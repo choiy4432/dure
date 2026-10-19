@@ -1,0 +1,71 @@
+/*
+ * 두레 테마 — 색·반경·그림자·글꼴은 이 파일에만 둔다.
+ * 컴포넌트 CSS·TSX 는 아래 변수만 쓴다(색 값을 직접 쓰지 않는다).
+ * 다른 시안을 테마로 쓰려면 이 파일만 바꾸면 된다.
+ * 지금 값 = 고른 시안 '이 분야의 표준'(.impeccable/mocks/decision/canon.html).
+ */
+:root {
+  /* 바탕·글자 */
+  --bg: #FFFFFF;
+  --canvas: #F8FAFC;           /* 관계도 바탕 */
+  --dot: #E2E8F0;              /* 관계도 점 모눈 */
+  --subtle: #F8FAFC;           /* 옅은 칸·두 번째 버튼 hover */
+  --hover: #F1F5F9;            /* 아이콘·방 버튼 hover, 아바타·내 말풍선 바탕 */
+  --text: #0F172A;
+  --text-2: #334155;           /* 본문보다 한 단계 옅은 글 */
+  --text-3: #475569;           /* 상태 글·작은 라벨 */
+  --muted: #64748B;            /* 보조 글 */
+  --selection: #DBEAFE;
+  --code-bg: rgba(15, 23, 42, 0.06);
+
+  /* 주색 */
+  --primary: #2563EB;
+  --primary-hover: #1D4ED8;
+  --primary-text: #1D4ED8;     /* 링크·파란 알약 글 */
+  --primary-soft: #EFF6FF;     /* 파란 알약·아바타 바탕 */
+  --primary-soft-border: #BFDBFE;
+  --on-primary: #FFFFFF;
+
+  /* 테두리 */
+  --border: #E2E8F0;
+  --border-strong: #CBD5E1;    /* hover 테두리·경계선 손잡이·꺼진 스위치 */
+  --border-soft: #F1F5F9;      /* 카드 안 나눔 줄 */
+
+  /* 상태 */
+  --ok: #10B981;               /* 작업 중 */
+  --ok-bg: #ECFDF5;
+  --ok-text: #047857;
+  --warn: #F59E0B;             /* 승인 기다림 */
+  --warn-bg: #FFFBEB;
+  --warn-border: #FDE68A;
+  --warn-strong: #FCD34D;      /* 승인 기다리는 노드 테두리 */
+  --warn-text: #B45309;
+  --warn-code-bg: #FEF3C7;
+  --warn-code-text: #78350F;
+  --danger: #EF4444;           /* 안 읽음·멈춤 */
+  --idle: #94A3B8;             /* 대기 */
+
+  /* 반경 */
+  --radius-node: 12px;
+  --radius-ctl: 8px;
+  --radius-box: 10px;          /* 요약 칩 묶음·고정 카드·하는 일 목록 */
+  --radius-sm: 6px;
+  --radius-xs: 4px;
+  --radius-code: 5px;
+  --radius-pill: 999px;
+  --radius-dot: 50%;           /* 상태 점 모양 */
+
+  /* 그림자 */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-label: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-pri: 0 1px 2px rgba(37, 99, 235, 0.35);
+  --shadow-knob: 0 1px 2px rgba(15, 23, 42, 0.3);
+  --shadow-node: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 20px -6px rgba(15, 23, 42, 0.1);
+  --shadow-node-sel: 0 0 0 1px var(--primary), 0 0 0 5px rgba(37, 99, 235, 0.12), 0 8px 20px -6px rgba(15, 23, 42, 0.14);
+  --shadow-box: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 12px -4px rgba(15, 23, 42, 0.08);
+  --ring-soft: 0 0 0 3px rgba(37, 99, 235, 0.15);   /* 입력창 포커스 */
+
+  /* 글꼴 */
+  --font: 'Noto Sans KR', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+}

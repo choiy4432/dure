@@ -17,7 +17,11 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
-    build: { rollupOptions: { input: resolve(__dirname, 'src/renderer/index.html') } },
+    build: {
+      rollupOptions: { input: resolve(__dirname, 'src/renderer/index.html') },
+      // 글꼴은 파일로만 — 작은 글꼴 조각을 data: 로 넣으면 CSP font-src 'self' 에 막힌다
+      assetsInlineLimit: (file: string) => (/\.woff2?$/.test(file) ? false : undefined),
+    },
     plugins: [react()],
   },
 })

@@ -1,0 +1,413 @@
+/* 바탕 문법 — 값은 전부 tokens.css 의 변수. 모양은 시안 canon.html 그대로. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 22px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--selection);
+  color: var(--text);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* 선 아이콘(lucide) — 크기·굵기는 App 의 LucideProvider(16px · 1.75) */
+.i {
+  flex: none;
+}
+
+/* 파일·명령 이름 */
+code,
+.f {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  letter-spacing: 0;
+}
+
+code {
+  padding: 1px 5px;
+  border-radius: var(--radius-code);
+  background: var(--code-bg);
+}
+
+/* 버튼 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-ctl);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 0.15s;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+}
+
+.pri {
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-pri);
+}
+
+.pri:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.sec {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+}
+
+.sec:hover:not(:disabled) {
+  background: var(--subtle);
+  border-color: var(--border-strong);
+}
+
+.sm {
+  height: 28px;
+  padding: 0 12px;
+}
+
+.ib {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--radius-ctl);
+  color: var(--muted);
+}
+
+.ib:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* 상태 점 — g 작업 중 · a 승인 기다림 · r 안 읽음/멈춤 · s 대기 */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-dot);
+  display: inline-block;
+  flex: none;
+}
+
+.dot.g {
+  background: var(--ok);
+}
+
+.dot.a {
+  background: var(--warn);
+}
+
+.dot.r {
+  background: var(--danger);
+}
+
+.dot.s {
+  background: var(--idle);
+}
+
+/* 세로 나눔 줄 */
+.vr {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  flex: none;
+}
+
+/* 칩(모델 고르기 같은 작은 고르기 버튼) */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.chip:hover:not(:disabled) {
+  background: var(--subtle);
+}
+
+/* 켜고 끄는 스위치 — <button class="sw" role="switch" aria-checked> 글<span class="tg"></span></button> */
+.sw {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.tg {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  transition: background-color 0.15s;
+}
+
+.tg::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  box-shadow: var(--shadow-knob);
+  transition: left 0.15s;
+}
+
+.sw[aria-checked="true"] .tg {
+  background: var(--primary);
+}
+
+.sw[aria-checked="true"] .tg::after {
+  left: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .tg,
+  .tg::after {
+    transition: none;
+  }
+}
+
+/* ── 셸 ─────────────────────────────────────────── */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 위 띠 */
+.top {
+  position: relative;
+  z-index: 5;
+  flex: none;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.brand {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.room {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 360px;
+  height: 32px;
+  padding: 0 8px 0 10px;
+  border-radius: var(--radius-ctl);
+  font-weight: 500;
+}
+
+.room:hover {
+  background: var(--hover);
+}
+
+.room-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.top-sp {
+  flex: 1;
+}
+
+/* 관계도 바탕 — 점 모눈 16px */
+.cv {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background-color: var(--canvas);
+  background-image: radial-gradient(circle, var(--dot) 1.3px, transparent 1.6px);
+  background-size: 16px 16px;
+  background-position: -8px -8px;
+}
+
+/* 오른쪽 패널 */
+.pnl {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/* 나눔 화면 — 관계도 ≥ 400px · 패널 ≥ 360px(SplitView 와 같은 수) */
+.sv {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.sv-pane {
+  display: flex;
+  min-height: 0;
+}
+
+.sv-map {
+  flex-grow: 0;
+  flex-shrink: 1;
+  min-width: 400px;
+}
+
+.sv-panel {
+  flex: 1 1 0;
+  min-width: 360px;
+}
+
+/* 경계선 — 1px 줄, 끌 수 있는 폭 11px, 가운데 손잡이 */
+.split {
+  position: relative;
+  z-index: 6;
+  flex: 0 0 1px;
+  background: var(--border);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.split::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  right: -5px;
+}
+
+.split::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -2px;
+  width: 5px;
+  height: 36px;
+  margin-top: -18px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  box-shadow: 0 0 0 2px var(--bg);
+}
+
+.split:hover::after,
+.split.drag::after {
+  background: var(--primary);
+}
+
+.split:focus-visible {
+  outline: none;
+}
+
+.split:focus-visible::after {
+  background: var(--primary);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--primary);
+}
+
+/* 빈 화면 안내 */
+.empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  max-width: 360px;
+  padding: 24px 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-node);
+  background: var(--bg);
+  box-shadow: var(--shadow-node);
+  text-align: center;
+}
+
+.empty-t {
+  margin: 0;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.empty-d {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.empty-card .btn {
+  margin-top: 12px;
+}
