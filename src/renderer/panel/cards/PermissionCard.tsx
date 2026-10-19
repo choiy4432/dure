@@ -1,0 +1,72 @@
+import { useState } from 'react'
+import { ChevronDown } from 'lucide-react'
+import type { Decision, PendingRequest } from '../../../engine/types'
+import { requestTarget, requestTitle } from '../../lib/toolSummary'
+import { ago } from '../../lib/words'
+import { useCall } from './useCall'
+
+// 자세히 — 파일 전체를 쓰는 입력은 아주 길 수 있다. 앞부분만
+const DETAIL_MAX = 4000
+
+function inputText(input: unknown): string {
+  let text: string
+  try {
+    text = JSON.stringify(input, null, 2) ?? String(input)
+  } catch {
+    text = String(input)
+  }
+  return text.length > DETAIL_MAX ? `${text.slice(0, DETAIL_MAX)}\n…` : text
+}
+
+interface Props {
+  request: PendingRequest
+  agent: { name: string; folder: string }
+  now: number
+}
+
+/** 권한 카드 — 관계도 카드의 앰버 칸과 같은 제목·대상, 자세히(입력 접힘) · [허용] [거절] · 항상 허용 */
+export function PermissionCard({ request, agent, now }: Props) {
+  const { busy, error, call } = useCall()
+  const [more, setMore] = useState(false)
+  const title = requestTitle(agent.name, request.toolName, request.input)
+  const target = requestTarget(request.toolName, request.input, agent.folder)
+  // 성공하면 엔진이 요청을 지워 카드가 사라진다 — 그동안 버튼은 막아 둔다
+  const answer = (d: Decision) => call(() => window.dure.answerRequest(request.id, d), 'hold')
+
+  return (
+    <section className="pin ask" aria-label={title}>
+      <div className="ask-h">
+        <b className="ask-t">{title}</b>
+        <span className="pin-t">{ago(request.createdAt, now)}</span>
+      </div>
+      <div className="ask-row">
+        {target && (
+          <code className="trunc" title={target}>
+            {target}
+          </code>
+        )}
+        <button type="button" className="lk ask-more" aria-expanded={more} onClick={() => setMore(m => !m)}>
+          자세히
+          <ChevronDown className="i" size={14} aria-hidden="true" />
+        </button>
+      </div>
+      {more && <pre className="ask-json">{inputText(request.input)}</pre>}
+      <div className="ab">
+        <button type="button" className="btn pri sm" disabled={busy} onClick={() => answer({ type: 'allow' })}>
+          허용
+        </button>
+        <button type="button" className="btn sec sm" disabled={busy} onClick={() => answer({ type: 'deny' })}>
+          거절
+        </button>
+        <button type="button" className="lk" disabled={busy} onClick={() => answer({ type: 'allow-always' })}>
+          이 에이전트에선 항상 허용
+        </button>
+      </div>
+      {error && (
+        <p className="pin-err" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  )
+}
