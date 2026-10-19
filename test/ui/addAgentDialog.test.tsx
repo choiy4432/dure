@@ -139,13 +139,14 @@ describe('AddAgentDialog', () => {
     expect(store.getState().agents.find(a => a.id === 'n1')!.pos).toEqual(expected)
   })
 
-  it('엔진 오류는 해당 칸 아래 빨간 글로 그대로 — 이름 겹침·없는 폴더, 대화상자는 열린 채', async () => {
+  it('엔진 오류는 해당 칸 아래 빨간 글로 — 이름 겹침은 해요체 안내와 다음 할 일, 없는 폴더는 그대로, 대화상자는 열린 채', async () => {
     await renderApp()
     const { dlg } = openDialog()
     await fill(dlg, { name: '기획', role: '기획서 · 문구' })
     await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '추가' })) })
     await settle()
-    const nameError = within(dlg).getByText('이미 있는 이름입니다: 기획')
+    expect(within(dlg).queryByText('이미 있는 이름입니다: 기획')).toBeNull() // 엔진 원문은 보이지 않는다
+    const nameError = within(dlg).getByText('‘기획’이라는 에이전트가 이미 있어요. 다른 이름을 써 주세요.')
     expect(nameError.classList.contains('fe')).toBe(true)
     const name = within(dlg).getByRole('textbox', { name: '이름' })
     expect(nameError.closest('.fld')!.contains(name)).toBe(true)
@@ -155,7 +156,7 @@ describe('AddAgentDialog', () => {
 
     // 이름을 고치면 그 문구는 사라진다
     fireEvent.change(name, { target: { value: '디자인' } })
-    expect(within(dlg).queryByText('이미 있는 이름입니다: 기획')).toBeNull()
+    expect(within(dlg).queryByText('‘기획’이라는 에이전트가 이미 있어요. 다른 이름을 써 주세요.')).toBeNull()
 
     api.pickFolder.mockResolvedValueOnce('C:\\gone')
     await fill(dlg, {})

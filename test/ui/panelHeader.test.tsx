@@ -346,7 +346,7 @@ describe('AgentMenu', () => {
     expect(screen.queryByRole('menu')).toBeNull()
   })
 
-  it('이름·역할 바꾸기는 같은 자리 입력 — 엔진 오류 문구를 그대로, 고치면 저장', async () => {
+  it('이름·역할 바꾸기는 같은 자리 입력 — 이름 겹침은 칸 아래 해요체 안내, 고치면 저장', async () => {
     await renderPanel()
     openMenu()
     fireEvent.click(item('이름·역할 바꾸기'))
@@ -359,7 +359,9 @@ describe('AgentMenu', () => {
     fireEvent.change(name, { target: { value: '기획' } })
     await act(async () => { fireEvent.keyDown(name, { key: 'Enter' }) })
     await settle()
-    expect(screen.getByText('이미 있는 이름입니다: 기획')).toBeTruthy()
+    // 추가 대화상자와 같은 해요체 안내(엔진 원문은 보이지 않는다)
+    expect(screen.getByText('‘기획’이라는 에이전트가 이미 있어요. 다른 이름을 써 주세요.')).toBeTruthy()
+    expect(screen.queryByText('이미 있는 이름입니다: 기획')).toBeNull()
     expect(screen.getByRole('textbox', { name: '이름' })).toBeTruthy()
 
     fireEvent.change(name, { target: { value: '웹 화면 2' } })

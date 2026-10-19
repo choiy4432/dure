@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest'
-import { ago, josa, lasting } from '../../src/renderer/lib/words'
+import { ago, fieldError, josa, lasting } from '../../src/renderer/lib/words'
+
+describe('fieldError — 엔진 오류를 칸 아래 안내로', () => {
+  it('이름 겹침은 해요체로, 다음 할 일까지 — 받침 따라 이라는/라는, 모르면 (이)라는', () => {
+    expect(fieldError('이미 있는 이름입니다: 기획')).toBe('‘기획’이라는 에이전트가 이미 있어요. 다른 이름을 써 주세요.')
+    expect(fieldError('이미 있는 이름입니다: 디자이너')).toBe('‘디자이너’라는 에이전트가 이미 있어요. 다른 이름을 써 주세요.')
+    expect(fieldError('이미 있는 이름입니다: Web')).toBe('‘Web’(이)라는 에이전트가 이미 있어요. 다른 이름을 써 주세요.')
+  })
+
+  it('다른 오류는 그대로', () => {
+    expect(fieldError('폴더를 찾을 수 없습니다: C:\\gone')).toBe('폴더를 찾을 수 없습니다: C:\\gone')
+    expect(fieldError('이름을 입력하세요')).toBe('이름을 입력하세요')
+  })
+})
 
 describe('josa', () => {
   it('받침이 있으면 앞 것, 없으면 뒤 것', () => {

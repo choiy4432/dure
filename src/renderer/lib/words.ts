@@ -55,6 +55,23 @@ function hasBatchim(word: string): boolean | null {
   return null
 }
 
+/** 엔진의 이름 겹침 문구 — store.ts addAgent·updateAgent 가 던진다 */
+const NAME_TAKEN = /^이미 있는 이름입니다: (.+)$/
+
+/**
+ * 입력 칸 아래에 보일 오류 — 엔진 문구 중 해요체가 아니고 다음 할 일이 없는 것만 바꿔 쓴다.
+ * 이름 겹침 '이미 있는 이름입니다: 기획' → '‘기획’이라는 에이전트가 이미 있어요. 다른 이름을 써 주세요.'
+ * 그 밖은 그대로(어느 칸의 오류인지는 원문으로 가린다).
+ */
+export function fieldError(message: string): string {
+  const taken = NAME_TAKEN.exec(message)
+  if (!taken) return message
+  const name = taken[1]
+  const b = hasBatchim(name)
+  const ra = b === null ? '(이)라는' : b ? '이라는' : '라는'
+  return `‘${name}’${ra} 에이전트가 이미 있어요. 다른 이름을 써 주세요.`
+}
+
 /** 낱말 뒤에 붙일 조사 — 받침이 있으면 앞 것, 없으면 뒤 것, 알 수 없으면 '이(가)' 처럼 둘 다 */
 export function josa(word: string, pair: JosaPair): string {
   const [withB, withoutB] = pair.split('/')

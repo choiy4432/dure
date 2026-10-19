@@ -4,7 +4,7 @@ import type { AgentId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
 import { displayStatus, type DisplayStatus } from '../state/selectors'
-import { errorMessage, initial, STATUS_WORD } from '../lib/words'
+import { errorMessage, fieldError, initial, STATUS_WORD } from '../lib/words'
 import { ModelPicker, type Described } from './ModelPicker'
 import { AgentMenu } from './AgentMenu'
 
@@ -167,7 +167,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
   )
 }
 
-/** 이름·역할 바꾸기 — 머리의 같은 자리에서. 엔진 오류(이름 겹침 등)는 칸 아래 그대로 */
+/** 이름·역할 바꾸기 — 머리의 같은 자리에서. 엔진 오류는 칸 아래(이름 겹침은 해요체 안내로) */
 function NameEdit({ agent, onDone }: { agent: AgentView; onDone: () => void }) {
   const [name, setName] = useState(agent.name)
   const [role, setRole] = useState(agent.role)
@@ -194,7 +194,7 @@ function NameEdit({ agent, onDone }: { agent: AgentView; onDone: () => void }) {
       await getStore().refresh()
       onDone()
     } catch (e) {
-      setError(errorMessage(e))
+      setError(fieldError(errorMessage(e))) // 이름 겹침은 추가 대화상자와 같은 해요체 안내로
       setBusy(false)
     }
   }

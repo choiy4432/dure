@@ -2,7 +2,7 @@ import { useId, useRef, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import type { RoomId } from '../../engine/types'
 import { getStore } from '../state/store'
-import { errorMessage } from '../lib/words'
+import { errorMessage, fieldError } from '../lib/words'
 import { placeMissing } from '../map/layout'
 import { FormDialog } from './FormDialog'
 
@@ -20,7 +20,7 @@ interface Props {
   onClose: () => void
 }
 
-/** 에이전트 추가 — 폴더 · 이름 · 역할 한 줄. 셋 다 있어야 추가, 엔진 오류는 그 칸 아래 그대로 */
+/** 에이전트 추가 — 폴더 · 이름 · 역할 한 줄. 셋 다 있어야 추가, 엔진 오류는 그 칸 아래(이름 겹침은 해요체 안내로) */
 export function AddAgentDialog({ roomId, onClose }: Props) {
   const [folder, setFolder] = useState<string | null>(null)
   const [name, setName] = useState('')
@@ -68,9 +68,10 @@ export function AddAgentDialog({ roomId, onClose }: Props) {
       const pos = placeMissing([...seats, { id: agent.id, pos: agent.pos }]).get(agent.id)
       if (pos) await window.dure.updateAgent(agent.id, { pos }).catch(e => console.error('두레: 새 에이전트 자리를 저장하지 못했어요', e))
     } catch (e) {
-      const message = errorMessage(e)
-      const field = fieldOf(message)
-      setError({ field, message })
+      // 어느 칸인지는 엔진 원문으로 가리고, 보이는 글은 해요체 안내로(이름 겹침)
+      const raw = errorMessage(e)
+      const field = fieldOf(raw)
+      setError({ field, message: fieldError(raw) })
       setBusy(false)
       if (field === 'folder') folderButton.current?.focus()
       else if (field === 'name') nameInput.current?.focus()
