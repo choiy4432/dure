@@ -408,6 +408,20 @@ code {
   line-height: 18px;
   color: var(--muted);
   overflow-wrap: anywhere;
+  word-break: keep-all; /* 한국어는 낱말 사이에서만 줄을 바꾼다 */
+  text-wrap: balance; /* 두 줄이면 고르게 — 마지막 낱말 하나만 남지 않게 */
+}
+
+/* 오류 원문 — 본문 아래 작게(한국어가 아닐 때만) */
+.empty-x {
+  margin: 4px 0 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .empty-card .btn {

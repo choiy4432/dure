@@ -357,6 +357,17 @@ describe('store 처음 불러오기 실패', () => {
     expect(s.getState().rooms).toHaveLength(2)
   })
 
+  it('다시 받기에 성공하면 스냅샷과 같은 한 번의 갱신에서 loadError 를 지운다(낡은 오류와 새 상태가 함께 보이는 순간이 없다)', async () => {
+    const { api } = fake()
+    api.snapshot.mockRejectedValueOnce(new Error('No handler registered'))
+    const s = createStore(api)
+    await expect(s.init()).rejects.toThrow()
+    const seen: { loadError: string | null; rooms: number }[] = []
+    s.subscribe(() => seen.push({ loadError: s.getState().loadError, rooms: s.getState().rooms.length }))
+    await s.refresh()
+    expect(seen).toEqual([{ loadError: null, rooms: 2 }])
+  })
+
   it('처음엔 loadError 가 없다', async () => {
     const { api } = fake()
     const s = createStore(api)

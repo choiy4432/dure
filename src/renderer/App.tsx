@@ -76,8 +76,14 @@ export function App() {
   )
 }
 
-/** 처음 상태를 못 받았을 때 — '첫 방을 만들어 보세요' 대신 까닭과 다시 시도 */
+const HANGUL = /[가-힣]/
+
+/**
+ * 처음 상태를 못 받았을 때 — '첫 방을 만들어 보세요' 대신 안내와 다시 시도.
+ * 한국어 엔진 문구면 그대로 본문으로, 아니면(Electron IPC 원문 등 영어) 한국어 안내가 본문이고 원문은 작은 줄로만.
+ */
 function LoadFailed({ message }: { message: string }) {
+  const korean = HANGUL.test(message)
   const [busy, setBusy] = useState(false)
   const retry = async () => {
     setBusy(true)
@@ -89,5 +95,13 @@ function LoadFailed({ message }: { message: string }) {
       setBusy(false)
     }
   }
-  return <Empty kind="load" text={message} onAction={() => void retry()} busy={busy} />
+  return (
+    <Empty
+      kind="load"
+      text={korean ? message : undefined}
+      detail={korean ? undefined : message}
+      onAction={() => void retry()}
+      busy={busy}
+    />
+  )
 }

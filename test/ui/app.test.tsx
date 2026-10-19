@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, act, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 
 const room = (id: string, name = id) => ({ id, name, createdAt: 1 })
@@ -124,6 +124,34 @@ describe('App 셸', () => {
     expect(screen.queryByText('두레를 불러오지 못했어요')).toBeNull()
     expect(screen.getByText('첫 방을 만들어 보세요')).toBeTruthy()
     expect(snap).toHaveBeenCalledTimes(3)
+  })
+
+  it('불러오기 오류 문구 — 한글이 없는 원문(IPC 등)은 한국어 안내를 본문으로, 원문은 작은 줄로만', async () => {
+    const raw = "Error invoking remote method 'dure:invoke': Error: No handler registered for 'dure:invoke'"
+    ;(window as any).dure.snapshot = vi.fn().mockRejectedValueOnce(new Error(raw)).mockImplementation(async () => snapshot)
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { App } = await import('../../src/renderer/App')
+    await act(async () => { await getStore().init().catch(() => {}) })
+    render(<App />)
+    const card = screen.getByRole('alert')
+    expect(within(card).getByText('두레를 불러오지 못했어요')).toBeTruthy()
+    const main = within(card).getByText('잠시 뒤 다시 시도해 주세요. 계속 안 되면 두레를 껐다 켜 주세요.')
+    expect(main.classList.contains('empty-d')).toBe(true)
+    const detail = within(card).getByText(raw)
+    expect(detail.classList.contains('empty-x')).toBe(true) // 작은 회색 mono 줄
+    expect(detail).not.toBe(main)
+  })
+
+  it('불러오기 오류 문구 — 한글 원문(엔진 문구)은 그대로 본문, 일반 안내·작은 줄은 없다', async () => {
+    ;(window as any).dure.snapshot = vi.fn().mockRejectedValueOnce(new Error('설정 파일을 읽지 못했어요')).mockImplementation(async () => snapshot)
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { App } = await import('../../src/renderer/App')
+    await act(async () => { await getStore().init().catch(() => {}) })
+    render(<App />)
+    const card = screen.getByRole('alert')
+    expect(within(card).getByText('설정 파일을 읽지 못했어요').classList.contains('empty-d')).toBe(true)
+    expect(within(card).queryByText('잠시 뒤 다시 시도해 주세요. 계속 안 되면 두레를 껐다 켜 주세요.')).toBeNull()
+    expect(card.querySelector('.empty-x')).toBeNull()
   })
 
   it('빈 화면 버튼은 onAction 을 부른다', async () => {

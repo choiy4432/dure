@@ -77,7 +77,8 @@ export function createStore(api: DureApi): Store {
         delete statusSince[a.id]
       }
     }
-    state = { ...state, ...snap, roomId, selectedAgentId, statusSince }
+    // 받았으니 불러오기 오류도 같은 갱신에서 지운다(낡은 오류와 새 상태가 함께 그려지지 않게)
+    state = { ...state, ...snap, roomId, selectedAgentId, statusSince, loadError: null }
   }
 
   const applyEvent = (ev: Ev, at: number) => {
@@ -170,7 +171,6 @@ export function createStore(api: DureApi): Store {
     try {
       applySnapshot(await api.snapshot())
       loaded = true
-      if (state.loadError !== null) state = { ...state, loadError: null }
     } catch (e) {
       // 처음 상태를 못 받았으면 화면이 '첫 방을 만들어 보세요' 대신 이 까닭을 보이게
       if (!loaded) state = { ...state, loadError: e instanceof Error ? e.message : String(e) }
