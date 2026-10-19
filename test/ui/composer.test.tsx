@@ -323,6 +323,31 @@ describe('slashEntry — / 목록에 무엇을 보이나', () => {
     const { slashEntry } = await import('../../src/renderer/panel/SlashMenu')
     expect(slashEntry(cmd(name, 'Some built-in thing'))).toBeNull()
   })
+
+  // 실제 claude 2.1.270 initialize 목록의 모양
+  it('이름에 : 이 있으면 설치한 플러그인 스킬 — 꼬리표가 없어도 그 설명 그대로', async () => {
+    const { slashEntry } = await import('../../src/renderer/panel/SlashMenu')
+    const d = 'You MUST use this before any creative work'
+    expect(slashEntry(cmd('superpowers:brainstorming', d))).toEqual({ name: 'superpowers:brainstorming', text: d })
+    expect(slashEntry(cmd('code-review:code-review', 'Review the current diff'))).toEqual({ name: 'code-review:code-review', text: 'Review the current diff' })
+  })
+
+  it('마지막 꼬리표가 (user)·(project) 일 때만 사용자 것 — 다른 괄호 꼬리표는 기본 명령이라 숨긴다', async () => {
+    const { slashEntry } = await import('../../src/renderer/panel/SlashMenu')
+    expect(slashEntry(cmd('x', 'Watch after deploy (gstack) (user)'))).toEqual({ name: 'x', text: 'Watch after deploy (gstack) (user)' })
+    expect(slashEntry(cmd('fork', 'Fork this conversation (dynamic workflow)'))).toBeNull()
+    expect(slashEntry(cmd('resume', 'Resume a conversation (resumable with /resume)'))).toBeNull()
+    expect(slashEntry(cmd('sync', 'Sync settings (claude.ai sync)'))).toBeNull()
+    expect(slashEntry(cmd('mine', 'My helper (user) note'))).toBeNull() // (user) 가 끝이 아니면 아니다
+  })
+
+  it('꼬리표 없는 config 는 숨기고 compact 는 한국어로', async () => {
+    const { slashEntry } = await import('../../src/renderer/panel/SlashMenu')
+    expect(slashEntry(cmd('config', 'Open config panel'))).toBeNull()
+    expect(slashEntry(cmd('compact', 'Clear conversation history but keep a summary in context'))).toEqual({
+      name: 'compact', text: '대화를 요약해 용량을 줄여요',
+    })
+  })
 })
 
 describe('Composer — /clear · /model 은 목록과 상관없이 두레가 처리', () => {

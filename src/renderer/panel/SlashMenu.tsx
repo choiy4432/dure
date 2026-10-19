@@ -21,15 +21,20 @@ const BUILTIN: Record<string, string> = {
   model: '모델 고르기',
 }
 
-/** 설명 끝의 출처 꼬리표 — '… (user)' · '… (project)' · '… (gstack) (user)' */
-const SOURCE_TAG = /\(([^()]+)\)\s*$/
+/**
+ * 설명의 마지막 꼬리표가 사용자 것인가 — '… (user)' · '… (project)' · '… (gstack) (user)'.
+ * 기본 명령도 '(dynamic workflow)' · '(claude.ai sync)' 같은 괄호 메모로 끝나므로 이 둘만 본다.
+ */
+const USER_TAG = /\((user|project)\)\s*$/
 
 /**
- * 목록에 보일지·무엇으로 보일지 — 사용자 명령·스킬(설명 끝에 출처 꼬리표)은 그 설명 그대로,
- * 꼬리표 없는 기본 명령은 BUILTIN 에 있는 것만 한국어로. 그 밖은 null(숨김).
+ * 목록에 보일지·무엇으로 보일지(claude 2.1.270 의 initialize 목록 기준):
+ * 1. 이름에 ':' — 설치한 플러그인 스킬(superpowers:brainstorming 등) → 그 설명 그대로
+ * 2. 마지막 꼬리표가 (user)·(project) — 사용자 명령·스킬 → 그 설명 그대로
+ * 3. 그 밖은 Claude Code 기본·번들 명령 → BUILTIN 에 있는 것만 한국어로, 나머지는 null(숨김)
  */
 export function slashEntry(c: SlashCommand): SlashEntry | null {
-  if (SOURCE_TAG.test(c.description)) return { name: c.name, text: c.description }
+  if (c.name.includes(':') || USER_TAG.test(c.description)) return { name: c.name, text: c.description }
   const text = BUILTIN[c.name]
   return text === undefined ? null : { name: c.name, text }
 }
