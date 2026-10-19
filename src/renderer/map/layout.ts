@@ -119,7 +119,7 @@ function controlOffset(distance: number): number {
   return distance >= 0 ? 0.5 * distance : CURVATURE * 25 * Math.sqrt(-distance)
 }
 
-/** 변에서 나가는 조절점 — React Flow getBezierPath 와 같은 셈(HandoffEdge 가 그 함수로 선을 그린다) */
+/** 변에서 나가는 조절점 — React Flow getBezierPath 와 같은 셈 */
 function controlPoint(side: Side, p: Point, q: Point): Point {
   switch (side) {
     case 'left': return { x: p.x - controlOffset(p.x - q.x), y: p.y }
@@ -129,12 +129,27 @@ function controlPoint(side: Side, p: Point, q: Point): Point {
   }
 }
 
-/** 엣지 곡선 위 t(0 = 보낸 쪽, 1 = 화살촉) 자리 — HandoffEdge 가 그리는 그 3차 곡선 */
-export function curvePoint(e: EdgeEnds, t: number): Point {
-  const p0 = e.source
-  const p3 = e.target
-  const p1 = controlPoint(e.sourcePosition, p0, p3)
-  const p2 = controlPoint(e.targetPosition, p3, p0)
+const STILL: Point = { x: 0, y: 0 }
+
+/**
+ * 엣지 곡선의 네 점 — 끝점 둘과 React Flow getBezierPath 와 같은 조절점 둘.
+ * bow 만큼 두 조절점을 함께 민다(짝 엣지가 가운데에서 서로 멀어지게 휜다 — 곡선 한가운데는 bow 의 3/4 만큼 옮겨 간다).
+ */
+function controls(e: EdgeEnds, bow: Point): [Point, Point, Point, Point] {
+  const p1 = controlPoint(e.sourcePosition, e.source, e.target)
+  const p2 = controlPoint(e.targetPosition, e.target, e.source)
+  return [e.source, { x: p1.x + bow.x, y: p1.y + bow.y }, { x: p2.x + bow.x, y: p2.y + bow.y }, e.target]
+}
+
+/** 엣지 선(SVG path) — 휘지 않으면(bow 0) React Flow getBezierPath 와 같은 곡선 */
+export function edgePath(e: EdgeEnds, bow: Point = STILL): string {
+  const [p0, p1, p2, p3] = controls(e, bow)
+  return `M${p0.x},${p0.y} C${p1.x},${p1.y} ${p2.x},${p2.y} ${p3.x},${p3.y}`
+}
+
+/** 엣지 곡선 위 t(0 = 보낸 쪽, 1 = 화살촉) 자리 */
+export function curvePoint(e: EdgeEnds, t: number, bow: Point = STILL): Point {
+  const [p0, p1, p2, p3] = controls(e, bow)
   const u = 1 - t
   const a = u * u * u
   const b = 3 * u * u * t
@@ -143,54 +158,48 @@ export function curvePoint(e: EdgeEnds, t: number): Point {
   return { x: a * p0.x + b * p1.x + c * p2.x + d * p3.x, y: a * p0.y + b * p1.y + c * p2.y + d * p3.y }
 }
 
-/** 엣지 상태 알약 크기 — base.css .el 높이 24 · 너비는 가장 긴 문구('전달됨 · 59분 전')에 여유를 둔 값 */
-export const LABEL_SIZE: Size = { w: 104, h: 24 }
+/** 엣지 상태 알약 크기(재기 전 기본) — base.css .el 높이 24, 너비는 '전달됨 · 방금' 쯤 */
+export const LABEL_SIZE: Size = { w: 88, h: 24 }
 /** 짝 알약 사이에 남길 틈 */
 const LABEL_GAP = 8
-/** 짝 알약이 곡선을 따라 미끄러지는 한 걸음 · 가장 멀리(곡선 양 끝 15% 안으로는 가지 않는다) */
-const SLIDE_STEP = 0.01
-const SLIDE_MAX = 0.35
-
-const AXIS: Record<Side, Point> = { left: { x: 0, y: 1 }, right: { x: 0, y: 1 }, top: { x: 1, y: 0 }, bottom: { x: 1, y: 0 } }
 
 /**
- * 짝 엣지의 알약 한 개 자리 — 곡선 위 t 에서, 제 선이 비킨 쪽(엣지에 수직)으로 shift 의 반만큼 더.
- * 비킨 쪽 = 끝점이 변을 따라 shift 만큼 옮겨 간 쪽. 더 비켜도 곡선은 알약(높이 24) 안에 남는다.
+ * 짝 엣지가 휘는 정도(조절점을 미는 벡터) — 같은 두 카드를 반대로 잇는 짝(shift ≠ 0, 예: '상한 대기' 둘)은
+ * 끝점만 변을 따라 비켜서는 가운데의 두 알약이 겹친다(위아래로 잇는 짝은 늘). 그래서 두 선을 가운데에서 서로 바깥으로 휘게 해,
+ * 각자 제 곡선 한가운데에 놓인 두 알약이 알약 크기 + 틈만큼 떨어지게 한다. 이미 떨어져 있으면 휘지 않는다.
+ * 바깥 = 두 카드 가운데를 잇는 선에 수직, 짝 곡선의 한가운데에서 내 곡선 한가운데 쪽.
+ * 짝의 곡선은 같은 카드에서 그대로 셈한다(edgeEnds(to, from, -shift)) — 두 엣지가 거울인 셈을 해 서로 반대로 휜다.
+ * pill = 내 알약의 실제 크기(HandoffEdge 가 잰다) — 짝도 제 크기로 셈해 둘의 몫을 더하면 꼭 필요한 만큼이 된다.
  */
-function pairPlace(e: EdgeEnds, shift: number, from: Rect, to: Rect, t: number): Point {
+export function pairBow(e: EdgeEnds, shift: number, from: Rect, to: Rect, pill: Size = LABEL_SIZE): Point {
+  if (shift === 0) return STILL
+  const mine = curvePoint(e, 0.5)
+  const theirs = curvePoint(edgeEnds(to, from, -shift), 0.5)
   const dx = to.x + to.w / 2 - (from.x + from.w / 2)
   const dy = to.y + to.h / 2 - (from.y + from.h / 2)
   const len = Math.hypot(dx, dy) || 1
-  const ax = AXIS[e.sourcePosition].x + AXIS[e.targetPosition].x
-  const ay = AXIS[e.sourcePosition].y + AXIS[e.targetPosition].y
-  const side = Math.sign(shift) * (-dy * ax + dx * ay) < 0 ? -1 : 1
-  const k = (side * Math.abs(shift)) / 2 / len
-  const p = curvePoint(e, t)
-  return { x: p.x - dy * k, y: p.y + dx * k }
+  const gap = { x: mine.x - theirs.x, y: mine.y - theirs.y }
+  let n = { x: -dy / len, y: dx / len }
+  if (gap.x * n.x + gap.y * n.y < 0) n = { x: -n.x, y: -n.y }
+  // 두 한가운데가 각자 n·-n 으로 p 만큼 옮기면 차이는 gap + 2p·n — 가로(알약 너비 + 틈)나 세로(높이 + 틈)로
+  // 떨어지는 가장 작은 p. 이미 떨어져 있으면 0
+  const along = (d: number, nd: number, size: number) => {
+    const need = size + LABEL_GAP
+    if (Math.abs(d) >= need) return 0
+    if (Math.abs(nd) < 1e-9) return Infinity
+    return (need - Math.sign(nd) * d) / (2 * Math.abs(nd))
+  }
+  const p = Math.min(along(gap.x, n.x, pill.w), along(gap.y, n.y, pill.h))
+  if (p === 0 || !Number.isFinite(p)) return STILL
+  const push = p / 0.75
+  return { x: n.x * push, y: n.y * push }
 }
 
 /**
- * 엣지 상태 알약 자리 — 보통은 곡선 한가운데(React Flow 의 라벨 자리와 같다).
- * 같은 두 카드를 반대로 잇는 짝(shift ≠ 0, 예: '상한 대기' 둘)이면 두 알약이 겹치지 않게, 각자 제 곡선 위에서:
- * ① 제 선이 비킨 쪽(엣지에 수직)으로 shift 의 반만큼 더 비킨다(pairPlace).
- * ② 그래도 겹치면(위아래로 잇는 짝은 알약 너비 때문에 늘 겹친다) 곡선을 따라 둘 다 제 보낸 쪽으로 — 서로 반대 끝으로 —
- *    겹치지 않는 가장 짧은 거리만큼 미끄러진다. 보낸 쪽으로 안 되면 받는 쪽으로.
- * 짝의 곡선은 같은 카드에서 그대로 셈한다(edgeEnds(to, from, -shift)) — 두 엣지가 정확히 거울인 셈을 해 같은 답을 낸다.
+ * 엣지 상태 알약 자리 — 곡선 한가운데. 짝 엣지면 휜 곡선(pairBow)의 한가운데라, 두 알약이 떨어져 있고 각자 제 곡선 위다.
+ * 짝이 아니면 React Flow 의 라벨 자리와 같다.
  */
-export function labelPoint(e: EdgeEnds, shift: number, from: Rect, to: Rect): Point {
-  if (shift === 0) return curvePoint(e, 0.5)
-  const other = edgeEnds(to, from, -shift)
-  const at = (t: number) => {
-    const me = pairPlace(e, shift, from, to, t)
-    const it = pairPlace(other, -shift, to, from, t)
-    const clear = Math.abs(it.x - me.x) >= LABEL_SIZE.w + LABEL_GAP || Math.abs(it.y - me.y) >= LABEL_SIZE.h + LABEL_GAP
-    return { me, clear }
-  }
-  for (let i = 0; i * SLIDE_STEP <= SLIDE_MAX + 1e-9; i++) {
-    for (const t of i === 0 ? [0.5] : [0.5 - i * SLIDE_STEP, 0.5 + i * SLIDE_STEP]) {
-      const r = at(t)
-      if (r.clear) return r.me
-    }
-  }
-  return at(0.5 - SLIDE_MAX).me
+export function labelPoint(e: EdgeEnds, shift: number, from: Rect, to: Rect, pill: Size = LABEL_SIZE): Point {
+  return curvePoint(e, 0.5, pairBow(e, shift, from, to, pill))
 }
+

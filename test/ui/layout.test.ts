@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { Position, getBezierPath } from '@xyflow/react'
 import {
-  CELL, GAP_X, GAP_Y, MARGIN, NODE_SIZE, edgeEnds, isUnplaced, labelPoint, placeMissing, placeNew,
-  type EdgeEnds, type Point, type Rect, type Side,
+  CELL, GAP_X, GAP_Y, MARGIN, NODE_SIZE, edgeEnds, edgePath, isUnplaced, labelPoint, pairBow, placeMissing, placeNew,
+  type Point, type Rect, type Side,
 } from '../../src/renderer/map/layout'
 
 const W = NODE_SIZE.w
@@ -141,78 +141,84 @@ describe('edgeEnds', () => {
   })
 })
 
-describe('labelPoint — 엣지 가운데 상태 알약 자리', () => {
+describe('엣지 선과 상태 알약 자리 — edgePath · labelPoint · pairBow', () => {
   const rect = (x: number, y: number, w = W, h = H) => ({ x, y, w, h })
   const SIDE: Record<Side, Position> = { left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom }
-  /** HandoffEdge 가 그리는 그 곡선(React Flow getBezierPath) */
-  const bezier = (e: EdgeEnds) =>
-    getBezierPath({
-      sourceX: e.source.x, sourceY: e.source.y, sourcePosition: SIDE[e.sourcePosition],
-      targetX: e.target.x, targetY: e.target.y, targetPosition: SIDE[e.targetPosition],
-    })
-  /** 그 곡선 위 점 — 경로 문자열 'M x,y C x,y x,y x,y' 의 3차 곡선 */
-  const onPath = (e: EdgeEnds, t: number) => {
-    const n = bezier(e)[0].match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/g)!.map(Number)
+  const nums = (d: string) => d.match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/g)!.map(Number)
+  /** 경로 문자열 'M x,y C x,y x,y x,y' 의 3차 곡선 위 점 */
+  const onPath = (d: string, t: number) => {
+    const n = nums(d)
     const u = 1 - t
     const k = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t]
     return { x: k[0] * n[0] + k[1] * n[2] + k[2] * n[4] + k[3] * n[6], y: k[0] * n[1] + k[1] * n[3] + k[2] * n[5] + k[3] * n[7] }
   }
-  /** 점에서 곡선까지 가장 가까운 거리(곡선을 잘게 나눠 잰다) */
-  const distToCurve = (p: Point, e: EdgeEnds) => {
-    let best = Infinity
-    for (let i = 0; i <= 400; i++) {
-      const q = onPath(e, i / 400)
-      best = Math.min(best, Math.hypot(q.x - p.x, q.y - p.y))
-    }
-    return best
-  }
-  /** 가장 긴 알약('전달됨 · 59분 전')에 여유를 둔 크기 · 두 알약 사이 최소 틈 */
-  const PILL = { w: 104, h: 24 }
+  const samples = (d: string) => Array.from({ length: 401 }, (_, i) => onPath(d, i / 400))
+  /** 점에서 그 선까지 가장 가까운 거리(선을 잘게 나눠 잰다) */
+  const distToPath = (p: Point, d: string) => Math.min(...samples(d).map(q => Math.hypot(q.x - p.x, q.y - p.y)))
+  /** 두 알약 사이 최소 틈 */
   const GAP = 4
-  const apart = (p: Point, q: Point) => Math.abs(p.x - q.x) >= PILL.w + GAP || Math.abs(p.y - q.y) >= PILL.h + GAP
 
-  it('짝이 없는 엣지는 곡선 한가운데 — React Flow 의 라벨 자리와 같다', () => {
+  it('짝이 없는 엣지는 휘지 않고 React Flow getBezierPath 와 같은 선 · 알약은 그 한가운데(React Flow 의 라벨 자리)', () => {
     for (const [s, t] of [[rect(0, 0), rect(600, 40)], [rect(0, 0), rect(40, 500)], [{ x: 64, y: 464, w: 304, h: 208 }, rect(448, 272)]] as const) {
       const e = edgeEnds(s, t)
-      const [, lx, ly] = bezier(e)
+      const [d, lx, ly] = getBezierPath({
+        sourceX: e.source.x, sourceY: e.source.y, sourcePosition: SIDE[e.sourcePosition],
+        targetX: e.target.x, targetY: e.target.y, targetPosition: SIDE[e.targetPosition],
+      })
+      expect(pairBow(e, 0, s, t)).toEqual({ x: 0, y: 0 })
+      nums(edgePath(e)).forEach((v, i) => expect(v).toBeCloseTo(nums(d)[i], 6))
       const p = labelPoint(e, 0, s, t)
       expect(p.x).toBeCloseTo(lx, 6)
       expect(p.y).toBeCloseTo(ly, 6)
     }
   })
 
-  // 같은 두 카드를 반대로 잇는 두 엣지(예: '상한 대기' 둘) — 두 알약이 떨어져 둘 다 읽히고, 각자 제 곡선 위에
+  // 같은 두 카드를 반대로 잇는 두 엣지(예: '상한 대기' 둘)
   const pairs: [string, Rect, Rect][] = [
     ['위아래(검수 캡처의 웹 화면 ↔ 서버)', rect(448, 272), rect(576, 592)],
+    ['같은 열 위아래', rect(64, 64), rect(64, 64 + CELL.h + GAP_Y)],
     ['위아래로 가까움(넓은 승인 카드 아래 64px)', { x: 64, y: 64, w: 304, h: 217 }, rect(64, 64 + 217 + 64)],
     ['옆(가로 칸 사이 200)', rect(64, 64), rect(64 + W + 200, 64)],
     ['옆으로 가까움(넓은 승인 카드 옆 152)', { x: 64, y: 64, w: 304, h: 217 }, rect(64 + W + 200, 64)],
     ['비스듬히(시안의 디자인 → 웹 화면)', { x: 64, y: 464, w: 304, h: 208 }, rect(448, 272)],
     ['멀리 대각선', rect(64, 64), rect(1000, 700)],
   ]
+  // 알약 너비 — '상한 대기' 67 · '전달됨 · 방금' 87 · '전달됨 · 12분 전' 100
+  const widths = [67, 87, 100]
+  const cases = pairs.flatMap(([name, a, b]) => widths.map(w => [`${name} · 알약 ${w}px`, a, b, w] as const))
 
-  it.each(pairs)('%s — 두 알약이 겹치지 않는다', (_name, a, b) => {
+  it.each(cases)('%s — 두 알약이 떨어져 둘 다 읽히고, 각자 제 곡선 위에', (_name, a, b, w) => {
+    const pill = { w, h: 24 }
     const ab = edgeEnds(a, b, -12)
     const ba = edgeEnds(b, a, 12)
-    const pa = labelPoint(ab, -12, a, b)
-    const pb = labelPoint(ba, 12, b, a)
-    expect(apart(pa, pb)).toBe(true)
+    const bowA = pairBow(ab, -12, a, b, pill)
+    const bowB = pairBow(ba, 12, b, a, pill)
+    const pa = labelPoint(ab, -12, a, b, pill)
+    const pb = labelPoint(ba, 12, b, a, pill)
+    // 떨어져 있다 — 가로로든 세로로든 알약 크기 + 틈
+    expect(Math.abs(pa.x - pb.x) >= w + GAP || Math.abs(pa.y - pb.y) >= 24 + GAP).toBe(true)
+    // 제 곡선(그리는 그 선) 한가운데
+    expect(distToPath(pa, edgePath(ab, bowA))).toBeLessThan(0.5)
+    expect(distToPath(pb, edgePath(ba, bowB))).toBeLessThan(0.5)
+    // 서로 반대쪽으로 휜다(휘었다면)
+    expect(bowA.x * bowB.x + bowA.y * bowB.y).toBeLessThanOrEqual(0)
   })
 
-  it.each(pairs)('%s — 알약은 제 곡선 위에(곡선이 알약 안을 지난다)', (_name, a, b) => {
-    const ab = edgeEnds(a, b, -12)
-    const ba = edgeEnds(b, a, 12)
-    expect(distToCurve(labelPoint(ab, -12, a, b), ab)).toBeLessThanOrEqual(PILL.h / 2 - 4)
-    expect(distToCurve(labelPoint(ba, 12, b, a), ba)).toBeLessThanOrEqual(PILL.h / 2 - 4)
-  })
-
-  it('짝인 알약은 곡선 바깥쪽(제 선이 비킨 쪽)으로 조금 더 비킨다 — 가운데 선에서 서로 멀어진다', () => {
+  it('나란히 옆으로 잇는 짝은 이미 거의 떨어져 있어 조금만 휜다(선 모양이 거의 그대로)', () => {
     const a = rect(64, 64)
     const b = rect(64 + W + 200, 64)
-    const ab = edgeEnds(a, b, -12) // 위로 비킨 선
-    const ba = edgeEnds(b, a, 12) // 아래로 비킨 선
-    const mid = a.y + H / 2
-    expect(labelPoint(ab, -12, a, b).y).toBeLessThan(mid - 12)
-    expect(labelPoint(ba, 12, b, a).y).toBeGreaterThan(mid + 12)
+    const bow = pairBow(edgeEnds(a, b, -12), -12, a, b, { w: 87, h: 24 })
+    expect(Math.hypot(bow.x, bow.y)).toBeLessThan(8)
+    expect(bow.y).toBeLessThan(0) // 위로 비킨 선은 위로
+  })
+
+  it('알약이 넓을수록 위아래 짝은 더 휜다 — 필요한 만큼만', () => {
+    const a = rect(448, 272)
+    const b = rect(576, 592)
+    const e = edgeEnds(a, b, -12)
+    const len = (w: number) => Math.hypot(pairBow(e, -12, a, b, { w, h: 24 }).x, pairBow(e, -12, a, b, { w, h: 24 }).y)
+    expect(len(67)).toBeGreaterThan(0)
+    expect(len(100)).toBeGreaterThan(len(67))
   })
 })
+

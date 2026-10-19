@@ -1,6 +1,6 @@
-import { memo, useEffect, useRef, type MouseEvent } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
 import {
-  EdgeLabelRenderer, Position, ViewportPortal, getBezierPath, useInternalNode,
+  EdgeLabelRenderer, ViewportPortal, useInternalNode,
   type Edge, type EdgeProps, type InternalNode,
 } from '@xyflow/react'
 import type { AgentId, MessageState } from '../../engine/types'
@@ -8,7 +8,7 @@ import { useDure } from '../state/store'
 import { label } from '../state/selectors'
 import { useNow } from '../lib/useNow'
 import { PACKET_MS, useShot } from '../lib/motion'
-import { NODE_SIZE, edgeEnds, labelPoint, type Rect, type Side } from './layout'
+import { LABEL_SIZE, NODE_SIZE, curvePoint, edgeEnds, edgePath, pairBow, type Rect, type Size } from './layout'
 
 export interface HandoffEdgeData extends Record<string, unknown> {
   state: MessageState
@@ -28,10 +28,6 @@ export const FRESH_MS = 60_000
 const RING_MS = 450
 /** 처음 그릴 때 이보다 오래된 전달은 움직이지 않는다 */
 const REPLAY_WINDOW_MS = 2_000
-
-const POSITION: Record<Side, Position> = {
-  left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom,
-}
 
 /** 선 모양 — on 갓 전달 · old 전달된 지 오래 · wait 확인 대기 · held 상한 대기 · queue 작업 끝 대기 */
 type Tone = 'on' | 'old' | 'wait' | 'held' | 'queue'
@@ -100,6 +96,14 @@ export const HandoffEdge = memo(function HandoffEdge({ id, source, target, data 
   const pathRef = useRef<SVGPathElement>(null)
   const dotRef = useRef<SVGCircleElement>(null)
   const ringRef = useRef<SVGCircleElement>(null)
+  // 알약 크기 — 그린 뒤 재서(문구마다 너비가 다르다) 반대 방향 짝이 필요한 만큼만 휘게
+  const pillRef = useRef<HTMLButtonElement>(null)
+  const [pill, setPill] = useState<Size>(LABEL_SIZE)
+  useLayoutEffect(() => {
+    const el = pillRef.current
+    if (!el || !el.offsetWidth) return
+    if (el.offsetWidth !== pill.w || el.offsetHeight !== pill.h) setPill({ w: el.offsetWidth, h: el.offsetHeight })
+  })
   // lastDelivered 가 바뀔 때마다 한 번 — 처음 그릴 때는 전달과 함께 새로 생긴 엣지(REPLAY_WINDOW_MS 안)만
   const shot = useShot(deliveredAt, REPLAY_WINDOW_MS)
 
@@ -115,16 +119,10 @@ export const HandoffEdge = memo(function HandoffEdge({ id, source, target, data 
   const from = rectOf(s)
   const to = rectOf(t)
   const ends = edgeEnds(from, to, data.shift)
-  // 알약 자리 — 보통은 곡선 한가운데, 반대 방향 짝이면 두 알약이 겹치지 않게 각자 제 곡선 위에서 비킨다
-  const at = labelPoint(ends, data.shift, from, to)
-  const [d] = getBezierPath({
-    sourceX: ends.source.x,
-    sourceY: ends.source.y,
-    sourcePosition: POSITION[ends.sourcePosition],
-    targetX: ends.target.x,
-    targetY: ends.target.y,
-    targetPosition: POSITION[ends.targetPosition],
-  })
+  // 반대 방향 짝이면 두 선이 가운데에서 서로 바깥으로 휜다 — 알약은 늘 제 곡선 한가운데라 둘이 떨어져 각자 제 선 위에
+  const bow = pairBow(ends, data.shift, from, to, pill)
+  const d = edgePath(ends, bow)
+  const at = curvePoint(ends, 0.5, bow)
   const view = { id, from: source, to: target, state: data.state, at: data.at, count: data.count }
   const fresh = data.state === 'delivered' && now - data.at < FRESH_MS
   const tone = toneOf(data.state, fresh)
@@ -137,6 +135,7 @@ export const HandoffEdge = memo(function HandoffEdge({ id, source, target, data 
       <path d={d} className="he-hit" />
       <EdgeLabelRenderer>
         <button
+          ref={pillRef}
           type="button"
           className={`el nodrag nopan${fresh ? ' on' : ''}`}
           style={{ transform: `translate(-50%, -50%) translate(${at.x}px, ${at.y}px)` }}
