@@ -13,9 +13,16 @@ const log = (s) => {
 };
 log(JSON.stringify({ argv, pid: process.pid, mcpToolTimeout: process.env.MCP_TOOL_TIMEOUT ?? null }));
 
-// FAKE_DIE_FLAG_FILE 의 내용이 이 프로세스의 -n 이름이면 stdin 을 읽기 전에 바로 죽는다(파일을 지우면 다시 산다)
+// FAKE_DIE_FLAG_FILE 로 이 프로세스(-n 이름)를 고장 낸다(파일을 지우면 다음 실행부터 정상):
+//   "<이름>"       stdin 을 읽기 전에 바로 죽는다(exit 1)
+//   "<이름>:hang"  아무것도 처리하지 않고 아무 말도 안 한다 — stdin 이 닫히면 끝
+//   "<이름>:mute"  제어 요청에만 답하고 사용자 줄은 무시한다
 const dieFile = process.env.FAKE_DIE_FLAG_FILE;
-if (dieFile && fs.existsSync(dieFile) && fs.readFileSync(dieFile, 'utf8') === flag('-n')) process.exit(1);
+const knob = dieFile && fs.existsSync(dieFile) ? fs.readFileSync(dieFile, 'utf8') : '';
+const myName = flag('-n');
+if (knob === myName) process.exit(1);
+const hang = knob === `${myName}:hang`;
+const mute = knob === `${myName}:mute`;
 
 const sessionId = flag('--resume') ?? flag('--session-id') ?? 'fake-session';
 let model = flag('--model') ?? 'default';
@@ -169,24 +176,29 @@ async function control(msg) {
   }
 }
 
-const rl = readline.createInterface({ input: process.stdin });
-rl.on('line', (line) => {
-  if (!line.trim()) return;
-  log(line);
-  let msg;
-  try {
-    msg = JSON.parse(line);
-  } catch {
-    return;
-  }
-  if (msg.type === 'control_request') void control(msg);
-  else if (msg.type === 'user') {
-    const content = msg.message?.content ?? [];
-    const text = (Array.isArray(content) ? content : [{ type: 'text', text: String(content) }])
-      .filter((c) => c.type === 'text')
-      .map((c) => c.text)
-      .join('\n');
-    void turn(text);
-  }
-});
-rl.on('close', () => process.exit(0));
+if (hang) {
+  process.stdin.resume(); // 받기만 하고 버린다
+  process.stdin.on('end', () => process.exit(0));
+} else {
+  const rl = readline.createInterface({ input: process.stdin });
+  rl.on('line', (line) => {
+    if (!line.trim()) return;
+    log(line);
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (msg.type === 'control_request') void control(msg);
+    else if (msg.type === 'user' && !mute) {
+      const content = msg.message?.content ?? [];
+      const text = (Array.isArray(content) ? content : [{ type: 'text', text: String(content) }])
+        .filter((c) => c.type === 'text')
+        .map((c) => c.text)
+        .join('\n');
+      void turn(text);
+    }
+  });
+  rl.on('close', () => process.exit(0));
+}

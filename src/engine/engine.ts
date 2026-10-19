@@ -150,6 +150,7 @@ class EngineImpl extends EventEmitter implements Engine {
     } finally {
       this.removing.delete(id);
       this.shown.delete(id);
+      this.held.delete(id); // 기다리던 사람 입력은 에이전트와 함께 버린다
     }
   }
 
@@ -304,19 +305,16 @@ class EngineImpl extends EventEmitter implements Engine {
       env: { ...process.env, ...this.o.env, ...SPAWN_ENV_EXTRA },
     });
     s.on('event', (ev: StreamEvent) => {
-      if (this.sessions.get(id) !== s) return;
-      this.inFlight.delete(s); // 무엇이든 이벤트가 오면 보낸 줄을 받은 것으로 본다
-      this.onEvent(id, ev);
+      // 제어 응답이 아닌 이벤트가 오면 보낸 줄을 읽은 것 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
+      if (ev.kind !== 'control-response') this.inFlight.delete(s);
+      if (this.sessions.get(id) === s) this.onEvent(id, ev);
     });
     s.on('status', () => this.sessions.get(id) === s && this.emitStatus(id));
     s.on('exit', ({ expected }: { expected: boolean }) => {
-      if (this.sessions.get(id) !== s) return;
+      if (this.sessions.get(id) !== s) return; // 엔진이 끝낸 세션은 endSession 이 정리
       this.sessions.delete(id);
       if (!expected) {
-        // 보낸 줄을 읽기 전에 죽었다 — 메시지는 queued 로, 사람 입력은 기다리는 줄 맨 앞으로(다음 실행·flushAll 때 다시)
-        const lost = this.inFlight.get(s);
-        if (lost?.kind === 'relay') this.router.requeue(lost.messageId);
-        else if (lost) this.heldOf(id).unshift(lost.parts);
+        this.restoreInFlight(id, s);
         this.errors.set(id, s.errorText ?? EXITED);
         this.perms.cancelForAgent(id, EXITED);
       }
@@ -355,7 +353,6 @@ class EngineImpl extends EventEmitter implements Engine {
   private async endSession(id: AgentId): Promise<void> {
     const s = this.sessions.get(id);
     this.sessions.delete(id);
-    this.held.delete(id);
     this.errors.delete(id);
     this.perms.cancelForAgent(id, EXITED);
     if (!s) return;
@@ -365,6 +362,15 @@ class EngineImpl extends EventEmitter implements Engine {
     });
     await Promise.race([s.stop().catch(() => undefined), limit]);
     clearTimeout(timer);
+    this.restoreInFlight(id, s); // 멈출 때까지도 못 읽은 줄
+  }
+
+  /** 보낸 줄을 읽기 전에 끝났다 — 메시지는 queued 로, 사람 입력은 기다리는 줄 맨 앞으로(다음 실행·flushAll 때 다시) */
+  private restoreInFlight(id: AgentId, s: ClaudeSession): void {
+    const lost = this.inFlight.get(s);
+    this.inFlight.delete(s);
+    if (lost?.kind === 'relay') this.router.requeue(lost.messageId);
+    else if (lost) this.heldOf(id).unshift(lost.parts);
   }
 
   private emitStatus(id: AgentId): void {

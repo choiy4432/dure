@@ -276,6 +276,66 @@ test('사람 입력을 읽기 전에 죽으면 그 입력은 다음 입력 앞�
   expect(e.status(b.id)).toBe('idle');
 });
 
+test('제어 응답은 수신 확인이 아니다 — 보낸 뒤 제어 응답만 오고 죽으면 메시지는 queued 로', async () => {
+  const dieFlag = path.join(dir, 'die');
+  fs.writeFileSync(dieFlag, 'B:mute'); // 제어 요청에만 답하고 사용자 줄은 안 읽는다
+  const e = await start({ FAKE_DIE_FLAG_FILE: dieFlag });
+  const { a, b } = setup(e);
+  e.updateAgent(b.id, { auto: true });
+  const delivered = waitFor<RelayMessage>(e, 'message', (m) => m.to === b.id && m.state === 'delivered');
+  const aDone = resultOf(e, a.id);
+  await e.sendUser(a.id, text('SEND B: 읽었나'));
+  await delivered;
+  await aDone;
+
+  await e.describe(b.id); // 메시지를 보낸 뒤에 제어 응답이 온다
+  const errored = waitFor<StatusEvent>(e, 'status', (s) => s.agentId === b.id && s.status === 'error');
+  process.kill(lastSpawnOf('B').pid);
+  await errored;
+
+  expect(e.messages({ to: b.id }).map((m) => m.state)).toEqual(['queued']);
+});
+
+test('shutdown 으로 끝낸 세션이 못 읽은 메시지는 queued 로 남고 다음 시작 때 전달', async () => {
+  const dieFlag = path.join(dir, 'die');
+  fs.writeFileSync(dieFlag, 'B:hang'); // 아무것도 안 읽고 아무 말도 안 한다
+  const e1 = await start({ FAKE_DIE_FLAG_FILE: dieFlag });
+  const { a, b } = setup(e1);
+  e1.updateAgent(b.id, { auto: true });
+  const delivered = waitFor<RelayMessage>(e1, 'message', (m) => m.to === b.id && m.state === 'delivered');
+  const aDone = resultOf(e1, a.id);
+  await e1.sendUser(a.id, text('SEND B: 끝나기 전에'));
+  await delivered;
+  await aDone;
+  expect(e1.status(b.id)).toBe('working');
+
+  await e1.shutdown();
+
+  expect(openMessageLog(dataDir).list({ to: b.id }).map((m) => m.state)).toEqual(['queued']);
+  fs.rmSync(dieFlag);
+  const e2 = await start({ FAKE_DIE_FLAG_FILE: dieFlag });
+  expect(await resultText(resultOf(e2, b.id))).toBe('받음: [두레 메시지 — 보낸 쪽: A(기획)]\n끝나기 전에');
+});
+
+test('newConversation 으로 끝낸 세션이 못 읽은 사람 입력은 새 대화의 맨 앞으로', async () => {
+  const dieFlag = path.join(dir, 'die');
+  fs.writeFileSync(dieFlag, 'B:hang');
+  const e = await start({ FAKE_DIE_FLAG_FILE: dieFlag });
+  const { b } = setup(e);
+  await e.sendUser(b.id, text('echo 못 읽음'));
+  expect(e.status(b.id)).toBe('working');
+
+  await e.newConversation(b.id);
+
+  fs.rmSync(dieFlag);
+  const done = resultTextIs(e, b.id, '받음: echo 다음');
+  await e.sendUser(b.id, text('echo 다음'));
+  await done;
+  expect(userTexts()).toEqual(['echo 못 읽음', 'echo 다음']);
+  expect(flagValue(lastSpawnOf('B').argv, '--session-id')).toBe(agentOf(e, b.id).sessionId);
+  expect(agentOf(e, b.id).sessionId).not.toBe(b.sessionId);
+});
+
 test('Claude 가 죽을 때 기다리던 사람 입력은 남고, 다음 입력 때 먼저 보낸 뒤 대기 메시지를 전달', async () => {
   const e = await start();
   const { a, b } = setup(e);
