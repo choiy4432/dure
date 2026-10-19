@@ -8,6 +8,8 @@ export type UiState = Snapshot & {
   history: Record<AgentId, HistoryItem[]>
   historyStatus: Record<AgentId, { state: 'loading' | 'ready' | 'error'; error?: string }>
   streaming: Record<AgentId, string>
+  /** 에이전트마다 마지막 assistant 글과 그 시각 — 기록을 안 불러온 에이전트도(관계도 카드의 한 줄 요약) */
+  lastText: Record<AgentId, { text: string; at: number }>
   /** 키 `${from}>${to}` → 마지막으로 전달된 시각(message.updatedAt) */
   lastDelivered: Record<string, number>
 }
@@ -30,10 +32,16 @@ const EVENTS: (keyof EngineEventMap)[] = [
 
 const sameItem = (a: HistoryItem, b: HistoryItem) => JSON.stringify(a) === JSON.stringify(b)
 
+/** assistant 항목의 글(하는 일 블록은 뺀다) — 글이 없으면 '' */
+function assistantText(item: HistoryItem): string {
+  if (item.kind !== 'assistant') return ''
+  return item.blocks.flatMap(b => (b.type === 'text' && b.text.trim() !== '' ? [b.text] : [])).join('\n\n')
+}
+
 export function createStore(api: DureApi): Store {
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0,
-    roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, lastDelivered: {},
+    roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, lastText: {}, lastDelivered: {},
   }
   const listeners = new Set<() => void>()
   let buffer: Ev[] | null = null // 스냅샷을 기다리는 동안 온 이벤트
@@ -94,15 +102,18 @@ export function createStore(api: DureApi): Store {
         break
       case 'history': {
         const { agentId, item } = ev.payload
+        // 흐르는 글·마지막 글은 기록을 불러왔든 아니든 — 안 비우면 다음 차례 글이 앞 차례 뒤에 붙는다
+        const text = assistantText(item)
+        state = {
+          ...state,
+          streaming: state.streaming[agentId] ? { ...state.streaming, [agentId]: '' } : state.streaming,
+          lastText: text ? { ...state.lastText, [agentId]: { text, at: item.t } } : state.lastText,
+        }
         const pending = loading.get(agentId)
         if (pending) { pending.push(item); break }
         const list = state.history[agentId]
         if (!list) break // 아직 안 불러온 에이전트 — 불러올 때 같이 온다
-        state = {
-          ...state,
-          history: { ...state.history, [agentId]: [...list, item] },
-          streaming: { ...state.streaming, [agentId]: '' },
-        }
+        state = { ...state, history: { ...state.history, [agentId]: [...list, item] } }
         break
       }
       case 'agent-event': {
@@ -171,10 +182,20 @@ export function createStore(api: DureApi): Store {
       const loaded = await api.history(id)
       const extra = (loading.get(id) ?? []).filter(it => !loaded.some(l => sameItem(l, it)))
       loading.delete(id)
+      const list = [...loaded, ...extra]
+      // 다시 켠 뒤엔 이벤트로 온 글이 없다 — 불러온 기록의 마지막 글로 채운다(더 새 글이 이미 있으면 그대로)
+      let lastText = state.lastText
+      for (let i = list.length - 1; i >= 0; i--) {
+        const text = assistantText(list[i])
+        if (!text) continue
+        if ((lastText[id]?.at ?? -Infinity) < list[i].t) lastText = { ...lastText, [id]: { text, at: list[i].t } }
+        break
+      }
       set({
         ...state,
-        history: { ...state.history, [id]: [...loaded, ...extra] },
+        history: { ...state.history, [id]: list },
         historyStatus: { ...state.historyStatus, [id]: { state: 'ready' } },
+        lastText,
       })
     } catch (e) {
       loading.delete(id)

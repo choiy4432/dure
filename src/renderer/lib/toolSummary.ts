@@ -1,3 +1,5 @@
+import { josa } from './words'
+
 export type ToolIcon = 'file' | 'edit' | 'run' | 'search' | 'web' | 'handoff' | 'question' | 'other'
 export interface ToolSummary {
   verb: string
@@ -60,4 +62,50 @@ export function toolSummary(name: string, input: unknown): ToolSummary {
       return { verb: '사용', target: m ? m[1] : name, icon: 'other' }
     }
   }
+}
+
+// 승인 요청 제목의 '무엇을 하려' — 하는 일 요약의 동사로 고른다. 이 표 한 곳에서만 정한다.
+const INTENT: Record<string, string> = {
+  수정: '파일을 고치려',
+  만듦: '파일을 만들려',
+  실행: '명령을 실행하려',
+  읽음: '파일을 읽으려',
+  찾음: '파일을 찾아보려',
+  '웹에서 찾아봄': '웹에서 찾아보려',
+  '할 일 정리': '할 일을 정리하려',
+  '도우미에게 맡김': '도우미에게 일을 맡기려',
+  넘김: '일을 넘기려',
+  '동료 확인': '동료를 확인하려',
+  물어봄: '물어보려',
+}
+const INTENT_OTHER = '도구를 쓰려'
+
+/** 승인 요청 제목 — '디자인이 파일을 고치려 해요' */
+export function requestTitle(agentName: string, toolName: string, input: unknown): string {
+  const { verb } = toolSummary(toolName, input)
+  return `${agentName}${josa(agentName, '이/가')} ${INTENT[verb] ?? INTENT_OTHER} 해요`
+}
+
+const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
+const slash = (p: string) => p.replace(/\\/g, '/')
+
+/** 에이전트 폴더 안이면 폴더 기준 경로, 아니면 전체 — 구분자는 '/' 로 */
+function relativeTo(path: string, folder: string | undefined): string {
+  const p = slash(path)
+  if (!folder) return p
+  const base = slash(folder).replace(/\/+$/, '') + '/'
+  return p.toLowerCase().startsWith(base.toLowerCase()) ? p.slice(base.length) : p
+}
+
+/** 승인 요청의 대상 — 파일 경로(폴더 기준)나 명령 첫 줄. 잘림 없이 — 화면이 말줄임을 맡는다 */
+export function requestTarget(toolName: string, input: unknown, folder?: string): string | null {
+  if (FILE_TOOLS.has(toolName)) {
+    const path = field(input, 'file_path') ?? field(input, 'notebook_path')
+    return path ? relativeTo(path, folder) : null
+  }
+  if (toolName === 'Bash' || toolName === 'PowerShell') {
+    const cmd = field(input, 'command')
+    return cmd ? cmd.split(/\r?\n/)[0] : null
+  }
+  return toolSummary(toolName, input).target
 }

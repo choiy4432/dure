@@ -411,3 +411,573 @@ code {
 .empty-card .btn {
   margin-top: 12px;
 }
+
+/* ── 관계도 ─────────────────────────────────────── */
+
+/* 한 줄 말줄임 — 긴 이름·역할·경로가 카드 크기를 바꾸지 않게 */
+.trunc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rm {
+  position: absolute;
+  inset: 0;
+}
+
+/* 화살촉 정의만 담는 보이지 않는 svg */
+.mk-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* 요약 칩(왼쪽 위) · 확대 조절(왼쪽 아래) */
+.sum,
+.zc {
+  position: absolute;
+  left: 16px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  box-shadow: var(--shadow-sm);
+}
+
+.sum {
+  top: 16px;
+}
+
+.sum button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.sum button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.sum b {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.zc {
+  bottom: 16px;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.zc .ib {
+  width: 28px;
+  height: 28px;
+}
+
+.zc .ib:disabled {
+  opacity: 0.45;
+}
+
+.zc-v {
+  width: 40px;
+  text-align: center;
+}
+
+/* 카드 — React Flow 노드 안 */
+.react-flow__node-agent {
+  border-radius: var(--radius-node);
+}
+
+.nd-port.react-flow__handle {
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.nd {
+  display: flex;
+  flex-direction: column;
+  width: 256px;
+  min-height: 136px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-node);
+  box-shadow: var(--shadow-node);
+}
+
+.nd.pend {
+  border-color: var(--warn-strong);
+}
+
+/* 권한 요청 칸이 있는 카드 — 시안 그대로 304px(버튼·링크 한 줄) */
+.nd.wide {
+  width: 304px;
+}
+
+.nd.sel {
+  border-color: var(--primary);
+  box-shadow: var(--shadow-node-sel);
+}
+
+.nh {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 14px 12px;
+}
+
+.av {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-box);
+  background: var(--hover);
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.av.b {
+  background: var(--primary-soft);
+  color: var(--primary-text);
+}
+
+.nt {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.nn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.nn b {
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.nr {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+/* 묻지 않고 실행하는 에이전트 표시 */
+.bp {
+  flex: none;
+  display: inline-grid;
+  color: var(--warn-text);
+}
+
+.au {
+  flex: none;
+  align-self: flex-start;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.au.on {
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.na {
+  padding: 0 14px 12px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-2);
+}
+
+.nf {
+  margin-top: auto;
+  flex: none;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 14px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.st {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.st.w {
+  color: var(--ok-text);
+  font-weight: 700;
+}
+
+.st.p {
+  color: var(--warn-text);
+  font-weight: 700;
+}
+
+.st.e {
+  color: var(--danger-text);
+  font-weight: 700;
+}
+
+.st-l,
+.nf-t {
+  flex: none;
+  white-space: nowrap;
+}
+
+.nf-err {
+  font-weight: 400;
+}
+
+.um {
+  flex: none;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.um b {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--danger);
+  color: var(--on-danger);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * 승인 기다림 칸 — 카드 안 앰버 띠.
+ * 위아래 8px 이면 권한 카드 높이가 199px — 격자 칸(136) + 간격(64) = 200 안에 들어 아래 카드와 겹치지 않는다.
+ */
+.ap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  font-size: 13px;
+  line-height: 18px;
+  cursor: default;
+}
+
+.ap code {
+  align-self: flex-start;
+  max-width: 100%;
+  font-size: 12px;
+  line-height: 16px;
+  background: var(--warn-code-bg);
+  color: var(--warn-code-text);
+}
+
+.ap > .lk {
+  align-self: flex-start;
+}
+
+/* 제목은 두 줄까지(이름이 아주 길 때) */
+.ap-t {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ab {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* 글 링크 버튼 */
+.lk {
+  height: 28px;
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--primary-text);
+}
+
+.lk:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.lk:disabled {
+  opacity: 0.45;
+}
+
+/* 넘김 엣지 — 선은 카드 아래, 연결점·넘김 점은 카드 위(.he-top) */
+.he {
+  fill: none;
+  stroke-width: 2px;
+}
+
+.he.on {
+  stroke: var(--primary);
+}
+
+.he.old {
+  stroke: var(--primary-soft-border);
+}
+
+.he.wait {
+  stroke: var(--muted);
+  stroke-width: 1.5px;
+  stroke-dasharray: 6 5;
+}
+
+.he.held {
+  stroke: var(--warn);
+  stroke-width: 1.5px;
+  stroke-dasharray: 6 5;
+}
+
+.he.queue {
+  stroke: var(--muted);
+  stroke-dasharray: 0 5;
+  stroke-linecap: round;
+}
+
+.he-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16px;
+  cursor: pointer;
+}
+
+.mk {
+  stroke-linejoin: round;
+}
+
+.mk.on {
+  fill: var(--primary);
+  stroke: var(--primary);
+}
+
+.mk.old {
+  fill: var(--primary-soft-border);
+  stroke: var(--primary-soft-border);
+}
+
+.mk.wait {
+  fill: var(--muted);
+  stroke: var(--muted);
+}
+
+.mk.held {
+  fill: var(--warn);
+  stroke: var(--warn);
+}
+
+.he-top {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.pt {
+  fill: var(--bg);
+  stroke: var(--idle);
+  stroke-width: 1.5px;
+}
+
+.pt.on {
+  stroke: var(--primary);
+}
+
+.pkt-dot {
+  fill: var(--primary);
+  stroke: var(--bg);
+  stroke-width: 2px;
+  opacity: 0;
+}
+
+.pkt-ring {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 2px;
+  opacity: 0;
+}
+
+/* 엣지 가운데 상태 알약 — 갓 전달되면 파랑 */
+.el {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: all;
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: var(--shadow-label);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.el:hover {
+  border-color: var(--border-strong);
+}
+
+.el.on {
+  border-color: var(--primary-soft-border);
+  background: var(--primary-soft);
+  color: var(--primary-text);
+  font-weight: 500;
+}
+
+/* 두 에이전트 사이 메시지 창 */
+.pm {
+  position: absolute;
+  z-index: 7;
+  width: 320px;
+  max-width: calc(100% - 24px);
+  max-height: min(360px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  box-shadow: var(--shadow-node);
+}
+
+.pm:focus {
+  outline: none;
+}
+
+.pm-hd {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.pm-n {
+  flex: none;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pm-ic {
+  color: var(--muted);
+}
+
+.pm-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+}
+
+.pm-row {
+  padding: 8px 14px;
+}
+
+.pm-row + .pm-row {
+  border-top: 1px solid var(--border-soft);
+}
+
+.pm-row.off {
+  opacity: 0.5;
+}
+
+.pm-h {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-2);
+}
+
+.pm-h b {
+  max-width: 96px;
+}
+
+.pm-m {
+  flex: none;
+  color: var(--muted);
+}
+
+.pm-t {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.pm-empty {
+  margin: 0;
+  padding: 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pkt {
+    display: none;
+  }
+}

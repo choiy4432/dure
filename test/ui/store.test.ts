@@ -130,6 +130,38 @@ describe('store events', () => {
     emit('history', { agentId: 'b', item: note('x') })
     expect(s.getState().history.b).toBeUndefined()
   })
+
+  it('기록을 안 불러온 에이전트도 흐르는 글은 차례마다 비워진다', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('agent-event', { agentId: 'b', event: { kind: 'text-delta', text: '첫 답' } })
+    emit('history', { agentId: 'b', item: { t: 2, kind: 'assistant', blocks: [{ type: 'text', text: '첫 답' }] } })
+    expect(s.getState().streaming.b).toBe('')
+    emit('agent-event', { agentId: 'b', event: { kind: 'text-delta', text: '둘째' } })
+    expect(s.getState().streaming.b).toBe('둘째')
+  })
+
+  it('lastText = 에이전트마다 마지막 assistant 글과 시각(기록을 불러왔든 아니든)', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    const said = (text: string, t: number): HistoryItem => ({ t, kind: 'assistant', blocks: [{ type: 'text', text }] })
+    emit('history', { agentId: 'b', item: said('배너 문구를 넘겼어요', 5) })
+    emit('history', { agentId: 'b', item: { t: 6, kind: 'assistant', blocks: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }] } })
+    emit('history', { agentId: 'b', item: note('알림', 7) })
+    expect(s.getState().lastText.b).toEqual({ text: '배너 문구를 넘겼어요', at: 5 })
+  })
+
+  it('기록을 불러오면 그 안의 마지막 assistant 글로 lastText 를 채운다', async () => {
+    const said = (text: string, t: number): HistoryItem => ({ t, kind: 'assistant', blocks: [{ type: 'text', text }] })
+    const { api } = fake({ history: async () => [said('옛 답', 1), said('새 답', 3), note('끝', 4)] })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    await vi.waitFor(() => expect(s.getState().history.a).toBeDefined())
+    expect(s.getState().lastText.a).toEqual({ text: '새 답', at: 3 })
+  })
 })
 
 describe('store selection', () => {

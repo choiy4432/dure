@@ -61,6 +61,13 @@ export function edges(roomId: RoomId, agents: AgentView[], messages: RelayMessag
   }))
 }
 
+/** 두 에이전트 사이에 오간 메시지 — 양방향, 최신 먼저(같은 시각이면 나중에 바뀐 것 먼저), 버린 것도 넣는다 */
+export function pairMessages(a: AgentId, b: AgentId, messages: RelayMessage[]): RelayMessage[] {
+  return messages
+    .filter(m => (m.from === a && m.to === b) || (m.from === b && m.to === a))
+    .sort((x, y) => y.createdAt - x.createdAt || y.updatedAt - x.updatedAt)
+}
+
 export function label(edge: EdgeView, now: number): string {
   switch (edge.state) {
     case 'delivered': {

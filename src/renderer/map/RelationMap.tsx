@@ -1,0 +1,324 @@
+import '@xyflow/react/dist/base.css'
+import {
+  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
+  type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type RefObject,
+} from 'react'
+import {
+  Background, BackgroundVariant, ReactFlow, ReactFlowProvider, applyNodeChanges,
+  type EdgeTypes, type NodeChange, type NodeTypes,
+} from '@xyflow/react'
+import { ArrowLeftRight, ArrowRight } from 'lucide-react'
+import type { AgentId, MessageState, RoomId } from '../../engine/types'
+import { getStore, useDure } from '../state/store'
+import { edges as edgeViews, pairMessages, type EdgeView } from '../state/selectors'
+import { ago } from '../lib/words'
+import { useNow } from '../lib/useNow'
+import { AgentNode, type AgentFlowNode } from './AgentNode'
+import { HandoffEdge, MARKER_TONES, markerId, type HandoffFlowEdge } from './HandoffEdge'
+import { SummaryChips } from './SummaryChips'
+import { FIT_OPTIONS, ZoomControls } from './ZoomControls'
+import { isUnplaced, placeMissing, type Point } from './layout'
+
+const nodeTypes: NodeTypes = { agent: AgentNode }
+const edgeTypes: EdgeTypes = { handoff: HandoffEdge }
+
+/** 같은 두 카드를 반대로 잇는 선이 비키는 거리 */
+const PAIR_SHIFT = 12
+
+const ARIA = {
+  'node.a11yDescription.default': 'Enter 나 스페이스를 누르면 오른쪽 패널에 열려요. 끌어서 자리를 옮길 수 있어요.',
+  'node.a11yDescription.keyboardDisabled': 'Enter 나 스페이스를 누르면 오른쪽 패널에 열려요.',
+  'node.a11yDescription.ariaLiveMessage': () => '카드를 옮겼어요',
+  'edge.a11yDescription.default': '',
+  'handle.ariaLabel': '연결점',
+}
+
+const STATE_WORD: Record<MessageState, string> = {
+  delivered: '전달됨',
+  pending: '확인 대기',
+  held: '상한 대기',
+  queued: '작업 끝 대기',
+  dismissed: '버림',
+}
+
+/** 관계도 — 그 방의 에이전트 카드와 넘김 엣지. 방을 바꾸면 처음부터 다시 그린다(화면 맞춤 포함) */
+export function RelationMap() {
+  const roomId = useDure(s => s.roomId)
+  if (!roomId) return null
+  return (
+    <ReactFlowProvider key={roomId}>
+      <MapCanvas roomId={roomId} />
+    </ReactFlowProvider>
+  )
+}
+
+interface Seat {
+  id: AgentId
+  name: string
+  role: string
+  pos: Point
+}
+const seatsEqual = (a: Seat[], b: Seat[]) =>
+  a.length === b.length &&
+  a.every((x, i) => x.id === b[i].id && x.name === b[i].name && x.role === b[i].role && x.pos.x === b[i].pos.x && x.pos.y === b[i].pos.y)
+
+const edgesEqual = (a: EdgeView[], b: EdgeView[]) =>
+  a.length === b.length &&
+  a.every((x, i) => x.id === b[i].id && x.state === b[i].state && x.at === b[i].at && x.count === b[i].count)
+
+interface PairAt {
+  a: AgentId
+  b: AgentId
+  x: number
+  y: number
+}
+
+function MapCanvas({ roomId }: { roomId: RoomId }) {
+  const seats = useDure(
+    s => s.agents.filter(a => a.roomId === roomId).map(a => ({ id: a.id, name: a.name, role: a.role, pos: a.pos })),
+    seatsEqual,
+  )
+  const views = useDure(s => edgeViews(roomId, s.agents, s.messages), edgesEqual)
+  const wrap = useRef<HTMLDivElement>(null)
+  // 화면에서 정한 자리 — 엔진에 저장되어 스토어로 돌아오기 전까지 이 값을 쓴다
+  const placed = useRef(new Map<AgentId, Point>()) // 처음 그릴 때 정해 준 자리({0,0} 이던 에이전트)
+  const moved = useRef(new Map<AgentId, Point>()) // 끌어서 옮긴 자리
+  const saving = useRef(new Set<AgentId>())
+
+  // 자리 없는({0,0}) 에이전트는 겹치지 않는 칸을 정해 둔다(한 번만 — 저장은 아래 effect 에서)
+  if (seats.some(a => isUnplaced(a.pos) && !placed.current.has(a.id))) {
+    const known = seats.map(a => ({ id: a.id, pos: moved.current.get(a.id) ?? placed.current.get(a.id) ?? a.pos }))
+    for (const [id, p] of placeMissing(known)) placed.current.set(id, p)
+  }
+  const posOf = (a: Seat): Point =>
+    moved.current.get(a.id) ?? (isUnplaced(a.pos) ? placed.current.get(a.id) : undefined) ?? a.pos
+
+  const build = (prev: AgentFlowNode[]): AgentFlowNode[] => {
+    const byId = new Map(prev.map(n => [n.id, n]))
+    return seats.map(a => {
+      const position = posOf(a)
+      const ariaLabel = a.role ? `${a.name} · ${a.role}` : a.name
+      const old = byId.get(a.id)
+      if (old && old.ariaLabel === ariaLabel && (old.dragging || (old.position.x === position.x && old.position.y === position.y))) return old
+      return { ...(old ?? { id: a.id, type: 'agent' as const, data: {} }), position, ariaLabel }
+    })
+  }
+  const [nodes, setNodes] = useState<AgentFlowNode[]>(() => build([]))
+  // build 는 seats 와 ref 만 읽는다 — 바뀐 카드가 없으면 배열도 그대로(다시 그리지 않게)
+  useEffect(() => {
+    setNodes(prev => {
+      const next = build(prev)
+      return next.length === prev.length && next.every((n, i) => n === prev[i]) ? prev : next
+    })
+  }, [seats])
+
+  // 정해 준 자리를 엔진에 저장 — 끝나면 스냅샷을 다시 받아 스토어 자리가 따라오게
+  useEffect(() => {
+    const todo = seats.filter(a => isUnplaced(a.pos) && placed.current.has(a.id) && !saving.current.has(a.id))
+    if (todo.length === 0) return
+    for (const a of todo) saving.current.add(a.id)
+    void Promise.allSettled(todo.map(a => window.dure.updateAgent(a.id, { pos: placed.current.get(a.id)! })))
+      .then(() => getStore().refresh())
+      .catch(() => {}) // 못 받으면 이번 실행에선 정해 둔 자리 그대로 보인다
+      .finally(() => todo.forEach(a => saving.current.delete(a.id)))
+  }, [seats])
+
+  const onNodesChange = useCallback((changes: NodeChange<AgentFlowNode>[]) => {
+    setNodes(nds => applyNodeChanges(changes, nds))
+  }, [])
+
+  const onNodeDragStop = useCallback((_e: unknown, node: AgentFlowNode) => {
+    const p = { x: Math.round(node.position.x), y: Math.round(node.position.y) }
+    if (isUnplaced(p)) p.x = 1 // {0,0} 은 '자리 없음' 뜻이라 피한다
+    moved.current.set(node.id, p)
+    void window.dure
+      .updateAgent(node.id, { pos: p })
+      .then(() => getStore().refresh())
+      .catch(() => {})
+      .finally(() => {
+        if (moved.current.get(node.id) === p) moved.current.delete(node.id)
+      })
+  }, [])
+
+  const [pair, setPair] = useState<PairAt | null>(null)
+  const openPair = useCallback((a: AgentId, b: AgentId, e: MouseEvent) => {
+    const r = wrap.current?.getBoundingClientRect()
+    let x = e.clientX
+    let y = e.clientY
+    if (e.detail === 0) {
+      // 키보드로 누른 라벨 — 누른 자리가 없으니 라벨 아래에
+      const label = (e.currentTarget as Element).getBoundingClientRect()
+      x = label.left + label.width / 2
+      y = label.bottom
+    }
+    setPair({ a, b, x: x - (r?.left ?? 0), y: y - (r?.top ?? 0) })
+  }, [])
+  const closePair = useCallback(() => setPair(null), [])
+
+  const flowEdges = useMemo<HandoffFlowEdge[]>(() => {
+    const ids = new Set(views.map(v => v.id))
+    return views.map(v => ({
+      id: v.id,
+      source: v.from,
+      target: v.to,
+      type: 'handoff',
+      data: {
+        state: v.state,
+        at: v.at,
+        count: v.count,
+        shift: ids.has(`${v.to}>${v.from}`) ? (v.from < v.to ? -PAIR_SHIFT : PAIR_SHIFT) : 0,
+        onOpen: openPair,
+      },
+    }))
+  }, [views, openPair])
+
+  // 키보드로 카드를 고르기 — 카드(노드)에 포커스가 있을 때 Enter·스페이스
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    const el = e.target as HTMLElement
+    if (!el.classList?.contains('react-flow__node')) return
+    const id = el.getAttribute('data-id')
+    if (!id) return
+    e.preventDefault()
+    getStore().selectAgent(id)
+  }
+
+  return (
+    <div className="rm" ref={wrap} onKeyDown={onKeyDown}>
+      <svg className="mk-defs" aria-hidden="true" focusable="false">
+        <defs>
+          {MARKER_TONES.map(tone => (
+            <marker
+              key={tone}
+              id={markerId(tone)}
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="10"
+              markerHeight="10"
+              markerUnits="userSpaceOnUse"
+              orient="auto"
+            >
+              <path d="M1.5 1.5 9 5 1.5 8.5z" className={`mk ${tone}`} />
+            </marker>
+          ))}
+        </defs>
+      </svg>
+      <ReactFlow<AgentFlowNode, HandoffFlowEdge>
+        nodes={nodes}
+        edges={flowEdges}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        onNodesChange={onNodesChange}
+        onNodeClick={(_e, node) => getStore().selectAgent(node.id)}
+        onNodeDragStop={onNodeDragStop}
+        onEdgeClick={(e, edge) => openPair(edge.source, edge.target, e)}
+        onMoveStart={closePair}
+        fitView
+        fitViewOptions={FIT_OPTIONS}
+        minZoom={0.25}
+        maxZoom={2}
+        nodesDraggable
+        nodesConnectable={false}
+        elementsSelectable={false}
+        edgesFocusable={false}
+        zoomOnDoubleClick={false}
+        deleteKeyCode={null}
+        selectionKeyCode={null}
+        multiSelectionKeyCode={null}
+        ariaLabelConfig={ARIA}
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background variant={BackgroundVariant.Dots} gap={16} size={3} color="var(--dot)" bgColor="var(--canvas)" />
+      </ReactFlow>
+      <SummaryChips roomId={roomId} />
+      <ZoomControls />
+      {pair && <PairPopover key={`${pair.a}>${pair.b}`} at={pair} bounds={wrap} onClose={closePair} />}
+    </div>
+  )
+}
+
+const POP_W = 320
+const POP_MARGIN = 12
+
+/** 엣지를 누르면 뜨는 작은 창 — 두 에이전트 사이에 오간 메시지(양방향, 최신 먼저). 바깥 누르기·Esc 로 닫힌다 */
+export function PairPopover({ at, bounds, onClose }: { at: PairAt; bounds: RefObject<HTMLDivElement | null>; onClose: () => void }) {
+  const list = useDure(s => pairMessages(at.a, at.b, s.messages))
+  const names = useDure(s => Object.fromEntries(s.agents.filter(x => x.id === at.a || x.id === at.b).map(x => [x.id, x.name])) as Record<AgentId, string>,
+    (p, q) => p[at.a] === q[at.a] && p[at.b] === q[at.b])
+  const now = useNow()
+  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ left: at.x + POP_MARGIN, top: at.y + POP_MARGIN })
+  const name = (id: AgentId) => names[id] ?? '지워진 에이전트'
+
+  // 창이 관계도 밖으로 나가지 않게 — 그린 뒤 크기를 재서 안으로 들인다
+  useLayoutEffect(() => {
+    const box = bounds.current?.getBoundingClientRect()
+    const el = ref.current
+    if (!box || !el) return
+    const w = el.offsetWidth || POP_W
+    const h = el.offsetHeight
+    let left = Math.max(POP_MARGIN, at.x + POP_MARGIN)
+    let top = Math.max(POP_MARGIN, at.y + POP_MARGIN)
+    if (left + w > box.width - POP_MARGIN) left = Math.max(POP_MARGIN, at.x - POP_MARGIN - w)
+    if (top + h > box.height - POP_MARGIN) top = Math.max(POP_MARGIN, box.height - POP_MARGIN - h)
+    setPos({ left, top })
+  }, [at, bounds, list.length])
+
+  useEffect(() => {
+    // 열리면 창으로 포커스, Esc 로 닫으면 연 자리(라벨)로 돌려준다
+    const opener = document.activeElement as HTMLElement | null
+    ref.current?.focus()
+    const down = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose()
+    }
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      onClose()
+      opener?.focus?.()
+    }
+    document.addEventListener('pointerdown', down, true)
+    document.addEventListener('keydown', key)
+    return () => {
+      document.removeEventListener('pointerdown', down, true)
+      document.removeEventListener('keydown', key)
+    }
+  }, [onClose])
+
+  return (
+    <div
+      ref={ref}
+      className="pm"
+      role="dialog"
+      aria-label={`${name(at.a)} · ${name(at.b)} 사이에 오간 메시지`}
+      tabIndex={-1}
+      style={{ left: pos.left, top: pos.top }}
+    >
+      <div className="pm-hd">
+        <b className="trunc">{name(at.a)}</b>
+        <ArrowLeftRight className="i pm-ic" size={14} aria-hidden="true" />
+        <b className="trunc">{name(at.b)}</b>
+        <span className="pm-n">메시지 {list.length}개</span>
+      </div>
+      {list.length === 0 ? (
+        <p className="pm-empty">오간 메시지가 없어요</p>
+      ) : (
+        <ul className="pm-list">
+          {list.map(m => (
+            <li key={m.id} className={m.state === 'dismissed' ? 'pm-row off' : 'pm-row'}>
+              <div className="pm-h">
+                <b className="trunc">{name(m.from)}</b>
+                <ArrowRight className="i pm-ic" size={12} aria-hidden="true" />
+                <b className="trunc">{name(m.to)}</b>
+                <span className="pm-m">
+                  · {STATE_WORD[m.state]} · {ago(m.createdAt, now)}
+                </span>
+              </div>
+              <p className="pm-t">{m.text}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}

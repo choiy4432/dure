@@ -13,7 +13,9 @@ beforeEach(() => {
   vi.resetModules()
   localStorage.clear()
   snapshot = { claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 3 }
-  ;(window as any).dure = { snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
+  ;(window as any).dure = {
+    snapshot: async () => snapshot, history: async () => [], on: () => () => {}, updateAgent: async () => ({}),
+  }
 })
 afterEach(() => cleanup())
 

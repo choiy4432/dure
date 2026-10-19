@@ -3,6 +3,7 @@ import { useDure } from './state/store'
 import { TopBar } from './shell/TopBar'
 import { SplitView } from './shell/SplitView'
 import { Empty } from './shell/Empty'
+import { RelationMap } from './map/RelationMap'
 
 // 방 고르기·방 만들기·에이전트 추가·설정 대화상자는 아직 없다 — 생기면 아래 처리들을 잇는다
 const openRoomMenu = () => {}
@@ -39,7 +40,7 @@ export function App() {
       <SplitView
         left={
           <main className="cv" aria-label="관계도">
-            {v.agentCount === 0 && <Empty kind="agent" onAction={openAddAgent} />}
+            {v.agentCount === 0 ? <Empty kind="agent" onAction={openAddAgent} /> : <RelationMap />}
           </main>
         }
         right={<aside className="pnl" aria-label={v.selectedName ?? '에이전트'} />}

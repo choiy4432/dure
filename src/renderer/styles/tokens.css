@@ -43,6 +43,8 @@
   --warn-code-bg: #FEF3C7;
   --warn-code-text: #78350F;
   --danger: #EF4444;           /* 안 읽음·멈춤 */
+  --danger-text: #B91C1C;      /* 멈춤 글(흰 바탕 위 읽히는 빨강) */
+  --on-danger: #FFFFFF;        /* 빨간 배지 위 글 */
   --idle: #94A3B8;             /* 대기 */
 
   /* 반경 */

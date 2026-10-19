@@ -1,0 +1,174 @@
+import { memo, useEffect, useRef, useState, type MouseEvent } from 'react'
+import {
+  EdgeLabelRenderer, Position, ViewportPortal, getBezierPath, useInternalNode,
+  type Edge, type EdgeProps, type InternalNode,
+} from '@xyflow/react'
+import type { AgentId, MessageState } from '../../engine/types'
+import { useDure } from '../state/store'
+import { label } from '../state/selectors'
+import { useNow } from '../lib/useNow'
+import { reducedMotion } from '../lib/motion'
+import { NODE_SIZE, edgeEnds, type Rect, type Side } from './layout'
+
+export interface HandoffEdgeData extends Record<string, unknown> {
+  state: MessageState
+  /** 가장 최근 메시지가 바뀐 시각 */
+  at: number
+  count: number
+  /** 반대 방향 엣지가 있으면 겹치지 않게 비키는 거리 */
+  shift: number
+  /** 선·라벨을 누르면 — 두 에이전트 사이 메시지 창을 연다 */
+  onOpen: (from: AgentId, to: AgentId, e: MouseEvent) => void
+}
+export type HandoffFlowEdge = Edge<HandoffEdgeData, 'handoff'>
+
+/** 이 시간 안에 전달된 엣지는 파란 알약·진한 선 */
+export const FRESH_MS = 60_000
+/** 넘김 점이 엣지를 따라가는 시간 · 받는 쪽 고리가 퍼지는 시간 */
+export const MOVE_MS = 400
+const RING_MS = 450
+/** 처음 그릴 때 이보다 오래된 전달은 움직이지 않는다 */
+const REPLAY_WINDOW_MS = 2_000
+
+const POSITION: Record<Side, Position> = {
+  left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom,
+}
+
+/** 선 모양 — on 갓 전달 · old 전달된 지 오래 · wait 확인 대기 · held 상한 대기 · queue 작업 끝 대기 */
+type Tone = 'on' | 'old' | 'wait' | 'held' | 'queue'
+export const MARKER_TONES = ['on', 'old', 'wait', 'held'] as const
+export const markerId = (tone: (typeof MARKER_TONES)[number]) => `dure-mk-${tone}`
+
+function toneOf(state: MessageState, fresh: boolean): Tone {
+  switch (state) {
+    case 'delivered': return fresh ? 'on' : 'old'
+    case 'held': return 'held'
+    case 'queued': return 'queue'
+    default: return 'wait'
+  }
+}
+
+function rectOf(n: InternalNode): Rect {
+  return {
+    x: n.internals.positionAbsolute.x,
+    y: n.internals.positionAbsolute.y,
+    w: n.measured.width ?? NODE_SIZE.w,
+    h: n.measured.height ?? NODE_SIZE.h,
+  }
+}
+
+const easeOut = (x: number) => 1 - Math.pow(1 - x, 3)
+
+/** 점이 선을 따라 보낸 쪽 → 받는 쪽으로(ease-out), 끝나면 받는 자리에 고리가 한 번 퍼진다 */
+function playPacket(path: SVGPathElement, dot: SVGCircleElement, ring: SVGCircleElement): () => void {
+  const len = path.getTotalLength()
+  const t0 = performance.now()
+  let raf = 0
+  const frame = (t: number) => {
+    const p = (t - t0) / MOVE_MS
+    if (p < 1) {
+      const pt = path.getPointAtLength(easeOut(Math.max(0, p)) * len)
+      dot.setAttribute('cx', String(pt.x))
+      dot.setAttribute('cy', String(pt.y))
+      dot.style.opacity = '1'
+    } else {
+      dot.style.opacity = '0'
+      const q = (t - t0 - MOVE_MS) / RING_MS
+      if (q >= 1) {
+        ring.style.opacity = '0'
+        return
+      }
+      ring.setAttribute('r', String(4 + 10 * easeOut(q)))
+      ring.style.opacity = String(0.5 * (1 - q))
+    }
+    raf = requestAnimationFrame(frame)
+  }
+  raf = requestAnimationFrame(frame)
+  return () => {
+    cancelAnimationFrame(raf)
+    dot.style.opacity = '0'
+    ring.style.opacity = '0'
+  }
+}
+
+/** lastDelivered 가 바뀔 때마다 1씩 오르는 수 — 처음 그릴 때의 지난 전달·움직임 줄이기는 세지 않는다 */
+function usePacketShot(deliveredAt: number | undefined): number {
+  const [shot, setShot] = useState(0)
+  const seen = useRef<{ at: number | undefined } | null>(null)
+  useEffect(() => {
+    const first = seen.current === null
+    const was = seen.current?.at
+    seen.current = { at: deliveredAt }
+    if (deliveredAt === undefined || deliveredAt === was) return
+    if (first && Date.now() - deliveredAt > REPLAY_WINDOW_MS) return
+    if (reducedMotion()) return
+    setShot(n => n + 1)
+  }, [deliveredAt])
+  return shot
+}
+
+/** 넘김 엣지 — 카드 테두리끼리 부드러운 곡선 + 화살촉, 가운데 상태 알약, 전달되는 순간 점·고리 */
+export const HandoffEdge = memo(function HandoffEdge({ id, source, target, data }: EdgeProps<HandoffFlowEdge>) {
+  const s = useInternalNode(source)
+  const t = useInternalNode(target)
+  const selected = useDure(st => st.selectedAgentId)
+  const deliveredAt = useDure(st => st.lastDelivered[id])
+  const now = useNow()
+  const pathRef = useRef<SVGPathElement>(null)
+  const dotRef = useRef<SVGCircleElement>(null)
+  const ringRef = useRef<SVGCircleElement>(null)
+  const shot = usePacketShot(deliveredAt)
+
+  useEffect(() => {
+    const path = pathRef.current
+    const dot = dotRef.current
+    const ring = ringRef.current
+    if (!shot || !path || !dot || !ring || typeof path.getTotalLength !== 'function') return
+    return playPacket(path, dot, ring)
+  }, [shot])
+
+  if (!s || !t || !data) return null
+  const ends = edgeEnds(rectOf(s), rectOf(t), data.shift)
+  const [d, labelX, labelY] = getBezierPath({
+    sourceX: ends.source.x,
+    sourceY: ends.source.y,
+    sourcePosition: POSITION[ends.sourcePosition],
+    targetX: ends.target.x,
+    targetY: ends.target.y,
+    targetPosition: POSITION[ends.targetPosition],
+  })
+  const view = { id, from: source, to: target, state: data.state, at: data.at, count: data.count }
+  const fresh = data.state === 'delivered' && now - data.at < FRESH_MS
+  const tone = toneOf(data.state, fresh)
+  const marker = tone === 'queue' ? 'wait' : tone
+
+  return (
+    <>
+      <path ref={pathRef} d={d} className={`he ${tone}`} markerEnd={`url(#${markerId(marker)})`} />
+      {/* 누르기 쉬운 넓은 투명 선 — 누름은 RelationMap 의 onEdgeClick 이 받는다 */}
+      <path d={d} className="he-hit" />
+      <EdgeLabelRenderer>
+        <button
+          type="button"
+          className={`el nodrag nopan${fresh ? ' on' : ''}`}
+          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+          aria-haspopup="dialog"
+          onClick={e => data.onOpen(source, target, e)}
+        >
+          {label(view, now)}
+        </button>
+      </EdgeLabelRenderer>
+      {/* 연결점·넘김 점은 카드 위에 그린다(선은 카드 아래) — 시안처럼 고리가 카드에 가리지 않게 */}
+      <ViewportPortal>
+        <svg className="he-top" aria-hidden="true">
+          <circle className={`pt${selected === source ? ' on' : ''}`} cx={ends.source.x} cy={ends.source.y} r={3.5} />
+          <circle className={`pt${selected === target ? ' on' : ''}`} cx={ends.targetPort.x} cy={ends.targetPort.y} r={3.5} />
+          <g className="pkt">
+            <circle ref={dotRef} className="pkt-dot" r={4.5} cx={ends.source.x} cy={ends.source.y} />
+            <circle ref={ringRef} className="pkt-ring" r={4} cx={ends.targetPort.x} cy={ends.targetPort.y} />
+          </g>
+        </svg>
+      </ViewportPortal>
+    </>
+  )
+})

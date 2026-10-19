@@ -1,0 +1,36 @@
+import { useReactFlow, useStore } from '@xyflow/react'
+import { Maximize, Minus, Plus } from 'lucide-react'
+import { moveMs } from '../lib/motion'
+
+/**
+ * 처음 그릴 때와 '모두 보기' 에 쓰는 맞춤 — 카드가 적어도 100% 보다 크게 키우지 않는다.
+ * 위·아래 여백은 요약 칩(위)·확대 조절(아래)에 카드가 가리지 않을 만큼.
+ */
+export const FIT_OPTIONS = { maxZoom: 1, padding: { top: '72px', bottom: '64px', x: '48px' } } as const
+
+const EPS = 0.001
+
+/** 관계도 왼쪽 아래 — 축소 · 배율 · 확대 · 모두 보기 */
+export function ZoomControls() {
+  const zoom = useStore(s => s.transform[2])
+  const min = useStore(s => s.minZoom)
+  const max = useStore(s => s.maxZoom)
+  const flow = useReactFlow()
+  const duration = () => moveMs(200)
+
+  return (
+    <div className="zc" role="group" aria-label="확대 조절">
+      <button type="button" className="ib" aria-label="축소" title="축소" disabled={zoom <= min + EPS} onClick={() => void flow.zoomOut({ duration: duration() })}>
+        <Minus className="i" />
+      </button>
+      <span className="zc-v">{Math.round(zoom * 100)}%</span>
+      <button type="button" className="ib" aria-label="확대" title="확대" disabled={zoom >= max - EPS} onClick={() => void flow.zoomIn({ duration: duration() })}>
+        <Plus className="i" />
+      </button>
+      <span className="vr" aria-hidden="true" />
+      <button type="button" className="ib" aria-label="모두 보기" title="모두 보기" onClick={() => void flow.fitView({ ...FIT_OPTIONS, duration: duration() })}>
+        <Maximize className="i" />
+      </button>
+    </div>
+  )
+}

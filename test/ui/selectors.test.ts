@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { displayStatus, edges, label, summary, unreadFor, type EdgeView } from '../../src/renderer/state/selectors'
+import { displayStatus, edges, label, pairMessages, summary, unreadFor, type EdgeView } from '../../src/renderer/state/selectors'
 import type { PendingRequest, RelayMessage, MessageState } from '../../src/engine/types'
 import type { AgentView } from '../../src/shared/ipcContract'
 
@@ -91,5 +91,32 @@ describe('label', () => {
     expect(label(e('pending'), 0)).toBe('확인 대기')
     expect(label(e('held'), 0)).toBe('상한 대기')
     expect(label(e('queued'), 0)).toBe('작업 끝 대기')
+  })
+})
+
+describe('pairMessages', () => {
+  it('두 에이전트 사이 양방향 메시지를 최신 먼저, 버린 것도 넣는다', () => {
+    const ms = [
+      msg('a', 'b', 'delivered', { id: 'x1', createdAt: 10, updatedAt: 12 }),
+      msg('b', 'a', 'pending', { id: 'x2', createdAt: 30, updatedAt: 30 }),
+      msg('a', 'c', 'pending', { id: 'x3', createdAt: 40 }),
+      msg('c', 'b', 'pending', { id: 'x4', createdAt: 50 }),
+      msg('a', 'b', 'dismissed', { id: 'x5', createdAt: 20, updatedAt: 25 }),
+    ]
+    expect(pairMessages('a', 'b', ms).map(m => m.id)).toEqual(['x2', 'x5', 'x1'])
+    expect(pairMessages('b', 'a', ms).map(m => m.id)).toEqual(['x2', 'x5', 'x1'])
+  })
+
+  it('같은 시각이면 나중에 바뀐 것이 먼저, 원본 배열은 그대로', () => {
+    const ms = [
+      msg('a', 'b', 'queued', { id: 'y1', createdAt: 10, updatedAt: 10 }),
+      msg('a', 'b', 'delivered', { id: 'y2', createdAt: 10, updatedAt: 15 }),
+    ]
+    expect(pairMessages('a', 'b', ms).map(m => m.id)).toEqual(['y2', 'y1'])
+    expect(ms.map(m => m.id)).toEqual(['y1', 'y2'])
+  })
+
+  it('오간 메시지가 없으면 빈 목록', () => {
+    expect(pairMessages('a', 'b', [msg('a', 'c', 'pending')])).toEqual([])
   })
 })

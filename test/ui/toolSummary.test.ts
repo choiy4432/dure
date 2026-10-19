@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { toolSummary } from '../../src/renderer/lib/toolSummary'
+import { requestTarget, requestTitle, toolSummary } from '../../src/renderer/lib/toolSummary'
 
 describe('toolSummary', () => {
   it('파일 도구는 마지막 조각만', () => {
@@ -30,5 +30,36 @@ describe('toolSummary', () => {
     expect(toolSummary('mcp__x__y', {})).toEqual({ verb: '사용', target: 'y', icon: 'other' })
     expect(toolSummary('Foo', null)).toEqual({ verb: '사용', target: 'Foo', icon: 'other' })
     expect(toolSummary('Read', null).target).toBeNull()
+  })
+})
+
+describe('requestTitle', () => {
+  it('하는 일 요약의 동사로 "<이름>이 <무엇>하려 해요"', () => {
+    expect(requestTitle('디자인', 'Edit', { file_path: 'a.css' })).toBe('디자인이 파일을 고치려 해요')
+    expect(requestTitle('디자인', 'MultiEdit', {})).toBe('디자인이 파일을 고치려 해요')
+    expect(requestTitle('서버', 'Write', { file_path: 'a.ts' })).toBe('서버가 파일을 만들려 해요')
+    expect(requestTitle('서버', 'Bash', { command: 'npm test' })).toBe('서버가 명령을 실행하려 해요')
+    expect(requestTitle('서버', 'PowerShell', { command: 'dir' })).toBe('서버가 명령을 실행하려 해요')
+    expect(requestTitle('기획', 'WebFetch', { url: 'https://x.y' })).toBe('기획이 웹에서 찾아보려 해요')
+  })
+
+  it('모르는 도구는 "도구를 쓰려"', () => {
+    expect(requestTitle('기획', 'mcp__figma__get_file', {})).toBe('기획이 도구를 쓰려 해요')
+  })
+})
+
+describe('requestTarget', () => {
+  it('파일은 에이전트 폴더 기준 경로(슬래시로), 폴더 밖이면 전체 경로', () => {
+    expect(requestTarget('Write', { file_path: 'C:\\w\\src\\styles\\tokens.css' }, 'C:\\w')).toBe('src/styles/tokens.css')
+    expect(requestTarget('Edit', { file_path: 'c:/W/src/a.ts' }, 'C:\\w\\')).toBe('src/a.ts')
+    expect(requestTarget('Edit', { file_path: 'D:/other/a.ts' }, 'C:\\w')).toBe('D:/other/a.ts')
+    expect(requestTarget('Edit', { file_path: 'C:/wx/a.ts' }, 'C:/w')).toBe('C:/wx/a.ts')
+    expect(requestTarget('NotebookEdit', { notebook_path: '/p/n.ipynb' }, '/p')).toBe('n.ipynb')
+  })
+
+  it('명령은 첫 줄 전체, 그 밖은 하는 일 요약의 대상', () => {
+    expect(requestTarget('Bash', { command: 'npm run build -- --mode production --watch\nrm x' })).toBe('npm run build -- --mode production --watch')
+    expect(requestTarget('mcp__figma__get_file', {})).toBe('get_file')
+    expect(requestTarget('TodoWrite', {})).toBeNull()
   })
 })

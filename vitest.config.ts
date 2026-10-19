@@ -13,6 +13,7 @@ export default defineConfig({
           name: 'ui',
           environment: 'jsdom',
           include: ['test/ui/**/*.test.{ts,tsx}'],
+          setupFiles: ['test/ui/setup.ts'],
         },
         esbuild: { jsx: 'automatic' },
       },
