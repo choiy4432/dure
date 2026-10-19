@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { CELL, GAP_X, GAP_Y, MARGIN, NODE_SIZE, edgeEnds, isUnplaced, placeMissing, placeNew, type Point } from '../../src/renderer/map/layout'
+import { Position, getBezierPath } from '@xyflow/react'
+import {
+  CELL, GAP_X, GAP_Y, MARGIN, NODE_SIZE, edgeEnds, isUnplaced, labelPoint, placeMissing, placeNew,
+  type EdgeEnds, type Point, type Rect, type Side,
+} from '../../src/renderer/map/layout'
 
 const W = NODE_SIZE.w
 const H = NODE_SIZE.h
@@ -134,5 +138,81 @@ describe('edgeEnds', () => {
     const ba = edgeEnds(rect(600, 0), rect(0, 0), 12)
     expect(ab.source.y).toBe(H / 2 - 12)
     expect(ba.source.y).toBe(H / 2 + 12)
+  })
+})
+
+describe('labelPoint — 엣지 가운데 상태 알약 자리', () => {
+  const rect = (x: number, y: number, w = W, h = H) => ({ x, y, w, h })
+  const SIDE: Record<Side, Position> = { left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom }
+  /** HandoffEdge 가 그리는 그 곡선(React Flow getBezierPath) */
+  const bezier = (e: EdgeEnds) =>
+    getBezierPath({
+      sourceX: e.source.x, sourceY: e.source.y, sourcePosition: SIDE[e.sourcePosition],
+      targetX: e.target.x, targetY: e.target.y, targetPosition: SIDE[e.targetPosition],
+    })
+  /** 그 곡선 위 점 — 경로 문자열 'M x,y C x,y x,y x,y' 의 3차 곡선 */
+  const onPath = (e: EdgeEnds, t: number) => {
+    const n = bezier(e)[0].match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/g)!.map(Number)
+    const u = 1 - t
+    const k = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t]
+    return { x: k[0] * n[0] + k[1] * n[2] + k[2] * n[4] + k[3] * n[6], y: k[0] * n[1] + k[1] * n[3] + k[2] * n[5] + k[3] * n[7] }
+  }
+  /** 점에서 곡선까지 가장 가까운 거리(곡선을 잘게 나눠 잰다) */
+  const distToCurve = (p: Point, e: EdgeEnds) => {
+    let best = Infinity
+    for (let i = 0; i <= 400; i++) {
+      const q = onPath(e, i / 400)
+      best = Math.min(best, Math.hypot(q.x - p.x, q.y - p.y))
+    }
+    return best
+  }
+  /** 가장 긴 알약('전달됨 · 59분 전')에 여유를 둔 크기 · 두 알약 사이 최소 틈 */
+  const PILL = { w: 104, h: 24 }
+  const GAP = 4
+  const apart = (p: Point, q: Point) => Math.abs(p.x - q.x) >= PILL.w + GAP || Math.abs(p.y - q.y) >= PILL.h + GAP
+
+  it('짝이 없는 엣지는 곡선 한가운데 — React Flow 의 라벨 자리와 같다', () => {
+    for (const [s, t] of [[rect(0, 0), rect(600, 40)], [rect(0, 0), rect(40, 500)], [{ x: 64, y: 464, w: 304, h: 208 }, rect(448, 272)]] as const) {
+      const e = edgeEnds(s, t)
+      const [, lx, ly] = bezier(e)
+      const p = labelPoint(e, 0, s, t)
+      expect(p.x).toBeCloseTo(lx, 6)
+      expect(p.y).toBeCloseTo(ly, 6)
+    }
+  })
+
+  // 같은 두 카드를 반대로 잇는 두 엣지(예: '상한 대기' 둘) — 두 알약이 떨어져 둘 다 읽히고, 각자 제 곡선 위에
+  const pairs: [string, Rect, Rect][] = [
+    ['위아래(검수 캡처의 웹 화면 ↔ 서버)', rect(448, 272), rect(576, 592)],
+    ['위아래로 가까움(넓은 승인 카드 아래 64px)', { x: 64, y: 64, w: 304, h: 217 }, rect(64, 64 + 217 + 64)],
+    ['옆(가로 칸 사이 200)', rect(64, 64), rect(64 + W + 200, 64)],
+    ['옆으로 가까움(넓은 승인 카드 옆 152)', { x: 64, y: 64, w: 304, h: 217 }, rect(64 + W + 200, 64)],
+    ['비스듬히(시안의 디자인 → 웹 화면)', { x: 64, y: 464, w: 304, h: 208 }, rect(448, 272)],
+    ['멀리 대각선', rect(64, 64), rect(1000, 700)],
+  ]
+
+  it.each(pairs)('%s — 두 알약이 겹치지 않는다', (_name, a, b) => {
+    const ab = edgeEnds(a, b, -12)
+    const ba = edgeEnds(b, a, 12)
+    const pa = labelPoint(ab, -12, a, b)
+    const pb = labelPoint(ba, 12, b, a)
+    expect(apart(pa, pb)).toBe(true)
+  })
+
+  it.each(pairs)('%s — 알약은 제 곡선 위에(곡선이 알약 안을 지난다)', (_name, a, b) => {
+    const ab = edgeEnds(a, b, -12)
+    const ba = edgeEnds(b, a, 12)
+    expect(distToCurve(labelPoint(ab, -12, a, b), ab)).toBeLessThanOrEqual(PILL.h / 2 - 4)
+    expect(distToCurve(labelPoint(ba, 12, b, a), ba)).toBeLessThanOrEqual(PILL.h / 2 - 4)
+  })
+
+  it('짝인 알약은 곡선 바깥쪽(제 선이 비킨 쪽)으로 조금 더 비킨다 — 가운데 선에서 서로 멀어진다', () => {
+    const a = rect(64, 64)
+    const b = rect(64 + W + 200, 64)
+    const ab = edgeEnds(a, b, -12) // 위로 비킨 선
+    const ba = edgeEnds(b, a, 12) // 아래로 비킨 선
+    const mid = a.y + H / 2
+    expect(labelPoint(ab, -12, a, b).y).toBeLessThan(mid - 12)
+    expect(labelPoint(ba, 12, b, a).y).toBeGreaterThan(mid + 12)
   })
 })

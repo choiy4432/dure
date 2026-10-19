@@ -8,7 +8,7 @@ import { useDure } from '../state/store'
 import { label } from '../state/selectors'
 import { useNow } from '../lib/useNow'
 import { reducedMotion } from '../lib/motion'
-import { NODE_SIZE, edgeEnds, type Rect, type Side } from './layout'
+import { NODE_SIZE, edgeEnds, labelPoint, type Rect, type Side } from './layout'
 
 export interface HandoffEdgeData extends Record<string, unknown> {
   state: MessageState
@@ -128,8 +128,12 @@ export const HandoffEdge = memo(function HandoffEdge({ id, source, target, data 
   }, [shot])
 
   if (!s || !t || !data) return null
-  const ends = edgeEnds(rectOf(s), rectOf(t), data.shift)
-  const [d, labelX, labelY] = getBezierPath({
+  const from = rectOf(s)
+  const to = rectOf(t)
+  const ends = edgeEnds(from, to, data.shift)
+  // 알약 자리 — 보통은 곡선 한가운데, 반대 방향 짝이면 두 알약이 겹치지 않게 각자 제 곡선 위에서 비킨다
+  const at = labelPoint(ends, data.shift, from, to)
+  const [d] = getBezierPath({
     sourceX: ends.source.x,
     sourceY: ends.source.y,
     sourcePosition: POSITION[ends.sourcePosition],
@@ -151,7 +155,7 @@ export const HandoffEdge = memo(function HandoffEdge({ id, source, target, data 
         <button
           type="button"
           className={`el nodrag nopan${fresh ? ' on' : ''}`}
-          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+          style={{ transform: `translate(-50%, -50%) translate(${at.x}px, ${at.y}px)` }}
           aria-haspopup="dialog"
           onClick={e => data.onOpen(source, target, e)}
         >

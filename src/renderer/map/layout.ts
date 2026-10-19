@@ -111,3 +111,86 @@ export function edgeEnds(s: Rect, t: Rect, shift = 0): EdgeEnds {
     targetPort,
   }
 }
+
+/** React Flow getBezierPath 기본 곡률 */
+const CURVATURE = 0.25
+
+function controlOffset(distance: number): number {
+  return distance >= 0 ? 0.5 * distance : CURVATURE * 25 * Math.sqrt(-distance)
+}
+
+/** 변에서 나가는 조절점 — React Flow getBezierPath 와 같은 셈(HandoffEdge 가 그 함수로 선을 그린다) */
+function controlPoint(side: Side, p: Point, q: Point): Point {
+  switch (side) {
+    case 'left': return { x: p.x - controlOffset(p.x - q.x), y: p.y }
+    case 'right': return { x: p.x + controlOffset(q.x - p.x), y: p.y }
+    case 'top': return { x: p.x, y: p.y - controlOffset(p.y - q.y) }
+    case 'bottom': return { x: p.x, y: p.y + controlOffset(q.y - p.y) }
+  }
+}
+
+/** 엣지 곡선 위 t(0 = 보낸 쪽, 1 = 화살촉) 자리 — HandoffEdge 가 그리는 그 3차 곡선 */
+export function curvePoint(e: EdgeEnds, t: number): Point {
+  const p0 = e.source
+  const p3 = e.target
+  const p1 = controlPoint(e.sourcePosition, p0, p3)
+  const p2 = controlPoint(e.targetPosition, p3, p0)
+  const u = 1 - t
+  const a = u * u * u
+  const b = 3 * u * u * t
+  const c = 3 * u * t * t
+  const d = t * t * t
+  return { x: a * p0.x + b * p1.x + c * p2.x + d * p3.x, y: a * p0.y + b * p1.y + c * p2.y + d * p3.y }
+}
+
+/** 엣지 상태 알약 크기 — base.css .el 높이 24 · 너비는 가장 긴 문구('전달됨 · 59분 전')에 여유를 둔 값 */
+export const LABEL_SIZE: Size = { w: 104, h: 24 }
+/** 짝 알약 사이에 남길 틈 */
+const LABEL_GAP = 8
+/** 짝 알약이 곡선을 따라 미끄러지는 한 걸음 · 가장 멀리(곡선 양 끝 15% 안으로는 가지 않는다) */
+const SLIDE_STEP = 0.01
+const SLIDE_MAX = 0.35
+
+const AXIS: Record<Side, Point> = { left: { x: 0, y: 1 }, right: { x: 0, y: 1 }, top: { x: 1, y: 0 }, bottom: { x: 1, y: 0 } }
+
+/**
+ * 짝 엣지의 알약 한 개 자리 — 곡선 위 t 에서, 제 선이 비킨 쪽(엣지에 수직)으로 shift 의 반만큼 더.
+ * 비킨 쪽 = 끝점이 변을 따라 shift 만큼 옮겨 간 쪽. 더 비켜도 곡선은 알약(높이 24) 안에 남는다.
+ */
+function pairPlace(e: EdgeEnds, shift: number, from: Rect, to: Rect, t: number): Point {
+  const dx = to.x + to.w / 2 - (from.x + from.w / 2)
+  const dy = to.y + to.h / 2 - (from.y + from.h / 2)
+  const len = Math.hypot(dx, dy) || 1
+  const ax = AXIS[e.sourcePosition].x + AXIS[e.targetPosition].x
+  const ay = AXIS[e.sourcePosition].y + AXIS[e.targetPosition].y
+  const side = Math.sign(shift) * (-dy * ax + dx * ay) < 0 ? -1 : 1
+  const k = (side * Math.abs(shift)) / 2 / len
+  const p = curvePoint(e, t)
+  return { x: p.x - dy * k, y: p.y + dx * k }
+}
+
+/**
+ * 엣지 상태 알약 자리 — 보통은 곡선 한가운데(React Flow 의 라벨 자리와 같다).
+ * 같은 두 카드를 반대로 잇는 짝(shift ≠ 0, 예: '상한 대기' 둘)이면 두 알약이 겹치지 않게, 각자 제 곡선 위에서:
+ * ① 제 선이 비킨 쪽(엣지에 수직)으로 shift 의 반만큼 더 비킨다(pairPlace).
+ * ② 그래도 겹치면(위아래로 잇는 짝은 알약 너비 때문에 늘 겹친다) 곡선을 따라 둘 다 제 보낸 쪽으로 — 서로 반대 끝으로 —
+ *    겹치지 않는 가장 짧은 거리만큼 미끄러진다. 보낸 쪽으로 안 되면 받는 쪽으로.
+ * 짝의 곡선은 같은 카드에서 그대로 셈한다(edgeEnds(to, from, -shift)) — 두 엣지가 정확히 거울인 셈을 해 같은 답을 낸다.
+ */
+export function labelPoint(e: EdgeEnds, shift: number, from: Rect, to: Rect): Point {
+  if (shift === 0) return curvePoint(e, 0.5)
+  const other = edgeEnds(to, from, -shift)
+  const at = (t: number) => {
+    const me = pairPlace(e, shift, from, to, t)
+    const it = pairPlace(other, -shift, to, from, t)
+    const clear = Math.abs(it.x - me.x) >= LABEL_SIZE.w + LABEL_GAP || Math.abs(it.y - me.y) >= LABEL_SIZE.h + LABEL_GAP
+    return { me, clear }
+  }
+  for (let i = 0; i * SLIDE_STEP <= SLIDE_MAX + 1e-9; i++) {
+    for (const t of i === 0 ? [0.5] : [0.5 - i * SLIDE_STEP, 0.5 + i * SLIDE_STEP]) {
+      const r = at(t)
+      if (r.clear) return r.me
+    }
+  }
+  return at(0.5 - SLIDE_MAX).me
+}
