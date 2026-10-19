@@ -65,6 +65,7 @@ function useCardView(agentId: AgentId) {
       streaming: s.streaming[agentId] ?? '',
       last: s.lastText[agentId] ?? null,
       lastMessageAt,
+      since: s.statusSince[agentId] ?? null,
     }
   })
 }
@@ -76,6 +77,18 @@ function activityLine(v: CardView): string {
   if (v.unread > 0 && v.sender && v.status !== 'error') return `${v.sender}${josa(v.sender, '이/가')} 보낸 메시지 확인 전`
   if (v.last) return clip(v.last.text, ACTIVITY_MAX)
   return STATUS_LINE[v.status]
+}
+
+/** 바닥 오른쪽 시각 — 작업 중 'N분째' · 승인 기다림 'N분 전' · 그 밖은 마지막 답·메시지 시각 */
+function timeText(v: CardView, now: number): string {
+  // 언제부터인지 모르면(켤 때 이미 작업 중이던 에이전트) 쓰지 않는다 — '방금 시작' 은 거짓말이 된다
+  if (v.status === 'working') return v.since !== null ? lasting(v.since, now) : ''
+  if (v.status === 'awaiting') {
+    const at = v.request?.createdAt ?? v.since
+    return at !== null ? ago(at, now) : ''
+  }
+  const lastAt = Math.max(v.last?.at ?? 0, v.lastMessageAt)
+  return lastAt > 0 ? ago(lastAt, now) : ''
 }
 
 const stop = (e: MouseEvent) => e.stopPropagation()
@@ -115,23 +128,11 @@ function Approval({ agent, request }: { agent: AgentView; request: PendingReques
 export function AgentCard({ agentId }: { agentId: AgentId }) {
   const v = useCardView(agentId)
   const now = useNow()
-  const status = v?.status ?? 'idle'
-  // 지금 상태가 언제부터인가('3분째') — 상태가 바뀐 그 렌더에서 시각을 새로 잡는다
-  const [since, setSince] = useState(() => ({ status, at: Date.now() }))
-  if (since.status !== status) setSince({ status, at: Date.now() })
   if (!v) return null
 
-  const { agent, request, unread, selected } = v
+  const { agent, request, unread, selected, status } = v
   const st = STATUS[status]
-  const lastAt = Math.max(v.last?.at ?? 0, v.lastMessageAt)
-  const time =
-    status === 'working'
-      ? lasting(since.at, now)
-      : status === 'awaiting'
-        ? ago(request?.createdAt ?? since.at, now)
-        : lastAt > 0
-          ? ago(lastAt, now)
-          : ''
+  const time = timeText(v, now)
   const errorText = status === 'error' && agent.errorText ? agent.errorText : null
 
   return (

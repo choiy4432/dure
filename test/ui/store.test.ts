@@ -88,6 +88,45 @@ describe('store events', () => {
     expect(s.getState().agents[0]).toMatchObject({ status: 'error', errorText: '멈춤', bypass: true, heldInput: 2 })
   })
 
+  it('statusSince — 표시 상태가 바뀐 status 이벤트를 받은 시각, 같은 상태 반복엔 그대로', async () => {
+    const { api, emit } = fake({ snapshot: async () => snap({ agents: [agent('a', 'r1', { status: 'working' }), agent('b')] }) })
+    const s = createStore(api)
+    await s.init()
+    // 스냅샷으로만 아는 상태는 언제부터인지 모른다
+    expect(s.getState().statusSince).toEqual({})
+    const now = vi.spyOn(Date, 'now')
+    try {
+      now.mockReturnValue(1_000)
+      emit('status', { agentId: 'b', status: 'working', errorText: null })
+      expect(s.getState().statusSince.b).toBe(1_000)
+      now.mockReturnValue(5_000)
+      emit('status', { agentId: 'b', status: 'working', errorText: null }) // 같은 상태 — 그대로
+      expect(s.getState().statusSince.b).toBe(1_000)
+      emit('status', { agentId: 'a', status: 'working', errorText: null }) // 이미 작업 중이던 a — 바뀐 게 아님
+      expect(s.getState().statusSince.a).toBeUndefined()
+      emit('status', { agentId: 'b', status: 'idle', errorText: null })
+      expect(s.getState().statusSince.b).toBe(5_000)
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('스냅샷에서 상태가 바뀐 에이전트는 statusSince 를 지운다(언제 바뀌었는지 모름)', async () => {
+    let a: AgentView['status'] = 'idle'
+    let b: AgentView['status'] = 'idle'
+    const { api, emit } = fake({ snapshot: async () => snap({ agents: [agent('a', 'r1', { status: a }), agent('b', 'r1', { status: b })] }) })
+    const s = createStore(api)
+    await s.init()
+    emit('status', { agentId: 'a', status: 'working', errorText: null })
+    emit('status', { agentId: 'b', status: 'working', errorText: null })
+    const bSince = s.getState().statusSince.b
+    a = 'idle' // 엔진에선 a 가 이미 끝났다 — 이벤트 없이 스냅샷으로만 안다
+    b = 'working' // b 는 이벤트대로
+    await s.refresh()
+    expect(s.getState().statusSince.a).toBeUndefined()
+    expect(s.getState().statusSince.b).toBe(bSince)
+  })
+
   it('message 는 id 로 갱신하고 delivered 면 lastDelivered 에 updatedAt 을 쓴다', async () => {
     const { api, emit } = fake()
     const s = createStore(api)

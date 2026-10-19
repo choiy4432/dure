@@ -1,6 +1,7 @@
 import { useRef, useSyncExternalStore } from 'react'
 import type { AgentId, EngineEventMap, HistoryItem, RoomId } from '../../engine/types'
 import type { DureApi, Snapshot } from '../../shared/ipcContract'
+import { displayStatus } from './selectors'
 
 export type UiState = Snapshot & {
   roomId: RoomId | null
@@ -12,6 +13,11 @@ export type UiState = Snapshot & {
   lastText: Record<AgentId, { text: string; at: number }>
   /** 키 `${from}>${to}` → 마지막으로 전달된 시각(message.updatedAt) */
   lastDelivered: Record<string, number>
+  /**
+   * 에이전트마다 지금 표시 상태가 시작된 시각 — status 이벤트로 표시 상태가 바뀐 걸 받은 순간(Date.now()).
+   * 스냅샷으로만 아는 상태(켤 때 이미 작업 중 등)는 언제부터인지 모르므로 없다.
+   */
+  statusSince: Record<AgentId, number>
 }
 
 export interface Store {
@@ -42,9 +48,10 @@ export function createStore(api: DureApi): Store {
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, lastText: {}, lastDelivered: {},
+    statusSince: {},
   }
   const listeners = new Set<() => void>()
-  let buffer: Ev[] | null = null // 스냅샷을 기다리는 동안 온 이벤트
+  let buffer: { ev: Ev; at: number }[] | null = null // 스냅샷을 기다리는 동안 온 이벤트(받은 시각과 함께)
   const loading = new Map<AgentId, HistoryItem[]>() // 기록을 불러오는 동안 온 항목
   let subscribed = false
 
@@ -57,14 +64,28 @@ export function createStore(api: DureApi): Store {
   const applySnapshot = (snap: Snapshot) => {
     const roomId = snap.rooms.some(r => r.id === state.roomId) ? state.roomId : (snap.rooms[0]?.id ?? null)
     const selectedAgentId = snap.agents.some(a => a.id === state.selectedAgentId) ? state.selectedAgentId : null
-    state = { ...state, ...snap, roomId, selectedAgentId }
+    // 이벤트 없이 스냅샷에서 표시 상태가 바뀐 에이전트는 언제 바뀌었는지 모른다 — 시작 시각을 지운다
+    let statusSince = state.statusSince
+    for (const a of snap.agents) {
+      if (statusSince[a.id] === undefined) continue
+      const old = state.agents.find(x => x.id === a.id)
+      if (!old || displayStatus(old, state.requests) !== displayStatus(a, snap.requests)) {
+        statusSince = { ...statusSince }
+        delete statusSince[a.id]
+      }
+    }
+    state = { ...state, ...snap, roomId, selectedAgentId, statusSince }
   }
 
-  const applyEvent = (ev: Ev) => {
+  const applyEvent = (ev: Ev, at: number) => {
     switch (ev.name) {
       case 'status': {
         const p = ev.payload
-        state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, status: p.status, errorText: p.errorText } : a)) }
+        const old = state.agents.find(a => a.id === p.agentId)
+        const agents = state.agents.map(a => (a.id === p.agentId ? { ...a, status: p.status, errorText: p.errorText } : a))
+        const next = agents.find(a => a.id === p.agentId)
+        const changed = !!old && !!next && displayStatus(old, state.requests) !== displayStatus(next, state.requests)
+        state = { ...state, agents, statusSince: changed ? { ...state.statusSince, [p.agentId]: at } : state.statusSince }
         break
       }
       case 'flags': {
@@ -127,8 +148,9 @@ export function createStore(api: DureApi): Store {
   }
 
   const onEvent = (ev: Ev) => {
-    if (buffer) { buffer.push(ev); return }
-    applyEvent(ev)
+    const at = Date.now() // 받은 시각 — 스냅샷을 기다렸다 적용해도 이 시각을 쓴다
+    if (buffer) { buffer.push({ ev, at }); return }
+    applyEvent(ev, at)
     notify()
   }
 
@@ -147,7 +169,7 @@ export function createStore(api: DureApi): Store {
     } finally {
       const pending = buffer
       buffer = null
-      for (const ev of pending ?? []) applyEvent(ev)
+      for (const { ev, at } of pending ?? []) applyEvent(ev, at)
     }
     notify()
   }

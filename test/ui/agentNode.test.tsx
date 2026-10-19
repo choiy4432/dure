@@ -162,6 +162,30 @@ describe('AgentNode — 카드 내용', () => {
     expect(card.classList.contains('sel')).toBe(true)
   })
 
+  it('작업 중인데 언제부터인지 모르면(켤 때 이미 작업 중) 시각을 쓰지 않는다', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', status: 'working' })]
+    const { card } = await renderCard()
+    expect(card.querySelector('.nf-t')).toBeNull()
+    expect(card.textContent).not.toContain('방금 시작')
+  })
+
+  it('작업 시작 시각은 스토어에 — 카드를 다시 그려도(방을 오가도) 그대로 N분째', async () => {
+    const t0 = Date.now()
+    const now = vi.spyOn(Date, 'now').mockReturnValue(t0)
+    try {
+      const { card, unmount } = await renderCard()
+      emit('status', { agentId: 'd', status: 'working', errorText: null })
+      expect(card.querySelector('.nf-t')!.textContent).toBe('방금 시작')
+      unmount()
+      now.mockReturnValue(t0 + 3 * 60_000 + 5_000)
+      const { AgentCard } = await import('../../src/renderer/map/AgentNode')
+      const again = render(<AgentCard agentId="d" />)
+      expect(again.container.querySelector('.nf-t')!.textContent).toBe('3분째')
+    } finally {
+      now.mockRestore()
+    }
+  })
+
   it('끝난 답이 있으면 그 글 앞부분, 없으면 상태 문장', async () => {
     const { card } = await renderCard()
     expect(card.querySelector('.na')!.textContent).toBe('기다리는 중')
