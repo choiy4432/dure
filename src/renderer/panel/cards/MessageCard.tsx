@@ -10,6 +10,17 @@ import { useCall } from './useCall'
 /** 패널에 카드로 보이는 메시지 상태 — 상한 대기(held)는 방 하나에 한 장인 자동 상한 카드가 맡는다 */
 export type ShownState = 'pending' | 'queued' | 'delivered'
 
+/** 최근 전달된 메시지 카드는 5분이 지나면 접힌 채로 보인다 */
+export const FOLD_AFTER = 5 * 60_000
+
+/**
+ * 고정 카드가 펼쳐져 있나 — 사람이 정한 게 먼저('나중에'·머리 누르기), 아니면 기다리는 건 펼침, 전달된 건 5분 동안만.
+ * 패널의 고정 카드와 대화 목록(같은 메시지를 한 줄로 접을지)이 같은 셈을 쓴다.
+ */
+export function pinOpen(m: { id: string; state: RelayMessage['state']; updatedAt: number }, open: Record<string, boolean>, now: number): boolean {
+  return open[m.id] ?? (m.state !== 'delivered' || now - m.updatedAt < FOLD_AFTER)
+}
+
 /** 상태 표 — 관계도 엣지 알약과 같은 낱말 */
 const TAG: Record<ShownState, string> = { delivered: '전달됨', pending: '확인 대기', queued: '작업 끝 대기' }
 

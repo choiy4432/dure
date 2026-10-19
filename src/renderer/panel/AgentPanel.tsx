@@ -1,11 +1,12 @@
 import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import type { AgentId, RelayMessage } from '../../engine/types'
 import { useDure } from '../state/store'
+import { latestDelivered } from '../state/selectors'
 import { errorMessage } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { PanelHeader } from './PanelHeader'
 import type { Described } from './ModelPicker'
-import { MessageCard, type ShownState } from './cards/MessageCard'
+import { MessageCard, pinOpen, type ShownState } from './cards/MessageCard'
 import { PermissionCard } from './cards/PermissionCard'
 import { QuestionCard } from './cards/QuestionCard'
 import { HeldChainCard } from './cards/HeldChainCard'
@@ -13,8 +14,6 @@ import { ChatList } from './ChatList'
 import { Composer } from './Composer'
 
 const IDLE: Described = { state: 'idle' }
-/** 최근 전달된 메시지 카드는 5분이 지나면 접힌 채로 보인다 */
-const FOLD_AFTER = 5 * 60_000
 
 type Shown = RelayMessage & { state: ShownState }
 const isWaiting = (m: RelayMessage): m is Shown => m.state === 'pending' || m.state === 'queued'
@@ -59,14 +58,8 @@ function Pins({ agentId, open, onOpenChange }: {
   const requests = v.requests.filter(r => r.agentId === agentId).sort(byCreated)
   const inbox = v.messages.filter(m => m.to === agentId && isWaiting(m)).sort(byCreated) as Shown[]
   const held = v.messages.some(m => m.roomId === agent.roomId && m.state === 'held')
-  let delivered: Shown | null = null
-  for (const m of v.messages) {
-    if (m.to !== agentId || m.state !== 'delivered') continue
-    if (!delivered || m.updatedAt > delivered.updatedAt) delivered = m as Shown
-  }
+  const delivered = latestDelivered(agentId, v.messages) as Shown | null
 
-  // 접힘은 사람이 정한 게 먼저('나중에'·머리 누르기) — 아니면 기다리는 건 펼침, 전달된 건 5분 동안만 펼침
-  const isOpen = (m: Shown) => open[m.id] ?? (m.state !== 'delivered' || now - m.updatedAt < FOLD_AFTER)
   const card = (m: Shown) => (
     <MessageCard
       key={m.id}
@@ -74,7 +67,7 @@ function Pins({ agentId, open, onOpenChange }: {
       fromName={nameOf(m.from)}
       toName={agent.name}
       now={now}
-      open={isOpen(m)}
+      open={pinOpen(m, open, now)}
       onOpenChange={o => onOpenChange(m.id, o)}
     />
   )
@@ -160,7 +153,7 @@ export function AgentPanel() {
         onModelOpenChange={open => setModelOpenFor(open ? sel.id : null)}
       />
       <Pins agentId={sel.id} open={cardOpen} onOpenChange={setOpen} />
-      <ChatList key={`c-${sel.id}`} agentId={sel.id} pin={sent.agentId === sel.id ? sent.n : 0} />
+      <ChatList key={`c-${sel.id}`} agentId={sel.id} pin={sent.agentId === sel.id ? sent.n : 0} cardOpen={cardOpen} />
       <Composer
         key={`i-${sel.id}`}
         agentId={sel.id}

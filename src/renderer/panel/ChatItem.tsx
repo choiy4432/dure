@@ -55,8 +55,20 @@ function Action({ a }: { a: ActionLine }) {
   )
 }
 
+/** 접힌 전달 메시지의 한 줄 — 첫 글 줄, 마크다운 머리표·강조 기호는 걷는다 */
+function firstLine(text: string): string {
+  const line = text.split('\n').find(l => l.trim() !== '') ?? ''
+  return line.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, '').replace(/[`*]/g, '').trim()
+}
+
+interface Props {
+  line: ChatLine
+  /** 전달된 메시지가 위 고정 카드에 펼쳐져 있다 — 한 줄(누구에게서 온 메시지 + 첫 줄)로 접는다 */
+  folded?: boolean
+}
+
 /** 대화 한 줄 — 사람 말풍선 · 전달된 메시지 · Claude 블록(+ 하는 일) · 알림 · 명령 출력 · 흐르는 글 */
-function ChatItemView({ line }: { line: ChatLine }) {
+function ChatItemView({ line, folded = false }: Props) {
   switch (line.kind) {
     case 'me':
       return (
@@ -70,21 +82,36 @@ function ChatItemView({ line }: { line: ChatLine }) {
           {line.text && <p>{line.text}</p>}
         </div>
       )
-    case 'relay':
-      return (
-        <div className="ci-relay">
-          <div className="who">
+    case 'relay': {
+      // '기획에게서 온 메시지' 한 마디 — 이름만 굵게, 이름과 조사 사이를 나누지 않는다(한 칸 안에)
+      const who = (
+        <div className="who">
+          <span className="who-p">
             {line.from ? (
               <>
-                <span className="k">{line.from}</span>에게서 온 메시지
+                <b>{line.from}</b>에게서 온 메시지
               </>
             ) : (
               '전달된 메시지'
             )}
+          </span>
+        </div>
+      )
+      if (folded) {
+        return (
+          <div className="ci-relay fold">
+            {who}
+            <p className="fold-t trunc">{firstLine(line.text)}</p>
           </div>
+        )
+      }
+      return (
+        <div className="ci-relay">
+          {who}
           <Markdown text={line.text} />
         </div>
       )
+    }
     case 'claude':
       return (
         <div className="ci-claude">
@@ -121,7 +148,8 @@ const sameAction = (a: ActionLine, b: ActionLine) =>
   a.denied === b.denied && a.output === b.output && a.pending === b.pending && a.truncated === b.truncated
 
 /** 기록이 하나 늘 때마다 줄 객체는 새로 만들어진다 — 내용이 같으면 다시 그리지 않는다(마크다운을 다시 읽지 않게) */
-function sameLine(prev: { line: ChatLine }, next: { line: ChatLine }): boolean {
+function sameLine(prev: Props, next: Props): boolean {
+  if (!!prev.folded !== !!next.folded) return false
   const a = prev.line
   const b = next.line
   if (a === b) return true
@@ -130,7 +158,7 @@ function sameLine(prev: { line: ChatLine }, next: { line: ChatLine }): boolean {
     case 'me':
       return a.images === (b as typeof a).images && a.at === (b as typeof a).at
     case 'relay':
-      return a.from === (b as typeof a).from && a.at === (b as typeof a).at
+      return a.from === (b as typeof a).from && a.at === (b as typeof a).at && a.messageId === (b as typeof a).messageId
     case 'claude': {
       const x = (b as typeof a).actions
       return a.at === (b as typeof a).at && a.actions.length === x.length && a.actions.every((act, i) => sameAction(act, x[i]))

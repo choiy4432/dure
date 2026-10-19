@@ -81,6 +81,13 @@ describe('buildTranscript', () => {
     }
     expect(buildTranscript([it], undefined).lines[0]).toEqual({ kind: 'relay', from: '기획', text: '본문\n둘째 줄', at: 5 })
   })
+  it('전달된 메시지의 id 를 줄에 남긴다 — 위 고정 카드와 같은 메시지인지 알아보게', () => {
+    const it: HistoryItem = {
+      t: 5, kind: 'user', source: 'relay', messageId: 'm7',
+      parts: [{ type: 'text', text: '[두레 메시지 — 보낸 쪽: 기획(기획서 · 문구)]\n본문' }],
+    }
+    expect(buildTranscript([it], undefined).lines[0]).toEqual({ kind: 'relay', from: '기획', text: '본문', at: 5, messageId: 'm7' })
+  })
   it('머리를 못 읽어도 relay 출처면 relay 줄(이름 빈 값, 본문 통째)', () => {
     const it: HistoryItem = { t: 6, kind: 'user', source: 'relay', parts: [{ type: 'text', text: '머리 없는 글' }] }
     expect(buildTranscript([it], undefined).lines[0]).toEqual({ kind: 'relay', from: '', text: '머리 없는 글', at: 6 })

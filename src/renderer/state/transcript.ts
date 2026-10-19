@@ -17,7 +17,7 @@ export interface ActionLine {
 
 export type ChatLine =
   | { kind: 'me'; text: string; images: number; at: number }
-  | { kind: 'relay'; from: string; text: string; at: number }
+  | { kind: 'relay'; from: string; text: string; at: number; messageId?: string }
   | { kind: 'claude'; text: string; actions: ActionLine[]; at: number }
   | { kind: 'notice'; text: string; at: number }
   | { kind: 'local'; text: string; at: number }
@@ -95,7 +95,7 @@ export function buildTranscript(
           .join('\n\n')
         const images = it.parts.filter((p) => p.type === 'image').length
         const relay = it.source === 'relay' ? stripRelay(text) : null
-        if (relay) all.push({ kind: 'relay', from: relay.from, text: relay.body, at: it.t })
+        if (relay) all.push({ kind: 'relay', from: relay.from, text: relay.body, at: it.t, ...(it.messageId ? { messageId: it.messageId } : {}) })
         else all.push({ kind: 'me', text, images, at: it.t })
         break
       }

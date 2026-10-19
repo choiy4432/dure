@@ -126,17 +126,72 @@ describe('ChatList — 줄마다', () => {
     expect(row.querySelector('.k')).toBeNull()
   })
 
-  it('전달된 메시지는 보낸 이름 꼬리표, 알림은 가운데 작은 줄', async () => {
+  it('전달된 메시지는 "기획에게서 온 메시지" 한 마디(이름만 굵게, 이름과 조사 사이 나눔 없음), 알림은 가운데 작은 줄', async () => {
     history.mockResolvedValueOnce([
       { t: 1, kind: 'user', source: 'relay', parts: [{ type: 'text', text: '[두레 메시지 — 보낸 쪽: 기획(기획서 · 문구)]\n배너 문구를 바꿔 주세요' }] },
       { t: 2, kind: 'notice', text: '멈췄어요' },
     ] satisfies HistoryItem[])
     await renderPanel()
     const relay = conv().querySelector('.ci-relay') as HTMLElement
-    expect(within(relay).getByText('기획')).toHaveClass('k')
+    const name = within(relay).getByText('기획')
+    expect(name.tagName).toBe('B')
+    expect(name).not.toHaveClass('k') // 테두리 꼬리표가 아니다
+    expect(relay.querySelector('.k')).toBeNull()
+    // 이름과 '에게서 온 메시지' 가 한 덩어리 — 머리 줄(.who, 칸 사이 간격이 있는 줄)의 칸이 하나뿐
+    expect(name.parentElement!.textContent).toBe('기획에게서 온 메시지')
+    expect(relay.querySelector('.who')!.children).toHaveLength(1)
     expect(relay).toHaveTextContent('배너 문구를 바꿔 주세요')
     expect(conv().querySelector('.me')).toBeNull()
     expect(within(conv()).getByText('멈췄어요')).toHaveClass('note')
+  })
+
+  describe('위 고정 카드에 펼쳐 보이는 메시지와 같으면 한 줄로 접는다', () => {
+    const BODY = '배너 문구를 ‘여름, 같이 걸어요’로 바꿔 주세요.\n\n바꾼 뒤 줄바꿈이 두 줄 안에 들어가는지 확인 부탁해요.'
+    const relayItem = (messageId: string): HistoryItem => ({
+      t: 1, kind: 'user', source: 'relay', messageId,
+      parts: [{ type: 'text', text: `[두레 메시지 — 보낸 쪽: 기획(기획서 · 문구)]\n${BODY}` }],
+    })
+    const delivered = (id: string, ago: number) => {
+      const t = Date.now() - ago
+      return { id, roomId: 'r1', from: 'p', to: 'w', text: BODY, createdAt: t - 1000, state: 'delivered' as const, updatedAt: t }
+    }
+
+    it('고정 카드가 펼쳐져 있으면 "기획에게서 온 메시지 · 첫 줄" 한 줄 — 카드를 접으면 대화에서 다시 다 보인다', async () => {
+      snapshot.messages = [delivered('m1', 10_000)]
+      history.mockResolvedValueOnce([relayItem('m1')])
+      await renderPanel()
+      const relay = conv().querySelector('.ci-relay') as HTMLElement
+      expect(relay).toHaveClass('fold')
+      expect(relay).toHaveTextContent('기획에게서 온 메시지')
+      expect(relay).toHaveTextContent('배너 문구를 ‘여름, 같이 걸어요’로 바꿔 주세요.')
+      expect(relay).not.toHaveTextContent('줄바꿈이 두 줄') // 둘째 문단은 위 카드에만
+      expect(relay.querySelector('.fold-t')).toHaveClass('trunc')
+
+      // 고정 카드를 접는다 — 대화의 같은 메시지가 다 펼쳐진다
+      const pin = screen.getByRole('region', { name: '기획이 보낸 메시지' })
+      fireEvent.click(pin.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
+      const full = conv().querySelector('.ci-relay') as HTMLElement
+      expect(full).not.toHaveClass('fold')
+      expect(full).toHaveTextContent('줄바꿈이 두 줄')
+    })
+
+    it('카드가 접힌 채(전달된 지 5분 넘음)면 대화에서 다 보인다', async () => {
+      snapshot.messages = [delivered('m1', 6 * 60_000)]
+      history.mockResolvedValueOnce([relayItem('m1')])
+      await renderPanel()
+      const relay = conv().querySelector('.ci-relay') as HTMLElement
+      expect(relay).not.toHaveClass('fold')
+      expect(relay).toHaveTextContent('줄바꿈이 두 줄')
+    })
+
+    it('카드에 있는 것과 다른 메시지는 그대로 다 보인다', async () => {
+      snapshot.messages = [delivered('m2', 10_000)]
+      history.mockResolvedValueOnce([relayItem('m1')])
+      await renderPanel()
+      const relay = conv().querySelector('.ci-relay') as HTMLElement
+      expect(relay).not.toHaveClass('fold')
+      expect(relay).toHaveTextContent('줄바꿈이 두 줄')
+    })
   })
 
   it('이미지가 붙은 내 말은 이미지 수를 함께', async () => {

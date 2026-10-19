@@ -2,26 +2,41 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentId, HistoryItem } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { buildTranscript } from '../state/transcript'
+import { latestDelivered } from '../state/selectors'
+import { useNow } from '../lib/useNow'
 import { ChatItem } from './ChatItem'
+import { pinOpen } from './cards/MessageCard'
 
 /** 처음에 그리는 줄 수 · '더 보기' 한 번에 늘리는 수 */
 const PAGE = 300
 /** 바닥에서 이만큼 안이면 '맨 아래에 붙어 있다' */
 const STICK_PX = 24
 const NONE: HistoryItem[] = []
+const NO_CHOICE: Record<string, boolean> = {}
 
 /**
  * 대화 목록(시안 .conv) — 고른 에이전트의 기록을 buildTranscript 로 줄로 바꿔 그린다.
  * 최근 300줄만 그리고 위에 '이전 대화 N개 더 보기'. 새 줄이 오면 맨 아래에 붙어 있을 때만 따라 내려간다.
  * pin 이 오르면(내가 보냄) 위로 올려 읽던 중이어도 맨 아래에 다시 붙는다.
+ * 위 고정 카드에 펼쳐 보이는 '최근 전달된 메시지'와 같은 줄은 한 줄로 접는다(cardOpen = 패널이 들고 있는 카드 펼침).
  */
-export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number }) {
+export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
+  agentId: AgentId
+  pin?: number
+  cardOpen?: Record<string, boolean>
+}) {
   const v = useDure(s => ({
     items: s.history[agentId] ?? NONE,
     status: s.historyStatus[agentId]?.state ?? 'loading',
     streaming: s.streaming[agentId] ?? '',
   }))
   const [limit, setLimit] = useState(PAGE)
+  const latest = useDure(s => {
+    const m = latestDelivered(agentId, s.messages)
+    return m ? { id: m.id, updatedAt: m.updatedAt } : null
+  })
+  const now = useNow()
+  const pinned = latest && pinOpen({ ...latest, state: 'delivered' }, cardOpen, now) ? latest.id : null
 
   // 흐르는 글은 따로 — 글자가 올 때마다 기록 전체를 다시 줄로 바꾸지 않는다(줄 객체가 그대로라 다시 그리지도 않는다)
   const { lines, hiddenBefore } = useMemo(() => buildTranscript(v.items, undefined, limit), [v.items, limit])
@@ -92,7 +107,7 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
         )}
         {lines.map((line, i) => (
           // 줄 번호(앞에 숨긴 줄 포함)는 새 줄이 붙어도 그대로 — 펼친 하는 일이 닫히지 않는다
-          <ChatItem key={hiddenBefore + i} line={line} />
+          <ChatItem key={hiddenBefore + i} line={line} folded={line.kind === 'relay' && !!line.messageId && line.messageId === pinned} />
         ))}
         {v.streaming && <ChatItem line={{ kind: 'streaming', text: v.streaming }} />}
       </section>
