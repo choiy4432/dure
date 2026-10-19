@@ -108,7 +108,7 @@ async function main() {
     const before = results(B).length;
     await engine.sendUser(B, [{ type: 'text', text: "note.txt 파일에 '두레' 라고 써 줘." }]);
     await until('B 의 승인 요청', 90000, () => engine.pendingRequests(B).length > 0);
-    await sleep(330000); // 클라이언트 HTTP 타임아웃(약 300초)을 넘겨 — approve 는 SSE keepalive 로 버틴다
+    await sleep(330000); // CLI 의 MCP 무응답 제한(기본 300초)을 넘겨 — mcp.json 의 dure 서버 timeout 으로 풀었는지 확인
     const req = engine.pendingRequests(B)[0];
     if (!req) throw new Error('330초 기다리는 사이 승인 요청이 사라짐(끊김)');
     engine.answerRequest(req.id, { type: 'allow' });

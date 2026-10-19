@@ -57,6 +57,11 @@ describe('buildArgs', () => {
 describe('buildMcpConfig', () => {
   test('MCP 설정 형식', () => {
     expect(buildMcpConfig({ port: 5, token: 'T', agentId: 'A' })).toEqual({ mcpServers: { dure: {
-      type: 'http', url: 'http://127.0.0.1:5/mcp', headers: { Authorization: 'Bearer T', 'X-Dure-Agent': 'A' } } } });
+      type: 'http', url: 'http://127.0.0.1:5/mcp', headers: { Authorization: 'Bearer T', 'X-Dure-Agent': 'A' },
+      timeout: 86400000 } } });
+  });
+  test('dure 서버는 무응답 시간 제한을 하루로 — CLI 기본 300초면 사람 승인 대기가 끊긴다', () => {
+    const cfg = buildMcpConfig({ port: 5, token: 'T', agentId: 'A' }) as any;
+    expect(cfg.mcpServers.dure.timeout).toBeGreaterThan(300_000);
   });
 });

@@ -19,7 +19,11 @@ export interface McpHandlers {
 export interface McpServerHandle { port: number; token: string; close(): Promise<void> }
 
 export interface McpServerOptions {
-  /** approve 를 기다리는 동안 SSE 주석을 보내는 간격 — 클라이언트 HTTP 타임아웃(약 300초)에 끊기지 않게 */
+  /**
+   * approve 를 기다리는 동안 SSE 주석을 보내는 간격. CLI 의 300초 무응답 제한은 주석을 진행으로 치지 않는다 —
+   * 그 제한은 MCP 설정의 서버별 timeout 으로 푼다(claudeArgs DURE_SERVER_TIMEOUT_MS). 이 주석 줄은 사이 장비가
+   * 조용한 연결을 끊지 않게 하는 덤일 뿐이다.
+   */
   keepaliveMs?: number;
 }
 
@@ -73,7 +77,8 @@ async function callTool(h: McpHandlers, agentId: AgentId, params: any, signal: A
 
 /**
  * tools/call — 부른 쪽이 답을 받기 전에 끊으면 signal 을 abort 한다.
- * approve 는 사람 답을 오래 기다릴 수 있어 SSE 로 답한다: 머리글을 곧바로 보내고 keepaliveMs 마다 주석 줄,
+ * approve 는 사람 답을 오래 기다릴 수 있어 SSE 로 답한다(오래 기다려도 안 끊기는 건 서버별 timeout 덕이다 —
+ * 위 McpServerOptions 참고): 머리글을 곧바로 보내고 keepaliveMs 마다 주석 줄,
  * 답이 오면 `event: message` + `data: <JSON-RPC>` 한 번 보내고 끝낸다. 다른 도구는 application/json 그대로.
  */
 function toolCall(h: McpHandlers, agentId: AgentId, m: any, res: ServerResponse, keepaliveMs: number): void {

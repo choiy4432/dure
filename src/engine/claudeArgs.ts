@@ -2,6 +2,11 @@ export const APPROVE_TOOL = 'mcp__dure__approve';
 export const DURE_TOOLS = ['mcp__dure__list_agents', 'mcp__dure__send_message'];
 export const BLOCKED_TOOLS = ['SendMessage', 'ListAgents'];
 export const SPAWN_ENV_EXTRA = { MCP_TOOL_TIMEOUT: '86400000' };
+// The CLI also aborts any MCP call that sends "no response or progress" for 300 s — separate
+// from MCP_TOOL_TIMEOUT, and SSE comment lines don't count as progress. A per-server "timeout"
+// lifts it for the dure server only, so a human can take longer than 5 min to answer an
+// approval card (scripts/probe/probe5.mjs, docs/findings).
+export const DURE_SERVER_TIMEOUT_MS = 86_400_000;
 
 export function buildArgs(a: {
   sessionId: string;
@@ -34,6 +39,7 @@ export function buildMcpConfig(a: { port: number; token: string; agentId: string
         type: 'http',
         url: `http://127.0.0.1:${a.port}/mcp`,
         headers: { Authorization: `Bearer ${a.token}`, 'X-Dure-Agent': a.agentId },
+        timeout: DURE_SERVER_TIMEOUT_MS,
       },
     },
   };
