@@ -2,8 +2,20 @@ import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
-    include: ['test/**/*.test.{ts,tsx}'],
-    environment: 'node',
-    environmentMatchGlobs: [['test/ui/**', 'jsdom']],
+    projects: [
+      {
+        extends: false,
+        test: { name: 'node', environment: 'node', include: ['test/**/*.test.{ts,tsx}'], exclude: ['test/ui/**'] },
+      },
+      {
+        extends: false,
+        test: {
+          name: 'ui',
+          environment: 'jsdom',
+          include: ['test/ui/**/*.test.{ts,tsx}'],
+        },
+        esbuild: { jsx: 'automatic' },
+      },
+    ],
   },
 })

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, dialog, shell } from 'electron'
 import { join } from 'node:path'
 import { createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
@@ -7,6 +7,7 @@ import { resolveClaudeCommand } from './claudeCommand'
 let mainWindow: BrowserWindow | null = null
 let engine: Engine | null = null
 let claudeMissing = false
+let exitCode = 0
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -58,29 +59,40 @@ if (!app.requestSingleInstanceLock()) {
       try {
         await engine?.shutdown()
       } finally {
-        app.exit()
+        app.exit(exitCode)
       }
     })()
   })
 
   app.on('window-all-closed', () => app.quit())
 
-  void app.whenReady().then(async () => {
-    const claude = resolveClaudeCommand(process.env, () => locateClaude())
-    if (claude) {
-      engine = await createEngine({
-        dataDir: app.getPath('userData'),
-        claude,
-        autoStart: false,
-      })
-      // Task 4: registerIpc(engine, ...) goes here, BEFORE engine.start().
-      engine.start()
-    } else {
-      claudeMissing = true
-    }
-    mainWindow = createWindow()
+  // Test-only hooks: DURE_SMOKE_EXIT_MS (self-quit after N ms), DURE_NO_DIALOG=1 (skip the error box, still exit 1).
+  void app
+    .whenReady()
+    .then(async () => {
+      const claude = resolveClaudeCommand(process.env, () => locateClaude())
+      if (claude) {
+        engine = await createEngine({
+          dataDir: app.getPath('userData'),
+          claude,
+          autoStart: false,
+        })
+        // Task 4: registerIpc(engine, ...) goes here, BEFORE engine.start().
+        engine.start()
+      } else {
+        claudeMissing = true
+      }
+      mainWindow = createWindow()
 
-    const smokeMs = Number(process.env.DURE_SMOKE_EXIT_MS)
-    if (smokeMs > 0) setTimeout(() => app.quit(), smokeMs)
-  })
+      const smokeMs = Number(process.env.DURE_SMOKE_EXIT_MS)
+      if (smokeMs > 0) setTimeout(() => app.quit(), smokeMs)
+    })
+    .catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err)
+      if (process.env.DURE_NO_DIALOG !== '1') dialog.showErrorBox('두레를 시작하지 못했어요', message)
+      // Go through the normal quit path (before-quit -> shutdown -> exit) so Chromium's helper processes are torn down.
+      exitCode = 1
+      // Brief grace: quitting before Chromium's network service finishes starting orphans that helper process.
+      setTimeout(() => app.quit(), 500)
+    })
 }
