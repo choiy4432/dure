@@ -108,8 +108,13 @@ export function buildTranscript(
         all.push({ kind: 'local', text: it.text, at: it.t })
         break
       case 'result':
-      case 'boundary':
         flush()
+        break
+      case 'boundary':
+        // 새 대화 — 앞 줄은 버린다(다시 켜면 엔진도 경계 뒤만 준다). 스토어가 이미 버리지만 어디서 오든 같은 화면이 되게
+        cur = null
+        texts.length = 0
+        all.length = 0
         break
     }
   }

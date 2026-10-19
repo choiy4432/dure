@@ -127,18 +127,31 @@ export function createStore(api: DureApi): Store {
         break
       case 'history': {
         const { agentId, item } = ev.payload
+        // 새 대화(boundary) — 앞 대화는 버린다. 다시 켜면 엔진의 history() 도 경계 뒤만 주니 같은 화면이 된다(알림 줄 없음)
+        const boundary = item.kind === 'boundary'
         // 흐르는 글·마지막 글은 기록을 불러왔든 아니든 — 안 비우면 다음 차례 글이 앞 차례 뒤에 붙는다
         const text = assistantText(item)
+        let lastText = state.lastText
+        if (text) lastText = { ...lastText, [agentId]: { text, at: item.t } }
+        else if (boundary && lastText[agentId]) {
+          lastText = { ...lastText }
+          delete lastText[agentId]
+        }
         state = {
           ...state,
           streaming: state.streaming[agentId] ? { ...state.streaming, [agentId]: '' } : state.streaming,
-          lastText: text ? { ...state.lastText, [agentId]: { text, at: item.t } } : state.lastText,
+          lastText,
         }
         const pending = loading.get(agentId)
-        if (pending) { pending.push(item); break }
+        if (pending) {
+          // 불러오는 중 — 경계만 맨 앞에 남겨, 불러온 기록(경계 앞이거나 이미 그 뒤에 왔다)도 버리게 한다
+          if (boundary) pending.splice(0, pending.length, item)
+          else pending.push(item)
+          break
+        }
         const list = state.history[agentId]
         if (!list) break // 아직 안 불러온 에이전트 — 불러올 때 같이 온다
-        state = { ...state, history: { ...state.history, [agentId]: [...list, item] } }
+        state = { ...state, history: { ...state.history, [agentId]: boundary ? [] : [...list, item] } }
         break
       }
       case 'agent-event': {
@@ -211,9 +224,12 @@ export function createStore(api: DureApi): Store {
     set({ ...state, historyStatus: { ...state.historyStatus, [id]: { state: 'loading' } } })
     try {
       const loaded = await api.history(id)
-      const extra = (loading.get(id) ?? []).filter(it => !loaded.some(l => sameItem(l, it)))
+      const pending = loading.get(id) ?? []
       loading.delete(id)
-      const list = [...loaded, ...extra]
+      // 불러오는 동안 새 대화가 시작됐으면(경계가 맨 앞에 남아 있다) 경계 뒤에 온 것만 — 경계 뒤에 읽었어도 그 항목들은 이벤트로 이미 왔다
+      const list = pending[0]?.kind === 'boundary'
+        ? pending.slice(1)
+        : [...loaded, ...pending.filter(it => !loaded.some(l => sameItem(l, it)))]
       // 다시 켠 뒤엔 이벤트로 온 글이 없다 — 불러온 기록의 마지막 글로 채운다(더 새 글이 이미 있으면 그대로)
       let lastText = state.lastText
       for (let i = list.length - 1; i >= 0; i--) {

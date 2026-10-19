@@ -161,6 +161,22 @@ describe('ChatList — 줄마다', () => {
   })
 })
 
+describe('ChatList — 새 대화', () => {
+  it('새 대화(boundary)가 오면 앞 대화 줄이 사라진다 — 알림 줄 없이 빈 대화, 그 뒤에 온 것만', async () => {
+    await renderPanel()
+    expect(conv().querySelector('.me')).not.toBeNull()
+    await emit('history', { agentId: 'w', item: { t: 7, kind: 'boundary' } })
+    expect(conv().querySelector('.me')).toBeNull()
+    expect(conv().querySelector('.ci-claude')).toBeNull()
+    expect(conv().querySelector('.note')).toBeNull()
+    expect(conv()).not.toHaveTextContent('헤더 높이')
+    expect(conv().children).toHaveLength(0)
+    await emit('history', { agentId: 'w', item: { t: 8, kind: 'user', source: 'human', parts: [{ type: 'text', text: '새로 시작해요' }] } })
+    expect(conv().querySelectorAll('.me')).toHaveLength(1)
+    expect(conv().querySelector('.me')).toHaveTextContent('새로 시작해요')
+  })
+})
+
 describe('ChatList — 아주 긴 대화(Review Focus 1)', () => {
   const many = (n: number): HistoryItem[] =>
     Array.from({ length: n }, (_, i) => ({ t: i, kind: 'notice' as const, text: `알림 ${i}` }))

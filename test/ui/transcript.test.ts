@@ -27,6 +27,14 @@ describe('buildTranscript', () => {
       { id: 'a', verb: '읽음', target: 'f.ts', icon: 'file', allowed: true, denied: false, output: 'content' },
     ])
   })
+  it('boundary(새 대화)를 만나면 그 앞 줄은 버린다 — 다시 켠 뒤의 기록과 같은 화면', () => {
+    const { lines } = buildTranscript(
+      [human('옛 말', 1), asst([{ type: 'text', text: '옛 답' }], 2), { t: 3, kind: 'boundary' }, human('새 말', 4)],
+      undefined,
+    )
+    expect(lines).toEqual([{ kind: 'me', text: '새 말', images: 0, at: 4 }])
+    expect(buildTranscript([human('옛 말', 1), { t: 2, kind: 'boundary' }], undefined).lines).toEqual([])
+  })
   it('결과 없으면 진행 중', () => {
     const { lines } = buildTranscript([asst([{ type: 'tool_use', id: 'z', name: 'Bash', input: { command: 'ls' } }])], undefined)
     expect((lines[0] as any).actions[0]).toMatchObject({ output: '', allowed: false, denied: false, pending: true })

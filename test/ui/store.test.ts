@@ -304,6 +304,64 @@ describe('store 스냅샷 겹침 합치기', () => {
   })
 })
 
+describe('store 새 대화(boundary)', () => {
+  const said = (text: string, t: number): HistoryItem => ({ t, kind: 'assistant', blocks: [{ type: 'text', text }] })
+  const boundary = (t: number): HistoryItem => ({ t, kind: 'boundary' })
+  const texts = (items: HistoryItem[] | undefined) => (items ?? []).map(i => (i.kind === 'notice' ? i.text : i.kind))
+
+  it('boundary 가 오면 그 에이전트의 앞 기록을 버린다(다시 켠 뒤와 같은 화면) — 다른 에이전트는 그대로', async () => {
+    const { api, emit } = fake({ history: async () => [note('옛', 1), said('옛 답', 2)] })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('b')
+    await vi.waitFor(() => expect(s.getState().history.b).toHaveLength(2))
+    s.selectAgent('a')
+    await vi.waitFor(() => expect(s.getState().history.a).toHaveLength(2))
+    expect(s.getState().lastText.a).toEqual({ text: '옛 답', at: 2 })
+
+    emit('history', { agentId: 'a', item: boundary(3) })
+    expect(s.getState().history.a).toEqual([])
+    expect(s.getState().lastText.a).toBeUndefined()
+    expect(s.getState().history.b).toHaveLength(2)
+
+    emit('history', { agentId: 'a', item: note('새', 4) })
+    expect(texts(s.getState().history.a)).toEqual(['새'])
+  })
+
+  it('기록을 불러오는 동안 boundary 가 오면 불러온 옛 기록도 버리고 그 뒤에 온 것만(앞에서 읽었든 뒤에서 읽었든)', async () => {
+    for (const read of [[note('옛', 1), note('경계 앞', 2)], [note('경계 뒤', 4)]]) {
+      let release!: (h: HistoryItem[]) => void
+      const { api, emit } = fake({ history: () => new Promise<HistoryItem[]>(r => { release = r }) })
+      const s = createStore(api)
+      await s.init()
+      s.selectAgent('a')
+      emit('history', { agentId: 'a', item: note('경계 앞', 2) })
+      emit('history', { agentId: 'a', item: boundary(3) })
+      emit('history', { agentId: 'a', item: note('경계 뒤', 4) })
+      release(read)
+      await vi.waitFor(() => expect(s.getState().historyStatus.a).toEqual({ state: 'ready' }))
+      expect(texts(s.getState().history.a)).toEqual(['경계 뒤'])
+    }
+  })
+
+  it('스냅샷을 기다리는 동안 온 boundary 도 — 스냅샷 뒤에 적용되어 앞 기록을 버린다', async () => {
+    const { api, emit } = fake({ history: async () => [note('옛', 1)] })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    await vi.waitFor(() => expect(s.getState().history.a).toHaveLength(1))
+    let release!: (v: Snapshot) => void
+    api.snapshot.mockImplementationOnce(() => new Promise<Snapshot>(r => { release = r }))
+    const p = s.refresh()
+    emit('history', { agentId: 'a', item: boundary(2) })
+    emit('history', { agentId: 'a', item: note('새', 3) })
+    expect(texts(s.getState().history.a)).toEqual(['옛']) // 아직 기다리는 중
+    release(snap())
+    await p
+    expect(texts(s.getState().history.a)).toEqual(['새'])
+  })
+})
+
 describe('store 기록 불러오기 상태', () => {
   it('loading → ready', async () => {
     let release!: (h: HistoryItem[]) => void
