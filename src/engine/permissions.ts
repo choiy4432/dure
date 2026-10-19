@@ -38,10 +38,18 @@ export class Permissions extends EventEmitter {
       createdAt: Date.now(),
     };
     if (args.tool_use_id) this.asked.add(`${agentId}:${args.tool_use_id}`);
-    return new Promise<ApproveResult>((resolve) => {
-      this.entries.set(req.id, { req, resolve });
-      this.emit('request', { ...req });
+    let resolve!: (r: ApproveResult) => void;
+    const result = new Promise<ApproveResult>((r) => {
+      resolve = r;
     });
+    this.entries.set(req.id, { req, resolve });
+    // 알림은 대기를 만든 뒤 밖에서 — 듣는 쪽이 던져도 요청은 대기로 남아 답할 수 있다(엔진은 자기 듣는 쪽을 따로 감싼다)
+    try {
+      this.emit('request', { ...req });
+    } catch {
+      /* 듣는 쪽 오류로 요청을 잃지 않는다 */
+    }
+    return result;
   }
 
   answer(requestId: string, d: Decision): void {

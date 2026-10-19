@@ -23,6 +23,26 @@ interface State {
 
 const norm = (s: string) => s.trim().toLocaleLowerCase('ko');
 
+// 윈도우에선 백신·검색 색인이 파일을 잠깐 잡고 있으면 이름 바꾸기가 EPERM·EACCES·EBUSY 로 실패한다
+const LOCKED = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const RENAME_RETRIES = 5;
+const RENAME_BACKOFF_MS = 20;
+const pause = new Int32Array(new SharedArrayBuffer(4));
+
+/** renameSync — 잠금 오류면 RENAME_BACKOFF_MS 쉬고 RENAME_RETRIES 번까지 다시, 그래도 안 되면 던진다 */
+function renameRetrying(from: string, to: string): void {
+  for (let retry = 0; ; retry++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException | null)?.code;
+      if (retry >= RENAME_RETRIES || !code || !LOCKED.has(code)) throw e;
+      Atomics.wait(pause, 0, 0, RENAME_BACKOFF_MS);
+    }
+  }
+}
+
 function load(file: string): State {
   const empty: State = { version: 1, rooms: [], agents: [] };
   if (!fs.existsSync(file)) return empty;
@@ -31,7 +51,7 @@ function load(file: string): State {
     if (!raw || !Array.isArray(raw.rooms) || !Array.isArray(raw.agents)) throw new Error('bad shape');
     return { version: 1, rooms: raw.rooms, agents: raw.agents };
   } catch {
-    fs.renameSync(file, `${file}.broken-${Date.now()}`);
+    renameRetrying(file, `${file}.broken-${Date.now()}`);
     return empty;
   }
 }
@@ -44,7 +64,7 @@ export function openStore(dataDir: string): Store {
   const save = () => {
     const tmp = `${file}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-    fs.renameSync(tmp, file);
+    renameRetrying(tmp, file);
   };
   const clone = <T>(v: T): T => structuredClone(v);
   const needRoom = (id: RoomId) => {

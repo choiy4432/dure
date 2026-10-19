@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,8 +9,21 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dure-'));
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+const fsError = (code: string) => Object.assign(new Error(`가짜 ${code}`), { code });
+
+/** 처음 failures 번은 code 로 실패하고 그 뒤엔 진짜로 이름을 바꾸는 renameSync */
+function flakyRename(failures: number, code: string) {
+  const real = fs.renameSync;
+  let left = failures;
+  return vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+    if (left-- > 0) throw fsError(code);
+    real(from, to);
+  });
+}
 
 test('저장한 방·에이전트가 다시 열어도 남는다', () => {
   const s = openStore(dir);
@@ -92,6 +105,38 @@ test('state.json 이 깨져 있으면 state.json.broken-<시각> 으로 옮기�
   expect(fs.readFileSync(path.join(dir, broken[0]), 'utf8')).toBe('{ not json');
   s.addRoom('new');
   expect(openStore(dir).rooms()).toHaveLength(1);
+});
+
+test('윈도우 잠금(EPERM·EACCES·EBUSY)으로 이름 바꾸기가 두 번 실패해도 다시 시도해 저장한다', () => {
+  for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
+    const s = openStore(dir);
+    const rename = flakyRename(2, code);
+    s.addRoom(code);
+    expect(rename).toHaveBeenCalledTimes(3);
+    rename.mockRestore();
+    expect(openStore(dir).rooms().map((r) => r.name)).toContain(code);
+    expect(fs.readdirSync(dir)).not.toContain('state.json.tmp');
+  }
+});
+
+test('잠금이 풀리지 않으면 다섯 번 더 시도한 뒤 던진다 · 다른 오류는 바로 던진다', () => {
+  const s = openStore(dir);
+  const busy = flakyRename(Infinity, 'EBUSY');
+  expect(() => s.addRoom('R')).toThrow('가짜 EBUSY');
+  expect(busy).toHaveBeenCalledTimes(6);
+  busy.mockRestore();
+
+  const missing = flakyRename(Infinity, 'ENOENT');
+  expect(() => s.addRoom('R2')).toThrow('가짜 ENOENT');
+  expect(missing).toHaveBeenCalledTimes(1);
+});
+
+test('깨진 state.json 을 옮길 때도 잠금이면 다시 시도한다', () => {
+  fs.writeFileSync(path.join(dir, 'state.json'), '{ not json');
+  const rename = flakyRename(1, 'EPERM');
+  expect(openStore(dir).rooms()).toEqual([]);
+  expect(rename).toHaveBeenCalledTimes(2);
+  expect(fs.readdirSync(dir).filter((f) => f.startsWith('state.json.broken-'))).toHaveLength(1);
 });
 
 test('updateAgent 는 undefined 값을 무시한다 — 다시 열어도 pos·name 그대로', () => {

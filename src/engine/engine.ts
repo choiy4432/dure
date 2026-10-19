@@ -33,6 +33,7 @@ export interface AgentDescription {
 //  'message'     RelayMessage     'held' { roomId }
 //  'request'     PendingRequest   'request-resolved' { id; agentId }
 //  'flags'       { agentId; bypass: boolean }   (init.permissionMode === 'bypassPermissions')
+//  'engine-error' { agentId: string | null; message: string }  (프로세스 이벤트 처리·듣는 쪽에서 난 오류 — 앱을 죽이지 않고 알린다)
 export interface Engine extends EventEmitter {
   rooms(): Room[];
   agents(roomId?: RoomId): Agent[];
@@ -91,17 +92,20 @@ class EngineImpl extends EventEmitter implements Engine {
       deliver: (id, text, messageId) => this.sendTo(this.ensure(id), [{ type: 'text', text }], { kind: 'relay', messageId }),
       isBusy: (id) => this.waiting(id) || (this.held.get(id)?.length ?? 0) > 0,
     });
+    // 아래 알림은 프로세스 이벤트·MCP 요청 처리 중에도 불린다 — 듣는 쪽이 던져도 남은 일(상태·다음 입력)은 한다
     this.perms.on('request', (r: PendingRequest) => {
-      this.emit('request', r);
-      this.emitStatus(r.agentId);
+      this.guard(r.agentId, () => this.emit('request', r));
+      this.guard(r.agentId, () => this.emitStatus(r.agentId));
     });
     this.perms.on('resolved', (r: { id: string; agentId: AgentId }) => {
-      this.emit('request-resolved', r);
-      this.emitStatus(r.agentId);
-      this.pump(r.agentId);
+      this.guard(r.agentId, () => this.emit('request-resolved', r));
+      this.guard(r.agentId, () => {
+        this.emitStatus(r.agentId);
+        this.pump(r.agentId);
+      });
     });
-    this.router.on('message', (m: RelayMessage) => this.emit('message', m));
-    this.router.on('held', (h: { roomId: RoomId }) => this.emit('held', h));
+    this.router.on('message', (m: RelayMessage) => this.guard(null, () => this.emit('message', m)));
+    this.router.on('held', (h: { roomId: RoomId }) => this.guard(null, () => this.emit('held', h)));
   }
 
   async start(): Promise<void> {
@@ -304,22 +308,31 @@ class EngineImpl extends EventEmitter implements Engine {
       cwd: agent.folder,
       env: { ...process.env, ...this.o.env, ...SPAWN_ENV_EXTRA },
     });
-    s.on('event', (ev: StreamEvent) => {
-      // 제어 응답이 아닌 이벤트가 오면 보낸 줄을 읽은 것 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
-      if (ev.kind !== 'control-response') this.inFlight.delete(s);
-      if (this.sessions.get(id) === s) this.onEvent(id, ev);
-    });
-    s.on('status', () => this.sessions.get(id) === s && this.emitStatus(id));
-    s.on('exit', ({ expected }: { expected: boolean }) => {
-      if (this.sessions.get(id) !== s) return; // 엔진이 끝낸 세션은 endSession 이 정리
-      this.sessions.delete(id);
-      if (!expected) {
-        this.restoreInFlight(id, s);
-        this.errors.set(id, s.errorText ?? EXITED);
-        this.perms.cancelForAgent(id, EXITED);
-      }
-      this.emitStatus(id);
-    });
+    // 세션 콜백 안에서 던지면 stdout 처리 중 잡히지 않은 예외가 되어 앱이 죽는다 — 모두 guard 로 감싼다
+    s.on('event', (ev: StreamEvent) =>
+      this.guard(id, () => {
+        // 제어 응답이 아닌 이벤트가 오면 보낸 줄을 읽은 것 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
+        if (ev.kind !== 'control-response') this.inFlight.delete(s);
+        if (this.sessions.get(id) === s) this.onEvent(id, ev);
+      }),
+    );
+    s.on('status', () =>
+      this.guard(id, () => {
+        if (this.sessions.get(id) === s) this.emitStatus(id);
+      }),
+    );
+    s.on('exit', ({ expected }: { expected: boolean }) =>
+      this.guard(id, () => {
+        if (this.sessions.get(id) !== s) return; // 엔진이 끝낸 세션은 endSession 이 정리
+        this.sessions.delete(id);
+        if (!expected) {
+          this.guard(id, () => this.restoreInFlight(id, s)); // 기록 실패여도 아래 정리는 한다
+          this.errors.set(id, s.errorText ?? EXITED);
+          this.perms.cancelForAgent(id, EXITED);
+        }
+        this.emitStatus(id);
+      }),
+    );
     s.start();
     if (s.status === 'error') {
       // 폴더 없음 — 띄우지 않았다
@@ -337,16 +350,34 @@ class EngineImpl extends EventEmitter implements Engine {
   private onEvent(id: AgentId, ev: StreamEvent): void {
     if (ev.kind === 'control-response') return; // 내부 응답 — initialize 의 account 같은 것이 밖으로 새지 않게
     if (ev.kind === 'init') {
-      if (this.store.agent(id)?.started === false) this.store.updateAgent(id, { started: true });
-      this.emit('flags', { agentId: id, bypass: ev.permissionMode === 'bypassPermissions' });
+      // 저장이 실패해도 init 은 알린다 — started 는 다음 차례의 init 때 다시 쓴다
+      this.guard(id, () => {
+        if (this.store.agent(id)?.started === false) this.store.updateAgent(id, { started: true });
+      });
+      this.guard(id, () => this.emit('flags', { agentId: id, bypass: ev.permissionMode === 'bypassPermissions' }));
     }
     if (ev.kind === 'tool-result') {
-      this.emit('agent-event', { agentId: id, event: ev, viaApproval: this.perms.wasAsked(id, ev.toolUseId) });
+      this.guard(id, () =>
+        this.emit('agent-event', { agentId: id, event: ev, viaApproval: this.perms.wasAsked(id, ev.toolUseId) }),
+      );
     } else {
-      this.emit('agent-event', { agentId: id, event: ev });
+      this.guard(id, () => this.emit('agent-event', { agentId: id, event: ev }));
     }
     // 세션은 result 를 내보내기 직전에 idle 이 된다 — 이 차례의 result 를 먼저 알린 뒤 다음 입력을 보낸다
     if (ev.kind === 'result') this.pump(id);
+  }
+
+  /** 콜백 안의 오류를 삼키고 'engine-error' 로 알린다('error' 는 듣는 쪽이 없으면 Node 가 던진다) */
+  private guard(agentId: AgentId | null, fn: () => void): void {
+    try {
+      fn();
+    } catch (e) {
+      try {
+        this.emit('engine-error', { agentId, message: e instanceof Error ? e.message : String(e) });
+      } catch {
+        /* engine-error 듣는 쪽의 오류까지는 어쩔 수 없다 — 삼킨다 */
+      }
+    }
   }
 
   /** 세션을 맵에서 빼고(이후 이벤트 무시) 승인 대기를 정리한 뒤 멈춘다 — 상한 STOP_LIMIT_MS */

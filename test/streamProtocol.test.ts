@@ -86,6 +86,22 @@ describe('parseLine', () => {
     expect(parseLine('{"type":"mystery"}')).toEqual({ kind: 'ignored', type: 'mystery' });
   });
 
+  test('모양이 이상한 줄에도 던지지 않는다 — permission_denials 에 null → ignored parse-error', () => {
+    const line = '{"type":"result","subtype":"success","is_error":false,"result":"x","permission_denials":[null]}';
+    expect(() => parseLine(line)).not.toThrow();
+    expect(parseLine(line)).toEqual({ kind: 'ignored', type: 'parse-error' });
+  });
+
+  test('message 가 객체가 아니어도 던지지 않는다', () => {
+    for (const message of [7, 'x', null, true, [1]]) {
+      for (const type of ['user', 'assistant']) {
+        expect(() => parseLine(JSON.stringify({ type, message }))).not.toThrow();
+      }
+    }
+    expect(parseLine('{"type":"user","message":7}')).toEqual({ kind: 'ignored', type: 'user' });
+    expect(parseLine('{"type":"assistant","message":"x"}')).toEqual({ kind: 'assistant', blocks: [] });
+  });
+
   test('깨진 JSON → ignored invalid-json, 빈 줄 → null', () => {
     expect(parseLine('{oops')).toEqual({ kind: 'ignored', type: 'invalid-json' });
     expect(parseLine('')).toBeNull();

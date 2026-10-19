@@ -139,6 +139,20 @@ test('없는 requestId answer → throw', () => {
   expect(() => perms.answer('nope', { type: 'allow' })).toThrow();
 });
 
+test('request 듣는 쪽이 던져도 요청은 대기로 남아 답할 수 있다 — request() 는 던지지 않는다', async () => {
+  perms.on('request', () => {
+    throw new Error('듣는 쪽 고장');
+  });
+  let p!: Promise<unknown>;
+  expect(() => {
+    p = perms.request(a1, { tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 't1' });
+  }).not.toThrow();
+  expect(perms.pending()).toHaveLength(1);
+  perms.answer(lastPending().id, { type: 'allow' });
+  expect(await p).toEqual({ behavior: 'allow', updatedInput: { command: 'ls' } });
+  expect(perms.pending()).toEqual([]);
+});
+
 test('없는 에이전트는 즉시 deny, 대기·이벤트 없음', async () => {
   const events: unknown[] = [];
   perms.on('request', (r) => events.push(r));

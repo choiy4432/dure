@@ -462,6 +462,58 @@ test('폴더 지운 뒤 sendUser → status error, errorText 폴더를 찾을 �
   expect(e.status(b.id)).toBe('idle');
 });
 
+test('첫 init 의 started 저장이 한 번 실패해도 engine-error 로 알리고 차례는 끝난다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const store = (e as any).store;
+  const realUpdate = store.updateAgent;
+  let thrown = 0;
+  store.updateAgent = (id: string, patch: { started?: boolean }) => {
+    if (patch.started === true && thrown === 0) {
+      thrown++;
+      throw new Error('저장 실패(가짜)');
+    }
+    return realUpdate(id, patch);
+  };
+  const errors: unknown[] = [];
+  e.on('engine-error', (x) => errors.push(x));
+  const done = resultOf(e, a.id);
+
+  await e.sendUser(a.id, text('echo 하나'));
+
+  expect(await resultText(done)).toBe('받음: echo 하나');
+  expect(thrown).toBe(1);
+  expect(errors).toEqual([{ agentId: a.id, message: '저장 실패(가짜)' }]);
+  expect(e.status(a.id)).toBe('idle');
+  // 다음 차례의 init 때 다시 쓴다
+  const again = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 둘'));
+  await again;
+  expect(agentOf(e, a.id).started).toBe(true);
+});
+
+test('agent-event 듣는 쪽이 던져도 engine-error 로 알리고, 차례 끝의 다음 입력은 그대로 보낸다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  let broke = false;
+  e.on('agent-event', (x: AgentEvent) => {
+    if (!broke && x.agentId === a.id && x.event.kind === 'result') {
+      broke = true;
+      throw new Error('화면 고장(가짜)');
+    }
+  });
+  const errors: unknown[] = [];
+  e.on('engine-error', (x) => errors.push(x));
+  const second = resultTextIs(e, a.id, '받음: echo 둘');
+
+  await e.sendUser(a.id, text('echo 하나'));
+  await e.sendUser(a.id, text('echo 둘')); // 일하는 중 — 첫 차례의 result 뒤에 보낸다
+
+  await second;
+  expect(errors).toEqual([{ agentId: a.id, message: '화면 고장(가짜)' }]);
+  expect(userTexts()).toEqual(['echo 하나', 'echo 둘']);
+});
+
 test('describe → commands·models, account 없음', async () => {
   const e = await start();
   const { a } = setup(e);

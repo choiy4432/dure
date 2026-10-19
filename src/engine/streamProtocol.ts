@@ -48,6 +48,7 @@ function parseAssistant(obj: any): StreamEvent {
   return { kind: 'assistant', blocks };
 }
 
+/** 한 줄을 이벤트로 — 던지지 않는다(모양이 이상하면 ignored parse-error) */
 export function parseLine(line: string): StreamEvent | null {
   if (line.trim() === '') return null;
   let obj: any;
@@ -57,6 +58,14 @@ export function parseLine(line: string): StreamEvent | null {
     return ignored('invalid-json');
   }
   if (obj === null || typeof obj !== 'object') return ignored('invalid-json');
+  try {
+    return parseObject(obj);
+  } catch {
+    return ignored('parse-error');
+  }
+}
+
+function parseObject(obj: any): StreamEvent {
   switch (obj.type) {
     case 'system':
       if (obj.subtype === 'init') {
