@@ -1694,11 +1694,498 @@ code {
   color: var(--muted);
 }
 
-/* 대화 자리 */
-.pnl-chat {
+/* ── 대화 목록(시안 .conv) ───────────────────────── */
+.conv {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.conv::-webkit-scrollbar {
+  width: 10px;
+}
+
+.conv::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 10px;
+  border: 3px solid var(--bg);
+}
+
+/* 불러오는 중 · 못 불러옴 */
+.conv-st {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--muted);
+}
+
+/* 이전 대화 N개 더 보기 */
+.conv-more {
+  align-self: center;
+  flex: none;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  background: var(--bg);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  box-shadow: var(--shadow-sm);
+}
+
+.conv-more:hover {
+  background: var(--subtle);
+  border-color: var(--border-strong);
+}
+
+/* 사람 말풍선 — 오른쪽 */
+.me {
+  align-self: flex-end;
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: var(--radius-node) var(--radius-node) var(--radius-xs) var(--radius-node);
+  background: var(--hover);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.me p {
+  margin: 0;
+}
+
+.me-img {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.me-img + p {
+  margin-top: 4px;
+}
+
+/* 말한 쪽 이름 — 'Claude' */
+.who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+/* 작은 꼬리표 — '허용된 일' · 보낸 이름 */
+.k {
+  flex: none;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-code);
+  background: var(--hover);
+  color: var(--text-3);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* 다른 에이전트가 넘긴 메시지 — 왼쪽, 테두리 말풍선 */
+.ci-relay {
+  align-self: flex-start;
+  max-width: 88%;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-node) var(--radius-node) var(--radius-node) var(--radius-xs);
+  background: var(--subtle);
+}
+
+.ci-relay .who {
+  font-weight: 500;
+}
+
+.ci-relay .k {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  line-height: 18px;
+  color: var(--text);
+  font-weight: 700;
+}
+
+/* 하는 일 목록 — 접힌 한 줄씩 */
+.acts {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  overflow: hidden;
+}
+
+.acts li + li {
+  border-top: 1px solid var(--border-soft);
+}
+
+.act {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: var(--text-2);
+  text-align: left;
+}
+
+.act:hover:not(:disabled) {
+  background: var(--subtle);
+}
+
+.act:focus-visible {
+  outline-offset: -2px;
+}
+
+.act .c {
+  width: 14px;
+  height: 14px;
+  color: var(--idle);
+  transition: transform 0.15s;
+}
+
+.act[aria-expanded="true"] .c {
+  transform: rotate(90deg);
+}
+
+.act .f {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.act-v {
+  flex: none;
+}
+
+/* 진행 중(결과 전) — 펼칠 것이 없다 */
+.acts li.run .act {
+  color: var(--muted);
+}
+
+/* 거절된 일 — 회색 줄그음 */
+.acts li.no .act,
+.acts li.no .act .f {
+  color: var(--muted);
+}
+
+.acts li.no .act .f,
+.acts li.no .act-v {
+  text-decoration: line-through;
+}
+
+.act-out {
+  padding: 8px 12px 10px 34px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--subtle);
+}
+
+.act-out pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: 0;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.act-none,
+.act-cut {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.act-cut {
+  margin-top: 6px;
+}
+
+/* 알림 — 가운데 작은 회색 */
+.note {
+  align-self: center;
+  max-width: 80%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* 명령(/cost 등) 출력 */
+.ci-local {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: 0;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 흐르는 글 — 끝에 깜빡이는 커서 */
+.live-t {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 16px;
+  margin-left: 2px;
+  vertical-align: -3px;
+  background: var(--text);
+  animation: caret-blink 1s steps(2, start) infinite;
+}
+
+@keyframes caret-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+/* ── 입력창(시안 .cmp/.box) ─────────────────────── */
+.cmp {
+  flex: none;
+  padding: 12px 20px 20px;
+}
+
+.box {
+  position: relative;
+  padding: 12px 10px 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-node);
+  background: var(--bg);
+  box-shadow: var(--shadow-box);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.box:focus-within {
+  border-color: var(--primary);
+  box-shadow: var(--ring-soft);
+}
+
+/* 이미지를 끌어 오는 중 */
+.box.drop {
+  border-color: var(--primary);
+  border-style: dashed;
+  box-shadow: var(--ring-soft);
+}
+
+.box textarea {
+  display: block;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  resize: none;
+  padding: 0;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  color: var(--text);
+  caret-color: var(--primary);
+  overflow-y: hidden;
+}
+
+.box textarea::placeholder {
+  color: var(--muted);
+}
+
+.tb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  margin-left: -6px;
+}
+
+.tb-sp {
+  flex: 1;
+}
+
+/* 보낼 차례를 기다리는 입력 N개 */
+.held-in {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.send {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-ctl);
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-pri);
+  transition: background-color 0.15s;
+}
+
+.send:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.send:disabled {
+  background: var(--border);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+/* 붙인 이미지 미리보기 칩 */
+.atts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 2px 0 10px;
+}
+
+.att {
+  position: relative;
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  background: var(--subtle);
+}
+
+.att img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: calc(var(--radius-ctl) - 1px);
+}
+
+.att.wait {
+  background: var(--hover);
+  animation: att-wait 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes att-wait {
+  to {
+    opacity: 0.5;
+  }
+}
+
+.att-x {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-dot);
+  background: var(--bg);
+  color: var(--text-3);
+  box-shadow: var(--shadow-sm);
+}
+
+.att-x:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* 입력창 아래 — 못 보냄 · 못 붙임 */
+.cmp-err {
+  margin: 6px 2px 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--danger-text);
+}
+
+/* / 명령 목록 — 입력창 위 */
+.slash {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  box-shadow: var(--shadow-pop);
+}
+
+.sl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sl[aria-selected="true"] {
+  background: var(--hover);
+}
+
+.sl-n {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.sl-d {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret,
+  .att.wait {
+    animation: none;
+  }
+
+  .act .c {
+    transition: none;
+  }
 }
 
 /* 떠 있는 목록(모델 · 메뉴) — 여는 버튼과 같은 칸에 */

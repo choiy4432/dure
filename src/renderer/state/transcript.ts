@@ -11,6 +11,8 @@ export interface ActionLine {
   denied: boolean
   output: string
   pending?: boolean
+  /** 출력이 길어 앞 2000자만 남겼다 — 잘렸을 때만 true */
+  truncated?: boolean
 }
 
 export type ChatLine =
@@ -76,6 +78,7 @@ export function buildTranscript(
                 allowed: !r.viaApproval && !r.isError,
                 denied: r.isError && DENY_TEXTS.includes(r.text),
                 output: r.text.slice(0, OUTPUT_MAX),
+                ...(r.text.length > OUTPUT_MAX ? { truncated: true } : {}),
               })
             }
           }

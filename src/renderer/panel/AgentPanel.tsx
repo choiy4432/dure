@@ -9,6 +9,8 @@ import { MessageCard, type ShownState } from './cards/MessageCard'
 import { PermissionCard } from './cards/PermissionCard'
 import { QuestionCard } from './cards/QuestionCard'
 import { HeldChainCard } from './cards/HeldChainCard'
+import { ChatList } from './ChatList'
+import { Composer } from './Composer'
 
 const IDLE: Described = { state: 'idle' }
 /** 최근 전달된 메시지 카드는 5분이 지나면 접힌 채로 보인다 */
@@ -95,8 +97,7 @@ function Pins({ agentId, open, onOpenChange }: {
 
 /**
  * 오른쪽 패널 — 고른 에이전트 하나.
- * 위에서부터: 머리(PanelHeader) → 고정 카드 자리(.pnl-pins) → 대화 자리(.pnl-chat) → 입력창.
- * 카드·대화·입력창은 이 틀 안에 자식으로 더한다.
+ * 위에서부터: 머리(PanelHeader) → 고정 카드 자리(.pnl-pins) → 대화 목록(ChatList) → 입력창(Composer).
  */
 export function AgentPanel() {
   const sel = useDure(s => {
@@ -105,7 +106,7 @@ export function AgentPanel() {
   })
   const id = sel?.id ?? null
 
-  // describe 는 claude 를 켠다 — 고르기만으론 부르지 않고, 모델 목록(나중엔 / 명령 목록)을 열 때 에이전트마다 한 번.
+  // describe 는 claude 를 켠다 — 고르기만으론 부르지 않고, 모델 목록이나 / 명령 목록을 처음 열 때 에이전트마다 한 번.
   // 받은 것은 에이전트별로 둔다(다른 에이전트로 갔다 와도 다시 안 받는다)
   const [described, setDescribed] = useState<Record<AgentId, Described>>({})
   const asked = useRef(new Set<AgentId>())
@@ -155,9 +156,16 @@ export function AgentPanel() {
         onModelOpenChange={open => setModelOpenFor(open ? sel.id : null)}
       />
       <Pins agentId={sel.id} open={cardOpen} onOpenChange={setOpen} />
-      {/* 대화 목록 */}
-      <div className="pnl-chat" />
-      {/* 입력창 */}
+      <ChatList key={`c-${sel.id}`} agentId={sel.id} />
+      <Composer
+        key={`i-${sel.id}`}
+        agentId={sel.id}
+        name={sel.name}
+        description={described[sel.id] ?? IDLE}
+        onLoadCommands={ensureDescribed}
+        onRetryCommands={retryDescribe}
+        onOpenModel={() => setModelOpenFor(sel.id)}
+      />
     </aside>
   )
 }

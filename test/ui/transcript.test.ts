@@ -53,6 +53,11 @@ describe('buildTranscript', () => {
   it('출력은 앞 2000자', () => {
     const { lines } = buildTranscript([asst([{ type: 'tool_use', id: 'q', name: 'Bash', input: {} }]), res('q', 'x'.repeat(5000))], undefined)
     expect((lines[0] as any).actions[0].output).toHaveLength(2000)
+    expect((lines[0] as any).actions[0].truncated).toBe(true)
+  })
+  it('잘리지 않은 출력엔 잘림 표시가 없다(2000자 딱 맞아도)', () => {
+    const { lines } = buildTranscript([asst([{ type: 'tool_use', id: 'q', name: 'Bash', input: {} }]), res('q', 'x'.repeat(2000))], undefined)
+    expect((lines[0] as any).actions[0].truncated).toBeUndefined()
   })
   it('전달 머리를 떼고 보낸 이름만 남긴다', () => {
     const it: HistoryItem = {
