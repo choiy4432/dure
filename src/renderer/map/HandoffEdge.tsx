@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type MouseEvent } from 'react'
+import { memo, useEffect, useRef, type MouseEvent } from 'react'
 import {
   EdgeLabelRenderer, Position, ViewportPortal, getBezierPath, useInternalNode,
   type Edge, type EdgeProps, type InternalNode,
@@ -7,7 +7,7 @@ import type { AgentId, MessageState } from '../../engine/types'
 import { useDure } from '../state/store'
 import { label } from '../state/selectors'
 import { useNow } from '../lib/useNow'
-import { reducedMotion } from '../lib/motion'
+import { PACKET_MS, useShot } from '../lib/motion'
 import { NODE_SIZE, edgeEnds, labelPoint, type Rect, type Side } from './layout'
 
 export interface HandoffEdgeData extends Record<string, unknown> {
@@ -24,8 +24,7 @@ export type HandoffFlowEdge = Edge<HandoffEdgeData, 'handoff'>
 
 /** 이 시간 안에 전달된 엣지는 파란 알약·진한 선 */
 export const FRESH_MS = 60_000
-/** 넘김 점이 엣지를 따라가는 시간 · 받는 쪽 고리가 퍼지는 시간 */
-export const MOVE_MS = 400
+/** 받는 쪽 고리가 퍼지는 시간(점이 엣지를 따라가는 시간은 lib/motion PACKET_MS) */
 const RING_MS = 450
 /** 처음 그릴 때 이보다 오래된 전달은 움직이지 않는다 */
 const REPLAY_WINDOW_MS = 2_000
@@ -65,7 +64,7 @@ function playPacket(path: SVGPathElement, dot: SVGCircleElement, ring: SVGCircle
   const t0 = performance.now()
   let raf = 0
   const frame = (t: number) => {
-    const p = (t - t0) / MOVE_MS
+    const p = (t - t0) / PACKET_MS
     if (p < 1) {
       const pt = path.getPointAtLength(easeOut(Math.max(0, p)) * len)
       dot.setAttribute('cx', String(pt.x))
@@ -73,7 +72,7 @@ function playPacket(path: SVGPathElement, dot: SVGCircleElement, ring: SVGCircle
       dot.style.opacity = '1'
     } else {
       dot.style.opacity = '0'
-      const q = (t - t0 - MOVE_MS) / RING_MS
+      const q = (t - t0 - PACKET_MS) / RING_MS
       if (q >= 1) {
         ring.style.opacity = '0'
         return
@@ -91,22 +90,6 @@ function playPacket(path: SVGPathElement, dot: SVGCircleElement, ring: SVGCircle
   }
 }
 
-/** lastDelivered 가 바뀔 때마다 1씩 오르는 수 — 처음 그릴 때의 지난 전달·움직임 줄이기는 세지 않는다 */
-function usePacketShot(deliveredAt: number | undefined): number {
-  const [shot, setShot] = useState(0)
-  const seen = useRef<{ at: number | undefined } | null>(null)
-  useEffect(() => {
-    const first = seen.current === null
-    const was = seen.current?.at
-    seen.current = { at: deliveredAt }
-    if (deliveredAt === undefined || deliveredAt === was) return
-    if (first && Date.now() - deliveredAt > REPLAY_WINDOW_MS) return
-    if (reducedMotion()) return
-    setShot(n => n + 1)
-  }, [deliveredAt])
-  return shot
-}
-
 /** 넘김 엣지 — 카드 테두리끼리 부드러운 곡선 + 화살촉, 가운데 상태 알약, 전달되는 순간 점·고리 */
 export const HandoffEdge = memo(function HandoffEdge({ id, source, target, data }: EdgeProps<HandoffFlowEdge>) {
   const s = useInternalNode(source)
@@ -117,7 +100,8 @@ export const HandoffEdge = memo(function HandoffEdge({ id, source, target, data 
   const pathRef = useRef<SVGPathElement>(null)
   const dotRef = useRef<SVGCircleElement>(null)
   const ringRef = useRef<SVGCircleElement>(null)
-  const shot = usePacketShot(deliveredAt)
+  // lastDelivered 가 바뀔 때마다 한 번 — 처음 그릴 때는 전달과 함께 새로 생긴 엣지(REPLAY_WINDOW_MS 안)만
+  const shot = useShot(deliveredAt, REPLAY_WINDOW_MS)
 
   useEffect(() => {
     const path = pathRef.current
