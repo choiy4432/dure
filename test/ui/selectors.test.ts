@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { deliveredTo, displayStatus, edges, label, pairMessages, summary, unreadFor, type EdgeView } from '../../src/renderer/state/selectors'
+import { displayStatus, edges, label, pairMessages, summary, unreadFor, type EdgeView } from '../../src/renderer/state/selectors'
 import type { PendingRequest, RelayMessage, MessageState } from '../../src/engine/types'
 import type { AgentView } from '../../src/shared/ipcContract'
 
@@ -29,17 +29,6 @@ describe('unreadFor', () => {
     const ms = [msg('a', 'b', 'pending'), msg('a', 'b', 'held'), msg('a', 'b', 'queued'), msg('a', 'b', 'delivered'), msg('b', 'a', 'pending')]
     expect(unreadFor('b', ms)).toBe(2)
     expect(unreadFor('a', ms)).toBe(1)
-  })
-})
-
-describe('deliveredTo', () => {
-  it('받는 쪽이 그 에이전트인 전달 중 가장 늦은 시각 — 보낸 쪽이 그 에이전트인 것은 아니다', () => {
-    const last = { 'a>b': 20, 'c>b': 35, 'b>a': 50, 'ab>x': 70 }
-    expect(deliveredTo('b', last)).toBe(35)
-    expect(deliveredTo('a', last)).toBe(50)
-    expect(deliveredTo('x', last)).toBe(70)
-    expect(deliveredTo('c', last)).toBeUndefined()
-    expect(deliveredTo('b', {})).toBeUndefined()
   })
 })
 

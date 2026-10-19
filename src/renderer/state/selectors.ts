@@ -39,15 +39,6 @@ export function latestDelivered(agentId: AgentId, messages: RelayMessage[]): Rel
   return hit
 }
 
-/** 이 에이전트가 마지막으로 받은 전달 시각 — lastDelivered 의 '보낸>받는' 칸 중 받는 쪽이 그 에이전트인 것 */
-export function deliveredTo(agentId: AgentId, lastDelivered: Record<string, number>): number | undefined {
-  let at: number | undefined
-  for (const [key, t] of Object.entries(lastDelivered)) {
-    if (key.slice(key.indexOf('>') + 1) === agentId && (at === undefined || t > at)) at = t
-  }
-  return at
-}
-
 export function summary(state: SummaryInput, roomId: RoomId): { working: number; awaiting: number; unread: number } {
   let working = 0
   let awaiting = 0

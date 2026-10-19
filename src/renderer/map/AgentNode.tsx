@@ -4,11 +4,11 @@ import { ShieldAlert } from 'lucide-react'
 import type { AgentId, Decision, PendingRequest } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
-import { deliveredTo, displayStatus, unreadFor, type DisplayStatus } from '../state/selectors'
+import { displayStatus, unreadFor, type DisplayStatus } from '../state/selectors'
 import { requestTarget, requestTitle } from '../lib/toolSummary'
 import { ago, initial, josa, lasting, STATUS_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
-import { popOnce, useShot } from '../lib/motion'
+import { popOnce, useRise } from '../lib/motion'
 
 export type AgentFlowNode = Node<Record<string, never>, 'agent'>
 
@@ -127,15 +127,13 @@ function Approval({ agent, request }: { agent: AgentView; request: PendingReques
 export function AgentCard({ agentId }: { agentId: AgentId }) {
   const v = useCardView(agentId)
   const now = useNow()
-  // 넘김 서명 — 이 에이전트에게 전달될 때마다 바닥 오른쪽(받은 메시지 배지, 없으면 그 자리의 시각)이 한 번 튄다.
-  // 넘김 점과 같은 lastDelivered 로 · 처음 그릴 때(다시 켬·방 바꿈)·움직임 줄이기는 튀지 않는다
-  const arrived = useDure(s => deliveredTo(agentId, s.lastDelivered))
-  const pop = useShot(arrived)
-  const slot = useRef<HTMLElement | null>(null)
-  const setSlot = useCallback((el: HTMLElement | null) => {
-    slot.current = el
+  // 넘김 서명 — 받은 메시지가 늘 때(도착하는 순간) 배지가 한 번 튄다. 처음 그릴 때·줄어들 때·움직임 줄이기는 튀지 않는다
+  const rise = useRise(v?.unread ?? 0)
+  const badge = useRef<HTMLElement | null>(null)
+  const setBadge = useCallback((el: HTMLElement | null) => {
+    badge.current = el
   }, [])
-  useEffect(() => (pop ? popOnce(slot.current) : undefined), [pop])
+  useEffect(() => (rise ? popOnce(badge.current) : undefined), [rise])
   if (!v) return null
 
   const { agent, request, unread, selected, status } = v
@@ -195,14 +193,10 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
         </span>
         {unread > 0 ? (
           <span className="um">
-            받은 메시지<b ref={setSlot}>{unread}</b>
+            받은 메시지<b ref={setBadge}>{unread}</b>
           </span>
         ) : (
-          time && (
-            <span ref={setSlot} className="nf-t">
-              {time}
-            </span>
-          )
+          time && <span className="nf-t">{time}</span>
         )}
       </div>
     </div>

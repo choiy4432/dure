@@ -10,7 +10,7 @@ export const moveMs = (ms: number) => (reducedMotion() ? 0 : ms)
 
 /**
  * 넘김 서명(이 화면의 하나뿐인 움직임) — 전달되는 순간 엣지를 따라 점이 보낸 쪽 → 받는 쪽으로 가고(PACKET_MS),
- * 닿으면 받는 자리에 고리가 퍼지고 받는 노드의 배지가 한 번 튄다(POP_MS).
+ * 닿으면 받는 자리에 고리가 퍼진다. 받는 노드의 배지는 메시지가 도착해 개수가 오르는 순간 한 번 튄다(POP_MS).
  */
 export const PACKET_MS = 400
 export const POP_MS = 260
@@ -24,11 +24,24 @@ const POP_FRAMES: Keyframe[] = [
   { transform: 'scale(1)' },
 ]
 
-/** el 을 한 번 튀게 한다 — 넘김 점이 닿는 때(PACKET_MS 뒤)에. 움직임 줄이기면 하지 않는다. 멈추는 함수를 돌려준다 */
+/** el 을 한 번 튀게 한다 — 움직임 줄이기면 하지 않는다. 멈추는 함수를 돌려준다 */
 export function popOnce(el: HTMLElement | null): () => void {
   if (!el || reducedMotion() || typeof el.animate !== 'function') return () => {}
-  const a = el.animate(POP_FRAMES, { duration: POP_MS, delay: PACKET_MS, iterations: 1 })
+  const a = el.animate(POP_FRAMES, { duration: POP_MS, iterations: 1 })
   return () => a.cancel()
+}
+
+/** count 가 오를 때마다 1씩 오르는 수 — 처음 그릴 때의 개수·줄어듦·움직임 줄이기는 세지 않는다 */
+export function useRise(count: number): number {
+  const [rise, setRise] = useState(0)
+  const prev = useRef<number | null>(null)
+  useEffect(() => {
+    const was = prev.current
+    prev.current = count
+    if (was === null || count <= was || reducedMotion()) return
+    setRise(n => n + 1)
+  }, [count])
+  return rise
 }
 
 /**

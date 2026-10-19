@@ -194,7 +194,7 @@ describe('AgentNode — 카드 내용', () => {
   })
 })
 
-describe('AgentNode — 넘김 서명: 받는 노드 배지가 한 번 튄다', () => {
+describe('AgentNode — 넘김 서명: 메시지가 도착하면 받는 노드 배지가 한 번 튄다', () => {
   // jsdom 엔 Web Animations 가 없다 — 부른 것만 센다
   let animate: ReturnType<typeof vi.fn>
   beforeEach(() => {
@@ -206,18 +206,16 @@ describe('AgentNode — 넘김 서명: 받는 노드 배지가 한 번 튄다', 
     delete (window as any).matchMedia
   })
   const at = (m: RelayMessage, state: RelayMessage['state'], t: number): RelayMessage => ({ ...m, state, updatedAt: t })
-
-  it('전달되는 순간 받는 노드의 배지가 튄다 — 넘김 점이 닿는 때(PACKET_MS 뒤)에 300ms 안으로 한 번', async () => {
-    const { PACKET_MS } = await import('../../src/renderer/lib/motion')
-    const a = msg('w', 's', 'pending')
-    const b = msg('w', 's', 'pending')
+  const setup = () => {
     snapshot.agents = [agent('s', { name: '서버' }), agent('w', { name: '웹 화면' })]
-    snapshot.messages = [a, b]
-    const { card } = await renderCard('s')
-    expect(card.querySelector('.um b')!.textContent).toBe('2')
-    expect(animate).not.toHaveBeenCalled()
+  }
 
-    emit('message', at(a, 'delivered', Date.now()))
+  it('받은 메시지가 0→1 로 생기면 배지가 바로 한 번 튄다(300ms 안, 기다림 없이)', async () => {
+    setup()
+    snapshot.messages = []
+    const { card } = await renderCard('s')
+    expect(card.querySelector('.um')).toBeNull()
+    emit('message', msg('w', 's', 'pending'))
     const badge = card.querySelector('.um b')!
     expect(badge.textContent).toBe('1')
     expect(animate).toHaveBeenCalledTimes(1)
@@ -226,50 +224,49 @@ describe('AgentNode — 넘김 서명: 받는 노드 배지가 한 번 튄다', 
     expect(frames[0].transform).toBe('scale(1)')
     expect(frames.at(-1)!.transform).toBe('scale(1)')
     expect(frames.some(f => f.transform !== 'scale(1)')).toBe(true)
-    expect(opts.delay).toBe(PACKET_MS)
+    expect(opts.delay ?? 0).toBe(0)
     expect(opts.duration).toBeLessThanOrEqual(300)
     expect(opts.iterations ?? 1).toBe(1)
   })
 
-  it('배지가 사라지면(마지막 받은 메시지가 전달됨) 그 자리의 시각이 튄다', async () => {
-    const a = msg('w', 's', 'pending')
-    snapshot.agents = [agent('s', { name: '서버' }), agent('w', { name: '웹 화면' })]
-    snapshot.messages = [a]
+  it('n→n+1 로 늘 때도 튄다', async () => {
+    setup()
+    snapshot.messages = [msg('w', 's', 'pending')]
     const { card } = await renderCard('s')
-    emit('message', at(a, 'delivered', Date.now()))
-    expect(card.querySelector('.um')).toBeNull()
-    const time = card.querySelector('.nf-t')!
-    expect(time.textContent).toBe('방금')
+    emit('message', msg('w', 's', 'pending'))
+    expect(card.querySelector('.um b')!.textContent).toBe('2')
     expect(animate).toHaveBeenCalledTimes(1)
-    expect(animate.mock.contexts[0]).toBe(time)
+    expect(animate.mock.contexts[0]).toBe(card.querySelector('.um b'))
   })
 
-  it('처음 그릴 때(다시 켬·방 바꿈)는 지난 전달로 튀지 않고, 다른 에이전트에게 간 전달·상태만 바뀐 메시지에도 안 튄다', async () => {
-    const a = msg('w', 's', 'pending')
-    const b = msg('s', 'w', 'pending')
-    const c = msg('w', 's', 'pending')
-    snapshot.agents = [agent('s', { name: '서버' }), agent('w', { name: '웹 화면' })]
-    snapshot.messages = [a, b, c]
-    const { getStore } = await import('../../src/renderer/state/store')
-    const { AgentCard } = await import('../../src/renderer/map/AgentNode')
-    await act(async () => { await getStore().init() })
-    emit('message', at(a, 'delivered', Date.now())) // 카드를 그리기 전에 전달됨
-    render(<AgentCard agentId="s" />)
-    expect(animate).not.toHaveBeenCalled()
-
-    emit('message', at(b, 'delivered', Date.now())) // 웹 화면에게 간 것
-    emit('message', at(c, 'held', Date.now())) // 전달이 아님
+  it('처음 그릴 때 이미 개수가 있으면(다시 켬·방 바꿈) 튀지 않는다', async () => {
+    setup()
+    snapshot.messages = [msg('w', 's', 'pending'), msg('w', 's', 'pending')]
+    const { card } = await renderCard('s')
+    expect(card.querySelector('.um b')!.textContent).toBe('2')
     expect(animate).not.toHaveBeenCalled()
   })
 
-  it('움직임 줄이기 설정이면 튀지 않는다(배지는 바로 바뀐다)', async () => {
-    ;(window as any).matchMedia = (q: string) => ({ matches: q.includes('reduce'), media: q })
+  it("개수가 줄 때(전달됨)는 튀지 않고 '방금' 시각도 튀지 않는다", async () => {
+    setup()
     const a = msg('w', 's', 'pending')
     const b = msg('w', 's', 'pending')
-    snapshot.agents = [agent('s', { name: '서버' }), agent('w', { name: '웹 화면' })]
     snapshot.messages = [a, b]
     const { card } = await renderCard('s')
     emit('message', at(a, 'delivered', Date.now()))
+    expect(card.querySelector('.um b')!.textContent).toBe('1')
+    emit('message', at(b, 'delivered', Date.now()))
+    expect(card.querySelector('.um')).toBeNull()
+    expect(card.querySelector('.nf-t')!.textContent).toBe('방금')
+    expect(animate).not.toHaveBeenCalled()
+  })
+
+  it('움직임 줄이기 설정이면 튀지 않는다(배지는 바로 보인다)', async () => {
+    ;(window as any).matchMedia = (q: string) => ({ matches: q.includes('reduce'), media: q })
+    setup()
+    snapshot.messages = []
+    const { card } = await renderCard('s')
+    emit('message', msg('w', 's', 'pending'))
     expect(card.querySelector('.um b')!.textContent).toBe('1')
     expect(animate).not.toHaveBeenCalled()
   })
