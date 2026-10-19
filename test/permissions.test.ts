@@ -153,6 +153,45 @@ test('request 듣는 쪽이 던져도 요청은 대기로 남아 답할 수 있�
   expect(perms.pending()).toEqual([]);
 });
 
+test('signal abort(부른 쪽이 끊김) → 대기에서 빠지고 deny 요청이 취소되었습니다, resolved 이벤트', async () => {
+  const resolved: unknown[] = [];
+  perms.on('resolved', (r) => resolved.push(r));
+  const ac = new AbortController();
+  const p = perms.request(a1, { tool_name: 'Bash', input: {} }, ac.signal);
+  const id = lastPending().id;
+  ac.abort();
+  expect(await p).toEqual({ behavior: 'deny', message: '요청이 취소되었습니다.' });
+  expect(perms.pending()).toEqual([]);
+  expect(resolved).toEqual([{ id, agentId: a1 }]);
+  // 늦게 온 allow-always 는 항상 허용 목록을 늘리지 않는다
+  expect(() => perms.answer(id, { type: 'allow-always' })).toThrow('대기 중인 요청이 없습니다');
+  expect(store.agent(a1)!.alwaysAllow).toEqual([]);
+});
+
+test('이미 abort 된 signal → 대기·이벤트 없이 바로 deny', async () => {
+  const events: unknown[] = [];
+  perms.on('request', (r) => events.push(r));
+  const ac = new AbortController();
+  ac.abort();
+  expect(await perms.request(a1, { tool_name: 'Bash', input: {} }, ac.signal)).toEqual({
+    behavior: 'deny',
+    message: '요청이 취소되었습니다.',
+  });
+  expect(events).toEqual([]);
+  expect(perms.pending()).toEqual([]);
+});
+
+test('답한 뒤의 abort 는 아무 일도 하지 않는다', async () => {
+  const resolved: unknown[] = [];
+  perms.on('resolved', (r) => resolved.push(r));
+  const ac = new AbortController();
+  const p = perms.request(a1, { tool_name: 'Bash', input: {} }, ac.signal);
+  perms.answer(lastPending().id, { type: 'allow' });
+  ac.abort();
+  expect((await p).behavior).toBe('allow');
+  expect(resolved).toHaveLength(1);
+});
+
 test('없는 에이전트는 즉시 deny, 대기·이벤트 없음', async () => {
   const events: unknown[] = [];
   perms.on('request', (r) => events.push(r));

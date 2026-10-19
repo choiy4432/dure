@@ -8,12 +8,24 @@ export type ApproveResult = { behavior: 'allow'; updatedInput: unknown } | { beh
 export interface McpHandlers {
   listAgents(agentId: AgentId): string | Promise<string>;
   sendMessage(agentId: AgentId, to: string, text: string): string | Promise<string>;
-  approve(agentId: AgentId, args: { tool_name: string; input: unknown; tool_use_id?: string }): Promise<ApproveResult>;
+  /** signal: 부른 쪽(HTTP 연결)이 답을 받기 전에 끊기면 abort */
+  approve(
+    agentId: AgentId,
+    args: { tool_name: string; input: unknown; tool_use_id?: string },
+    signal: AbortSignal,
+  ): Promise<ApproveResult>;
 }
 
 export interface McpServerHandle { port: number; token: string; close(): Promise<void> }
 
+export interface McpServerOptions {
+  /** approve 를 기다리는 동안 SSE 주석을 보내는 간격 — 클라이언트 HTTP 타임아웃(약 300초)에 끊기지 않게 */
+  keepaliveMs?: number;
+}
+
 const MAX_BODY = 1024 * 1024;
+const KEEPALIVE_MS = 30_000;
+const HEADERS_TIMEOUT_MS = 60_000; // Node 기본값 — 머리글을 받는 시간만 제한(requestTimeout 0 과 함께 써도 된다)
 
 const TOOLS = [
   { name: 'list_agents', description: '이 두레 방의 다른 에이전트 목록', inputSchema: { type: 'object', properties: {} } },
@@ -37,7 +49,7 @@ function send(res: ServerResponse, status: number, body?: unknown, extra: Record
 
 const textResult = (text: string, isError = false) => ({ content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) });
 
-async function callTool(h: McpHandlers, agentId: AgentId, params: any): Promise<ReturnType<typeof textResult>> {
+async function callTool(h: McpHandlers, agentId: AgentId, params: any, signal: AbortSignal): Promise<ReturnType<typeof textResult>> {
   const name = params?.name;
   const a = params?.arguments ?? {};
   const bad = () => textResult('잘못된 인자입니다', true);
@@ -51,7 +63,7 @@ async function callTool(h: McpHandlers, agentId: AgentId, params: any): Promise<
       if (typeof a.tool_name !== 'string') return bad();
       const args: { tool_name: string; input: unknown; tool_use_id?: string } = { tool_name: a.tool_name, input: a.input };
       if (typeof a.tool_use_id === 'string') args.tool_use_id = a.tool_use_id;
-      return textResult(JSON.stringify(await h.approve(agentId, args)));
+      return textResult(JSON.stringify(await h.approve(agentId, args, signal)));
     }
     return textResult(`알 수 없는 도구: ${String(name)}`, true);
   } catch (e) {
@@ -59,7 +71,36 @@ async function callTool(h: McpHandlers, agentId: AgentId, params: any): Promise<
   }
 }
 
-function handle(h: McpHandlers, token: string, req: IncomingMessage, res: ServerResponse): void {
+/**
+ * tools/call — 부른 쪽이 답을 받기 전에 끊으면 signal 을 abort 한다.
+ * approve 는 사람 답을 오래 기다릴 수 있어 SSE 로 답한다: 머리글을 곧바로 보내고 keepaliveMs 마다 주석 줄,
+ * 답이 오면 `event: message` + `data: <JSON-RPC>` 한 번 보내고 끝낸다. 다른 도구는 application/json 그대로.
+ */
+function toolCall(h: McpHandlers, agentId: AgentId, m: any, res: ServerResponse, keepaliveMs: number): void {
+  const aborter = new AbortController();
+  let keepalive: NodeJS.Timeout | undefined;
+  res.on('close', () => {
+    clearInterval(keepalive);
+    if (!res.writableEnded) aborter.abort();
+  });
+  const stream = m.params?.name === 'approve';
+  if (stream) {
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+    res.flushHeaders();
+    keepalive = setInterval(() => {
+      if (!res.writableEnded && !res.destroyed) res.write(': keepalive\n\n');
+    }, keepaliveMs);
+  }
+  void callTool(h, agentId, m.params, aborter.signal).then((result) => {
+    clearInterval(keepalive);
+    if (res.writableEnded || res.destroyed) return;
+    const body = { jsonrpc: '2.0', id: m.id, result };
+    if (stream) res.end(`event: message\ndata: ${JSON.stringify(body)}\n\n`);
+    else send(res, 200, body);
+  });
+}
+
+function handle(h: McpHandlers, token: string, keepaliveMs: number, req: IncomingMessage, res: ServerResponse): void {
   if (req.headers.authorization !== `Bearer ${token}`) { send(res, 401); req.resume(); return; }
   const agent = req.headers['x-dure-agent'];
   if (typeof agent !== 'string' || agent === '') { send(res, 400); req.resume(); return; }
@@ -92,17 +133,21 @@ function handle(h: McpHandlers, token: string, req: IncomingMessage, res: Server
     } else if (m.method === 'tools/list') {
       reply({ tools: TOOLS });
     } else if (m.method === 'tools/call') {
-      void callTool(h, agent, m.params).then((r) => { if (!res.writableEnded && !res.destroyed) reply(r); });
+      toolCall(h, agent, m, res, keepaliveMs);
     } else {
       reply({});
     }
   });
 }
 
-export function startMcpServer(h: McpHandlers): Promise<McpServerHandle> {
+export function startMcpServer(h: McpHandlers, o: McpServerOptions = {}): Promise<McpServerHandle> {
   const token = randomBytes(24).toString('hex');
+  const keepaliveMs = o.keepaliveMs ?? KEEPALIVE_MS;
   const sockets = new Set<Socket>();
-  const server = createServer((req, res) => handle(h, token, req, res));
+  // 사람 답을 기다리는 approve 가 서버 쪽 시간 제한에 끊기지 않게 requestTimeout 은 끈다(keepAliveTimeout 은 기본값)
+  const server = createServer({ requestTimeout: 0, headersTimeout: HEADERS_TIMEOUT_MS }, (req, res) =>
+    handle(h, token, keepaliveMs, req, res),
+  );
   server.on('connection', (s) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
   return new Promise((resolve, reject) => {
     server.once('error', reject);

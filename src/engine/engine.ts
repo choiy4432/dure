@@ -62,6 +62,7 @@ export interface Engine extends EventEmitter {
 const STOP_LIMIT_MS = 5000; // ClaudeSession.stop() 의 kill 뒤 대기는 끝이 없다 — 엔진이 따로 끊는다
 const EXITED = 'Claude 가 종료되었습니다.';
 const STOPPED_BY_USER = '사용자가 멈췄습니다.';
+const TURN_ENDED = '차례가 끝났습니다.';
 const NO_AGENT = '에이전트를 찾을 수 없습니다.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
 
@@ -116,9 +117,9 @@ class EngineImpl extends EventEmitter implements Engine {
         return JSON.stringify(peers.map((a) => ({ name: a.name, role: a.role, status: this.status(a.id) })));
       },
       sendMessage: (agentId, to, text) => this.router.send(this.caller(agentId).id, to, text),
-      approve: (agentId, args) => {
+      approve: (agentId, args, signal) => {
         if (this.closed || this.removing.has(agentId)) return Promise.resolve({ behavior: 'deny', message: EXITED });
-        return this.perms.request(agentId, args);
+        return this.perms.request(agentId, args, signal); // 부른 프로세스가 끊기면 카드도 사라진다
       },
     });
     this.router.flushAll();
@@ -372,7 +373,11 @@ class EngineImpl extends EventEmitter implements Engine {
       this.guard(id, () => this.emit('agent-event', { agentId: id, event: ev }));
     }
     // 세션은 result 를 내보내기 직전에 idle 이 된다 — 이 차례의 result 를 먼저 알린 뒤 다음 입력을 보낸다
-    if (ev.kind === 'result') this.pump(id);
+    if (ev.kind === 'result') {
+      // 끝난 차례엔 살아 있는 권한 질문이 있을 수 없다 — 남은 것(떠난 프로세스의 호출 등)은 정리해야 다음 입력이 나간다
+      this.perms.cancelForAgent(id, TURN_ENDED);
+      this.pump(id);
+    }
   }
 
   /** 콜백 안의 오류를 삼키고 'engine-error' 로 알린다('error' 는 듣는 쪽이 없으면 Node 가 던진다) */

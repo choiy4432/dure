@@ -5,11 +5,13 @@ import type { Store } from './store';
 import type { AgentId, Decision, PendingRequest } from './types';
 
 export const DENY_DEFAULT = '사용자가 거절했습니다.';
+const CANCELLED = '요청이 취소되었습니다.'; // 부른 쪽이 끊겨 Claude 에겐 닿지 않는다
 const QUESTION_TOOL = 'AskUserQuestion';
 
 interface Entry {
   req: PendingRequest;
   resolve: (r: ApproveResult) => void;
+  detach?: () => void; // signal 에 단 abort 듣는 쪽을 뗀다
 }
 
 // 권한·되묻기 대기열. 이벤트: 'request'(PendingRequest) · 'resolved'({ id, agentId })
@@ -21,13 +23,19 @@ export class Permissions extends EventEmitter {
     super();
   }
 
-  request(agentId: AgentId, args: { tool_name: string; input: unknown; tool_use_id?: string }): Promise<ApproveResult> {
+  /** signal 이 abort 되면(부른 쪽이 끊김) 대기에서 빼고 deny 로 끝낸다 — 죽은 호출의 카드가 남지 않게 */
+  request(
+    agentId: AgentId,
+    args: { tool_name: string; input: unknown; tool_use_id?: string },
+    signal?: AbortSignal,
+  ): Promise<ApproveResult> {
     const agent = this.store.agent(agentId);
     if (!agent) return Promise.resolve({ behavior: 'deny', message: '에이전트를 찾을 수 없습니다.' });
     const isQuestion = args.tool_name === QUESTION_TOOL;
     if (!isQuestion && agent.alwaysAllow.includes(args.tool_name)) {
       return Promise.resolve({ behavior: 'allow', updatedInput: args.input });
     }
+    if (signal?.aborted) return Promise.resolve({ behavior: 'deny', message: CANCELLED });
     const req: PendingRequest = {
       id: crypto.randomUUID(),
       agentId,
@@ -42,7 +50,15 @@ export class Permissions extends EventEmitter {
     const result = new Promise<ApproveResult>((r) => {
       resolve = r;
     });
-    this.entries.set(req.id, { req, resolve });
+    const entry: Entry = { req, resolve };
+    if (signal) {
+      const onAbort = () => {
+        if (this.entries.get(req.id) === entry) this.finish(entry, { behavior: 'deny', message: CANCELLED });
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      entry.detach = () => signal.removeEventListener('abort', onAbort);
+    }
+    this.entries.set(req.id, entry);
     // 알림은 대기를 만든 뒤 밖에서 — 듣는 쪽이 던져도 요청은 대기로 남아 답할 수 있다(엔진은 자기 듣는 쪽을 따로 감싼다)
     try {
       this.emit('request', { ...req });
@@ -96,6 +112,7 @@ export class Permissions extends EventEmitter {
 
   private finish(entry: Entry, result: ApproveResult): void {
     this.entries.delete(entry.req.id);
+    entry.detach?.();
     entry.resolve(result);
     this.emit('resolved', { id: entry.req.id, agentId: entry.req.agentId });
   }

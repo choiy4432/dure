@@ -24,6 +24,18 @@ async function rpc(h: McpServerHandle, msg: unknown, opts: { token?: string | nu
 }
 const call = (id: number, name: string, args: unknown) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
 
+/** SSE 응답 본문 → data 줄의 JSON-RPC (주석 ': …'·'event:' 줄은 버린다) */
+function sseData(body: string): any {
+  const data = body.split('\n').filter((l) => l.startsWith('data: ')).map((l) => l.slice('data: '.length));
+  expect(data).toHaveLength(1);
+  return JSON.parse(data[0]);
+}
+/** approve 는 SSE 로 온다 */
+async function approveReply(res: Response): Promise<any> {
+  expect(res.headers.get('content-type')).toContain('text/event-stream');
+  return sseData(await res.text());
+}
+
 describe('mcpServer', () => {
   test('토큰 없거나 틀리면 401', async () => {
     handle = await startMcpServer(handlers());
@@ -67,7 +79,9 @@ describe('mcpServer', () => {
   test('list_agents → handler 에 헤더 agentId', async () => {
     const seen: string[] = [];
     handle = await startMcpServer(handlers({ listAgents: (id) => { seen.push(id); return '[{"name":"B"}]'; } }));
-    const j = await (await rpc(handle, call(3, 'list_agents', {}))).json() as any;
+    const res = await rpc(handle, call(3, 'list_agents', {}));
+    expect(res.headers.get('content-type')).toContain('application/json'); // approve 말고는 SSE 아님
+    const j = await res.json() as any;
     expect(seen).toEqual(['agent-A']);
     expect(j.result.content[0].text).toBe('[{"name":"B"}]');
   });
@@ -81,12 +95,68 @@ describe('mcpServer', () => {
     expect(j.result.isError).toBeUndefined();
   });
 
-  test('approve → handler 결과를 JSON 문자열 text 로', async () => {
+  test('approve → handler 결과를 JSON 문자열 text 로 (SSE event: message)', async () => {
     const seen: unknown[] = [];
     handle = await startMcpServer(handlers({ approve: async (a, args) => { seen.push([a, args]); return { behavior: 'allow', updatedInput: { x: 1 } }; } }));
-    const j = await (await rpc(handle, call(5, 'approve', { tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'tu1' }))).json() as any;
+    const res = await rpc(handle, call(5, 'approve', { tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'tu1' }));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-cache');
+    const body = await res.text();
+    expect(body.endsWith('\n\n')).toBe(true);
+    expect(body).toContain('event: message\ndata: ');
+    const j = sseData(body);
+    expect(j.id).toBe(5);
     expect(JSON.parse(j.result.content[0].text)).toEqual({ behavior: 'allow', updatedInput: { x: 1 } });
     expect(seen).toEqual([['agent-A', { tool_name: 'Bash', input: { command: 'ls' }, tool_use_id: 'tu1' }]]);
+  });
+
+  test('approve 를 오래 기다리면 keepalive 주석을 보내다가 답을 data 줄로 보낸다', async () => {
+    handle = await startMcpServer(
+      handlers({ approve: () => new Promise((r) => setTimeout(() => r({ behavior: 'deny', message: '아니요' }), 100)) }),
+      { keepaliveMs: 20 },
+    );
+    const res = await rpc(handle, call(12, 'approve', { tool_name: 'Bash', input: {} }));
+    expect(res.headers.get('content-type')).toContain('text/event-stream');
+    const body = await res.text();
+    const lines = body.split('\n');
+    const firstData = lines.findIndex((l) => l.startsWith('data: '));
+    expect(lines.indexOf(': keepalive')).toBeGreaterThanOrEqual(0);
+    expect(lines.indexOf(': keepalive')).toBeLessThan(firstData);
+    expect(lines[firstData - 1]).toBe('event: message');
+    expect(JSON.parse(sseData(body).result.content[0].text)).toEqual({ behavior: 'deny', message: '아니요' });
+  });
+
+  test('approve 를 부른 쪽이 끊으면 handler 의 signal 이 abort 된다 — 답을 보낸 뒤엔 abort 안 됨', async () => {
+    let signal: AbortSignal | undefined;
+    let done!: () => void;
+    const aborted = new Promise<void>((r) => { done = r; });
+    handle = await startMcpServer(handlers({
+      approve: (_a, _args, s) => {
+        signal = s;
+        return new Promise((resolve) => s.addEventListener('abort', () => { done(); resolve({ behavior: 'deny', message: 'x' }); }));
+      },
+    }));
+    const client = new AbortController();
+    const p = fetch(`http://127.0.0.1:${handle.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handle.token}`, 'x-dure-agent': 'agent-A' },
+      body: JSON.stringify(call(13, 'approve', { tool_name: 'Bash', input: {} })),
+      signal: client.signal,
+    }).then((r) => r.text()).catch(() => 'aborted');
+    while (!signal) await new Promise((r) => setTimeout(r, 10));
+    expect(signal.aborted).toBe(false);
+    client.abort();
+    await aborted;
+    expect(signal.aborted).toBe(true);
+    await p;
+
+    // 정상으로 답한 요청의 signal 은 끝까지 abort 되지 않는다
+    let kept: AbortSignal | undefined;
+    await handle.close();
+    handle = await startMcpServer(handlers({ approve: async (_a, _args, s) => { kept = s; return { behavior: 'allow', updatedInput: {} }; } }));
+    await approveReply(await rpc(handle, call(14, 'approve', { tool_name: 'Bash', input: {} })));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(kept!.aborted).toBe(false);
   });
 
   test('handler 가 throw → result.isError true, text = 에러 메시지', async () => {
@@ -106,7 +176,7 @@ describe('mcpServer', () => {
     const b = await (await rpc(handle, call(8, 'send_message', { to: 'B' }))).json() as any;
     expect(b.result.isError).toBe(true);
     expect(b.result.content[0].text).toBe('잘못된 인자입니다');
-    const c = await (await rpc(handle, call(9, 'approve', { input: {} }))).json() as any;
+    const c = await approveReply(await rpc(handle, call(9, 'approve', { input: {} })));
     expect(c.result.isError).toBe(true);
   });
 

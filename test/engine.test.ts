@@ -97,6 +97,18 @@ const userTexts = (): string[] =>
     .map((x) => x.message.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n'));
 const controlRequests = (subtype: string) =>
   readLog().filter((x) => x.type === 'control_request' && x.request?.subtype === subtype);
+/** 에이전트의 MCP 설정으로 approve 를 직접 부른다 — 지금 차례와 상관없는(끊기거나 남은) 호출 흉내. 답은 SSE data 줄 */
+async function approveDirect(agentId: string, toolName: string, signal?: AbortSignal): Promise<unknown> {
+  const cfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'run', agentId, 'mcp.json'), 'utf8')).mcpServers.dure;
+  const res = await fetch(cfg.url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...cfg.headers },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'approve', arguments: { tool_name: toolName, input: {} } } }),
+    signal,
+  });
+  const data = (await res.text()).split('\n').find((l) => l.startsWith('data: '));
+  return JSON.parse(JSON.parse(data!.slice('data: '.length)).result.content[0].text);
+}
 const isAlive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -195,6 +207,54 @@ test('interrupt 중 승인 대기 → 그 요청 deny, request-resolved', async 
   await done; // 차례가 끝난다(거절이 먼저 닿든 interrupt 가 먼저 닿든)
   expect(e.status(a.id)).toBe('idle');
   expect(() => e.answerRequest(r.id, { type: 'allow' })).toThrow('대기 중인 요청이 없습니다');
+});
+
+test('approve 를 부른 쪽이 끊기면 승인 카드는 사라지고 상태가 돌아온다 — 늦은 allow-always 는 무시', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const first = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나'));
+  await first;
+  const req = waitFor<PendingRequest>(e, 'request');
+  const ac = new AbortController();
+  const call = approveDirect(a.id, 'Write', ac.signal).catch(() => 'aborted');
+  const r = await req;
+  expect(e.status(a.id)).toBe('awaiting');
+
+  const resolved = waitFor(e, 'request-resolved');
+  ac.abort();
+
+  expect(await resolved).toEqual({ id: r.id, agentId: a.id });
+  expect(await call).toBe('aborted');
+  expect(e.pendingRequests()).toEqual([]);
+  expect(e.status(a.id)).toBe('idle');
+  expect(() => e.answerRequest(r.id, { type: 'allow-always' })).toThrow('대기 중인 요청이 없습니다');
+  expect(agentOf(e, a.id).alwaysAllow).toEqual([]);
+  const next = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 둘')); // 막히지 않고 바로 간다
+  expect(await resultText(next)).toBe('받음: echo 둘');
+});
+
+test('차례가 끝나면 그 에이전트에 남은 승인 요청을 정리한다 — 차례가 끝났습니다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const req = waitFor<PendingRequest>(e, 'request');
+  await e.sendUser(a.id, text('ASK Write'));
+  const live = await req;
+  const leftoverReq = waitFor<PendingRequest>(e, 'request');
+  const leftover = approveDirect(a.id, 'Edit'); // 이 차례와 상관없는 호출(떠난 프로세스가 남긴 것처럼)
+  const r2 = await leftoverReq;
+  expect(e.pendingRequests(a.id)).toHaveLength(2);
+
+  const resolved = waitFor<{ id: string }>(e, 'request-resolved', (x) => x.id === r2.id);
+  const done = resultOf(e, a.id);
+  e.answerRequest(live.id, { type: 'allow' });
+
+  expect(await resultText(done)).toBe('ok');
+  expect(await resolved).toEqual({ id: r2.id, agentId: a.id });
+  expect(await leftover).toEqual({ behavior: 'deny', message: '차례가 끝났습니다.' });
+  expect(e.pendingRequests()).toEqual([]);
+  expect(e.status(a.id)).toBe('idle');
 });
 
 const resultTextIs = (e: Engine, agentId: string, t: string) =>

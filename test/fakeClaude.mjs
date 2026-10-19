@@ -71,8 +71,14 @@ async function rpc(method, params, id, sid) {
     body: JSON.stringify({ jsonrpc: '2.0', ...(id !== undefined ? { id } : {}), method, params }),
   });
   let body = await res.text();
-  const m = /^data: (.*)$/m.exec(body);
-  if (m) body = m[1];
+  if ((res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+    // SSE: ': keepalive' 주석·'event:' 줄은 버리고 data 줄만 (두레는 답 하나를 data 한 줄로 보낸다)
+    body = body
+      .split(/\r?\n/)
+      .filter((l) => l.startsWith('data:'))
+      .map((l) => l.slice('data:'.length).trimStart())
+      .join('\n');
+  }
   return { sid: res.headers.get('mcp-session-id') ?? sid, json: body.trim() ? JSON.parse(body) : null };
 }
 async function callTool(name, args) {
