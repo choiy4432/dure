@@ -13,6 +13,10 @@ const log = (s) => {
 };
 log(JSON.stringify({ argv, pid: process.pid, mcpToolTimeout: process.env.MCP_TOOL_TIMEOUT ?? null }));
 
+// FAKE_DIE_FLAG_FILE 의 내용이 이 프로세스의 -n 이름이면 stdin 을 읽기 전에 바로 죽는다(파일을 지우면 다시 산다)
+const dieFile = process.env.FAKE_DIE_FLAG_FILE;
+if (dieFile && fs.existsSync(dieFile) && fs.readFileSync(dieFile, 'utf8') === flag('-n')) process.exit(1);
+
 const sessionId = flag('--resume') ?? flag('--session-id') ?? 'fake-session';
 let model = flag('--model') ?? 'default';
 const permissionMode = process.env.FAKE_PERMISSION_MODE || 'default';

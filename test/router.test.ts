@@ -10,7 +10,7 @@ import type { Agent } from '../src/engine/types';
 let dir: string;
 let store: Store;
 let log: MessageLog;
-let deliver: Mock<(agentId: string, text: string) => void>;
+let deliver: Mock<(agentId: string, text: string, messageId: string) => void>;
 let busy: Set<string>;
 let router: Router;
 let a: Agent;
@@ -21,7 +21,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dure-'));
   store = openStore(dir);
   log = openMessageLog(dir);
-  deliver = vi.fn<(agentId: string, text: string) => void>();
+  deliver = vi.fn<(agentId: string, text: string, messageId: string) => void>();
   busy = new Set();
   router = new Router({ store, log, deliver, isBusy: (id) => busy.has(id) });
   roomId = store.addRoom('방').id;
@@ -46,7 +46,7 @@ test('자동 켜진 받는 쪽, 한가함 → deliver, delivered, 체인 1', () 
   auto(b.id);
   const r = router.send(a.id, 'Backend', '안녕');
   expect(r).toBe('Backend 에게 전달했습니다.');
-  expect(deliver).toHaveBeenCalledWith(b.id, formatDelivery(a, '안녕'));
+  expect(deliver).toHaveBeenCalledWith(b.id, formatDelivery(a, '안녕'), log.list()[0].id);
   expect(deliver.mock.calls[0][1]).toBe('[두레 메시지 — 보낸 쪽: Front(화면)]\n안녕');
   expect(log.list()[0].state).toBe('delivered');
   expect(router.chain(roomId)).toBe(1);
@@ -74,9 +74,11 @@ test('queued 가 둘이면 onIdle 마다 오래된 것부터 하나씩', () => {
   router.onIdle(b.id);
   expect(deliver).toHaveBeenCalledTimes(1);
   expect(deliver.mock.calls[0][1]).toContain('첫째');
+  expect(deliver.mock.calls[0][2]).toBe(log.list()[0].id);
   router.onIdle(b.id);
   expect(deliver).toHaveBeenCalledTimes(2);
   expect(deliver.mock.calls[1][1]).toContain('둘째');
+  expect(deliver.mock.calls[1][2]).toBe(log.list()[1].id);
 });
 
 test('자동 체인 3번 뒤 넷째는 held + held 이벤트, deliver 안 함', () => {
@@ -222,7 +224,7 @@ test('onIdle: 보낸 쪽이 지워진 메시지는 dismissed, 다음 것을 전�
   expect(ma.state).toBe('dismissed');
   expect(mc.state).toBe('delivered');
   expect(deliver).toHaveBeenCalledTimes(1);
-  expect(deliver).toHaveBeenCalledWith(b.id, formatDelivery(c, 'fromC'));
+  expect(deliver).toHaveBeenCalledWith(b.id, formatDelivery(c, 'fromC'), mc.id);
 });
 
 test('flushAll: 보낸 쪽이 지워진 메시지는 dismissed, 다음 것을 전달', () => {
@@ -233,5 +235,37 @@ test('flushAll: 보낸 쪽이 지워진 메시지는 dismissed, 다음 것을 �
   expect(ma.state).toBe('dismissed');
   expect(mc.state).toBe('delivered');
   expect(deliver).toHaveBeenCalledTimes(1);
-  expect(deliver).toHaveBeenCalledWith(b.id, formatDelivery(c, 'fromC'));
+  expect(deliver).toHaveBeenCalledWith(b.id, formatDelivery(c, 'fromC'), mc.id);
+});
+
+test('requeue: delivered 만 queued 로 되돌리고 message 이벤트, 다음 onIdle 에 같은 id 로 다시 전달', () => {
+  auto(b.id);
+  router.send(a.id, 'Backend', '다시');
+  const m = log.list()[0];
+  expect(m.state).toBe('delivered');
+  const seen: string[] = [];
+  router.on('message', (x) => seen.push(x.state));
+
+  router.requeue(m.id);
+
+  expect(log.get(m.id)!.state).toBe('queued');
+  expect(seen).toEqual(['queued']);
+  router.onIdle(b.id);
+  expect(deliver).toHaveBeenCalledTimes(2);
+  expect(deliver.mock.calls[1]).toEqual([b.id, formatDelivery(a, '다시'), m.id]);
+  expect(log.get(m.id)!.state).toBe('delivered');
+});
+
+test('requeue: delivered 가 아니거나 없는 메시지는 아무 일도 안 한다', () => {
+  router.send(a.id, 'Backend', '확인 대기'); // pending
+  const p = log.list()[0];
+  const seen: string[] = [];
+  router.on('message', (x) => seen.push(x.state));
+  router.requeue(p.id);
+  router.dismiss(p.id);
+  router.requeue(p.id);
+  router.requeue('없는-id');
+  expect(log.get(p.id)!.state).toBe('dismissed');
+  expect(seen).toEqual(['dismissed']);
+  expect(deliver).not.toHaveBeenCalled();
 });

@@ -222,6 +222,60 @@ test('일하는 중 사람이 또 입력하면 차례가 끝난 뒤 보낸다 �
   expect(e.status(a.id)).toBe('idle');
 });
 
+test('받는 쪽이 읽기 전에 죽으면 메시지는 queued 로 남고, 다시 켜면 flushAll 로 전달', async () => {
+  const dieFlag = path.join(dir, 'die');
+  fs.writeFileSync(dieFlag, 'B');
+  const e1 = await start({ FAKE_DIE_FLAG_FILE: dieFlag });
+  const { a, b } = setup(e1);
+  e1.updateAgent(b.id, { auto: true });
+  const bError = waitFor<StatusEvent>(e1, 'status', (s) => s.agentId === b.id && s.status === 'error');
+  const states: string[] = [];
+  e1.on('message', (m: RelayMessage) => m.to === b.id && states.push(m.state));
+  const requeued = waitFor<RelayMessage>(
+    e1,
+    'message',
+    (m) => m.to === b.id && m.state === 'queued' && states.includes('delivered'),
+  );
+  const aDone = resultOf(e1, a.id);
+
+  await e1.sendUser(a.id, text('SEND B: 사라지면 안 돼'));
+
+  await aDone;
+  await bError;
+  await requeued;
+  expect(states).toEqual(['queued', 'delivered', 'queued']); // 넘겼다가 → 읽기 전에 죽어서 되돌림
+  expect(e1.messages({ to: b.id }).map((m) => m.state)).toEqual(['queued']);
+  expect(e1.status(b.id)).toBe('error');
+  expect(spawnsOf('B')).toHaveLength(1);
+
+  fs.rmSync(dieFlag);
+  await e1.shutdown();
+  const e2 = await start({ FAKE_DIE_FLAG_FILE: dieFlag });
+  expect(e2.messages()[0].state).toBe('delivered');
+  expect(await resultText(resultOf(e2, b.id))).toBe('받음: [두레 메시지 — 보낸 쪽: A(기획)]\n사라지면 안 돼');
+  expect(spawnsOf('B')).toHaveLength(2);
+});
+
+test('사람 입력을 읽기 전에 죽으면 그 입력은 다음 입력 앞에 다시 보낸다', async () => {
+  const dieFlag = path.join(dir, 'die');
+  fs.writeFileSync(dieFlag, 'B');
+  const e = await start({ FAKE_DIE_FLAG_FILE: dieFlag });
+  const { b } = setup(e);
+  const bError = waitFor<StatusEvent>(e, 'status', (s) => s.agentId === b.id && s.status === 'error');
+  await e.sendUser(b.id, text('echo first'));
+  await e.sendUser(b.id, text('echo held')); // first 가 일하는 중이라 기다린다
+  await bError;
+  expect(userTexts()).toEqual([]); // 죽은 프로세스는 아무것도 못 읽었다
+
+  fs.rmSync(dieFlag);
+  const second = resultTextIs(e, b.id, '받음: echo second');
+  await e.sendUser(b.id, text('echo second'));
+  await second;
+  expect(userTexts()).toEqual(['echo first', 'echo held', 'echo second']); // 되살린 입력은 맨 앞
+  expect(spawnsOf('B')).toHaveLength(2);
+  expect(e.status(b.id)).toBe('idle');
+});
+
 test('Claude 가 죽을 때 기다리던 사람 입력은 남고, 다음 입력 때 먼저 보낸 뒤 대기 메시지를 전달', async () => {
   const e = await start();
   const { a, b } = setup(e);

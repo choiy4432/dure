@@ -64,12 +64,16 @@ const STOPPED_BY_USER = '사용자가 멈췄습니다.';
 const NO_AGENT = '에이전트를 찾을 수 없습니다.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
 
+/** 프로세스에 써 넣었지만 아직 아무 이벤트도 안 온 줄 — 읽기 전에 죽으면 되살린다 */
+type InFlight = { kind: 'relay'; messageId: string } | { kind: 'human'; parts: UserPart[] };
+
 class EngineImpl extends EventEmitter implements Engine {
   private sessions = new Map<AgentId, ClaudeSession>();
   private held = new Map<AgentId, UserPart[][]>(); // 일하는 중에 사람이 넣은 입력 — 끝나면 순서대로
   private errors = new Map<AgentId, string>(); // 세션 없이 남은 오류(비정상 종료·폴더 없음) — 다음 실행까지
   private shown = new Map<AgentId, { status: AgentStatus; errorText: string | null }>();
   private described = new WeakMap<ClaudeSession, Promise<AgentDescription>>();
+  private inFlight = new WeakMap<ClaudeSession, InFlight>();
   private removing = new Set<AgentId>();
   private closed = false;
   private closing: Promise<void> | null = null;
@@ -84,7 +88,7 @@ class EngineImpl extends EventEmitter implements Engine {
       store,
       log,
       limit: o.autoChainLimit,
-      deliver: (id, text) => this.ensure(id).send([{ type: 'text', text }]),
+      deliver: (id, text, messageId) => this.sendTo(this.ensure(id), [{ type: 'text', text }], { kind: 'relay', messageId }),
       isBusy: (id) => this.waiting(id) || (this.held.get(id)?.length ?? 0) > 0,
     });
     this.perms.on('request', (r: PendingRequest) => {
@@ -169,8 +173,7 @@ class EngineImpl extends EventEmitter implements Engine {
   async sendUser(id: AgentId, parts: UserPart[]) {
     const agent = this.need(id);
     this.router.humanInput(agent.roomId);
-    const q = this.held.get(id) ?? [];
-    this.held.set(id, q);
+    const q = this.heldOf(id);
     q.push(parts);
     try {
       this.ensure(id);
@@ -262,8 +265,19 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     if (!s || s.status !== 'idle' || this.perms.pending(id).length > 0) return;
     const next = this.held.get(id)?.shift();
-    if (next) s.send(next);
+    if (next) this.sendTo(s, next, { kind: 'human', parts: next });
     else this.router.onIdle(id);
+  }
+
+  private sendTo(s: ClaudeSession, parts: UserPart[], item: InFlight): void {
+    s.send(parts);
+    this.inFlight.set(s, item);
+  }
+
+  private heldOf(id: AgentId): UserPart[][] {
+    const q = this.held.get(id) ?? [];
+    this.held.set(id, q);
+    return q;
   }
 
   /** 필요할 때 띄운다 — 띄울 때마다 MCP 설정·방 안내문을 새로 쓴다(포트·토큰·동료 목록 최신) */
@@ -289,12 +303,20 @@ class EngineImpl extends EventEmitter implements Engine {
       cwd: agent.folder,
       env: { ...process.env, ...this.o.env, ...SPAWN_ENV_EXTRA },
     });
-    s.on('event', (ev: StreamEvent) => this.sessions.get(id) === s && this.onEvent(id, ev));
+    s.on('event', (ev: StreamEvent) => {
+      if (this.sessions.get(id) !== s) return;
+      this.inFlight.delete(s); // 무엇이든 이벤트가 오면 보낸 줄을 받은 것으로 본다
+      this.onEvent(id, ev);
+    });
     s.on('status', () => this.sessions.get(id) === s && this.emitStatus(id));
     s.on('exit', ({ expected }: { expected: boolean }) => {
       if (this.sessions.get(id) !== s) return;
       this.sessions.delete(id);
       if (!expected) {
+        // 보낸 줄을 읽기 전에 죽었다 — 메시지는 queued 로, 사람 입력은 기다리는 줄 맨 앞으로(다음 실행·flushAll 때 다시)
+        const lost = this.inFlight.get(s);
+        if (lost?.kind === 'relay') this.router.requeue(lost.messageId);
+        else if (lost) this.heldOf(id).unshift(lost.parts);
         this.errors.set(id, s.errorText ?? EXITED);
         this.perms.cancelForAgent(id, EXITED);
       }

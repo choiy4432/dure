@@ -12,7 +12,7 @@ export function formatDelivery(from: Agent, text: string): string {
 export interface RouterDeps {
   store: Store;
   log: MessageLog;
-  deliver(agentId: AgentId, text: string): void;
+  deliver(agentId: AgentId, text: string, messageId: string): void;
   isBusy(agentId: AgentId): boolean;
   limit?: number;
 }
@@ -89,6 +89,13 @@ export class Router extends EventEmitter {
     this.record(this.d.log.setState(messageId, 'dismissed'));
   }
 
+  /** 전달했는데 받는 쪽이 읽기 전에 죽은 메시지 — delivered 만 queued 로 되돌린다(다음 실행·flushAll 때 다시 전달) */
+  requeue(messageId: string): void {
+    const m = this.d.log.get(messageId);
+    if (!m || m.state !== 'delivered') return;
+    this.record(this.d.log.setState(messageId, 'queued'));
+  }
+
   onIdle(agentId: AgentId): void {
     this.drain(agentId, true);
   }
@@ -122,7 +129,7 @@ export class Router extends EventEmitter {
       return 'dismissed';
     }
     try {
-      this.d.deliver(m.to, formatDelivery(from, m.text));
+      this.d.deliver(m.to, formatDelivery(from, m.text), m.id);
     } catch {
       return 'wait';
     }
