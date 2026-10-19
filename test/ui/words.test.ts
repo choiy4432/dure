@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ago, fieldError, josa, lasting } from '../../src/renderer/lib/words'
+import { ago, elapsed, fieldError, josa, lasting } from '../../src/renderer/lib/words'
 
 describe('fieldError — 엔진 오류를 칸 아래 안내로', () => {
   it('이름 겹침은 해요체로, 다음 할 일까지 — 받침 따라 이라는/라는, 모르면 (이)라는', () => {
@@ -48,5 +48,18 @@ describe('lasting', () => {
     expect(lasting(0, 30_000)).toBe('방금 시작')
     expect(lasting(0, 3 * 60_000 + 5_000)).toBe('3분째')
     expect(lasting(0, 2 * 60 * 60_000)).toBe('2시간째')
+  })
+})
+
+describe('elapsed — 작업 중 줄의 지난 시간(초까지)', () => {
+  it('N초 · N분 N초 · N분 · N시간 N분', () => {
+    expect(elapsed(0, 400)).toBe('0초')
+    expect(elapsed(0, 12_400)).toBe('12초')
+    expect(elapsed(0, 65_000)).toBe('1분 5초')
+    expect(elapsed(0, 120_000)).toBe('2분')
+    expect(elapsed(0, 60 * 60_000 + 2 * 60_000 + 5_000)).toBe('1시간 2분')
+  })
+  it('시계가 거꾸로면 0초', () => {
+    expect(elapsed(5_000, 1_000)).toBe('0초')
   })
 })

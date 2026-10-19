@@ -93,6 +93,15 @@ export function ago(at: number, now: number): string {
   return `${Math.floor(d / DAY)}일 전`
 }
 
+/** 지난 시간(초까지) — 대화 맨 아래 '작업 중…' 줄이 1초마다 센다: N초 · N분 N초 · N분 · N시간 N분 */
+export function elapsed(since: number, now: number): string {
+  const s = Math.max(0, Math.floor((now - since) / 1000))
+  if (s < 60) return `${s}초`
+  const m = Math.floor(s / 60)
+  if (m < 60) return s % 60 === 0 ? `${m}분` : `${m}분 ${s % 60}초`
+  return `${Math.floor(m / 60)}시간 ${m % 60}분`
+}
+
 /** 이어진 시간 — 방금 시작 · N분째 · N시간째 */
 export function lasting(since: number, now: number): string {
   const d = now - since

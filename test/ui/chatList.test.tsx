@@ -393,3 +393,57 @@ describe('ChatList — 따라 내려가기', () => {
     })
   })
 })
+
+describe('ChatList — 작업 중 줄(Claude Code 의 작업 중 표시처럼)', () => {
+  afterEach(() => vi.useRealTimers())
+  const working = () => conv().querySelector('.ci-work')
+
+  it('일하는 동안 대화 맨 아래에 "작업 중…"과 지난 시간 — 1초마다 늘어난다', async () => {
+    await renderPanel()
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    vi.setSystemTime(100_000)
+    await emit('status', { agentId: 'w', status: 'working', errorText: null })
+    const row = working()!
+    expect(row).toHaveAttribute('role', 'status')
+    expect(row).toHaveTextContent('작업 중…')
+    expect(row).toHaveTextContent('0초')
+    expect(conv().lastElementChild).toBe(row)
+    act(() => { vi.advanceTimersByTime(12_000) })
+    expect(working()).toHaveTextContent('12초')
+  })
+
+  it('흐르는 글이 있어도 그 아래, 맨 끝', async () => {
+    await renderPanel()
+    await emit('status', { agentId: 'w', status: 'working', errorText: null })
+    await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '쓰는 중' } })
+    expect(conv().lastElementChild).toBe(working())
+    expect(working()!.previousElementSibling).toHaveClass('ci-live')
+  })
+
+  it('일이 끝나면 사라진다', async () => {
+    await renderPanel()
+    await emit('status', { agentId: 'w', status: 'working', errorText: null })
+    expect(working()).not.toBeNull()
+    await emit('status', { agentId: 'w', status: 'idle', errorText: null })
+    expect(working()).toBeNull()
+  })
+
+  it('승인을 기다리는 동안엔 없다 — 승인 카드가 대신 알린다', async () => {
+    await renderPanel()
+    await emit('status', { agentId: 'w', status: 'awaiting', errorText: null })
+    expect(working()).toBeNull()
+  })
+
+  it('앱을 열 때 이미 일하던 중이면 시간 없이 "작업 중…"만(언제 시작했는지 모른다)', async () => {
+    snapshot.agents[0] = agent('w', { name: '웹 화면', role: '화면 구현', status: 'working' })
+    await renderPanel()
+    expect(working()).toHaveTextContent('작업 중…')
+    expect(working()!.querySelector('.wk-time')).toBeNull()
+  })
+
+  it('다른 에이전트가 일하는 건 이 대화에 뜨지 않는다', async () => {
+    await renderPanel('w')
+    await emit('status', { agentId: 'p', status: 'working', errorText: null })
+    expect(working()).toBeNull()
+  })
+})

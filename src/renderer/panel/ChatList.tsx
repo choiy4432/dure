@@ -2,10 +2,11 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentId, HistoryItem } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { buildTranscript } from '../state/transcript'
-import { latestDelivered } from '../state/selectors'
+import { displayStatus, latestDelivered } from '../state/selectors'
 import { useNow } from '../lib/useNow'
 import { ChatItem } from './ChatItem'
 import { pinOpen } from './cards/MessageCard'
+import { WorkingRow } from './WorkingRow'
 
 /** 처음에 그리는 줄 수 · '더 보기' 한 번에 늘리는 수 */
 const PAGE = 300
@@ -19,6 +20,7 @@ const NO_CHOICE: Record<string, boolean> = {}
  * 최근 300줄만 그리고 위에 '이전 대화 N개 더 보기'. 새 줄이 오면 맨 아래에 붙어 있을 때만 따라 내려간다.
  * pin 이 오르면(내가 보냄) 위로 올려 읽던 중이어도 맨 아래에 다시 붙는다.
  * 위 고정 카드에 펼쳐 보이는 '최근 전달된 메시지'와 같은 줄은 한 줄로 접는다(cardOpen = 패널이 들고 있는 카드 펼침).
+ * 에이전트가 일하는 동안(표시 상태 '작업 중' — 승인 기다림은 승인 카드가 알린다) 맨 끝에 '작업 중…' 줄.
  */
 export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   agentId: AgentId
@@ -30,6 +32,10 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
     status: s.historyStatus[agentId]?.state ?? 'loading',
     streaming: s.streaming[agentId] ?? '',
   }))
+  const work = useDure(s => {
+    const a = s.agents.find(x => x.id === agentId)
+    return { on: !!a && displayStatus(a, s.requests) === 'working', since: s.statusSince[agentId] }
+  })
   const [limit, setLimit] = useState(PAGE)
   const latest = useDure(s => {
     const m = latestDelivered(agentId, s.messages)
@@ -59,7 +65,7 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
     } else if (stick.current) {
       el.scrollTop = el.scrollHeight
     }
-  }, [lines, v.streaming, v.status])
+  }, [lines, v.streaming, v.status, work.on])
 
   // 내가 보냈다 — 내 말이 보이게 맨 아래로, 뒤에 오는 줄(내 말·답)도 따라가게 다시 붙인다
   useLayoutEffect(() => {
@@ -110,6 +116,7 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
           <ChatItem key={hiddenBefore + i} line={line} folded={line.kind === 'relay' && !!line.messageId && line.messageId === pinned} />
         ))}
         {v.streaming && <ChatItem line={{ kind: 'streaming', text: v.streaming }} />}
+        {work.on && <WorkingRow since={work.since} />}
       </section>
     </div>
   )
