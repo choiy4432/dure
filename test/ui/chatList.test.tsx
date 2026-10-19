@@ -447,3 +447,29 @@ describe('ChatList — 작업 중 줄(Claude Code 의 작업 중 표시처럼)',
     expect(working()).toBeNull()
   })
 })
+
+describe('ChatList — 명령 출력', () => {
+  const COMPACT = 'Compacted PreCompact ["C:/Program Files/nodejs/node.exe" "C:/hooks/monitor.js"] completed successfully'
+
+  it('/compact 결과는 한국어 한 줄 — 영어 원문은 접힌 "자세히" 안에', async () => {
+    history = vi.fn(async () => [
+      { t: 1, kind: 'user', source: 'human', parts: [{ type: 'text', text: '/compact' }] },
+      { t: 2, kind: 'local-output', text: COMPACT },
+    ] as HistoryItem[])
+    await renderPanel()
+    expect(within(conv()).getByText('대화를 요약해서 줄였어요')).toBeInTheDocument()
+    expect(within(conv()).queryByText(COMPACT)).toBeNull()
+    const more = within(conv()).getByRole('button', { name: '자세히' })
+    expect(more).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(more)
+    expect(more).toHaveAttribute('aria-expanded', 'true')
+    expect(within(conv()).getByText(COMPACT)).toHaveClass('ci-local')
+  })
+
+  it('모르는 명령 출력은 원문 그대로, "자세히" 없이', async () => {
+    history = vi.fn(async () => [{ t: 1, kind: 'local-output', text: 'Total cost: $0.12' }] as HistoryItem[])
+    await renderPanel()
+    expect(within(conv()).getByText('Total cost: $0.12')).toHaveClass('ci-local')
+    expect(within(conv()).queryByRole('button', { name: '자세히' })).toBeNull()
+  })
+})

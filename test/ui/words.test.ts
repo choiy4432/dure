@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ago, elapsed, fieldError, josa, lasting } from '../../src/renderer/lib/words'
+import { ago, elapsed, fieldError, josa, lasting, localSummary } from '../../src/renderer/lib/words'
 
 describe('fieldError — 엔진 오류를 칸 아래 안내로', () => {
   it('이름 겹침은 해요체로, 다음 할 일까지 — 받침 따라 이라는/라는, 모르면 (이)라는', () => {
@@ -61,5 +61,16 @@ describe('elapsed — 작업 중 줄의 지난 시간(초까지)', () => {
   })
   it('시계가 거꾸로면 0초', () => {
     expect(elapsed(5_000, 1_000)).toBe('0초')
+  })
+})
+
+describe('localSummary — 아는 명령 출력은 한국어 한 줄로', () => {
+  it('/compact 결과(훅 메시지가 붙어도) → 대화를 요약해서 줄였어요', () => {
+    expect(localSummary('Compacted')).toBe('대화를 요약해서 줄였어요')
+    expect(localSummary('Compacted PreCompact ["node.exe" "hook.js"] completed successfully')).toBe('대화를 요약해서 줄였어요')
+  })
+  it('모르는 출력은 null — 원문 그대로 보인다', () => {
+    expect(localSummary('Total cost: $0.12')).toBeNull()
+    expect(localSummary('Error: Compacted failed')).toBeNull()
   })
 })

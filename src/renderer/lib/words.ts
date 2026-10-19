@@ -93,6 +93,15 @@ export function ago(at: number, now: number): string {
   return `${Math.floor(d / DAY)}일 전`
 }
 
+/**
+ * 아는 명령 출력의 한국어 한 줄 — Claude 가 주는 출력은 영어라, 아는 것만 바꿔 보이고 원문은 접어 둔다.
+ * /compact 는 'Compacted' 뒤에 훅 메시지(내 PC 경로 포함)가 붙어 온다. 모르는 출력은 null(원문 그대로).
+ */
+export function localSummary(text: string): string | null {
+  if (/^Compacted\b/.test(text)) return '대화를 요약해서 줄였어요'
+  return null
+}
+
 /** 지난 시간(초까지) — 대화 맨 아래 '작업 중…' 줄이 1초마다 센다: N초 · N분 N초 · N분 · N시간 N분 */
 export function elapsed(since: number, now: number): string {
   const s = Math.max(0, Math.floor((now - since) / 1000))

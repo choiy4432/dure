@@ -1,11 +1,12 @@
-import { memo, useState, type ComponentType } from 'react'
+import { memo, useId, useState, type ComponentType } from 'react'
 import {
-  ChevronRight, File, Globe, Image as ImageIcon, MessageCircleQuestion, Pencil, Search, Send, ShieldCheck, SquareTerminal,
+  ChevronDown, ChevronRight, File, Globe, Image as ImageIcon, MessageCircleQuestion, Pencil, Search, Send, ShieldCheck, SquareTerminal,
   Wrench, type LucideProps,
 } from 'lucide-react'
 import type { ActionLine, ChatLine } from '../state/transcript'
 import type { ToolIcon } from '../lib/toolSummary'
 import { Markdown } from '../lib/Markdown'
+import { localSummary } from '../lib/words'
 
 const ICONS: Record<ToolIcon, ComponentType<LucideProps>> = {
   file: File,
@@ -23,6 +24,30 @@ const ICONS: Record<ToolIcon, ComponentType<LucideProps>> = {
  * 읽기·찾기처럼 원래 묻지 않는 일엔 붙이지 않는다(시안: 읽음 줄엔 꼬리표가 없다).
  */
 const ASKS_FIRST = new Set(['수정', '만듦', '실행', '웹에서 찾아봄'])
+
+/** 명령 출력 — 아는 출력(/compact)은 가운데 한국어 한 줄 + 접힌 '자세히'(영어 원문), 모르는 출력은 원문 상자 그대로 */
+function LocalLine({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  const id = useId()
+  const summary = localSummary(text)
+  if (!summary) return <pre className="ci-local">{text}</pre>
+  return (
+    <div className="ci-sys">
+      <p className="note">
+        {summary}
+        <button type="button" className="lk sys-more" aria-expanded={open} aria-controls={id} onClick={() => setOpen(o => !o)}>
+          자세히
+          <ChevronDown className="i" size={14} aria-hidden="true" />
+        </button>
+      </p>
+      {open && (
+        <pre className="ci-local" id={id}>
+          {text}
+        </pre>
+      )}
+    </div>
+  )
+}
 
 function Action({ a }: { a: ActionLine }) {
   const [open, setOpen] = useState(false)
@@ -129,7 +154,7 @@ function ChatItemView({ line, folded = false }: Props) {
     case 'notice':
       return <p className="note">{line.text}</p>
     case 'local':
-      return <pre className="ci-local">{line.text}</pre>
+      return <LocalLine text={line.text} />
     case 'streaming':
       return (
         <div className="ci-live" aria-busy="true">

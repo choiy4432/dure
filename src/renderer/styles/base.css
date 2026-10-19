@@ -2026,6 +2026,38 @@ code {
   text-align: center;
 }
 
+/* 아는 명령 출력(/compact) — 가운데 한 줄 + '자세히'(펼치면 아래에 원문 상자) */
+.ci-sys {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.ci-sys .ci-local {
+  align-self: stretch;
+}
+
+.sys-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: auto;
+  margin-left: 6px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 18px;
+  vertical-align: baseline;
+}
+
+.sys-more .i {
+  transition: transform 150ms;
+}
+
+.sys-more[aria-expanded='true'] .i {
+  transform: rotate(180deg);
+}
+
 /* 명령(/cost 등) 출력 */
 .ci-local {
   margin: 0;
