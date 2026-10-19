@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Ref 
 import { Ellipsis, FolderOpen, MessageSquarePlus, Pencil, Trash2 } from 'lucide-react'
 import type { AgentId } from '../../engine/types'
 import { getStore } from '../state/store'
-import { errorMessage, josa } from '../lib/words'
+import { errorMessage, josa, RENEW_CONFIRM } from '../lib/words'
 import { moveMenuFocus, useDismiss } from '../lib/popover'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
 
@@ -113,8 +113,8 @@ export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
       )}
       <ConfirmDialog
         open={ask === 'renew'}
-        title="지금까지 대화를 접고 새로 시작할까요?"
-        confirmLabel="새로 시작"
+        title={RENEW_CONFIRM.title}
+        confirmLabel={RENEW_CONFIRM.confirmLabel}
         onConfirm={renew}
         onCancel={() => setAsk(null)}
       />

@@ -13,13 +13,20 @@ const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
 })
 const cmd = (name: string, description = `${name} command`) => ({ name, description, argumentHint: '' })
-// Claude 가 주는 그대로(영어 설명) — /c 로 시작하는 것이 9개
+// Claude 가 주는 그대로 — 기본 명령은 영어 설명에 꼬리표 없음, 사용자 명령·스킬은 끝에 (user)·(project) 꼬리표
+// 보이는 것 중 /c 로 시작하는 것이 9개(compact·clear + 사용자 7), context·cost·config·copy 는 기본이라 숨는다
 const DESC: AgentDescription = {
   commands: [
     cmd('compact', 'Clear conversation history but keep a summary in context'),
-    cmd('context'), cmd('cost'), cmd('clear', 'Clear conversation history and free up context'),
-    cmd('config'), cmd('commit'), cmd('code-review'), cmd('copy'), cmd('color'),
-    cmd('model', 'Set the AI model for Claude Code'), cmd('init'), cmd('review'),
+    cmd('context', 'Visualize current context usage'), cmd('cost', 'Show the total cost'),
+    cmd('clear', 'Clear conversation history and free up context'),
+    cmd('config', 'Open config panel'), cmd('copy', 'Copy the last response'),
+    cmd('canary', '배포 뒤 화면을 지켜봐요 (gstack) (user)'), cmd('careful', '지우는 명령 전에 한 번 더 (user)'),
+    cmd('codex', 'Second opinion from another model (user)'), cmd('commit', '커밋 메시지를 써 줘요 (user)'),
+    cmd('code-review', '바뀐 코드를 꼼꼼히 봐요 (project)'), cmd('color-check', '색 대비를 재요 (user)'),
+    cmd('cso', '보안 점검 (user)'),
+    cmd('model', 'Set the AI model for Claude Code'), cmd('init', 'Initialize a new CLAUDE.md file'),
+    cmd('review', 'Review a pull request'), cmd('doctor', 'Diagnose your installation'),
   ],
   models: [
     { value: 'default', displayName: 'Default (recommended)' },
@@ -30,7 +37,7 @@ const DESC: AgentDescription = {
 
 let snapshot: Snapshot
 let handlers: Record<string, ((p: any) => void)[]>
-let api: Record<'sendUser' | 'describe' | 'newConversation', ReturnType<typeof vi.fn>>
+let api: Record<'sendUser' | 'describe' | 'newConversation' | 'setModel', ReturnType<typeof vi.fn>>
 
 const emit = <K extends keyof EngineEventMap>(k: K, p: EngineEventMap[K]) => act(() => (handlers[k] ?? []).forEach(f => f(p)))
 const settle = () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
@@ -48,12 +55,12 @@ beforeEach(() => {
     sendUser: vi.fn(async (_id: string, _parts: UserPart[]) => {}),
     describe: vi.fn(async (_id: string) => DESC),
     newConversation: vi.fn(async (_id: string) => {}),
+    setModel: vi.fn(async (_id: string, _model: string | null) => {}),
   }
   ;(window as any).dure = {
     ...api,
     snapshot: async () => snapshot,
     history: async () => [],
-    setModel: async () => {},
     on: (k: string, fn: (p: any) => void) => {
       ;(handlers[k] ??= []).push(fn)
       return () => {}
@@ -167,16 +174,20 @@ describe('Composer — / 명령', () => {
     expect(api.describe).toHaveBeenCalledTimes(1)
   })
 
-  it('이름 앞부분으로 거른다 — 최대 8개, 이름 mono + 설명 한 줄', async () => {
+  it('이름 앞부분으로 거른다 — 최대 8개, 이름 mono + 설명 한 줄(숨는 기본 명령은 빼고)', async () => {
     await renderPanel()
     type('/co')
     await settle()
-    expect(names()).toEqual(['/compact', '/context', '/cost', '/config', '/commit', '/code-review', '/copy', '/color'])
+    expect(names()).toEqual(['/compact', '/codex', '/commit', '/code-review', '/color-check'])
     type('/c')
     expect(options()).toHaveLength(8)
     type('/comp')
     expect(names()).toEqual(['/compact'])
-    expect(options()[0]).toHaveTextContent('Clear conversation history but keep a summary in context')
+    expect(options()[0]).toHaveTextContent('대화를 요약해 용량을 줄여요')
+    type('/com')
+    expect(options()[1]).toHaveTextContent('커밋 메시지를 써 줘요 (user)')
+    type('/con')
+    expect(menu()).toBeNull() // context · config 는 두레에선 쓸 수 없는 기본 명령
   })
 
   it('맞는 게 없거나 띄어 쓰면 목록이 닫히고 Enter 는 그대로 보낸다', async () => {
@@ -202,7 +213,7 @@ describe('Composer — / 명령', () => {
     expect(options()[1]).toHaveAttribute('aria-selected', 'true')
     key('ArrowUp')
     key('ArrowUp')
-    expect(options()[7]).toHaveAttribute('aria-selected', 'true') // 맨 위에서 위로 — 맨 아래
+    expect(options()[options().length - 1]).toHaveAttribute('aria-selected', 'true') // 맨 위에서 위로 — 맨 아래
     key('ArrowDown')
     key('Enter')
     expect(input().value).toBe('/compact ')
@@ -229,8 +240,8 @@ describe('Composer — / 명령', () => {
     key('Escape')
     expect(menu()).toBeNull()
     expect(input().value).toBe('/co')
-    type('/con')
-    expect(names()).toEqual(['/context', '/config'])
+    type('/com')
+    expect(names()).toEqual(['/compact', '/commit'])
   })
 
   it('/model 은 모델 목록을 연다 — 보내지 않고 입력은 비운다(목록은 다시 받지 않는다)', async () => {
@@ -267,6 +278,15 @@ describe('Composer — / 명령', () => {
     expect(api.sendUser).not.toHaveBeenCalled()
   })
 
+  it('누르기로 고른 /review 는 기본 명령 — 한국어 설명', async () => {
+    await renderPanel()
+    type('/re')
+    await settle()
+    expect(options()[0]).toHaveTextContent('바뀐 내용을 검토해요')
+    type('/in')
+    expect(options()[0]).toHaveTextContent('이 폴더 설명서(CLAUDE.md)를 만들어요')
+  })
+
   it('명령 목록을 못 받으면 안내 + 다시 시도', async () => {
     api.describe.mockRejectedValueOnce(new Error('claude 를 켜지 못했어요'))
     await renderPanel()
@@ -277,6 +297,113 @@ describe('Composer — / 명령', () => {
     await settle()
     expect(api.describe).toHaveBeenCalledTimes(2)
     expect(options()).toHaveLength(8)
+  })
+})
+
+describe('slashEntry — / 목록에 무엇을 보이나', () => {
+  it('끝에 출처 꼬리표가 있으면 사용자 명령·스킬 — 그 설명 그대로', async () => {
+    const { slashEntry } = await import('../../src/renderer/panel/SlashMenu')
+    expect(slashEntry(cmd('commit', '커밋 메시지를 써 줘요 (user)'))).toEqual({ name: 'commit', text: '커밋 메시지를 써 줘요 (user)' })
+    expect(slashEntry(cmd('canary', 'Watch after deploy (gstack) (user)'))).toEqual({ name: 'canary', text: 'Watch after deploy (gstack) (user)' })
+    expect(slashEntry(cmd('lint', 'Run the linter (project)'))).toEqual({ name: 'lint', text: 'Run the linter (project)' })
+    // 같은 이름이 기본 목록에 있어도 꼬리표가 있으면 사용자 것
+    expect(slashEntry(cmd('review', '내 검토 순서 (user)'))).toEqual({ name: 'review', text: '내 검토 순서 (user)' })
+  })
+
+  it('꼬리표 없는 기본 명령은 두레에서 쓸 수 있는 것만 — 한국어 설명', async () => {
+    const { slashEntry } = await import('../../src/renderer/panel/SlashMenu')
+    expect(slashEntry(cmd('compact', 'Clear conversation history but keep a summary'))).toEqual({ name: 'compact', text: '대화를 요약해 용량을 줄여요' })
+    expect(slashEntry(cmd('init', 'Initialize a new CLAUDE.md file'))).toEqual({ name: 'init', text: '이 폴더 설명서(CLAUDE.md)를 만들어요' })
+    expect(slashEntry(cmd('review', 'Review a pull request'))).toEqual({ name: 'review', text: '바뀐 내용을 검토해요' })
+    expect(slashEntry(cmd('clear', 'Clear conversation history'))).toEqual({ name: 'clear', text: '새 대화 시작' })
+    expect(slashEntry(cmd('model', 'Set the AI model'))).toEqual({ name: 'model', text: '모델 고르기' })
+  })
+
+  it.each(['config', 'copy', 'cost', 'context', 'doctor'])('꼬리표 없는 %s 는 숨긴다', async name => {
+    const { slashEntry } = await import('../../src/renderer/panel/SlashMenu')
+    expect(slashEntry(cmd(name, 'Some built-in thing'))).toBeNull()
+  })
+})
+
+describe('Composer — /clear · /model 은 목록과 상관없이 두레가 처리', () => {
+  /** 목록을 받는 중(describe 가 끝나지 않음) */
+  const describeHangs = () => api.describe.mockReturnValueOnce(new Promise<AgentDescription>(() => {}))
+
+  it('목록을 받는 중에 /clear + Enter — 확인을 거쳐 newConversation, Claude 에는 보내지 않는다', async () => {
+    describeHangs()
+    await renderPanel()
+    type('/clear')
+    await settle()
+    expect(within(menu()!).getByText('명령을 불러오는 중…')).toBeInTheDocument()
+    key('Enter')
+    const dlg = screen.getByRole('alertdialog', { name: '지금까지 대화를 접고 새로 시작할까요?' })
+    expect(input().value).toBe('')
+    fireEvent.click(within(dlg).getByRole('button', { name: '새로 시작' }))
+    await settle()
+    expect(api.newConversation).toHaveBeenCalledWith('w')
+    expect(api.sendUser).not.toHaveBeenCalled()
+  })
+
+  it('Esc 로 목록을 닫은 뒤 보내기 버튼으로도 · 앞뒤 공백이 있어도 같다', async () => {
+    await renderPanel()
+    type('/clear')
+    await settle()
+    key('Escape')
+    expect(menu()).toBeNull()
+    fireEvent.click(sendButton())
+    const dlg = screen.getByRole('alertdialog', { name: '지금까지 대화를 접고 새로 시작할까요?' })
+    fireEvent.click(within(dlg).getByRole('button', { name: '취소' }))
+
+    type('  /clear \n')
+    key('Enter')
+    expect(screen.getByRole('alertdialog', { name: '지금까지 대화를 접고 새로 시작할까요?' })).toBeInTheDocument()
+    expect(api.sendUser).not.toHaveBeenCalled()
+  })
+
+  it('목록을 받는 중에 /model + Enter — 모델 목록을 연다', async () => {
+    describeHangs()
+    await renderPanel()
+    type('/model')
+    await settle()
+    key('Enter')
+    await settle()
+    expect(screen.getByRole('menu', { name: '모델' })).toBeInTheDocument()
+    expect(input().value).toBe('')
+    expect(api.sendUser).not.toHaveBeenCalled()
+  })
+
+  it('/model <이름> — 그 모델로 바꾸고(setModel) 보내지 않는다 · default 는 기본(null)', async () => {
+    await renderPanel()
+    type('/model sonnet')
+    key('Enter')
+    await settle()
+    expect(api.setModel).toHaveBeenCalledWith('w', 'sonnet')
+    expect(input().value).toBe('')
+    type('/model default')
+    key('Enter')
+    await settle()
+    expect(api.setModel).toHaveBeenLastCalledWith('w', null)
+    expect(api.sendUser).not.toHaveBeenCalled()
+  })
+
+  it('/model <이름> 이 실패하면 엔진 문구를 입력창 아래에 — 입력은 남긴다', async () => {
+    api.setModel.mockRejectedValueOnce(new Error('모르는 모델이에요: gpt'))
+    await renderPanel()
+    type('/model gpt')
+    key('Enter')
+    await settle()
+    expect(screen.getByRole('alert')).toHaveTextContent('모르는 모델이에요: gpt')
+    expect(input().value).toBe('/model gpt')
+    expect(api.sendUser).not.toHaveBeenCalled()
+  })
+
+  it('/models · /clearly 같은 다른 이름은 그대로 보낸다', async () => {
+    await renderPanel()
+    type('/clearly')
+    key('Enter')
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledWith('w', [{ type: 'text', text: '/clearly' }])
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 })
 

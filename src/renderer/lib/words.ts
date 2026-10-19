@@ -11,6 +11,12 @@ export const STATUS_WORD: Record<DisplayStatus, string> = {
   error: '멈춤',
 }
 
+/** 새 대화 확인 — 에이전트 메뉴의 '새 대화'와 입력창의 /clear 가 같은 말을 쓴다 */
+export const RENEW_CONFIRM = {
+  title: '지금까지 대화를 접고 새로 시작할까요?',
+  confirmLabel: '새로 시작',
+} as const
+
 /** 아바타 글자 — 이름의 첫 글자(영문은 대문자) */
 export function initial(name: string): string {
   return Array.from(name.trim())[0]?.toUpperCase() ?? '?'

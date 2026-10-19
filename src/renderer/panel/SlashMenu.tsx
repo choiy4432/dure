@@ -6,19 +6,43 @@ export type SlashCommand = AgentDescription['commands'][number]
 /** 한 번에 보이는 명령 수 */
 const MAX_ITEMS = 8
 
-/** 두레가 따로 처리하는 명령 — Claude 의 영어 설명 대신 */
-const OWN_TEXT: Record<string, string> = {
-  model: '모델 고르기',
+/** 목록 한 줄 — 이름과 보여 줄 설명 */
+export type SlashEntry = { name: string; text: string }
+
+/**
+ * Claude 의 기본 명령 중 두레에서 쓸 수 있는 것만 — 한국어 설명과 함께.
+ * clear·model 은 두레가 직접 처리한다(새 대화 확인 · 모델 목록). 나머지 기본 명령(config·cost 등)은 터미널 전용이라 숨긴다.
+ */
+const BUILTIN: Record<string, string> = {
+  compact: '대화를 요약해 용량을 줄여요',
+  init: '이 폴더 설명서(CLAUDE.md)를 만들어요',
+  review: '바뀐 내용을 검토해요',
   clear: '새 대화 시작',
+  model: '모델 고르기',
 }
 
-/** 이름 앞부분이 맞는 명령 — 받은 순서대로, 최대 8개(대소문자 무시) */
-export function matchCommands(commands: SlashCommand[], query: string): SlashCommand[] {
+/** 설명 끝의 출처 꼬리표 — '… (user)' · '… (project)' · '… (gstack) (user)' */
+const SOURCE_TAG = /\(([^()]+)\)\s*$/
+
+/**
+ * 목록에 보일지·무엇으로 보일지 — 사용자 명령·스킬(설명 끝에 출처 꼬리표)은 그 설명 그대로,
+ * 꼬리표 없는 기본 명령은 BUILTIN 에 있는 것만 한국어로. 그 밖은 null(숨김).
+ */
+export function slashEntry(c: SlashCommand): SlashEntry | null {
+  if (SOURCE_TAG.test(c.description)) return { name: c.name, text: c.description }
+  const text = BUILTIN[c.name]
+  return text === undefined ? null : { name: c.name, text }
+}
+
+/** 보일 명령 중 이름 앞부분이 맞는 것 — 받은 순서대로, 최대 8개(대소문자 무시) */
+export function matchCommands(commands: SlashCommand[], query: string): SlashEntry[] {
   const q = query.toLowerCase()
-  const out: SlashCommand[] = []
+  const out: SlashEntry[] = []
   for (const c of commands) {
     if (!c.name.toLowerCase().startsWith(q)) continue
-    out.push(c)
+    const entry = slashEntry(c)
+    if (!entry) continue
+    out.push(entry)
     if (out.length === MAX_ITEMS) break
   }
   return out
@@ -29,9 +53,9 @@ export const slashOptionId = (listId: string, i: number) => `${listId}-${i}`
 interface Props {
   id: string
   description: Described
-  items: SlashCommand[]
+  items: SlashEntry[]
   active: number
-  onPick: (c: SlashCommand) => void
+  onPick: (c: SlashEntry) => void
   onHover: (i: number) => void
   onRetry: () => void
 }
@@ -65,7 +89,7 @@ export function SlashMenu({ id, description, items, active, onPick, onHover, onR
             onClick={() => onPick(c)}
           >
             <span className="f sl-n">/{c.name}</span>
-            <span className="sl-d">{OWN_TEXT[c.name] ?? c.description}</span>
+            <span className="sl-d">{c.text}</span>
           </div>
         ))
       )}

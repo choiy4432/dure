@@ -5,15 +5,17 @@ import {
 import { ArrowUp, Image as ImageIcon, X } from 'lucide-react'
 import type { AgentId, UserPart } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
-import { errorMessage } from '../lib/words'
+import { errorMessage, RENEW_CONFIRM } from '../lib/words'
 import { IMAGE_TYPES, prepareImage } from '../lib/image'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
 import type { Described } from './ModelPicker'
-import { matchCommands, slashOptionId, SlashMenu, type SlashCommand } from './SlashMenu'
+import { matchCommands, slashOptionId, SlashMenu, type SlashEntry } from './SlashMenu'
 
 /** 본문 줄 높이(px, base.css 와 같다) — 입력창은 8줄까지 늘고 그 뒤로는 안에서 스크롤 */
 const LINE_PX = 22
 const MAX_LINES = 8
+/** 두레가 직접 처리하는 명령 — 목록을 거치든 직접 치든 Claude 에 보내지 않는다 */
+const OWN_COMMAND = /^\/(clear|model)(?:\s+([\s\S]*))?$/
 
 type Attached =
   | { key: number; state: 'loading' }
@@ -82,8 +84,41 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     setError(null)
   }
 
+  /**
+   * /clear → 새 대화 확인 · /model → 모델 목록 · /model <이름> → 그 모델로.
+   * 목록이 아직 안 왔거나 Esc 로 닫았어도 같다 — Claude 로 가면 확인 없이 지워지고 모델 칩이 어긋난다.
+   */
+  const runOwn = async (name: 'clear' | 'model', arg: string) => {
+    if (name === 'clear') {
+      setText('')
+      setAskClear(true)
+      return
+    }
+    if (arg === '') {
+      setText('')
+      onOpenModel()
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await window.dure.setModel(agentId, arg === 'default' ? null : arg)
+      setText('')
+      await getStore().refresh()
+    } catch (e) {
+      setError(errorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const send = async () => {
     if (!canSend) return
+    const own = OWN_COMMAND.exec(text.trim())
+    if (own) {
+      await runOwn(own[1] as 'clear' | 'model', (own[2] ?? '').trim())
+      return
+    }
     const parts: UserPart[] = images.map(i => ({ type: 'image', mediaType: i.mediaType, base64: i.base64 }))
     if (text.trim() !== '') parts.push({ type: 'text', text: text.trim() })
     setBusy(true)
@@ -100,13 +135,9 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     }
   }
 
-  const pick = (c: SlashCommand) => {
-    if (c.name === 'model') {
-      setText('')
-      onOpenModel()
-    } else if (c.name === 'clear') {
-      setText('')
-      setAskClear(true)
+  const pick = (c: SlashEntry) => {
+    if (c.name === 'model' || c.name === 'clear') {
+      void runOwn(c.name, '')
     } else {
       edit(`/${c.name} `)
       area.current?.focus()
@@ -277,8 +308,8 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
       )}
       <ConfirmDialog
         open={askClear}
-        title="지금까지 대화를 접고 새로 시작할까요?"
-        confirmLabel="새로 시작"
+        title={RENEW_CONFIRM.title}
+        confirmLabel={RENEW_CONFIRM.confirmLabel}
         onConfirm={renew}
         onCancel={() => setAskClear(false)}
       />
