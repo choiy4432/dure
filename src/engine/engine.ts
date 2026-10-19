@@ -202,6 +202,14 @@ class EngineImpl extends EventEmitter implements Engine {
     this.store.updateAgent(id, { sessionId: crypto.randomUUID(), started: false });
     this.emitStatus(id);
     await ending;
+    // 끝낸 세션이 못 읽었거나 기다리던 사람 입력은 새 대화로 보낸다 — 두면 사람이 다시 칠 때까지 멈춰 있고 메시지도 쌓인다
+    if ((this.held.get(id)?.length ?? 0) === 0) return;
+    try {
+      this.ensure(id);
+    } catch {
+      return; // 폴더 없음 등 — ensure 가 status error·errorText 를 남겼다
+    }
+    this.pump(id);
   }
 
   async setModel(id: AgentId, model: string | null) {

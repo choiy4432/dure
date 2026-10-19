@@ -319,21 +319,72 @@ test('shutdown 으로 끝낸 세션이 못 읽은 메시지는 queued 로 남고
 
 test('newConversation 으로 끝낸 세션이 못 읽은 사람 입력은 새 대화의 맨 앞으로', async () => {
   const dieFlag = path.join(dir, 'die');
-  fs.writeFileSync(dieFlag, 'B:hang');
+  fs.writeFileSync(dieFlag, 'B:mute'); // 제어 요청에만 답하고 사용자 줄은 읽지 않는다(받은 줄을 기록만 한다)
   const e = await start({ FAKE_DIE_FLAG_FILE: dieFlag });
   const { b } = setup(e);
   await e.sendUser(b.id, text('echo 못 읽음'));
   expect(e.status(b.id)).toBe('working');
+  await e.describe(b.id); // 그 프로세스가 떠서 플래그를 읽었다 — 이제 지워도 된다
+  fs.rmSync(dieFlag); // 새 대화의 프로세스는 정상 — newConversation 이 남은 입력을 곧바로 보낸다
 
   await e.newConversation(b.id);
 
-  fs.rmSync(dieFlag);
   const done = resultTextIs(e, b.id, '받음: echo 다음');
   await e.sendUser(b.id, text('echo 다음'));
   await done;
-  expect(userTexts()).toEqual(['echo 못 읽음', 'echo 다음']);
+  // 첫 줄은 mute 프로세스가 받기만 한 기록 — 새 대화가 그 입력부터 받았다
+  expect(userTexts()).toEqual(['echo 못 읽음', 'echo 못 읽음', 'echo 다음']);
   expect(flagValue(lastSpawnOf('B').argv, '--session-id')).toBe(agentOf(e, b.id).sessionId);
   expect(agentOf(e, b.id).sessionId).not.toBe(b.sessionId);
+});
+
+test('newConversation 때 남은 사람 입력은 새 대화로 보내고 idle 로 돌아온다 — 그 뒤 온 메시지도 전달', async () => {
+  const dieFlag = path.join(dir, 'die');
+  fs.writeFileSync(dieFlag, 'B:mute'); // 제어 요청에만 답하고 사용자 줄은 읽지 않는다(받은 줄을 기록만 한다)
+  const e = await start({ FAKE_DIE_FLAG_FILE: dieFlag });
+  const { a, b } = setup(e);
+  e.updateAgent(b.id, { auto: true });
+  await e.sendUser(b.id, text('echo 못 읽음'));
+  await e.sendUser(b.id, text('SLOW')); // 일하는 중이라 기다린다
+  await e.describe(b.id); // 그 프로세스가 떠서 플래그를 읽었다 — 이제 지워도 된다
+  fs.rmSync(dieFlag);
+  const first = resultTextIs(e, b.id, '받음: echo 못 읽음');
+
+  await e.newConversation(b.id);
+
+  await first; // 사람이 다시 치지 않아도 새 대화로 갔다
+  expect(e.status(b.id)).toBe('working'); // 이어서 기다리던 SLOW
+  const aDone = resultOf(e, a.id);
+  await e.sendUser(a.id, text('SEND B: 이어서'));
+  expect(await resultText(aDone)).toBe('B 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+
+  const delivery = '[두레 메시지 — 보낸 쪽: A(기획)]\n이어서';
+  const last = resultTextIs(e, b.id, `받음: ${delivery}`);
+  await e.interrupt(b.id);
+  await last;
+  expect(e.status(b.id)).toBe('idle');
+  // 첫 줄은 mute 프로세스가 받기만 한 기록
+  expect(userTexts().filter((t) => t !== 'SEND B: 이어서')).toEqual(['echo 못 읽음', 'echo 못 읽음', 'SLOW', delivery]);
+  expect(spawnsOf('B')).toHaveLength(2);
+  expect(flagValue(lastSpawnOf('B').argv, '--session-id')).toBe(agentOf(e, b.id).sessionId);
+  expect(e.messages({ to: b.id }).map((m) => m.state)).toEqual(['delivered']);
+});
+
+test('newConversation 때 남은 입력이 있는데 폴더가 없으면 status error 로 남고 던지지 않는다', async () => {
+  const dieFlag = path.join(dir, 'die');
+  fs.writeFileSync(dieFlag, 'B'); // 읽기 전에 죽는다 — 입력은 기다리는 줄로 돌아온다
+  const e = await start({ FAKE_DIE_FLAG_FILE: dieFlag });
+  const { b } = setup(e);
+  const errored = waitFor<StatusEvent>(e, 'status', (s) => s.agentId === b.id && s.status === 'error');
+  await e.sendUser(b.id, text('echo 못 읽음'));
+  await errored;
+  fs.rmSync(b.folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+
+  await e.newConversation(b.id);
+
+  expect(e.status(b.id)).toBe('error');
+  expect(e.errorText(b.id)).toBe(`폴더를 찾을 수 없습니다: ${b.folder}`);
+  expect(spawnsOf('B')).toHaveLength(1);
 });
 
 test('Claude 가 죽을 때 기다리던 사람 입력은 남고, 다음 입력 때 먼저 보낸 뒤 대기 메시지를 전달', async () => {
