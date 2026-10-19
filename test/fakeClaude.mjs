@@ -1,0 +1,177 @@
+// 테스트용 가짜 claude — 진짜와 같은 argv 를 받고 stream-json 으로 말한다. 동작 표는 plan Task 6.
+import fs from 'node:fs';
+import readline from 'node:readline';
+
+const argv = process.argv.slice(2);
+const flag = (n) => {
+  const i = argv.indexOf(n);
+  return i >= 0 ? argv[i + 1] : undefined;
+};
+const logFile = process.env.FAKE_CLAUDE_LOG;
+const log = (s) => {
+  if (logFile) fs.appendFileSync(logFile, s + '\n');
+};
+log(JSON.stringify({ argv }));
+
+const sessionId = flag('--resume') ?? flag('--session-id') ?? 'fake-session';
+let model = flag('--model') ?? 'default';
+const permissionMode = process.env.FAKE_PERMISSION_MODE || 'default';
+let mcp = null;
+try {
+  const cfg = JSON.parse(fs.readFileSync(flag('--mcp-config'), 'utf8'));
+  mcp = cfg?.mcpServers?.dure ?? null;
+} catch {
+  /* 설정 없음 */
+}
+
+const split = process.env.FAKE_SPLIT_WRITES === '1';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function emit(obj) {
+  const line = JSON.stringify(obj) + '\n';
+  if (!split) {
+    process.stdout.write(line);
+    return;
+  }
+  const a = Math.floor(line.length / 3);
+  const b = Math.floor((line.length * 2) / 3);
+  for (const piece of [line.slice(0, a), line.slice(a, b), line.slice(b)]) {
+    process.stdout.write(piece);
+    await sleep(15);
+  }
+}
+
+const init = () =>
+  emit({ type: 'system', subtype: 'init', session_id: sessionId, model, permissionMode, slash_commands: ['compact'], tools: ['Bash'] });
+const result = (text, extra = {}) =>
+  emit({ type: 'result', subtype: 'success', is_error: false, result: text, permission_denials: [], ...extra });
+const assistant = (content) => emit({ type: 'assistant', message: { role: 'assistant', content } });
+const toolResult = (id, text, isError = false) =>
+  emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: text }] } });
+
+async function rpc(method, params, id, sid) {
+  const res = await fetch(mcp.url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      ...(mcp.headers ?? {}),
+      ...(sid ? { 'mcp-session-id': sid } : {}),
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', ...(id !== undefined ? { id } : {}), method, params }),
+  });
+  let body = await res.text();
+  const m = /^data: (.*)$/m.exec(body);
+  if (m) body = m[1];
+  return { sid: res.headers.get('mcp-session-id') ?? sid, json: body.trim() ? JSON.parse(body) : null };
+}
+async function callTool(name, args) {
+  const a = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fake', version: '0' } }, 1);
+  const r = await rpc('tools/call', { name, arguments: args }, 2, a.sid);
+  return r.json?.result?.content?.[0]?.text ?? '';
+}
+
+let slowPending = false;
+let sequence = 0;
+
+async function turn(text) {
+  await init();
+  if (text.startsWith('SLOW')) {
+    slowPending = true;
+    return;
+  }
+  if (text.startsWith('CRASH')) {
+    process.stderr.write('fake crash\n');
+    process.exit(3);
+  }
+  const send = /^SEND ([^:]+): ([\s\S]*)$/.exec(text);
+  const ask = /^ASK (\S+)/.exec(text);
+  if (send || ask) {
+    const id = `toolu_${++sequence}`;
+    const name = send ? 'mcp__dure__send_message' : 'mcp__dure__approve';
+    const args = send
+      ? { to: send[1], text: send[2] }
+      : { tool_name: ask[1], input: { x: 1 }, tool_use_id: id };
+    await assistant([{ type: 'tool_use', id, name, input: args }]);
+    if (!mcp) {
+      await toolResult(id, 'dure MCP 서버가 설정에 없습니다', true);
+      await result('error', { is_error: true, subtype: 'error_during_execution' });
+      return;
+    }
+    let reply;
+    try {
+      reply = await callTool(send ? 'send_message' : 'approve', args);
+    } catch (e) {
+      await toolResult(id, `MCP 호출 실패: ${e.message}`, true);
+      await result('error', { is_error: true, subtype: 'error_during_execution' });
+      return;
+    }
+    if (send) {
+      await toolResult(id, reply);
+      await result(reply);
+      return;
+    }
+    let verdict = {};
+    try {
+      verdict = JSON.parse(reply);
+    } catch {
+      /* deny 로 취급 */
+    }
+    if (verdict.behavior === 'allow') {
+      await toolResult(id, 'ok');
+      await result('ok');
+    } else {
+      await toolResult(id, verdict.message ?? 'denied', true);
+      await result('denied', { permission_denials: [{ tool_name: ask[1], tool_use_id: id, tool_input: { x: 1 } }] });
+    }
+    return;
+  }
+  await emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '받음' } } });
+  await assistant([{ type: 'text', text: `받음: ${text}` }]);
+  await result(`받음: ${text}`);
+}
+
+async function control(msg) {
+  const rid = msg.request_id;
+  const sub = msg.request?.subtype;
+  const ok = (response = {}) => emit({ type: 'control_response', response: { subtype: 'success', request_id: rid, response } });
+  if (sub === 'initialize') {
+    await ok({
+      commands: [{ name: 'compact', description: '대화 요약', argumentHint: '' }],
+      models: [{ value: 'default', displayName: 'Default' }, { value: 'sonnet', displayName: 'Sonnet' }],
+      current_permission_mode: permissionMode,
+    });
+  } else if (sub === 'set_model') {
+    model = msg.request.model;
+    await ok();
+  } else if (sub === 'interrupt') {
+    await ok();
+    if (slowPending) {
+      slowPending = false;
+      await result('interrupted', { is_error: true, subtype: 'error_during_execution' });
+    }
+  } else {
+    await emit({ type: 'control_response', response: { subtype: 'error', request_id: rid, error: `unknown ${sub}` } });
+  }
+}
+
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  if (!line.trim()) return;
+  log(line);
+  let msg;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (msg.type === 'control_request') void control(msg);
+  else if (msg.type === 'user') {
+    const content = msg.message?.content ?? [];
+    const text = (Array.isArray(content) ? content : [{ type: 'text', text: String(content) }])
+      .filter((c) => c.type === 'text')
+      .map((c) => c.text)
+      .join('\n');
+    void turn(text);
+  }
+});
+rl.on('close', () => process.exit(0));

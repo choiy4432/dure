@@ -52,3 +52,6 @@ export type StreamEvent =
   | { kind: 'control-response'; requestId: string; ok: boolean; payload: any }
   | { kind: 'rate-limit'; info: unknown }
   | { kind: 'ignored'; type: string };
+
+export type SessionStatus = 'idle' | 'working' | 'stopped' | 'error';
+export type AgentStatus = SessionStatus | 'awaiting'; // awaiting = 승인 대기 — 엔진이 겹쳐 계산
