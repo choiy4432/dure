@@ -6,8 +6,8 @@ export type SlashCommand = AgentDescription['commands'][number]
 /** 한 번에 보이는 명령 수 */
 const MAX_ITEMS = 8
 
-/** 목록 한 줄 — 이름과 보여 줄 설명 */
-export type SlashEntry = { name: string; text: string }
+/** 목록 한 줄 — 이름 · 보여 줄 설명 · 작은 출처 표시(내 명령 · 이 프로젝트 · 플러그인 이름, 기본 명령엔 없음) */
+export type SlashEntry = { name: string; text: string; source?: string }
 
 /**
  * Claude 의 기본 명령 중 두레에서 쓸 수 있는 것만 — 한국어 설명과 함께.
@@ -27,14 +27,27 @@ const BUILTIN: Record<string, string> = {
  */
 const USER_TAG = /\((user|project)\)\s*$/
 
+/** 설명 끝의 영어 출처 꼬리표 묶음 — ' (gstack) (user)' 처럼. 한국어가 든 괄호(설명의 일부)는 꼬리표가 아니다 */
+const TRAILING_TAGS = /(?:\s*\([A-Za-z0-9 _.:/@+-]*\))+\s*$/
+
+/** 출처 꼬리표 → 화면의 작은 한국어 출처 */
+const SOURCE: Record<string, string> = { user: '내 명령', project: '이 프로젝트' }
+
 /**
  * 목록에 보일지·무엇으로 보일지(claude 2.1.270 의 initialize 목록 기준):
- * 1. 이름에 ':' — 설치한 플러그인 스킬(superpowers:brainstorming 등) → 그 설명 그대로
- * 2. 마지막 꼬리표가 (user)·(project) — 사용자 명령·스킬 → 그 설명 그대로
- * 3. 그 밖은 Claude Code 기본·번들 명령 → BUILTIN 에 있는 것만 한국어로, 나머지는 null(숨김)
+ * 1. 이름에 ':' — 설치한 플러그인 스킬(superpowers:brainstorming 등) → 출처는 ':' 앞 플러그인 이름(사용자가 설치한 이름)
+ * 2. 마지막 꼬리표가 (user)·(project) — 사용자 명령·스킬 → 출처 '내 명령' · '이 프로젝트'
+ * 3. 그 밖은 Claude Code 기본·번들 명령 → BUILTIN 에 있는 것만 한국어로(출처 없음), 나머지는 null(숨김)
+ * 1·2 의 설명은 끝의 영어 꼬리표 묶음('(gstack) (user)')을 떼고 보인다 — 출처는 따로 작게.
+ * 보일지 정하는 규칙(1·2·3)은 꼬리표를 떼기 전 원래 설명으로 정한다.
  */
 export function slashEntry(c: SlashCommand): SlashEntry | null {
-  if (c.name.includes(':') || USER_TAG.test(c.description)) return { name: c.name, text: c.description }
+  const tag = USER_TAG.exec(c.description)?.[1]
+  const colon = c.name.indexOf(':')
+  if (colon !== -1 || tag) {
+    const text = c.description.replace(TRAILING_TAGS, '').trim()
+    return { name: c.name, text, source: colon !== -1 ? c.name.slice(0, colon) : SOURCE[tag!] }
+  }
   const text = BUILTIN[c.name]
   return text === undefined ? null : { name: c.name, text }
 }
@@ -95,6 +108,7 @@ export function SlashMenu({ id, description, items, active, onPick, onHover, onR
           >
             <span className="f sl-n">/{c.name}</span>
             <span className="sl-d">{c.text}</span>
+            {c.source && <span className="sl-src">{c.source}</span>}
           </div>
         ))
       )}

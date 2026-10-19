@@ -2260,6 +2260,22 @@ code {
   color: var(--muted);
 }
 
+/* 출처 — 내 명령 · 이 프로젝트 · 플러그인 이름. 줄 오른쪽 끝에 작게(기본 명령엔 없다) */
+.sl-src {
+  flex: none;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg);
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-3);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .caret,
   .att.wait {

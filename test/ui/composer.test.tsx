@@ -196,7 +196,11 @@ describe('Composer — / 명령', () => {
     expect(names()).toEqual(['/compact'])
     expect(options()[0]).toHaveTextContent('대화를 요약해 용량을 줄여요')
     type('/com')
-    expect(options()[1]).toHaveTextContent('커밋 메시지를 써 줘요 (user)')
+    // 영어 출처 꼬리표 대신 작은 한국어 출처 — 설명 끝의 (user) 는 떼고 '내 명령'
+    expect(options()[1]).toHaveTextContent('커밋 메시지를 써 줘요')
+    expect(options()[1]).not.toHaveTextContent('(user)')
+    expect(options()[1].querySelector('.sl-src')).toHaveTextContent('내 명령')
+    expect(options()[0].querySelector('.sl-src')).toBeNull() // 기본 명령(/compact)엔 출처가 없다
     type('/con')
     expect(menu()).toBeNull() // context · config 는 두레에선 쓸 수 없는 기본 명령
   })
@@ -312,13 +316,16 @@ describe('Composer — / 명령', () => {
 })
 
 describe('slashEntry — / 목록에 무엇을 보이나', () => {
-  it('끝에 출처 꼬리표가 있으면 사용자 명령·스킬 — 그 설명 그대로', async () => {
+  it('끝에 출처 꼬리표가 있으면 사용자 명령·스킬 — 끝의 괄호 꼬리표는 떼고, 출처는 한국어로(user → 내 명령 · project → 이 프로젝트)', async () => {
     const { slashEntry } = await import('../../src/renderer/panel/SlashMenu')
-    expect(slashEntry(cmd('commit', '커밋 메시지를 써 줘요 (user)'))).toEqual({ name: 'commit', text: '커밋 메시지를 써 줘요 (user)' })
-    expect(slashEntry(cmd('canary', 'Watch after deploy (gstack) (user)'))).toEqual({ name: 'canary', text: 'Watch after deploy (gstack) (user)' })
-    expect(slashEntry(cmd('lint', 'Run the linter (project)'))).toEqual({ name: 'lint', text: 'Run the linter (project)' })
+    expect(slashEntry(cmd('commit', '커밋 메시지를 써 줘요 (user)'))).toEqual({ name: 'commit', text: '커밋 메시지를 써 줘요', source: '내 명령' })
+    expect(slashEntry(cmd('canary', 'Watch after deploy (gstack) (user)'))).toEqual({ name: 'canary', text: 'Watch after deploy', source: '내 명령' })
+    expect(slashEntry(cmd('lint', 'Run the linter (project)'))).toEqual({ name: 'lint', text: 'Run the linter', source: '이 프로젝트' })
     // 같은 이름이 기본 목록에 있어도 꼬리표가 있으면 사용자 것
-    expect(slashEntry(cmd('review', '내 검토 순서 (user)'))).toEqual({ name: 'review', text: '내 검토 순서 (user)' })
+    expect(slashEntry(cmd('review', '내 검토 순서 (user)'))).toEqual({ name: 'review', text: '내 검토 순서', source: '내 명령' })
+    // 설명 안의 한국어 괄호는 꼬리표가 아니다 — 남긴다
+    expect(slashEntry(cmd('doc', '설명서(CLAUDE.md)를 고쳐요 (user)'))).toEqual({ name: 'doc', text: '설명서(CLAUDE.md)를 고쳐요', source: '내 명령' })
+    expect(slashEntry(cmd('only', '(user)'))).toEqual({ name: 'only', text: '', source: '내 명령' })
   })
 
   it('꼬리표 없는 기본 명령은 두레에서 쓸 수 있는 것만 — 한국어 설명', async () => {
@@ -336,16 +343,20 @@ describe('slashEntry — / 목록에 무엇을 보이나', () => {
   })
 
   // 실제 claude 2.1.270 initialize 목록의 모양
-  it('이름에 : 이 있으면 설치한 플러그인 스킬 — 꼬리표가 없어도 그 설명 그대로', async () => {
+  it('이름에 : 이 있으면 설치한 플러그인 스킬 — 꼬리표가 없어도 보이고, 출처는 : 앞 플러그인 이름(괄호 없이)', async () => {
     const { slashEntry } = await import('../../src/renderer/panel/SlashMenu')
     const d = 'You MUST use this before any creative work'
-    expect(slashEntry(cmd('superpowers:brainstorming', d))).toEqual({ name: 'superpowers:brainstorming', text: d })
-    expect(slashEntry(cmd('code-review:code-review', 'Review the current diff'))).toEqual({ name: 'code-review:code-review', text: 'Review the current diff' })
+    expect(slashEntry(cmd('superpowers:brainstorming', d))).toEqual({ name: 'superpowers:brainstorming', text: d, source: 'superpowers' })
+    expect(slashEntry(cmd('code-review:code-review', 'Review the current diff'))).toEqual({
+      name: 'code-review:code-review', text: 'Review the current diff', source: 'code-review',
+    })
+    // 플러그인 스킬 설명 끝에 출처 꼬리표가 붙어 와도 떼고, 출처는 플러그인 이름
+    expect(slashEntry(cmd('gsd:plan', 'Plan a phase (user)'))).toEqual({ name: 'gsd:plan', text: 'Plan a phase', source: 'gsd' })
   })
 
   it('마지막 꼬리표가 (user)·(project) 일 때만 사용자 것 — 다른 괄호 꼬리표는 기본 명령이라 숨긴다', async () => {
     const { slashEntry } = await import('../../src/renderer/panel/SlashMenu')
-    expect(slashEntry(cmd('x', 'Watch after deploy (gstack) (user)'))).toEqual({ name: 'x', text: 'Watch after deploy (gstack) (user)' })
+    expect(slashEntry(cmd('x', 'Watch after deploy (gstack) (user)'))).toEqual({ name: 'x', text: 'Watch after deploy', source: '내 명령' })
     expect(slashEntry(cmd('fork', 'Fork this conversation (dynamic workflow)'))).toBeNull()
     expect(slashEntry(cmd('resume', 'Resume a conversation (resumable with /resume)'))).toBeNull()
     expect(slashEntry(cmd('sync', 'Sync settings (claude.ai sync)'))).toBeNull()
