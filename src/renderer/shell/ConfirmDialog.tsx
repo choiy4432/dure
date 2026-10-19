@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { errorMessage } from '../lib/words'
 
@@ -29,16 +29,55 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
 
 function Dialog({ title, body, confirmLabel, cancelLabel = '취소', danger, onConfirm, onCancel }: ConfirmDialogProps) {
   const ref = useRef<HTMLDivElement>(null)
+  const confirmButton = useRef<HTMLButtonElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const titleId = useId()
   const bodyId = useId()
 
+  // 키 처리는 문서에서 — 포커스가 대화상자 밖(body 등)에 떨어져 있어도 Esc·Tab 이 듣는다
+  const live = useRef({ busy, onCancel })
+  useLayoutEffect(() => {
+    live.current = { busy, onCancel }
+  })
+
   // 열리면 안으로 포커스(위험한 확인은 취소에 먼저), 닫히면 연 자리로 돌려준다
   useEffect(() => {
     const opener = document.activeElement as HTMLElement | null
     ref.current?.querySelector<HTMLElement>(danger ? '[data-cancel]' : '[data-confirm]')?.focus()
+
+    const onKey = (e: KeyboardEvent) => {
+      const box = ref.current
+      if (!box) return
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!live.current.busy) live.current.onCancel()
+        return
+      }
+      if (e.key !== 'Tab') return
+      const items = Array.from(box.querySelectorAll<HTMLElement>(FOCUSABLE))
+      const at = document.activeElement
+      const inside = box.contains(at)
+      if (items.length === 0) {
+        // 기다리는 동안(버튼이 막혀 있음) — 포커스는 대화상자에 머문다
+        e.preventDefault()
+        box.focus()
+        return
+      }
+      const first = items[0]
+      const last = items[items.length - 1]
+      if (e.shiftKey && (!inside || at === first || at === box)) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && (!inside || at === last)) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
     return () => {
+      document.removeEventListener('keydown', onKey, true)
       if (opener?.isConnected) opener.focus()
     }
   }, [danger])
@@ -51,6 +90,8 @@ function Dialog({ title, body, confirmLabel, cancelLabel = '취소', danger, onC
     setError(null)
     const done: unknown = onConfirm()
     if (!(done instanceof Promise)) return
+    // 버튼이 막히면 포커스가 body 로 떨어진다 — 그 전에 대화상자로 옮겨 둔다
+    ref.current?.focus()
     setBusy(true)
     try {
       await done
@@ -61,26 +102,17 @@ function Dialog({ title, body, confirmLabel, cancelLabel = '취소', danger, onC
     }
   }
 
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Escape') {
-      e.stopPropagation()
-      cancel()
+  // 기다림이 끝났는데 아직 열려 있으면(실패) 확인 버튼으로 포커스를 돌려준다
+  const wasBusy = useRef(false)
+  useEffect(() => {
+    if (busy) {
+      wasBusy.current = true
       return
     }
-    if (e.key !== 'Tab') return
-    const items = Array.from(ref.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])
-    if (items.length === 0) return
-    const first = items[0]
-    const last = items[items.length - 1]
-    const at = document.activeElement
-    if (e.shiftKey && (at === first || !ref.current?.contains(at))) {
-      e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && (at === last || !ref.current?.contains(at))) {
-      e.preventDefault()
-      first.focus()
-    }
-  }
+    if (!wasBusy.current) return
+    wasBusy.current = false
+    confirmButton.current?.focus()
+  }, [busy])
 
   // 바깥(막)을 누르면 닫는다 — 대화상자 안에서 시작한 누름은 아니다
   const onBackdrop = (e: PointerEvent<HTMLDivElement>) => {
@@ -96,7 +128,8 @@ function Dialog({ title, body, confirmLabel, cancelLabel = '취소', danger, onC
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={body ? bodyId : undefined}
-        onKeyDown={onKey}
+        aria-busy={busy || undefined}
+        tabIndex={-1}
       >
         <h2 id={titleId} className="dlg-t">
           {title}
@@ -111,7 +144,14 @@ function Dialog({ title, body, confirmLabel, cancelLabel = '취소', danger, onC
           <button type="button" className="btn sec" data-cancel onClick={cancel} disabled={busy}>
             {cancelLabel}
           </button>
-          <button type="button" className={`btn ${danger ? 'dng' : 'pri'}`} data-confirm onClick={confirm} disabled={busy}>
+          <button
+            ref={confirmButton}
+            type="button"
+            className={`btn ${danger ? 'dng' : 'pri'}`}
+            data-confirm
+            onClick={confirm}
+            disabled={busy}
+          >
             {confirmLabel}
           </button>
         </div>

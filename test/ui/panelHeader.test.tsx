@@ -11,13 +11,15 @@ const request = (over: Partial<PendingRequest> = {}): PendingRequest => ({
   id: 'q1', agentId: 'w', toolName: 'Write', input: { file_path: 'C:\\w\\a.ts' }, kind: 'permission',
   createdAt: Date.now(), ...over,
 })
+// Claude 가 주는 그대로(영어) — 화면엔 값으로 고른 한국어만 보여야 한다
 const DESC: AgentDescription = {
   commands: [],
   permissionMode: 'default',
   models: [
-    { value: 'default', displayName: 'Default', description: '추천 모델' },
-    { value: 'opus', displayName: 'Opus', description: '가장 똑똑한 모델' },
-    { value: 'sonnet', displayName: 'Sonnet', description: '빠르고 균형 잡힌 모델' },
+    { value: 'default', displayName: 'Default (recommended)', description: 'Use the default model' },
+    { value: 'opus', displayName: 'Opus', description: 'Most capable for complex work' },
+    { value: 'sonnet', displayName: 'Sonnet', description: 'Best for everyday tasks' },
+    { value: 'gpt-x', displayName: 'Custom Model', description: 'Some English text' },
   ],
 }
 
@@ -159,78 +161,117 @@ describe('PanelHeader — 자동 스위치', () => {
 })
 
 describe('ModelPicker', () => {
-  it('describe 는 패널을 열 때 한 번 — 다른 에이전트로 갔다 와도 다시 부르지 않는다', async () => {
+  const openPicker = async () => {
+    await act(async () => { fireEvent.click(modelChip()) })
+    await settle()
+  }
+
+  it('고르기만으론 describe 를 부르지 않는다(claude 를 켜지 않음) — 목록을 열 때 한 번, 다시 열거나 갔다 와도 그대로', async () => {
     const { store } = await renderPanel()
+    expect(api.describe).not.toHaveBeenCalled()
+    await openPicker()
     expect(api.describe).toHaveBeenCalledTimes(1)
     expect(api.describe).toHaveBeenCalledWith('w')
+    fireEvent.keyDown(screen.getByRole('menu', { name: '모델' }), { key: 'Escape' })
+    await openPicker()
+    expect(api.describe).toHaveBeenCalledTimes(1)
     await act(async () => store.selectAgent('p'))
     await settle()
+    expect(api.describe).toHaveBeenCalledTimes(1)
     await act(async () => store.selectAgent('w'))
-    await settle()
-    expect(api.describe.mock.calls.map(c => c[0])).toEqual(['w', 'p'])
+    await openPicker()
+    expect(api.describe).toHaveBeenCalledTimes(1)
   })
 
-  it('칩은 지금 모델 이름 — 모델이 없으면 default', async () => {
-    snapshot.agents = [agent('w', { name: '웹 화면', model: 'sonnet' }), agent('p', { name: '기획' })]
+  it('칩 이름은 describe 없이 agent.model 로 — 없으면 기본 (추천)', async () => {
+    snapshot.agents = [agent('w', { name: '웹 화면', model: 'sonnet' }), agent('p', { name: '기획' }), agent('o', { name: '오푸스', model: 'opus[1m]' })]
     const { store } = await renderPanel()
     expect(modelChip().textContent).toBe('Sonnet')
     await act(async () => store.selectAgent('p'))
-    await settle()
-    expect(modelChip().textContent).toBe('Default')
+    expect(modelChip().textContent).toBe('기본 (추천)')
+    await act(async () => store.selectAgent('o'))
+    expect(modelChip().textContent).toBe('Opus (긴 대화)')
+    expect(api.describe).not.toHaveBeenCalled()
   })
 
-  it('고르면 setModel — default 는 null 로, 지금 모델엔 표시', async () => {
+  it('고르면 setModel — default 는 null 로, 지금 모델엔 표시 · 이름·설명은 한국어(Claude 의 영어 설명은 안 보임)', async () => {
     snapshot.agents = [agent('w', { name: '웹 화면', model: 'sonnet' })]
     await renderPanel()
-    fireEvent.click(modelChip())
+    await openPicker()
     const menu = screen.getByRole('menu', { name: '모델' })
     const items = within(menu).getAllByRole('menuitemradio')
-    expect(items.map(i => i.querySelector('.mi-t')?.textContent)).toEqual(['Default', 'Opus', 'Sonnet'])
-    expect(items.map(i => i.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true'])
-    expect(within(menu).getByText('빠르고 균형 잡힌 모델')).toBeTruthy()
+    expect(items.map(i => i.querySelector('.mi-t')?.textContent)).toEqual(['기본 (추천)', 'Opus', 'Sonnet', 'Custom Model'])
+    expect(items.map(i => i.querySelector('.mi-d')?.textContent ?? null)).toEqual([
+      '평소 쓰기 좋은 모델', '어려운 일에 가장 똑똑한 모델', '빠르고 균형 잡힌 모델', null,
+    ])
+    expect(items.map(i => i.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true', 'false'])
+    expect(menu.textContent).not.toMatch(/Use the default|Most capable|everyday|English|recommended/)
 
     await act(async () => { fireEvent.click(items[0]) })
     await settle()
     expect(api.setModel).toHaveBeenCalledWith('w', null)
     expect(screen.queryByRole('menu', { name: '모델' })).toBeNull()
-    expect(modelChip().textContent).toBe('Default')
+    expect(modelChip().textContent).toBe('기본 (추천)')
 
-    fireEvent.click(modelChip())
+    await openPicker()
     await act(async () => { fireEvent.click(screen.getByRole('menuitemradio', { name: /Opus/ })) })
     await settle()
     expect(api.setModel).toHaveBeenLastCalledWith('w', 'opus')
     expect(modelChip().textContent).toBe('Opus')
   })
 
-  it('describe 가 실패하면 칩은 "모델" 만, 누르면 다시 시도', async () => {
+  it('describe 가 실패하면 칩은 그대로, 목록에 실패 줄과 다시 시도', async () => {
     api.describe.mockRejectedValueOnce(new Error('claude 를 시작하지 못했어요'))
     snapshot.agents = [agent('w', { name: '웹 화면', model: 'sonnet' })]
     await renderPanel()
-    expect(modelChip().textContent).toBe('모델')
-    await act(async () => { fireEvent.click(modelChip()) })
+    await openPicker()
+    expect(api.describe).toHaveBeenCalledTimes(1)
+    expect(modelChip().textContent).toBe('Sonnet')
+    const menu = screen.getByRole('menu', { name: '모델' })
+    expect(menu.textContent).toContain('모델 목록을 받지 못했어요')
+    // 다시 열기만으론 다시 부르지 않는다 — 다시 시도를 눌러야
+    fireEvent.keyDown(menu, { key: 'Escape' })
+    await openPicker()
+    expect(api.describe).toHaveBeenCalledTimes(1)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '다시 시도' })) })
     await settle()
     expect(api.describe).toHaveBeenCalledTimes(2)
-    expect(modelChip().textContent).toBe('Sonnet')
+    expect(screen.getAllByRole('menuitemradio')).toHaveLength(4)
   })
 
-  it('밖에서 열고 닫을 수 있다(open · onOpenChange) — Esc 로 닫으면 onOpenChange(false)', async () => {
+  it('밖에서 열고 닫을 수 있다(open · onOpenChange) — 열리면 받고, Esc 로 닫으면 onOpenChange(false)', async () => {
     const { ModelPicker } = await import('../../src/renderer/panel/ModelPicker')
     const onOpenChange = vi.fn()
-    render(
-      <ModelPicker
-        agentId="w"
-        model={null}
-        description={{ state: 'ready', value: DESC }}
-        onRetry={() => {}}
-        open
-        onOpenChange={onOpenChange}
-      />,
+    const onLoad = vi.fn()
+    const { rerender } = render(
+      <ModelPicker agentId="w" model={null} description={{ state: 'idle' }} onLoad={onLoad} onRetry={() => {}} open={false} onOpenChange={onOpenChange} />,
+    )
+    expect(onLoad).not.toHaveBeenCalled()
+    rerender(
+      <ModelPicker agentId="w" model={null} description={{ state: 'idle' }} onLoad={onLoad} onRetry={() => {}} open onOpenChange={onOpenChange} />,
+    )
+    expect(onLoad).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('menu', { name: '모델' }).textContent).toBe('모델 목록을 불러오는 중…')
+    rerender(
+      <ModelPicker agentId="w" model={null} description={{ state: 'ready', value: DESC }} onLoad={onLoad} onRetry={() => {}} open onOpenChange={onOpenChange} />,
     )
     const menu = screen.getByRole('menu', { name: '모델' })
+    expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(4)
     fireEvent.keyDown(menu, { key: 'Escape' })
     expect(onOpenChange).toHaveBeenCalledWith(false)
     // 제어 모드 — 부모가 open 을 바꾸기 전엔 그대로 열려 있다
     expect(screen.getByRole('menu', { name: '모델' })).toBeTruthy()
+  })
+
+  it('modelText — 값으로 한국어 이름·설명, 모르는 값은 Claude 이름만', async () => {
+    const { modelText } = await import('../../src/renderer/lib/words')
+    expect(modelText('default', 'Default (recommended)')).toEqual({ name: '기본 (추천)', description: '평소 쓰기 좋은 모델' })
+    expect(modelText('opus')).toEqual({ name: 'Opus', description: '어려운 일에 가장 똑똑한 모델' })
+    expect(modelText('opus[1m]', 'Opus (1M context)')).toEqual({ name: 'Opus (긴 대화)', description: '어려운 일에 가장 똑똑한 모델' })
+    expect(modelText('sonnet')).toEqual({ name: 'Sonnet', description: '빠르고 균형 잡힌 모델' })
+    expect(modelText('haiku')).toEqual({ name: 'Haiku', description: '가장 빠르고 가벼운 모델' })
+    expect(modelText('claude-x-2', 'Custom')).toEqual({ name: 'Custom', description: null })
+    expect(modelText('claude-x-2')).toEqual({ name: 'claude-x-2', description: null })
   })
 })
 
@@ -392,5 +433,46 @@ describe('ConfirmDialog', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(document.activeElement).toBe(outside)
     outside.remove()
+  })
+
+  it('포커스가 body 에 있어도 Esc 는 닫고 Tab 은 안으로 — 앱으로 새지 않는다', async () => {
+    const { ConfirmDialog } = await import('../../src/renderer/shell/ConfirmDialog')
+    const onCancel = vi.fn()
+    render(<ConfirmDialog open title="새로 시작할까요?" confirmLabel="새로 시작" onConfirm={() => {}} onCancel={onCancel} />)
+    const [cancel, ok] = within(screen.getByRole('alertdialog')).getAllByRole('button')
+    ;(document.activeElement as HTMLElement).blur()
+    expect(document.activeElement).toBe(document.body)
+    fireEvent.keyDown(document.body, { key: 'Tab' })
+    expect(document.activeElement).toBe(cancel)
+    ;(document.activeElement as HTMLElement).blur()
+    fireEvent.keyDown(document.body, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(ok)
+    ;(document.activeElement as HTMLElement).blur()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('확인을 기다리는 동안 포커스는 대화상자에, Esc 는 무시 · 실패하면 문구와 함께 확인 버튼으로', async () => {
+    const { ConfirmDialog } = await import('../../src/renderer/shell/ConfirmDialog')
+    const onCancel = vi.fn()
+    let fail: (e: Error) => void = () => {}
+    const onConfirm = () => new Promise<void>((_, reject) => { fail = reject })
+    render(<ConfirmDialog open title="지울까요?" confirmLabel="지우기" danger onConfirm={onConfirm} onCancel={onCancel} />)
+    const dlg = screen.getByRole('alertdialog')
+    const ok = within(dlg).getByRole('button', { name: '지우기' }) as HTMLButtonElement
+    await act(async () => { fireEvent.click(ok) })
+    expect(ok.disabled).toBe(true)
+    expect(document.activeElement).toBe(dlg)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onCancel).not.toHaveBeenCalled()
+    fireEvent.keyDown(dlg, { key: 'Tab' })
+    expect(document.activeElement).toBe(dlg)
+    await act(async () => { fail(new Error('에이전트를 찾을 수 없습니다: w')) })
+    await settle()
+    expect(within(dlg).getByText('에이전트를 찾을 수 없습니다: w')).toBeTruthy()
+    expect(ok.disabled).toBe(false)
+    expect(document.activeElement).toBe(ok)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
   })
 })

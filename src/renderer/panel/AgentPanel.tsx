@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { AgentId } from '../../engine/types'
 import { useDure } from '../state/store'
 import { errorMessage } from '../lib/words'
 import { PanelHeader } from './PanelHeader'
 import type { Described } from './ModelPicker'
 
-const LOADING: Described = { state: 'loading' }
+const IDLE: Described = { state: 'idle' }
 
 /**
  * 오른쪽 패널 — 고른 에이전트 하나.
@@ -19,12 +19,13 @@ export function AgentPanel() {
   })
   const id = sel?.id ?? null
 
-  // describe 는 에이전트마다 패널을 열 때 한 번 — 받은 것은 에이전트별로 둔다(다른 에이전트로 갔다 와도 다시 안 받는다)
+  // describe 는 claude 를 켠다 — 고르기만으론 부르지 않고, 모델 목록(나중엔 / 명령 목록)을 열 때 에이전트마다 한 번.
+  // 받은 것은 에이전트별로 둔다(다른 에이전트로 갔다 와도 다시 안 받는다)
   const [described, setDescribed] = useState<Record<AgentId, Described>>({})
   const asked = useRef(new Set<AgentId>())
   const describe = useCallback((agentId: AgentId) => {
     asked.current.add(agentId)
-    setDescribed(d => ({ ...d, [agentId]: LOADING }))
+    setDescribed(d => ({ ...d, [agentId]: { state: 'loading' } }))
     Promise.resolve()
       .then(() => window.dure.describe(agentId))
       .then(
@@ -32,8 +33,11 @@ export function AgentPanel() {
         e => setDescribed(d => ({ ...d, [agentId]: { state: 'error', error: errorMessage(e) } })),
       )
   }, [])
-  useEffect(() => {
+  const ensureDescribed = useCallback(() => {
     if (id && !asked.current.has(id)) describe(id)
+  }, [id, describe])
+  const retryDescribe = useCallback(() => {
+    if (id) describe(id)
   }, [id, describe])
 
   // 모델 목록 — 머리의 칩이나 입력창의 /model 이 연다
@@ -52,8 +56,9 @@ export function AgentPanel() {
       <PanelHeader
         key={sel.id}
         agentId={sel.id}
-        description={described[sel.id] ?? LOADING}
-        onRetryDescribe={() => describe(sel.id)}
+        description={described[sel.id] ?? IDLE}
+        onLoadDescription={ensureDescribed}
+        onRetryDescribe={retryDescribe}
         modelOpen={modelOpenFor === sel.id}
         onModelOpenChange={open => setModelOpenFor(open ? sel.id : null)}
       />

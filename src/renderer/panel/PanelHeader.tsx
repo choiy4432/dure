@@ -20,6 +20,8 @@ const PILL: Record<DisplayStatus, { tone: string; dot: string }> = {
 interface Props {
   agentId: AgentId
   description: Described
+  /** 모델 목록이 열릴 때 — 아직 안 받았으면 describe */
+  onLoadDescription: () => void
   onRetryDescribe: () => void
   /** 모델 목록을 밖에서 열고 닫을 때(입력창의 /model) */
   modelOpen?: boolean
@@ -27,7 +29,7 @@ interface Props {
 }
 
 /** 패널 머리(시안 .ph) — 아바타·이름·역할·멈추기·메뉴 / 상태 알약·모델 칩·자동 스위치 + 오류·묻지 않음 띠 */
-export function PanelHeader({ agentId, description, onRetryDescribe, modelOpen, onModelOpenChange }: Props) {
+export function PanelHeader({ agentId, description, onLoadDescription, onRetryDescribe, modelOpen, onModelOpenChange }: Props) {
   const v = useDure(s => {
     const agent = s.agents.find(a => a.id === agentId)
     return agent ? { agent, status: displayStatus(agent, s.requests) } : null
@@ -122,6 +124,7 @@ export function PanelHeader({ agentId, description, onRetryDescribe, modelOpen, 
             agentId={agent.id}
             model={agent.model}
             description={description}
+            onLoad={onLoadDescription}
             onRetry={onRetryDescribe}
             open={modelOpen}
             onOpenChange={onModelOpenChange}

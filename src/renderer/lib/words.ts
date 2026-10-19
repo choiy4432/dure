@@ -16,6 +16,20 @@ export function initial(name: string): string {
   return Array.from(name.trim())[0]?.toUpperCase() ?? '?'
 }
 
+/**
+ * 모델 이름·설명 — Claude 가 주는 이름·설명은 영어라 값(value)으로 한국어를 고른다.
+ * 모르는 값은 Claude 가 준 이름(없으면 값 그대로)만, 설명은 없다(영어 설명은 보이지 않는다).
+ * describe 전에도 쓴다 — 패널 머리의 모델 칩은 agent.model 만으로 이름을 정한다.
+ */
+export function modelText(value: string, displayName?: string): { name: string; description: string | null } {
+  const long = value.includes('[1m]') ? ' (긴 대화)' : ''
+  if (value === 'default') return { name: '기본 (추천)', description: '평소 쓰기 좋은 모델' }
+  if (value.startsWith('opus')) return { name: `Opus${long}`, description: '어려운 일에 가장 똑똑한 모델' }
+  if (value.startsWith('sonnet')) return { name: `Sonnet${long}`, description: '빠르고 균형 잡힌 모델' }
+  if (value.startsWith('haiku')) return { name: `Haiku${long}`, description: '가장 빠르고 가벼운 모델' }
+  return { name: displayName || value, description: null }
+}
+
 /** 엔진 오류를 화면에 그대로 — 엔진의 한국어 문구만 온다(스택은 오지 않는다) */
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)

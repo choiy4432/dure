@@ -1373,6 +1373,11 @@ code {
   box-shadow: var(--shadow-dlg);
 }
 
+/* 대화상자 자체는 포커스만 받아 둔다(기다리는 동안·글을 누른 뒤) — 테두리는 그리지 않는다 */
+.dlg:focus {
+  outline: none;
+}
+
 .dlg-t {
   margin: 0;
   font-size: 15px;
