@@ -18,6 +18,8 @@ export type UiState = Snapshot & {
    * 스냅샷으로만 아는 상태(켤 때 이미 작업 중 등)는 언제부터인지 모르므로 없다.
    */
   statusSince: Record<AgentId, number>
+  /** 처음 상태를 한 번도 못 받았을 때 그 까닭(오류 문구) — 받으면 null. 받은 뒤의 실패는 여기 오지 않는다 */
+  loadError: string | null
 }
 
 export interface Store {
@@ -48,12 +50,13 @@ export function createStore(api: DureApi): Store {
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, lastText: {}, lastDelivered: {},
-    statusSince: {},
+    statusSince: {}, loadError: null,
   }
   const listeners = new Set<() => void>()
   let buffer: { ev: Ev; at: number }[] | null = null // 스냅샷을 기다리는 동안 온 이벤트(받은 시각과 함께)
   const loading = new Map<AgentId, HistoryItem[]>() // 기록을 불러오는 동안 온 항목
   let subscribed = false
+  let loaded = false // 스냅샷을 한 번이라도 받았는가
 
   const notify = () => listeners.forEach(fn => fn())
   const set = (next: UiState) => {
@@ -166,12 +169,18 @@ export function createStore(api: DureApi): Store {
     buffer = []
     try {
       applySnapshot(await api.snapshot())
+      loaded = true
+      if (state.loadError !== null) state = { ...state, loadError: null }
+    } catch (e) {
+      // 처음 상태를 못 받았으면 화면이 '첫 방을 만들어 보세요' 대신 이 까닭을 보이게
+      if (!loaded) state = { ...state, loadError: e instanceof Error ? e.message : String(e) }
+      throw e
     } finally {
       const pending = buffer
       buffer = null
       for (const { ev, at } of pending ?? []) applyEvent(ev, at)
+      notify()
     }
-    notify()
   }
 
   // 스냅샷 요청은 한 번에 하나만 — 도중에 또 오면 끝난 뒤 한 번 더 받는다

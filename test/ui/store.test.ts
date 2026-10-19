@@ -330,3 +330,38 @@ describe('store 기록 불러오기 상태', () => {
     expect(s.getState().history.a).toHaveLength(1)
   })
 })
+
+describe('store 처음 불러오기 실패', () => {
+  it('처음 스냅샷을 못 받으면 loadError 에 문구 — 다시 받으면 지우고, 받은 뒤의 실패는 loadError 가 아니다', async () => {
+    const { api } = fake()
+    api.snapshot.mockRejectedValueOnce(new Error('연결이 끊겼어요'))
+    const s = createStore(api)
+    const fn = vi.fn()
+    s.subscribe(fn)
+    await expect(s.init()).rejects.toThrow('연결이 끊겼어요')
+    expect(s.getState().loadError).toBe('연결이 끊겼어요')
+    expect(fn).toHaveBeenCalled() // 화면이 오류를 그리게 알린다
+
+    api.snapshot.mockRejectedValueOnce(new Error('또 끊겼어요'))
+    await expect(s.refresh()).rejects.toThrow('또 끊겼어요')
+    expect(s.getState().loadError).toBe('또 끊겼어요')
+
+    await s.refresh()
+    expect(s.getState().loadError).toBeNull()
+    expect(s.getState().rooms).toHaveLength(2)
+    expect(s.getState().roomId).toBe('r1')
+
+    api.snapshot.mockRejectedValueOnce(new Error('잠깐 끊김'))
+    await expect(s.refresh()).rejects.toThrow('잠깐 끊김')
+    expect(s.getState().loadError).toBeNull() // 이미 받은 화면은 그대로 둔다
+    expect(s.getState().rooms).toHaveLength(2)
+  })
+
+  it('처음엔 loadError 가 없다', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    expect(s.getState().loadError).toBeNull()
+    await s.init()
+    expect(s.getState().loadError).toBeNull()
+  })
+})

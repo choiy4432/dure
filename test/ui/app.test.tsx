@@ -73,18 +73,57 @@ describe('App 셸', () => {
     expect(screen.getByRole('complementary', { name: '에이전트' })).toBeTruthy()
   })
 
-  it('위 띠 버튼은 넘겨받은 처리를 부른다', async () => {
+  it('위 띠 버튼은 넘겨받은 처리를 부른다 — 방 버튼은 방 목록을 연다', async () => {
+    snapshot = { ...snapshot, rooms: [room('r1', '여름 캠페인')] }
+    const { getStore } = await import('../../src/renderer/state/store')
     const { TopBar } = await import('../../src/renderer/shell/TopBar')
-    const onRoomMenu = vi.fn()
+    await act(async () => { await getStore().init() })
     const onAddAgent = vi.fn()
     const onSettings = vi.fn()
-    render(<TopBar roomName="여름 캠페인" onRoomMenu={onRoomMenu} onAddAgent={onAddAgent} onSettings={onSettings} />)
-    fireEvent.click(screen.getByRole('button', { name: '여름 캠페인' }))
+    render(<TopBar hasRoom onAddAgent={onAddAgent} onSettings={onSettings} />)
+    const roomButton = screen.getByRole('button', { name: '여름 캠페인' })
+    expect(roomButton.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(roomButton)
+    expect(roomButton.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByRole('dialog', { name: '방' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: '에이전트 추가' }))
     fireEvent.click(screen.getByRole('button', { name: '설정' }))
-    expect(onRoomMenu).toHaveBeenCalledTimes(1)
     expect(onAddAgent).toHaveBeenCalledTimes(1)
     expect(onSettings).toHaveBeenCalledTimes(1)
+  })
+
+  it('설정은 claude 가 없으면 막힘', async () => {
+    snapshot = { ...snapshot, claudeMissing: true }
+    await renderApp()
+    expect(screen.getByRole('button', { name: '설정' })).toHaveProperty('disabled', true)
+  })
+
+  it('처음 상태를 못 받으면 불러오기 오류와 다시 시도 — 첫 방 안내는 보이지 않는다', async () => {
+    const snap = vi.fn()
+      .mockRejectedValueOnce(new Error('연결이 끊겼어요'))
+      .mockRejectedValueOnce(new Error('아직 끊겨 있어요'))
+      .mockImplementation(async () => snapshot)
+    ;(window as any).dure.snapshot = snap
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { App } = await import('../../src/renderer/App')
+    await act(async () => { await getStore().init().catch(() => {}) })
+    render(<App />)
+    expect(screen.getByText('두레를 불러오지 못했어요')).toBeTruthy()
+    expect(screen.getByText('연결이 끊겼어요')).toBeTruthy()
+    expect(screen.queryByText('첫 방을 만들어 보세요')).toBeNull()
+    expect(screen.getByRole('button', { name: '에이전트 추가' })).toHaveProperty('disabled', true)
+    expect(screen.getByRole('button', { name: '설정' })).toHaveProperty('disabled', true)
+
+    // 다시 시도 — 또 실패하면 새 문구
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '다시 시도' })) })
+    expect(screen.getByText('아직 끊겨 있어요')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '다시 시도' })).toHaveProperty('disabled', false)
+
+    // 받으면 평소 화면(방이 없으니 첫 방 안내)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '다시 시도' })) })
+    expect(screen.queryByText('두레를 불러오지 못했어요')).toBeNull()
+    expect(screen.getByText('첫 방을 만들어 보세요')).toBeTruthy()
+    expect(snap).toHaveBeenCalledTimes(3)
   })
 
   it('빈 화면 버튼은 onAction 을 부른다', async () => {
@@ -93,5 +132,13 @@ describe('App 셸', () => {
     render(<Empty kind="room" onAction={onAction} />)
     fireEvent.click(screen.getByRole('button', { name: '방 만들기' }))
     expect(onAction).toHaveBeenCalledTimes(1)
+  })
+
+  it('빈 화면의 추가는 에이전트 추가 대화상자를 연다', async () => {
+    snapshot = { ...snapshot, rooms: [room('r1', '여름 캠페인')] }
+    ;(window as any).dure.pickFolder = async () => null
+    await renderApp()
+    fireEvent.click(screen.getByRole('button', { name: '추가' }))
+    expect(screen.getByRole('dialog', { name: '에이전트 추가' })).toBeTruthy()
   })
 })

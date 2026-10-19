@@ -232,10 +232,10 @@ code {
   height: 100%;
 }
 
-/* 위 띠 */
+/* 위 띠 — 방 목록이 관계도 위 칩(.sum 5)·경계선(6)·메시지 창(7) 위로 열리게 그보다 높다(대화상자 50 아래) */
 .top {
   position: relative;
-  z-index: 5;
+  z-index: 10;
   flex: none;
   height: 48px;
   display: flex;
@@ -264,7 +264,8 @@ code {
   font-weight: 500;
 }
 
-.room:hover {
+.room:hover,
+.room[aria-expanded="true"] {
   background: var(--hover);
 }
 
@@ -406,6 +407,7 @@ code {
   font-size: 13px;
   line-height: 18px;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .empty-card .btn {
@@ -2360,4 +2362,185 @@ code {
 
 .dng:hover:not(:disabled) {
   background: var(--danger-solid-hover);
+}
+
+/* ── 방 목록(위 띠 방 버튼 아래) ─────────────────── */
+.pop.rs {
+  width: 280px;
+  max-width: 280px;
+  max-height: min(420px, calc(100vh - 72px));
+}
+
+.rs-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * 한 줄 = 방 고르기 + … — 줄 전체가 hover 면이다.
+ * 키보드 포커스만 표시한다(:focus-visible) — 목록을 열 때 지금 방에 준 포커스가 마우스로 연 사람에게
+ * hover 줄과 함께 두 줄이 칠해진 것처럼 보이지 않게.
+ */
+.rs-row {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+
+.rs-row:hover,
+.rs-row:has(:focus-visible) {
+  background: var(--hover);
+}
+
+.rs-pick {
+  flex: 1;
+  min-width: 0;
+}
+
+.rs-pick:hover,
+.rs-pick:focus-visible {
+  background: transparent;
+}
+
+.rs-n {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rs-pick[aria-current="true"] .rs-n {
+  font-weight: 500;
+}
+
+/* … 는 그 줄에 올라가거나 포커스가 있을 때만 */
+.rs-row .rs-more {
+  margin: 0 4px 0 0;
+  opacity: 0;
+}
+
+.rs-row:hover .rs-more,
+.rs-row:has(:focus-visible) .rs-more,
+.rs-row .rs-more[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.rs-row .rs-more:hover:not(:disabled),
+.rs-row .rs-more[aria-expanded="true"] {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* 목록 안 이름 입력(새 방 · 이름 바꾸기) */
+.rs-form {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+}
+
+.rs-fr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rs-fr .inp {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+}
+
+.rs-form .fe {
+  padding: 4px 2px 2px;
+}
+
+/* ── 입력 대화상자(방 만들기 · 에이전트 추가 · 설정) ── */
+.dlg-form {
+  width: 440px;
+}
+
+.dlg-form .dlg-ab {
+  margin-top: 24px;
+}
+
+.fld {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+.fld-l {
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.fld-d {
+  margin: -4px 0 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+/* 고른 폴더 + 폴더 고르기 */
+.fld-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fld-path {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  background: var(--subtle);
+  font-size: 13px;
+  line-height: 30px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fld-path.f {
+  color: var(--text);
+  line-height: 30px;
+}
+
+.fld-path.bad {
+  border-color: var(--danger);
+}
+
+/* 숫자 칸 + 단위 */
+.fld-num {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fld-num .inp {
+  width: 80px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fld-u {
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.inp[type="number"] {
+  appearance: textfield;
+}
+
+.inp[type="number"]::-webkit-inner-spin-button,
+.inp[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }

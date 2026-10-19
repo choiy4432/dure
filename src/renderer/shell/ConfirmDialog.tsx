@@ -1,6 +1,7 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type PointerEvent } from 'react'
+import { useEffect, useId, useRef, useState, type PointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { errorMessage } from '../lib/words'
+import { useDialogFocus } from '../lib/dialog'
 
 export interface ConfirmDialogProps {
   open: boolean
@@ -19,8 +20,6 @@ export interface ConfirmDialogProps {
   onCancel: () => void
 }
 
-const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
-
 /** 앱 안 확인 대화상자 — 브라우저 confirm 대신. 열려 있는 동안 포커스는 안에서만 돈다 */
 export function ConfirmDialog(props: ConfirmDialogProps) {
   if (!props.open) return null
@@ -35,56 +34,12 @@ function Dialog({ title, body, confirmLabel, cancelLabel = '취소', danger, onC
   const titleId = useId()
   const bodyId = useId()
 
-  // 키 처리는 문서에서 — 포커스가 대화상자 밖(body 등)에 떨어져 있어도 Esc·Tab 이 듣는다
-  const live = useRef({ busy, onCancel })
-  useLayoutEffect(() => {
-    live.current = { busy, onCancel }
-  })
-
-  // 열리면 안으로 포커스(위험한 확인은 취소에 먼저), 닫히면 연 자리로 돌려준다
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null
-    ref.current?.querySelector<HTMLElement>(danger ? '[data-cancel]' : '[data-confirm]')?.focus()
-
-    const onKey = (e: KeyboardEvent) => {
-      const box = ref.current
-      if (!box) return
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        if (!live.current.busy) live.current.onCancel()
-        return
-      }
-      if (e.key !== 'Tab') return
-      const items = Array.from(box.querySelectorAll<HTMLElement>(FOCUSABLE))
-      const at = document.activeElement
-      const inside = box.contains(at)
-      if (items.length === 0) {
-        // 기다리는 동안(버튼이 막혀 있음) — 포커스는 대화상자에 머문다
-        e.preventDefault()
-        box.focus()
-        return
-      }
-      const first = items[0]
-      const last = items[items.length - 1]
-      if (e.shiftKey && (!inside || at === first || at === box)) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && (!inside || at === last)) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-    document.addEventListener('keydown', onKey, true)
-    return () => {
-      document.removeEventListener('keydown', onKey, true)
-      if (opener?.isConnected) opener.focus()
-    }
-  }, [danger])
-
   const cancel = () => {
     if (!busy) onCancel()
   }
+
+  // 열리면 안으로 포커스(위험한 확인은 취소에 먼저), 닫히면 연 자리로 돌려준다 · Esc 는 기다리는 동안 무시
+  useDialogFocus(ref, cancel, box => box.querySelector<HTMLElement>(danger ? '[data-cancel]' : '[data-confirm]'))
 
   const confirm = async () => {
     setError(null)
