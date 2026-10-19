@@ -903,6 +903,29 @@ test('engine: 전달 메시지는 source relay + messageId', async () => {
   });
 });
 
+test('engine: 하는 일 입력은 화면이 읽는 칸만 기록 — 넘김 본문은 기록 파일에 없다(이벤트도 같은 모양)', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const body = '아주 긴 넘김 본문 '.repeat(2000);
+  const live: { kind: string; blocks?: unknown }[] = [];
+  e.on('history', (h: { agentId: string; item: { kind: string } }) => h.agentId === a.id && live.push(h.item));
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text(`SEND B: ${body}`));
+  await done;
+  const stored = e.history(a.id).find((x) => x.kind === 'assistant')!;
+  expect(stored).toMatchObject({
+    kind: 'assistant',
+    blocks: [{ type: 'tool_use', name: 'mcp__dure__send_message', input: { to: 'B' } }],
+  });
+  expect(stored.kind === 'assistant' && stored.blocks[0].type === 'tool_use' && stored.blocks[0].input).toEqual({ to: 'B' });
+  expect(live.find((x) => x.kind === 'assistant')).toEqual(stored);
+  // 기록 파일의 assistant 줄에도 본문이 없다(사람이 친 SEND 줄에만 있다)
+  const lines = fs.readFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), 'utf8').split('\n');
+  const assistantLine = lines.find((l) => l.includes('"kind":"assistant"'))!;
+  expect(assistantLine).not.toContain('아주 긴 넘김 본문');
+  expect(lines.filter((l) => l.includes('아주 긴 넘김 본문'))).toHaveLength(1);
+});
+
 test('engine: 이미지는 바이트 수만 기록', async () => {
   const e = await start();
   const { a } = setup(e);

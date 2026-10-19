@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { openStore, renameRetrying, type Store } from './store';
 import { openMessageLog, type MessageLog } from './messageLog';
-import { openHistory, type History } from './history';
+import { openHistory, trimToolInput, type History } from './history';
 import { buildArgs, buildMcpConfig, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
 import { ClaudeSession } from './claudeSession';
@@ -481,7 +481,12 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   private recordEvent(id: AgentId, ev: StreamEvent): void {
-    if (ev.kind === 'assistant') this.record(id, { kind: 'assistant', blocks: ev.blocks });
+    if (ev.kind === 'assistant')
+      this.record(id, {
+        kind: 'assistant',
+        // 하는 일 입력은 화면이 읽는 칸만 — 파일 본문·넘김 본문으로 기록 파일이 커지지 않게(이벤트로 나가는 것도 같은 모양)
+        blocks: ev.blocks.map((b) => (b.type === 'tool_use' ? { ...b, input: trimToolInput(b.input) } : b)),
+      });
     else if (ev.kind === 'tool-result')
       this.record(id, {
         kind: 'tool-result',

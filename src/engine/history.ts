@@ -2,6 +2,47 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AgentId, HistoryItem } from './types';
 
+/**
+ * 기록에 남기는 하는 일 입력의 칸 — 화면(renderer lib/toolSummary.ts)이 읽는 것만. 거기서 새 칸을 읽으면 여기도 더한다.
+ * 파일 본문·고칠 글·넘김 본문 같은 큰 값은 기록 파일을 키우기만 하고 화면엔 안 쓰인다.
+ */
+const KEPT_INPUT = ['file_path', 'notebook_path', 'command', 'pattern', 'url', 'query', 'description', 'to'] as const;
+/** 경로 칸 — 넘치면 끝(파일 이름)을 남긴다. 화면은 마지막 조각만 보인다 */
+const PATH_INPUT = new Set<string>(['file_path', 'notebook_path']);
+const INPUT_TEXT_MAX = 500;
+
+/** 하는 일 입력을 기록용으로 줄인다 — 위 칸의 글 값만, 500자까지 */
+export function trimToolInput(input: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!input || typeof input !== 'object') return out;
+  for (const key of KEPT_INPUT) {
+    const v = (input as Record<string, unknown>)[key];
+    if (typeof v !== 'string') continue;
+    out[key] = v.length <= INPUT_TEXT_MAX ? v : PATH_INPUT.has(key) ? v.slice(-INPUT_TEXT_MAX) : v.slice(0, INPUT_TEXT_MAX);
+  }
+  return out;
+}
+
+/** 파일이 줄바꿈으로 끝나지 않는가 — 크기와 마지막 한 바이트만 본다(없으면 false) */
+function endsOpen(file: string): boolean {
+  let fd: number;
+  try {
+    fd = fs.openSync(file, 'r');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw e;
+  }
+  try {
+    const { size } = fs.fstatSync(fd);
+    if (size === 0) return false;
+    const last = Buffer.alloc(1);
+    fs.readSync(fd, last, 0, 1, size - 1);
+    return last[0] !== 0x0a;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export interface History {
   append(agentId: AgentId, item: HistoryItem): void;
   /** 오래된 것부터. sinceBoundary(기본 true)면 마지막 boundary 뒤만, limit(기본 500)은 그 가운데 마지막 N 개 */
@@ -20,10 +61,7 @@ export function openHistory(dataDir: string): History {
       const file = fileOf(agentId);
       if (!closed.has(agentId)) {
         // 마지막 줄이 끊겨 있으면 새 기록이 그 줄에 붙지 않게 닫는다
-        if (fs.existsSync(file)) {
-          const text = fs.readFileSync(file, 'utf8');
-          if (text.length > 0 && !text.endsWith('\n')) fs.appendFileSync(file, '\n');
-        }
+        if (endsOpen(file)) fs.appendFileSync(file, '\n');
         closed.add(agentId);
       }
       fs.appendFileSync(file, `${JSON.stringify(item)}\n`);
