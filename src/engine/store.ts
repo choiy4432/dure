@@ -113,7 +113,8 @@ export function openStore(dataDir: string): Store {
         checkName(a.roomId, patch.name, id);
         patch = { ...patch, name: patch.name.trim() };
       }
-      Object.assign(a, clone(patch));
+      const defined = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+      Object.assign(a, clone(defined));
       save();
       return clone(a);
     },

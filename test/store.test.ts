@@ -93,3 +93,12 @@ test('state.json 이 깨져 있으면 state.json.broken-<시각> 으로 옮기�
   s.addRoom('new');
   expect(openStore(dir).rooms()).toHaveLength(1);
 });
+
+test('updateAgent 는 undefined 값을 무시한다 — 다시 열어도 pos·name 그대로', () => {
+  const s = openStore(dir);
+  const r = s.addRoom('R');
+  const a = s.addAgent({ roomId: r.id, name: 'a', role: 'r', folder: dir });
+  s.updateAgent(a.id, { pos: undefined, name: undefined });
+  expect(s.agent(a.id)).toMatchObject({ name: 'a', pos: { x: 0, y: 0 } });
+  expect(openStore(dir).agent(a.id)).toMatchObject({ name: 'a', pos: { x: 0, y: 0 } });
+});
