@@ -252,6 +252,38 @@ describe('ChatList — 따라 내려가기', () => {
     expect(el.scrollTop).toBe(100)
   })
 
+  it('내가 보내면 위로 올려 읽던 중이어도 맨 아래로 — 내 말이 보이게, 그 뒤 줄도 따라간다', async () => {
+    await renderPanel()
+    const el = conv()
+    const size = { scrollHeight: 1000, clientHeight: 400 }
+    fakeScroll(el, size)
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    const box = screen.getByRole('textbox', { name: '웹 화면에게 보낼 메시지' })
+    fireEvent.change(box, { target: { value: '이것도 해 줘' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await settle()
+    expect(el.scrollTop).toBe(1000)
+    size.scrollHeight = 1200
+    await emit('history', { agentId: 'w', item: { t: 20, kind: 'user', source: 'human', parts: [{ type: 'text', text: '이것도 해 줘' }] } })
+    expect(el.scrollTop).toBe(1200)
+  })
+
+  it('못 보내면 읽던 자리 그대로', async () => {
+    ;(window as any).dure.sendUser = async () => { throw new Error('보내지 못했어요') }
+    await renderPanel()
+    const el = conv()
+    fakeScroll(el, { scrollHeight: 1000, clientHeight: 400 })
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    const box = screen.getByRole('textbox', { name: '웹 화면에게 보낼 메시지' })
+    fireEvent.change(box, { target: { value: '이것도 해 줘' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await settle()
+    expect(screen.getByRole('alert')).toHaveTextContent('보내지 못했어요')
+    expect(el.scrollTop).toBe(100)
+  })
+
   describe('대화 칸이 줄 때(창 크기 · 위에 카드가 생김)', () => {
     let observed: { cb: ResizeObserverCallback; targets: Element[] }[]
     beforeEach(() => {

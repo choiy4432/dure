@@ -136,6 +136,10 @@ export function AgentPanel() {
     setCardOpen(c => ({ ...c, [messageId]: open }))
   }, [])
 
+  // 내가 보낼 때마다 오르는 수(보낸 에이전트와 함께) — 대화 목록이 맨 아래로 붙어 내 말이 보이게
+  const [sent, setSent] = useState<{ agentId: AgentId | null; n: number }>({ agentId: null, n: 0 })
+  const onSent = useCallback((agentId: AgentId) => setSent(s => ({ agentId, n: s.n + 1 })), [])
+
   if (!sel) {
     return (
       <aside className="pnl" aria-label="에이전트">
@@ -156,7 +160,7 @@ export function AgentPanel() {
         onModelOpenChange={open => setModelOpenFor(open ? sel.id : null)}
       />
       <Pins agentId={sel.id} open={cardOpen} onOpenChange={setOpen} />
-      <ChatList key={`c-${sel.id}`} agentId={sel.id} />
+      <ChatList key={`c-${sel.id}`} agentId={sel.id} pin={sent.agentId === sel.id ? sent.n : 0} />
       <Composer
         key={`i-${sel.id}`}
         agentId={sel.id}
@@ -165,6 +169,7 @@ export function AgentPanel() {
         onLoadCommands={ensureDescribed}
         onRetryCommands={retryDescribe}
         onOpenModel={() => setModelOpenFor(sel.id)}
+        onSent={onSent}
       />
     </aside>
   )

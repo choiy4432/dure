@@ -42,9 +42,20 @@ let api: Record<'sendUser' | 'describe' | 'newConversation' | 'setModel', Return
 const emit = <K extends keyof EngineEventMap>(k: K, p: EngineEventMap[K]) => act(() => (handlers[k] ?? []).forEach(f => f(p)))
 const settle = () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
 
+// 미리보기 주소 — jsdom 엔 URL.createObjectURL 이 없다. 만든 것·놓아 준 것을 센다
+let created: Blob[]
+let revoked: string[]
+
 beforeEach(() => {
   vi.resetModules()
   prep.mockReset()
+  created = []
+  revoked = []
+  URL.createObjectURL = vi.fn((b: Blob) => {
+    created.push(b)
+    return `blob:dure/${created.length}`
+  })
+  URL.revokeObjectURL = vi.fn((u: string) => void revoked.push(u))
   handlers = {}
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }],
@@ -432,11 +443,12 @@ describe('Composer — /clear · /model 은 목록과 상관없이 두레가 처
   })
 })
 
+const png = (name = 'shot.png') => new File([new Uint8Array(10)], name, { type: 'image/png' })
+const ready = (base64 = 'QUJD') => ({ mediaType: 'image/png', base64, bytes: 3, blob: new Blob([base64], { type: 'image/png' }) })
+const fileInput = (c: HTMLElement) => c.querySelector('input[type="file"]') as HTMLInputElement
+const chips = () => screen.queryAllByRole('img', { name: /붙인 이미지/ })
+
 describe('Composer — 이미지', () => {
-  const png = (name = 'shot.png') => new File([new Uint8Array(10)], name, { type: 'image/png' })
-  const ready = (base64 = 'QUJD') => ({ mediaType: 'image/png', base64, bytes: 3 })
-  const fileInput = (c: HTMLElement) => c.querySelector('input[type="file"]') as HTMLInputElement
-  const chips = () => screen.queryAllByRole('img', { name: /붙인 이미지/ })
 
   it('이미지 버튼 → 파일 고르기 → 미리보기 칩, 보내면 이미지가 먼저 · 글이 뒤', async () => {
     prep.mockResolvedValue(ready())
@@ -450,7 +462,7 @@ describe('Composer — 이미지', () => {
     await settle()
     expect(prep).toHaveBeenCalledTimes(1)
     expect(chips()).toHaveLength(1)
-    expect(chips()[0]).toHaveAttribute('src', 'data:image/png;base64,QUJD')
+    expect(chips()[0]).toHaveAttribute('src', 'blob:dure/1')
     type('이 화면 봐 줘')
     key('Enter')
     await settle()
@@ -523,5 +535,102 @@ describe('Composer — 이미지', () => {
     expect(api.sendUser).not.toHaveBeenCalled()
     await act(async () => { done(ready()) })
     expect(sendButton()).toBeEnabled()
+  })
+})
+
+describe('Composer — 에이전트마다 쓰던 글·이미지(이번 실행 동안)', () => {
+  const box = (name: string) => screen.getByRole('textbox', { name: `${name}에게 보낼 메시지` }) as HTMLTextAreaElement
+  const select = async (store: { selectAgent(id: string): void }, id: string) => {
+    await act(async () => { store.selectAgent(id) })
+    await settle()
+  }
+
+  it('A 에서 쓰던 글과 이미지 칩은 B 에 갔다 와도 그대로 — B 는 B 의 것', async () => {
+    prep.mockResolvedValue(ready())
+    const { container, store } = await renderPanel('w')
+    type('헤더를 고쳐 줘')
+    fireEvent.change(fileInput(container), { target: { files: [png()] } })
+    await settle()
+    expect(chips()).toHaveLength(1)
+
+    await select(store, 'p')
+    expect(box('기획').value).toBe('')
+    expect(chips()).toHaveLength(0)
+    fireEvent.change(box('기획'), { target: { value: '문구를 다듬어 줘' } })
+
+    await select(store, 'w')
+    expect(box('웹 화면').value).toBe('헤더를 고쳐 줘')
+    expect(chips()).toHaveLength(1)
+    expect(chips()[0]).toHaveAttribute('src', 'blob:dure/1')
+    expect(sendButton()).toBeEnabled()
+
+    await select(store, 'p')
+    expect(box('기획').value).toBe('문구를 다듬어 줘')
+    expect(created).toHaveLength(1) // 오가도 미리보기를 다시 만들지 않는다
+    expect(revoked).toEqual([])
+  })
+
+  it('보내면 그 에이전트의 것만 비운다', async () => {
+    prep.mockResolvedValue(ready())
+    const { container, store } = await renderPanel('w')
+    type('웹 화면에 남을 글')
+    await select(store, 'p')
+    fireEvent.change(box('기획'), { target: { value: '기획에게 보낼 글' } })
+    fireEvent.change(fileInput(container), { target: { files: [png()] } })
+    await settle()
+    fireEvent.keyDown(box('기획'), { key: 'Enter' })
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledWith('p', [
+      { type: 'image', mediaType: 'image/png', base64: 'QUJD' },
+      { type: 'text', text: '기획에게 보낼 글' },
+    ])
+    expect(box('기획').value).toBe('')
+    expect(chips()).toHaveLength(0)
+    expect(revoked).toEqual(['blob:dure/1']) // 보낸 이미지의 미리보기는 놓아 준다
+
+    await select(store, 'w')
+    expect(box('웹 화면').value).toBe('웹 화면에 남을 글')
+    await select(store, 'p')
+    expect(box('기획').value).toBe('') // 다시 가도 비어 있다
+  })
+
+  it('미리보기 주소는 붙일 때 한 번 — 글을 쳐도 다시 만들지 않고, 지우면 놓아 준다', async () => {
+    const r = ready()
+    prep.mockResolvedValue(r)
+    const { container } = await renderPanel('w')
+    fireEvent.change(fileInput(container), { target: { files: [png()] } })
+    await settle()
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
+    expect(created[0]).toBe(r.blob) // 보낼 그 이미지로
+    for (const t of ['이', '이 화', '이 화면', '이 화면 봐 줘']) type(t)
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
+    expect(chips()[0]).toHaveAttribute('src', 'blob:dure/1')
+    expect(revoked).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: '이미지 지우기' }))
+    expect(revoked).toEqual(['blob:dure/1'])
+  })
+
+  it('에이전트가 지워지면 그 에이전트의 쓰던 글·이미지도 버리고 미리보기를 놓아 준다', async () => {
+    prep.mockResolvedValue(ready())
+    const { container, store } = await renderPanel('w')
+    fireEvent.change(fileInput(container), { target: { files: [png()] } })
+    await settle()
+    await select(store, 'p')
+    snapshot = { ...snapshot, agents: snapshot.agents.filter(a => a.id !== 'w') }
+    await act(async () => { await store.refresh() })
+    expect(revoked).toEqual(['blob:dure/1'])
+  })
+
+  it('다른 에이전트로 간 사이 이미지 준비가 끝나도 그 에이전트 칩으로 남는다', async () => {
+    let done!: (v: unknown) => void
+    prep.mockReturnValueOnce(new Promise(r => { done = r }))
+    const { container, store } = await renderPanel('w')
+    fireEvent.change(fileInput(container), { target: { files: [png()] } })
+    await settle()
+    await select(store, 'p')
+    await act(async () => { done(ready()) })
+    expect(chips()).toHaveLength(0) // 기획 입력창엔 없다
+    await select(store, 'w')
+    expect(chips()).toHaveLength(1)
   })
 })

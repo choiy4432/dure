@@ -47,7 +47,7 @@ describe('prepareImage — 작은 이미지', () => {
     const f = fakeDeps({ width: 1200, height: 800 })
     const file = new Blob([new Uint8Array([104, 105, 33])], { type: 'image/png' }) // 'hi!'
     const r = await prepareImage(file, f.deps)
-    expect(r).toEqual({ mediaType: 'image/png', base64: 'aGkh', bytes: 3 })
+    expect(r).toEqual({ mediaType: 'image/png', base64: 'aGkh', bytes: 3, blob: file })
     expect(f.draw).not.toHaveBeenCalled()
     expect(f.encode).not.toHaveBeenCalled()
     expect(f.close).toHaveBeenCalled()

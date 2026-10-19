@@ -15,7 +15,8 @@ export const IMAGE_WRONG_TYPE = '이 형식은 붙일 수 없어요'
 export const IMAGE_TOO_BIG = '이미지가 너무 커요 — 더 작은 이미지를 붙여 주세요'
 export const IMAGE_UNREADABLE = '이미지를 읽지 못했어요'
 
-export type PreparedImage = { mediaType: string; base64: string; bytes: number }
+/** blob = 보낼 그 이미지(줄였으면 줄인 것) — 입력창 미리보기는 이걸로(object URL) */
+export type PreparedImage = { mediaType: string; base64: string; bytes: number; blob: Blob }
 
 /** 이미지 읽기·그리기·저장 — 테스트는 바꿔 끼운다(jsdom 엔 캔버스가 없다) */
 export interface ImageDeps {
@@ -94,7 +95,7 @@ export async function prepareImage(
       }
     }
     if (!fits(blob)) return { error: IMAGE_TOO_BIG }
-    return { mediaType: type, base64: await toBase64(blob), bytes: blob.size }
+    return { mediaType: type, base64: await toBase64(blob), bytes: blob.size, blob }
   } catch {
     // 다시 그리기가 실패(메모리 등) — 원본으로 물러서지 않는다
     return { error: IMAGE_TOO_BIG }

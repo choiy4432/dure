@@ -13,8 +13,9 @@ const NONE: HistoryItem[] = []
 /**
  * 대화 목록(시안 .conv) — 고른 에이전트의 기록을 buildTranscript 로 줄로 바꿔 그린다.
  * 최근 300줄만 그리고 위에 '이전 대화 N개 더 보기'. 새 줄이 오면 맨 아래에 붙어 있을 때만 따라 내려간다.
+ * pin 이 오르면(내가 보냄) 위로 올려 읽던 중이어도 맨 아래에 다시 붙는다.
  */
-export function ChatList({ agentId }: { agentId: AgentId }) {
+export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number }) {
   const v = useDure(s => ({
     items: s.history[agentId] ?? NONE,
     status: s.historyStatus[agentId]?.state ?? 'loading',
@@ -44,6 +45,15 @@ export function ChatList({ agentId }: { agentId: AgentId }) {
       el.scrollTop = el.scrollHeight
     }
   }, [lines, v.streaming, v.status])
+
+  // 내가 보냈다 — 내 말이 보이게 맨 아래로, 뒤에 오는 줄(내 말·답)도 따라가게 다시 붙인다
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!pin || !el) return
+    stick.current = true
+    keep.current = null
+    el.scrollTop = el.scrollHeight
+  }, [pin])
 
   // 칸이 줄어도(창 크기 · 위에 카드가 생김) 맨 아래에 붙어 있었으면 바닥을 지킨다 — 줄어드는 건 스크롤 이벤트가 안 온다
   useLayoutEffect(() => {

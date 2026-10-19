@@ -10,16 +10,13 @@ import { IMAGE_TYPES, prepareImage } from '../lib/image'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
 import type { Described } from './ModelPicker'
 import { matchCommands, slashOptionId, SlashMenu, type SlashEntry } from './SlashMenu'
+import { getDraft, nextAttachKey, updateDraft, useDraft, type Attached } from './drafts'
 
 /** 본문 줄 높이(px, base.css 와 같다) — 입력창은 8줄까지 늘고 그 뒤로는 안에서 스크롤 */
 const LINE_PX = 22
 const MAX_LINES = 8
 /** 두레가 직접 처리하는 명령 — 목록을 거치든 직접 치든 Claude 에 보내지 않는다 */
 const OWN_COMMAND = /^\/(clear|model)(?:\s+([\s\S]*))?$/
-
-type Attached =
-  | { key: number; state: 'loading' }
-  | { key: number; state: 'ready'; mediaType: string; base64: string }
 
 interface Props {
   agentId: AgentId
@@ -31,15 +28,21 @@ interface Props {
   onRetryCommands: () => void
   /** /model — 패널 머리의 모델 목록을 연다 */
   onOpenModel: () => void
+  /** 보내졌을 때 — 대화 목록을 맨 아래로(내 말이 보이게) */
+  onSent?: (agentId: AgentId) => void
 }
 
 const hasFiles = (types: ArrayLike<string> | undefined) => Array.from(types ?? []).includes('Files')
 
-/** 입력창(시안 .cmp/.box) — 글·이미지 보내기, / 명령 */
-export function Composer({ agentId, name, description, onLoadCommands, onRetryCommands, onOpenModel }: Props) {
+/**
+ * 입력창(시안 .cmp/.box) — 글·이미지 보내기, / 명령.
+ * 쓰던 글과 붙인 이미지는 에이전트마다 drafts 에 둔다 — 다른 카드로 갔다 와도 그대로(이번 실행 동안만).
+ */
+export function Composer({ agentId, name, description, onLoadCommands, onRetryCommands, onOpenModel, onSent }: Props) {
   const heldInput = useDure(s => s.agents.find(a => a.id === agentId)?.heldInput ?? 0)
-  const [text, setText] = useState('')
-  const [attached, setAttached] = useState<Attached[]>([])
+  const { text, attached } = useDraft(agentId)
+  const setText = (next: string) => updateDraft(agentId, d => (d.text === next ? d : { ...d, text: next }))
+  const setAttached = (fn: (list: Attached[]) => Attached[]) => updateDraft(agentId, d => ({ ...d, attached: fn(d.attached) }))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [dismissed, setDismissed] = useState(false)
@@ -48,7 +51,6 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
   const [dragging, setDragging] = useState(false)
   const area = useRef<HTMLTextAreaElement>(null)
   const filePick = useRef<HTMLInputElement>(null)
-  const seq = useRef(0)
   const listId = useId()
 
   // / 명령 — '/' 로 시작하고 아직 띄어 쓰지 않았을 때만 목록
@@ -121,13 +123,15 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     }
     const parts: UserPart[] = images.map(i => ({ type: 'image', mediaType: i.mediaType, base64: i.base64 }))
     if (text.trim() !== '') parts.push({ type: 'text', text: text.trim() })
+    const sent = new Set(images.map(i => i.key))
     setBusy(true)
     setError(null)
     try {
       // 보낸 말은 기록(history 이벤트)으로 목록에 붙는다 — 일하는 중이면 엔진이 차례를 기다리게 둔다
       await window.dure.sendUser(agentId, parts)
-      setText('')
-      setAttached([])
+      // 이 에이전트의 쓰던 입력을 비운다(보낸 이미지의 미리보기는 drafts 가 놓아 준다)
+      updateDraft(agentId, d => ({ text: '', attached: d.attached.filter(a => !sent.has(a.key)) }))
+      onSent?.(agentId)
     } catch (e) {
       setError(errorMessage(e))
     } finally {
@@ -184,15 +188,19 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     if (files.length === 0) return
     setError(null)
     for (const file of files) {
-      const key = ++seq.current
+      const key = nextAttachKey()
       setAttached(a => [...a, { key, state: 'loading' }])
       void prepareImage(file).then(r => {
+        // 그사이 다른 에이전트로 갔어도 이 에이전트의 입력에 넣는다(setAttached 는 agentId 로 drafts 를 고친다)
         if ('error' in r) {
           setAttached(a => a.filter(x => x.key !== key))
           setError(r.error)
-        } else {
-          setAttached(a => a.map(x => (x.key === key ? { key, state: 'ready', mediaType: r.mediaType, base64: r.base64 } : x)))
+          return
         }
+        if (!getDraft(agentId).attached.some(x => x.key === key)) return // 그사이 버려졌다(에이전트 지움)
+        // 미리보기 주소는 붙일 때 한 번 — 글자를 칠 때마다 몇 MB 짜리 data: 주소를 다시 만들지 않는다
+        const url = URL.createObjectURL(r.blob)
+        setAttached(a => a.map(x => (x.key === key ? { key, state: 'ready', mediaType: r.mediaType, base64: r.base64, url } : x)))
       })
     }
   }
@@ -254,7 +262,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
                 <span key={a.key} className="att wait" role="status" aria-label="이미지 준비 중" />
               ) : (
                 <span key={a.key} className="att">
-                  <img src={`data:${a.mediaType};base64,${a.base64}`} alt={`붙인 이미지 ${++shown}`} />
+                  <img src={a.url} alt={`붙인 이미지 ${++shown}`} />
                   <button
                     type="button"
                     className="att-x"
