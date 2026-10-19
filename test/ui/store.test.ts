@@ -195,3 +195,67 @@ describe('store selection', () => {
     expect(fn).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('store 스냅샷 겹침 합치기', () => {
+  it('겹친 refresh 두 번은 요청을 하나로 합치고, 사이에 온 이벤트는 한 번만 적용된다', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    const resolvers: ((v: Snapshot) => void)[] = []
+    api.snapshot.mockImplementation(() => new Promise<Snapshot>(r => { resolvers.push(r) }))
+    const p1 = s.refresh()
+    emit('message', relay('m1', 'pending', { updatedAt: 5 }))
+    const p2 = s.refresh()
+    expect(resolvers).toHaveLength(1) // 두 번째는 아직 시작 안 함
+    resolvers[0](snap({ autoChainLimit: 1 }))
+    await vi.waitFor(() => expect(resolvers).toHaveLength(2))
+    emit('message', relay('m2', 'pending', { updatedAt: 6, createdAt: 6 }))
+    resolvers[1](snap({ autoChainLimit: 2, messages: [relay('m1', 'pending', { updatedAt: 5 })] }))
+    await Promise.all([p1, p2])
+    expect(s.getState().autoChainLimit).toBe(2)
+    expect(s.getState().messages.map(m => m.id)).toEqual(['m1', 'm2'])
+    expect(api.snapshot).toHaveBeenCalledTimes(3) // init + 합쳐진 2번
+  })
+
+  it('init 도중 refresh 도 이벤트를 잃지 않는다', async () => {
+    const { api, emit } = fake()
+    const resolvers: ((v: Snapshot) => void)[] = []
+    api.snapshot.mockImplementation(() => new Promise<Snapshot>(r => { resolvers.push(r) }))
+    const s = createStore(api)
+    const p1 = s.init()
+    const p2 = s.refresh()
+    resolvers[0](snap())
+    await vi.waitFor(() => expect(resolvers).toHaveLength(2))
+    emit('status', { agentId: 'a', status: 'working', errorText: null })
+    resolvers[1](snap())
+    await Promise.all([p1, p2])
+    expect(s.getState().agents[0].status).toBe('working')
+  })
+})
+
+describe('store 기록 불러오기 상태', () => {
+  it('loading → ready', async () => {
+    let release!: (h: HistoryItem[]) => void
+    const { api } = fake({ history: () => new Promise<HistoryItem[]>(r => { release = r }) })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    expect(s.getState().historyStatus.a).toEqual({ state: 'loading' })
+    release([note('x')])
+    await vi.waitFor(() => expect(s.getState().historyStatus.a).toEqual({ state: 'ready' }))
+  })
+
+  it('실패하면 error 와 메시지를 남기고(미처리 거부 없음), 다시 고르면 재시도한다', async () => {
+    const h = vi.fn().mockRejectedValueOnce(new Error('기록을 못 읽었어요')).mockResolvedValue([note('다시')])
+    const { api } = fake({ history: h })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    await vi.waitFor(() => expect(s.getState().historyStatus.a?.state).toBe('error'))
+    expect(s.getState().historyStatus.a.error).toBe('기록을 못 읽었어요')
+    expect(s.getState().history.a).toBeUndefined()
+    s.selectAgent('a')
+    await vi.waitFor(() => expect(s.getState().historyStatus.a).toEqual({ state: 'ready' }))
+    expect(s.getState().history.a).toHaveLength(1)
+  })
+})

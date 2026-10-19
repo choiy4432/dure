@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useRef, useSyncExternalStore } from 'react'
 import type { AgentId, EngineEventMap, HistoryItem, RoomId } from '../../engine/types'
 import type { DureApi, Snapshot } from '../../shared/ipcContract'
 
@@ -6,6 +6,7 @@ export type UiState = Snapshot & {
   roomId: RoomId | null
   selectedAgentId: AgentId | null
   history: Record<AgentId, HistoryItem[]>
+  historyStatus: Record<AgentId, { state: 'loading' | 'ready' | 'error'; error?: string }>
   streaming: Record<AgentId, string>
   /** 키 `${from}>${to}` → 마지막으로 전달된 시각(message.updatedAt) */
   lastDelivered: Record<string, number>
@@ -32,7 +33,7 @@ const sameItem = (a: HistoryItem, b: HistoryItem) => JSON.stringify(a) === JSON.
 export function createStore(api: DureApi): Store {
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0,
-    roomId: null, selectedAgentId: null, history: {}, streaming: {}, lastDelivered: {},
+    roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, lastDelivered: {},
   }
   const listeners = new Set<() => void>()
   let buffer: Ev[] | null = null // 스냅샷을 기다리는 동안 온 이벤트
@@ -128,7 +129,7 @@ export function createStore(api: DureApi): Store {
     }
   }
 
-  const fetchSnapshot = async () => {
+  const snapshotCycle = async () => {
     buffer = []
     try {
       applySnapshot(await api.snapshot())
@@ -140,15 +141,45 @@ export function createStore(api: DureApi): Store {
     notify()
   }
 
+  // 스냅샷 요청은 한 번에 하나만 — 도중에 또 오면 끝난 뒤 한 번 더 받는다
+  let inflight: Promise<void> | null = null
+  let rerun = false
+  const fetchSnapshot = (): Promise<void> => {
+    if (inflight) {
+      rerun = true
+      return inflight
+    }
+    inflight = (async () => {
+      try {
+        do {
+          rerun = false
+          await snapshotCycle()
+        } while (rerun)
+      } finally {
+        inflight = null
+        rerun = false
+      }
+    })()
+    return inflight
+  }
+
   const loadHistory = async (id: AgentId) => {
     if (state.history[id] || loading.has(id)) return
     loading.set(id, [])
+    set({ ...state, historyStatus: { ...state.historyStatus, [id]: { state: 'loading' } } })
     try {
       const loaded = await api.history(id)
       const extra = (loading.get(id) ?? []).filter(it => !loaded.some(l => sameItem(l, it)))
-      set({ ...state, history: { ...state.history, [id]: [...loaded, ...extra] } })
-    } finally {
       loading.delete(id)
+      set({
+        ...state,
+        history: { ...state.history, [id]: [...loaded, ...extra] },
+        historyStatus: { ...state.historyStatus, [id]: { state: 'ready' } },
+      })
+    } catch (e) {
+      loading.delete(id)
+      const error = e instanceof Error ? e.message : String(e)
+      set({ ...state, historyStatus: { ...state.historyStatus, [id]: { state: 'error', error } } })
     }
   }
 
@@ -182,7 +213,28 @@ export function getStore(): Store {
   return (shared ??= createStore(window.dure))
 }
 
-export function useDure<T>(sel: (s: UiState) => T): T {
+/** 원시값은 ===, 배열은 원소별 ===, 일반 객체는 한 단계 === */
+export function shallowEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((v, i) => Object.is(v, b[i]))
+  }
+  const ka = Object.keys(a)
+  const kb = Object.keys(b)
+  if (ka.length !== kb.length) return false
+  return ka.every(key => Object.prototype.hasOwnProperty.call(b, key) && Object.is((a as any)[key], (b as any)[key]))
+}
+
+export function useDure<T>(sel: (s: UiState) => T, isEqual: (a: T, b: T) => boolean = shallowEqual): T {
   const store = getStore()
-  return useSyncExternalStore(store.subscribe, () => sel(store.getState()))
+  const last = useRef<{ v: T } | null>(null)
+  const get = () => {
+    const next = sel(store.getState())
+    if (last.current && isEqual(last.current.v, next)) return last.current.v
+    last.current = { v: next }
+    return next
+  }
+  return useSyncExternalStore(store.subscribe, get)
 }
