@@ -70,15 +70,20 @@ async function callTool(name, args) {
   return r.json?.result?.content?.[0]?.text ?? '';
 }
 
-let slowPending = false;
+let current = null; // 진행 중인 차례 { ended }
 let sequence = 0;
 
 async function turn(text) {
+  const tok = { ended: false };
+  current = tok;
+  const finish = async (t, extra) => {
+    if (tok.ended) return;
+    tok.ended = true;
+    current = null;
+    await result(t, extra);
+  };
   await init();
-  if (text.startsWith('SLOW')) {
-    slowPending = true;
-    return;
-  }
+  if (text.startsWith('SLOW')) return; // interrupt 가 올 때까지 대기
   if (text.startsWith('CRASH')) {
     process.stderr.write('fake crash\n');
     process.exit(3);
@@ -87,27 +92,26 @@ async function turn(text) {
   const ask = /^ASK (\S+)/.exec(text);
   if (send || ask) {
     const id = `toolu_${++sequence}`;
-    const name = send ? 'mcp__dure__send_message' : 'mcp__dure__approve';
-    const args = send
-      ? { to: send[1], text: send[2] }
-      : { tool_name: ask[1], input: { x: 1 }, tool_use_id: id };
-    await assistant([{ type: 'tool_use', id, name, input: args }]);
-    if (!mcp) {
-      await toolResult(id, 'dure MCP 서버가 설정에 없습니다', true);
-      await result('error', { is_error: true, subtype: 'error_during_execution' });
-      return;
-    }
+    const args = send ? { to: send[1], text: send[2] } : { x: 1 };
+    await assistant([{ type: 'tool_use', id, name: send ? 'mcp__dure__send_message' : ask[1], input: args }]);
+    const fail = async (msg) => {
+      if (tok.ended) return;
+      await toolResult(id, msg, true);
+      await finish('error', { is_error: true, subtype: 'error_during_execution' });
+    };
+    if (!mcp) return fail('dure MCP 서버가 설정에 없습니다');
     let reply;
     try {
-      reply = await callTool(send ? 'send_message' : 'approve', args);
+      reply = send
+        ? await callTool('send_message', args)
+        : await callTool('approve', { tool_name: ask[1], input: { x: 1 }, tool_use_id: id });
     } catch (e) {
-      await toolResult(id, `MCP 호출 실패: ${e.message}`, true);
-      await result('error', { is_error: true, subtype: 'error_during_execution' });
-      return;
+      return fail(`MCP 호출 실패: ${e.message}`);
     }
+    if (tok.ended) return; // 중단된 차례의 늦은 응답
     if (send) {
       await toolResult(id, reply);
-      await result(reply);
+      await finish(reply);
       return;
     }
     let verdict = {};
@@ -118,19 +122,21 @@ async function turn(text) {
     }
     if (verdict.behavior === 'allow') {
       await toolResult(id, 'ok');
-      await result('ok');
+      await finish('ok');
     } else {
       await toolResult(id, verdict.message ?? 'denied', true);
-      await result('denied', { permission_denials: [{ tool_name: ask[1], tool_use_id: id, tool_input: { x: 1 } }] });
+      await finish('denied', { permission_denials: [{ tool_name: ask[1], tool_use_id: id, tool_input: { x: 1 } }] });
     }
     return;
   }
   await emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '받음' } } });
   await assistant([{ type: 'text', text: `받음: ${text}` }]);
-  await result(`받음: ${text}`);
+  await finish(`받음: ${text}`);
 }
 
+
 async function control(msg) {
+  if (process.env.FAKE_NO_CONTROL_REPLY === '1') return;
   const rid = msg.request_id;
   const sub = msg.request?.subtype;
   const ok = (response = {}) => emit({ type: 'control_response', response: { subtype: 'success', request_id: rid, response } });
@@ -145,8 +151,9 @@ async function control(msg) {
     await ok();
   } else if (sub === 'interrupt') {
     await ok();
-    if (slowPending) {
-      slowPending = false;
+    if (current && !current.ended) {
+      current.ended = true;
+      current = null;
       await result('interrupted', { is_error: true, subtype: 'error_during_execution' });
     }
   } else {

@@ -123,16 +123,24 @@ test('stdout 이 줄 중간에서 잘려 와도 한 줄로 합쳐 읽는다', as
 });
 
 test('request: 프로세스가 종료되면 대기 중 요청은 reject', async () => {
+  const s = make({ FAKE_NO_CONTROL_REPLY: '1' });
+  s.start();
+  const p = s.request({ subtype: 'initialize' }, 5000);
+  const assertion = expect(p).rejects.toThrow('프로세스가 종료되었습니다');
+  s.send(text('CRASH'));
+  await assertion;
+});
+
+test('request: 시간 초과면 reject', async () => {
+  const s = make({ FAKE_NO_CONTROL_REPLY: '1' });
+  s.start();
+  await expect(s.request({ subtype: 'initialize' }, 50)).rejects.toThrow('요청 시간이 초과되었습니다');
+});
+
+test('request: ok 가 아닌 응답이면 reject', async () => {
   const s = make();
   s.start();
-  const p = s.request({ subtype: 'initialize' }, 5000).then(
-    () => 'ok',
-    (e) => (e as Error).message,
-  );
-  s.send(text('CRASH'));
-  const r = await p;
-  // initialize 응답이 먼저 오거나, 종료로 reject 되거나 — 어느 쪽이든 대기 요청은 남지 않는다
-  expect(['ok', '프로세스가 종료되었습니다']).toContain(r);
+  await expect(s.request({ subtype: 'bogus' } as any)).rejects.toThrow('요청이 거부되었습니다');
 });
 
 test('SEND/ASK: 가짜가 MCP 서버에 JSON-RPC 로 호출한다', async () => {
@@ -162,12 +170,57 @@ test('SEND/ASK: 가짜가 MCP 서버에 JSON-RPC 로 호출한다', async () => 
   s.send(text('SEND 두리: 안녕'));
   expect((await done).text).toBe('delivered');
   done = waitFor<any>(s, 'event', (e) => e.kind === 'result');
+  const blocks: any[] = [];
+  s.on('event', (e) => e.kind === 'assistant' && blocks.push(...e.blocks));
   s.send(text('ASK Bash'));
   expect((await done).denials[0].toolName).toBe('Bash');
+  const askBlock = blocks.find((b) => b.type === 'tool_use');
+  expect(askBlock.name).toBe('Bash');
   const tc = calls.filter((c) => c.m.method === 'tools/call');
   expect(tc[0].m.params).toEqual({ name: 'send_message', arguments: { to: '두리', text: '안녕' } });
+  expect(tc[1].m.params).toEqual({
+    name: 'approve',
+    arguments: { tool_name: 'Bash', input: { x: 1 }, tool_use_id: askBlock.id },
+  });
   expect(tc[0].auth).toBe('Bearer tok');
   expect(tc[0].agent).toBe('a1');
   await s.stop();
+  await new Promise((r) => srv.close(r));
+});
+
+test('interrupt: ASK 가 승인 응답을 기다리는 중 → result ok false → idle, 늦은 응답은 무시', async () => {
+  const held: http.ServerResponse[] = [];
+  const srv = http.createServer((req, res) => {
+    let b = '';
+    req.on('data', (d) => (b += d));
+    req.on('end', () => {
+      const m = JSON.parse(b);
+      res.setHeader('content-type', 'application/json');
+      if (m.method === 'tools/call') held.push(res);
+      else res.end(JSON.stringify({ jsonrpc: '2.0', id: m.id, result: {} }));
+    });
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+  fs.writeFileSync(
+    path.join(dir, 'mcp.json'),
+    JSON.stringify(buildMcpConfig({ port: (srv.address() as any).port, token: 't', agentId: 'a1' })),
+  );
+  const s = make();
+  s.start();
+  const results: any[] = [];
+  s.on('event', (e) => e.kind === 'result' && results.push(e));
+  const asked = waitFor(s, 'event', (e) => e.kind === 'assistant');
+  s.send(text('ASK Bash'));
+  await asked;
+  while (held.length === 0) await new Promise((r) => setTimeout(r, 10));
+  const res = waitFor<any>(s, 'event', (e) => e.kind === 'result');
+  await s.interrupt();
+  expect((await res).ok).toBe(false);
+  expect(s.status).toBe('idle');
+  held[0].end(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { content: [{ type: 'text', text: '{"behavior":"allow"}' }] } }));
+  await new Promise((r) => setTimeout(r, 100));
+  expect(results).toHaveLength(1);
+  await s.stop();
+  srv.closeAllConnections();
   await new Promise((r) => srv.close(r));
 });
