@@ -6,3 +6,5 @@ scripts/probe/work*/
 scripts/probe/*.jsonl
 *.log
 scripts/probe/mcp*.json
+.impeccable/questions/
+.impeccable/review/
