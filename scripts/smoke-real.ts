@@ -39,6 +39,7 @@ const folder = (n: string) => {
 const folderA = folder('a');
 const folderB = folder('b');
 const folderC = folder('c');
+const folderD = folder('d');
 
 type Seen = { agentId: AgentId; event: StreamEvent };
 let seen: Seen[] = [];
@@ -107,9 +108,9 @@ async function main() {
     const before = results(B).length;
     await engine.sendUser(B, [{ type: 'text', text: "note.txt 파일에 '두레' 라고 써 줘." }]);
     await until('B 의 승인 요청', 90000, () => engine.pendingRequests(B).length > 0);
-    await sleep(150000);
+    await sleep(330000); // 클라이언트 HTTP 타임아웃(약 300초)을 넘겨 — approve 는 SSE keepalive 로 버틴다
     const req = engine.pendingRequests(B)[0];
-    if (!req) throw new Error('150초 기다리는 사이 승인 요청이 사라짐(끊김)');
+    if (!req) throw new Error('330초 기다리는 사이 승인 요청이 사라짐(끊김)');
     engine.answerRequest(req.id, { type: 'allow' });
     await until('B 의 result', 90000, () => results(B).length > before);
     const f = path.join(folderB, 'note.txt');
@@ -137,6 +138,23 @@ async function main() {
     if ('account' in (d as object)) throw new Error('describe 결과에 account 키가 있음');
     await engine.sendUser(C, [{ type: 'text', text: '한 단어로 대답해: 안녕' }]);
     await until('C 의 result', 60000, () => results(C).length > 0);
+  });
+
+  // describe 만 하고(첫 메시지 없이) 앱을 다시 켠 뒤 보내기 — 같은 --session-id 로 다시 띄워도 되는지
+  await step('describe-restart-send', async () => {
+    const D = engine.addAgent({ roomId: room.id, name: '재시작', role: '점검용', folder: folderD }).id;
+    await engine.setModel(D, 'haiku');
+    const d = await engine.describe(D);
+    if (!(d.models.length > 0)) throw new Error('models 가 비어 있음');
+    await engine.shutdown();
+    engine = await createEngine({ dataDir, claude: { command: claudePath } });
+    attach(engine);
+    const before = results(D).length;
+    await engine.sendUser(D, [{ type: 'text', text: '한 단어로 대답해: 안녕' }]);
+    await until('D 의 result 또는 오류', 60000, () => results(D).length > before || engine.status(D) === 'error');
+    if (engine.status(D) === 'error') throw new Error(`D 오류: ${engine.errorText(D) ?? '(오류 글 없음)'}`);
+    const r = results(D).at(-1)!.event as any;
+    if (!r.ok) throw new Error(`D 의 result 가 실패: ${r.subtype} ${r.text}`);
   });
 
   const pids: number[] = [];
