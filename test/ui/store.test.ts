@@ -1,0 +1,197 @@
+import { describe, it, expect, vi } from 'vitest'
+import { createStore } from '../../src/renderer/state/store'
+import type { EngineEventMap, HistoryItem, RelayMessage } from '../../src/engine/types'
+import type { AgentView, DureApi, Snapshot } from '../../src/shared/ipcContract'
+
+const agent = (id: string, roomId = 'r1', over: Partial<AgentView> = {}): AgentView => ({
+  id, roomId, name: id, role: '', folder: '/x', sessionId: '', started: true, auto: false, model: null,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
+})
+const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
+  claudeMissing: false,
+  rooms: [{ id: 'r1', name: '첫 방', createdAt: 2 }, { id: 'r2', name: '둘째', createdAt: 1 }],
+  agents: [agent('a'), agent('b'), agent('c', 'r2')],
+  messages: [], requests: [], autoChainLimit: 5, ...over,
+})
+const note = (text: string, t = 1): HistoryItem => ({ t, kind: 'notice', text })
+
+function fake(opts: { snapshot?: () => Promise<Snapshot>; history?: (id: string) => Promise<HistoryItem[]> } = {}) {
+  const handlers: Record<string, ((p: any) => void)[]> = {}
+  const api = {
+    snapshot: vi.fn(opts.snapshot ?? (async () => snap())),
+    history: vi.fn(opts.history ?? (async () => [])),
+    on: vi.fn((k: string, fn: (p: any) => void) => {
+      ;(handlers[k] ??= []).push(fn)
+      return () => {}
+    }),
+  } as unknown as DureApi & { snapshot: ReturnType<typeof vi.fn>; history: ReturnType<typeof vi.fn> }
+  const emit = <K extends keyof EngineEventMap>(k: K, p: EngineEventMap[K]) => (handlers[k] ?? []).forEach(f => f(p))
+  return { api, emit }
+}
+
+const relay = (id: string, state: RelayMessage['state'], over: Partial<RelayMessage> = {}): RelayMessage => ({
+  id, roomId: 'r1', from: 'a', to: 'b', text: 'x', createdAt: 1, state, updatedAt: 1, ...over,
+})
+
+describe('store init', () => {
+  it('snapshot 을 그대로 담고 첫 방을 고른다', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().roomId).toBe('r1')
+    expect(s.getState().agents).toHaveLength(3)
+    expect(s.getState().selectedAgentId).toBeNull()
+  })
+
+  it('다시 켠 뒤의 snapshot 은 지난 requests 없이 대기 메시지는 그대로', async () => {
+    const { api } = fake({ snapshot: async () => snap({ requests: [], messages: [relay('m1', 'pending'), relay('m2', 'held')] }) })
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().requests).toEqual([])
+    expect(s.getState().messages.map(m => m.state)).toEqual(['pending', 'held'])
+  })
+
+  it('snapshot 을 기다리는 동안 온 이벤트는 snapshot 뒤에 적용된다', async () => {
+    let release!: (s: Snapshot) => void
+    const { api, emit } = fake({ snapshot: () => new Promise<Snapshot>(r => { release = r }) })
+    const s = createStore(api)
+    const p = s.init()
+    emit('status', { agentId: 'a', status: 'working', errorText: null })
+    emit('message', relay('m1', 'pending'))
+    expect(s.getState().agents).toHaveLength(0)
+    release(snap())
+    await p
+    expect(s.getState().agents.find(a => a.id === 'a')!.status).toBe('working')
+    expect(s.getState().messages).toHaveLength(1)
+  })
+
+  it('snapshot 에 이미 들어 있는 메시지가 이벤트로 또 와도 중복되지 않는다', async () => {
+    let release!: (s: Snapshot) => void
+    const { api, emit } = fake({ snapshot: () => new Promise<Snapshot>(r => { release = r }) })
+    const s = createStore(api)
+    const p = s.init()
+    emit('message', relay('m1', 'delivered', { updatedAt: 5 }))
+    release(snap({ messages: [relay('m1', 'delivered', { updatedAt: 5 })] }))
+    await p
+    expect(s.getState().messages).toHaveLength(1)
+  })
+})
+
+describe('store events', () => {
+  it('status·flags·held-input 은 에이전트에 반영', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('status', { agentId: 'a', status: 'error', errorText: '멈춤' })
+    emit('flags', { agentId: 'a', bypass: true })
+    emit('held-input', { agentId: 'a', count: 2 })
+    expect(s.getState().agents[0]).toMatchObject({ status: 'error', errorText: '멈춤', bypass: true, heldInput: 2 })
+  })
+
+  it('message 는 id 로 갱신하고 delivered 면 lastDelivered 에 updatedAt 을 쓴다', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('message', relay('m1', 'pending', { updatedAt: 10 }))
+    expect(s.getState().lastDelivered).toEqual({})
+    emit('message', relay('m1', 'delivered', { updatedAt: 20 }))
+    expect(s.getState().messages).toHaveLength(1)
+    expect(s.getState().lastDelivered).toEqual({ 'a>b': 20 })
+  })
+
+  it('request 추가·request-resolved 제거', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('request', { id: 'q1', agentId: 'a', toolName: 'Bash', input: {}, kind: 'permission', createdAt: 1 })
+    expect(s.getState().requests).toHaveLength(1)
+    emit('request-resolved', { id: 'q1', agentId: 'a' })
+    expect(s.getState().requests).toEqual([])
+  })
+
+  it('text-delta 는 streaming 에 쌓이고 history 가 붙으면 비워진다', async () => {
+    const { api, emit } = fake({ history: async () => [note('옛')] })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    await vi.waitFor(() => expect(s.getState().history.a).toBeDefined())
+    emit('agent-event', { agentId: 'a', event: { kind: 'text-delta', text: '안' } })
+    emit('agent-event', { agentId: 'a', event: { kind: 'text-delta', text: '녕' } })
+    expect(s.getState().streaming.a).toBe('안녕')
+    emit('history', { agentId: 'a', item: note('새', 2) })
+    expect(s.getState().history.a.map(i => (i as any).text)).toEqual(['옛', '새'])
+    expect(s.getState().streaming.a).toBe('')
+  })
+
+  it('기록을 아직 안 불러온 에이전트의 history 이벤트는 무시', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('history', { agentId: 'b', item: note('x') })
+    expect(s.getState().history.b).toBeUndefined()
+  })
+})
+
+describe('store selection', () => {
+  it('에이전트를 고르면 기록을 한 번만 불러온다', async () => {
+    const { api } = fake({ history: async () => [note('하나')] })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    s.selectAgent('a')
+    await vi.waitFor(() => expect(s.getState().history.a).toHaveLength(1))
+    s.selectAgent(null)
+    s.selectAgent('a')
+    expect(api.history).toHaveBeenCalledTimes(1)
+  })
+
+  it('기록을 불러오는 동안 온 history 이벤트가 빠지지 않는다', async () => {
+    let release!: (h: HistoryItem[]) => void
+    const { api, emit } = fake({ history: () => new Promise<HistoryItem[]>(r => { release = r }) })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    emit('history', { agentId: 'a', item: note('늦게', 3) })
+    emit('history', { agentId: 'a', item: note('겹침', 2) })
+    release([note('옛', 1), note('겹침', 2)])
+    await vi.waitFor(() => expect(s.getState().history.a).toBeDefined())
+    expect(s.getState().history.a.map(i => (i as any).text)).toEqual(['옛', '겹침', '늦게'])
+  })
+
+  it('방을 바꾸면 선택한 에이전트를 비우고, 모르는 방은 무시', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    s.selectRoom('r2')
+    expect(s.getState()).toMatchObject({ roomId: 'r2', selectedAgentId: null })
+    s.selectRoom('nope')
+    expect(s.getState().roomId).toBe('r2')
+  })
+
+  it('선택한 방이 사라지면 남은 첫 방으로, 없으면 null', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    s.selectRoom('r2')
+    api.snapshot.mockResolvedValueOnce(snap({ rooms: [{ id: 'r1', name: '첫 방', createdAt: 2 }] }))
+    await s.refresh()
+    expect(s.getState().roomId).toBe('r1')
+    api.snapshot.mockResolvedValueOnce(snap({ rooms: [], agents: [] }))
+    await s.refresh()
+    expect(s.getState().roomId).toBeNull()
+  })
+
+  it('subscribe 는 변경을 알리고 해제할 수 있다', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    const fn = vi.fn()
+    const off = s.subscribe(fn)
+    emit('flags', { agentId: 'a', bypass: true })
+    expect(fn).toHaveBeenCalledTimes(1)
+    off()
+    emit('flags', { agentId: 'a', bypass: false })
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+})
