@@ -14,10 +14,11 @@ afterEach(() => {
 
 test('만들고 상태 바꾼 기록이 다시 열면 그대로', () => {
   const l = openMessageLog(dir);
-  const m = l.create({ roomId: 'r', from: 'a', to: 'b', text: '줄1\n"따옴표" \ 백슬래시 🎉 한글', state: 'pending' });
+  const m = l.create({ roomId: 'r', from: 'a', to: 'b', text: '줄1\n"따옴표" \\ 백슬래시 🎉 한글', state: 'pending' });
   l.setState(m.id, 'queued');
   const l2 = openMessageLog(dir);
-  expect(l2.get(m.id)).toMatchObject({ state: 'queued', text: '줄1\n"따옴표" \ 백슬래시 🎉 한글' });
+  expect(l2.get(m.id)!.text.includes('\\')).toBe(true);
+  expect(l2.get(m.id)).toMatchObject({ state: 'queued', text: '줄1\n"따옴표" \\ 백슬래시 🎉 한글' });
 });
 
 test('list 는 방·받는 쪽·상태로 거르고 오래된 순', () => {
