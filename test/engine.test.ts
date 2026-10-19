@@ -862,3 +862,129 @@ test('MCP list_agents: 같은 방 다른 에이전트 [{name, role, status}] · 
   prompt = fs.readFileSync(path.join(runDir, 'prompt.md'), 'utf8');
   expect(prompt).toContain('C(서버)');
 });
+
+// ── 대화 기록 ──
+const historyKinds = (e: Engine, id: string, o?: { all?: boolean }) => e.history(id, o).map((x) => x.kind);
+
+test('engine: 사람 입력과 Claude 답이 기록되고 다시 열어도 남는다', async () => {
+  const e1 = await start();
+  const { a } = setup(e1);
+  const done = resultOf(e1, a.id);
+  await e1.sendUser(a.id, text('안녕'));
+  await done;
+  await e1.shutdown();
+
+  const e2 = await start();
+  const items = e2.history(a.id);
+  expect(items.map((x) => x.kind)).toEqual(['user', 'assistant', 'result']);
+  expect(items[0]).toMatchObject({ kind: 'user', source: 'human', parts: [{ type: 'text', text: '안녕' }] });
+  expect(items[0]).not.toHaveProperty('messageId');
+  expect(items[1]).toMatchObject({ kind: 'assistant', blocks: [{ type: 'text', text: '받음: 안녕' }] });
+  expect(items[2]).toMatchObject({ kind: 'result', ok: true, subtype: 'success' });
+  expect(typeof items[0].t).toBe('number');
+});
+
+test('engine: 전달 메시지는 source relay + messageId', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  e.updateAgent(b.id, { auto: true });
+  const bDone = resultOf(e, b.id);
+  const aDone = resultOf(e, a.id);
+  await e.sendUser(a.id, text('SEND B: 하이'));
+  await aDone;
+  await bDone;
+  const delivered = e.messages({ to: b.id }).find((m) => m.state === 'delivered')!;
+  const user = e.history(b.id)[0];
+  expect(user).toMatchObject({
+    kind: 'user',
+    source: 'relay',
+    messageId: delivered.id,
+    parts: [{ type: 'text', text: '[두레 메시지 — 보낸 쪽: A(기획)]\n하이' }],
+  });
+});
+
+test('engine: 이미지는 바이트 수만 기록', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const bytes = Buffer.alloc(1234, 7);
+  const base64 = bytes.toString('base64');
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: '봐 줘' }, { type: 'image', mediaType: 'image/png', base64 }]);
+  await done;
+  expect(e.history(a.id)[0]).toMatchObject({
+    kind: 'user',
+    parts: [{ type: 'text', text: '봐 줘' }, { type: 'image', mediaType: 'image/png', bytes: 1234 }],
+  });
+  const file = path.join(dataDir, 'history', `${a.id}.jsonl`);
+  expect(fs.readFileSync(file, 'utf8')).not.toContain(base64);
+});
+
+test('engine: newConversation 뒤 history() 는 boundary 이후만, all:true 는 전부', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const first = resultOf(e, a.id);
+  await e.sendUser(a.id, text('하나'));
+  await first;
+  await e.newConversation(a.id);
+  expect(e.history(a.id)).toEqual([]);
+  const second = resultOf(e, a.id);
+  await e.sendUser(a.id, text('둘'));
+  await second;
+  expect(historyKinds(e, a.id)).toEqual(['user', 'assistant', 'result']);
+  expect(historyKinds(e, a.id, { all: true })).toEqual(['user', 'assistant', 'result', 'boundary', 'user', 'assistant', 'result']);
+  expect(e.history(a.id, { limit: 1 }).map((x) => x.kind)).toEqual(['result']); // 마지막 N 개
+});
+
+test('engine: history 이벤트가 append 마다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const seen: { agentId: string; item: { kind: string } }[] = [];
+  e.on('history', (h) => seen.push(h));
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('이벤트'));
+  await done;
+  expect(seen.map((h) => h.item.kind)).toEqual(['user', 'assistant', 'result']);
+  expect(seen.every((h) => h.agentId === a.id)).toBe(true);
+  expect(seen.map((h) => h.item)).toEqual(e.history(a.id));
+});
+
+test('engine: 멈춤·비정상 종료는 notice 로 남고, 실행 중 아닌 건 안 남는다', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  await e.sendUser(a.id, text('SLOW'));
+  expect(e.status(a.id)).toBe('working');
+  const stopped = waitFor(e, 'history', (h: any) => h.agentId === a.id && h.item.kind === 'result');
+  await e.interrupt(a.id);
+  await stopped;
+  expect(e.history(a.id).filter((x) => x.kind === 'notice')).toMatchObject([{ text: '멈췄어요' }]);
+
+  const crashed = waitFor<StatusEvent>(e, 'status', (s) => s.agentId === b.id && s.status === 'error');
+  await e.sendUser(b.id, text('CRASH'));
+  const err = await crashed;
+  expect(e.history(b.id).filter((x) => x.kind === 'notice')).toMatchObject([{ text: err.errorText }]);
+});
+
+test('engine: 보내기 전 대기 중인 입력은 기록에 없고 보낼 때 나타난다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await e.sendUser(a.id, text('SLOW'));
+  expect(e.status(a.id)).toBe('working');
+  await e.sendUser(a.id, text('나중'));
+  expect(e.history(a.id).map((x) => x.kind)).toEqual(['user']);
+  const second = waitFor(e, 'agent-event', (x: AgentEvent) => x.agentId === a.id && x.event.kind === 'result' && x.event.text === '받음: 나중');
+  await e.interrupt(a.id);
+  await second;
+  expect(e.history(a.id).filter((x) => x.kind === 'user').map((x: any) => x.parts[0].text)).toEqual(['SLOW', '나중']);
+});
+
+test('engine: removeAgent 는 기록 파일도 지운다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('지워질 말'));
+  await done;
+  const file = path.join(dataDir, 'history', `${a.id}.jsonl`);
+  expect(fs.existsSync(file)).toBe(true);
+  await e.removeAgent(a.id);
+  expect(fs.existsSync(file)).toBe(false);
+});

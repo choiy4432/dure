@@ -53,6 +53,17 @@ export type StreamEvent =
   | { kind: 'rate-limit'; info: unknown }
   | { kind: 'ignored'; type: string };
 
+export type HistoryPart = { type: 'text'; text: string } | { type: 'image'; mediaType: string; bytes: number };
+export type HistoryItem = { t: number } & (
+  | { kind: 'user'; source: 'human' | 'relay'; parts: HistoryPart[]; messageId?: string }
+  | { kind: 'assistant'; blocks: AssistantBlock[] }
+  | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; viaApproval: boolean }
+  | { kind: 'local-output'; text: string }
+  | { kind: 'result'; ok: boolean; subtype: string }
+  | { kind: 'notice'; text: string } // 멈춤·오류·종료 같은 알림
+  | { kind: 'boundary' } // 새 대화 경계
+);
+
 export type SessionStatus = 'idle' | 'working' | 'stopped' | 'error';
 export type AgentStatus = SessionStatus | 'awaiting'; // awaiting = 승인 대기 — 엔진이 겹쳐 계산
 

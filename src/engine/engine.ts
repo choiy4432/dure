@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { openStore, type Store } from './store';
 import { openMessageLog, type MessageLog } from './messageLog';
+import { openHistory, type History } from './history';
 import { buildArgs, buildMcpConfig, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
 import { ClaudeSession } from './claudeSession';
@@ -11,7 +12,7 @@ import { startMcpServer, type McpServerHandle } from './mcpServer';
 import { Permissions } from './permissions';
 import { Router } from './router';
 import type {
-  Agent, AgentId, AgentPatch, AgentStatus, Decision, PendingRequest, RelayMessage, Room, RoomId, StreamEvent, UserPart,
+  Agent, AgentId, AgentPatch, AgentStatus, Decision, HistoryItem, HistoryPart, PendingRequest, RelayMessage, Room, RoomId, StreamEvent, UserPart,
 } from './types';
 
 export interface EngineOptions {
@@ -33,6 +34,7 @@ export interface AgentDescription {
 //  'message'     RelayMessage     'held' { roomId }
 //  'request'     PendingRequest   'request-resolved' { id; agentId }
 //  'flags'       { agentId; bypass: boolean }   (init.permissionMode === 'bypassPermissions')
+//  'history'     { agentId; item: HistoryItem }   (대화 기록에 한 항목이 더해질 때마다 — text-delta·init·rate-limit 은 기록하지 않는다)
 //  'engine-error' { agentId: string | null; message: string }  (프로세스 이벤트 처리·듣는 쪽에서 난 오류 — 앱을 죽이지 않고 알린다)
 export interface Engine extends EventEmitter {
   rooms(): Room[];
@@ -50,6 +52,7 @@ export interface Engine extends EventEmitter {
   newConversation(id: AgentId): Promise<void>;
   setModel(id: AgentId, model: string | null): Promise<void>;
   describe(id: AgentId): Promise<AgentDescription>;
+  history(id: AgentId, o?: { all?: boolean; limit?: number }): HistoryItem[];
   messages(f?: Parameters<MessageLog['list']>[0]): RelayMessage[];
   approveMessage(id: string): void;
   dismissMessage(id: string): void;
@@ -63,6 +66,8 @@ const STOP_LIMIT_MS = 5000; // ClaudeSession.stop() 의 kill 뒤 대기는 끝�
 const EXITED = 'Claude 가 종료되었습니다.';
 const STOPPED_BY_USER = '사용자가 멈췄습니다.';
 const TURN_ENDED = '차례가 끝났습니다.';
+const TOOL_TEXT_KEEP = 2000;
+const STOPPED_NOTICE = '멈췄어요';
 const NO_AGENT = '에이전트를 찾을 수 없습니다.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
 
@@ -83,14 +88,14 @@ class EngineImpl extends EventEmitter implements Engine {
   private router: Router;
   private mcp!: McpServerHandle;
 
-  constructor(private o: EngineOptions, private store: Store, private log: MessageLog) {
+  constructor(private o: EngineOptions, private store: Store, private log: MessageLog, private hist: History) {
     super();
     this.perms = new Permissions(store);
     this.router = new Router({
       store,
       log,
       limit: o.autoChainLimit,
-      deliver: (id, text, messageId) => this.sendTo(this.ensure(id), [{ type: 'text', text }], { kind: 'relay', messageId }),
+      deliver: (id, text, messageId) => this.sendTo(id, this.ensure(id), [{ type: 'text', text }], { kind: 'relay', messageId }),
       isBusy: (id) => this.waiting(id) || (this.held.get(id)?.length ?? 0) > 0,
     });
     // 아래 알림은 프로세스 이벤트·MCP 요청 처리 중에도 불린다 — 듣는 쪽이 던져도 남은 일(상태·다음 입력)은 한다
@@ -152,6 +157,7 @@ class EngineImpl extends EventEmitter implements Engine {
         if (m.to === id || m.from === id) this.router.dismiss(m.id);
       }
       this.store.removeAgent(id);
+      this.hist.remove(id);
     } finally {
       this.removing.delete(id);
       this.shown.delete(id);
@@ -194,12 +200,16 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     this.perms.cancelForAgent(id, STOPPED_BY_USER);
     const s = this.sessions.get(id);
-    if (s) await s.interrupt();
+    if (!s) return;
+    const wasWorking = s.status === 'working';
+    await s.interrupt();
+    if (wasWorking) this.guard(id, () => this.record(id, { kind: 'notice', text: STOPPED_NOTICE }));
   }
 
   async newConversation(id: AgentId) {
     this.need(id);
     const ending = this.endSession(id);
+    this.guard(id, () => this.record(id, { kind: 'boundary' }));
     this.store.updateAgent(id, { sessionId: crypto.randomUUID(), started: false });
     this.emitStatus(id);
     await ending;
@@ -237,6 +247,10 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   // ── 메시지·승인 ──
+  history(id: AgentId, o: { all?: boolean; limit?: number } = {}): HistoryItem[] {
+    this.need(id);
+    return this.hist.read(id, { sinceBoundary: !o.all, limit: o.limit ?? (o.all ? Infinity : 500) });
+  }
   messages(f?: Parameters<MessageLog['list']>[0]) { return this.log.list(f); }
   approveMessage(id: string) { this.router.approve(id); }
   dismissMessage(id: string) { this.router.dismiss(id); }
@@ -279,13 +293,28 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     if (!s || s.status !== 'idle' || this.perms.pending(id).length > 0) return;
     const next = this.held.get(id)?.shift();
-    if (next) this.sendTo(s, next, { kind: 'human', parts: next });
+    if (next) this.sendTo(id, s, next, { kind: 'human', parts: next });
     else this.router.onIdle(id);
   }
 
-  private sendTo(s: ClaudeSession, parts: UserPart[], item: InFlight): void {
+  private sendTo(id: AgentId, s: ClaudeSession, parts: UserPart[], item: InFlight): void {
     s.send(parts);
     this.inFlight.set(s, item);
+    // 실제로 쓴 줄만 기록한다 — 대기 중인 입력은 보낼 때 나타난다
+    this.guard(id, () =>
+      this.record(id, {
+        kind: 'user',
+        source: item.kind === 'relay' ? 'relay' : 'human',
+        parts: parts.map(toHistoryPart),
+        ...(item.kind === 'relay' ? { messageId: item.messageId } : {}),
+      }),
+    );
+  }
+
+  private record(id: AgentId, item: HistoryItem | (Omit<HistoryItem, 't'> & { t?: number })): void {
+    const full = { t: Date.now(), ...item } as HistoryItem;
+    this.hist.append(id, full);
+    this.guard(id, () => this.emit('history', { agentId: id, item: full }));
   }
 
   private heldOf(id: AgentId): UserPart[][] {
@@ -336,7 +365,9 @@ class EngineImpl extends EventEmitter implements Engine {
         this.sessions.delete(id);
         if (!expected) {
           this.guard(id, () => this.restoreInFlight(id, s)); // 기록 실패여도 아래 정리는 한다
-          this.errors.set(id, s.errorText ?? EXITED);
+          const why = s.errorText ?? EXITED;
+          this.guard(id, () => this.record(id, { kind: 'notice', text: why }));
+          this.errors.set(id, why);
           this.perms.cancelForAgent(id, EXITED);
         }
         this.emitStatus(id);
@@ -372,12 +403,27 @@ class EngineImpl extends EventEmitter implements Engine {
     } else {
       this.guard(id, () => this.emit('agent-event', { agentId: id, event: ev }));
     }
+    this.guard(id, () => this.recordEvent(id, ev));
     // 세션은 result 를 내보내기 직전에 idle 이 된다 — 이 차례의 result 를 먼저 알린 뒤 다음 입력을 보낸다
     if (ev.kind === 'result') {
       // 끝난 차례엔 살아 있는 권한 질문이 있을 수 없다 — 남은 것(떠난 프로세스의 호출 등)은 정리해야 다음 입력이 나간다
       this.perms.cancelForAgent(id, TURN_ENDED);
       this.pump(id);
     }
+  }
+
+  private recordEvent(id: AgentId, ev: StreamEvent): void {
+    if (ev.kind === 'assistant') this.record(id, { kind: 'assistant', blocks: ev.blocks });
+    else if (ev.kind === 'tool-result')
+      this.record(id, {
+        kind: 'tool-result',
+        toolUseId: ev.toolUseId,
+        isError: ev.isError,
+        text: ev.text.slice(0, TOOL_TEXT_KEEP),
+        viaApproval: this.perms.wasAsked(id, ev.toolUseId),
+      });
+    else if (ev.kind === 'local-output') this.record(id, { kind: 'local-output', text: ev.text });
+    else if (ev.kind === 'result') this.record(id, { kind: 'result', ok: ev.ok, subtype: ev.subtype });
   }
 
   /** 콜백 안의 오류를 삼키고 'engine-error' 로 알린다('error' 는 듣는 쪽이 없으면 Node 가 던진다) */
@@ -428,6 +474,13 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 }
 
+function toHistoryPart(p: UserPart): HistoryPart {
+  // 이미지는 크기만 남긴다 — 내용은 저장하지 않는다
+  return p.type === 'text'
+    ? { type: 'text', text: p.text }
+    : { type: 'image', mediaType: p.mediaType, bytes: Buffer.from(p.base64, 'base64').length };
+}
+
 function toDescription(p: any): AgentDescription {
   // 필요한 필드만 골라 담는다 — account(이메일)는 읽지도 남기지도 않는다
   const list = (v: unknown): any[] => (Array.isArray(v) ? v : []);
@@ -447,7 +500,7 @@ function toDescription(p: any): AgentDescription {
 }
 
 export async function createEngine(o: EngineOptions): Promise<Engine> {
-  const engine = new EngineImpl(o, openStore(o.dataDir), openMessageLog(o.dataDir));
+  const engine = new EngineImpl(o, openStore(o.dataDir), openMessageLog(o.dataDir), openHistory(o.dataDir));
   await engine.start();
   return engine;
 }
