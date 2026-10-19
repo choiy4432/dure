@@ -73,26 +73,29 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
   }
 
   return (
-    <section ref={box} className="conv" aria-label="대화" onScroll={onScroll}>
-      {v.status === 'loading' && v.items.length === 0 && <p className="conv-st">대화를 불러오는 중…</p>}
-      {v.status === 'error' && (
-        <p className="conv-st">
-          대화를 불러오지 못했어요
-          <button type="button" className="lk" onClick={() => getStore().selectAgent(agentId)}>
-            다시 시도
+    // 바깥 칸 — 위 끝에 바탕색으로 사라지는 짧은 막(.conv-wrap::before). 고정 카드 바로 아래로 스크롤되는 글이 줄처럼 끊겨 보이지 않게
+    <div className="conv-wrap">
+      <section ref={box} className="conv" aria-label="대화" onScroll={onScroll}>
+        {v.status === 'loading' && v.items.length === 0 && <p className="conv-st">대화를 불러오는 중…</p>}
+        {v.status === 'error' && (
+          <p className="conv-st">
+            대화를 불러오지 못했어요
+            <button type="button" className="lk" onClick={() => getStore().selectAgent(agentId)}>
+              다시 시도
+            </button>
+          </p>
+        )}
+        {hiddenBefore > 0 && (
+          <button type="button" className="conv-more" onClick={showMore}>
+            이전 대화 {hiddenBefore}개 더 보기
           </button>
-        </p>
-      )}
-      {hiddenBefore > 0 && (
-        <button type="button" className="conv-more" onClick={showMore}>
-          이전 대화 {hiddenBefore}개 더 보기
-        </button>
-      )}
-      {lines.map((line, i) => (
-        // 줄 번호(앞에 숨긴 줄 포함)는 새 줄이 붙어도 그대로 — 펼친 하는 일이 닫히지 않는다
-        <ChatItem key={hiddenBefore + i} line={line} />
-      ))}
-      {v.streaming && <ChatItem line={{ kind: 'streaming', text: v.streaming }} />}
-    </section>
+        )}
+        {lines.map((line, i) => (
+          // 줄 번호(앞에 숨긴 줄 포함)는 새 줄이 붙어도 그대로 — 펼친 하는 일이 닫히지 않는다
+          <ChatItem key={hiddenBefore + i} line={line} />
+        ))}
+        {v.streaming && <ChatItem line={{ kind: 'streaming', text: v.streaming }} />}
+      </section>
+    </div>
   )
 }

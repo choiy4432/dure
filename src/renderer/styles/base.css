@@ -1725,6 +1725,30 @@ code {
 }
 
 /* ── 대화 목록(시안 .conv) ───────────────────────── */
+.conv-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * 위 끝 24px(.conv 윗 여백 자리) — 바탕색에서 투명으로. 위로 스크롤된 글·말풍선 테두리가 고정 카드 바로 아래에서
+ * 줄처럼 잘려 보이지 않고 바탕으로 사라진다. 맨 위에 있을 땐 빈 여백만 덮어 보이지 않는다. 스크롤 막대(10px)는 덮지 않는다.
+ */
+.conv-wrap::before {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 0;
+  right: 10px;
+  height: 24px;
+  background: linear-gradient(var(--bg), transparent);
+  pointer-events: none;
+}
+
 .conv {
   flex: 1;
   min-height: 0;
