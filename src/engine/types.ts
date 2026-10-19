@@ -38,3 +38,17 @@ export interface RelayMessage {
   state: MessageState;
   updatedAt: number;
 }
+
+export type UserPart = { type: 'text'; text: string } | { type: 'image'; mediaType: string; base64: string };
+export type ControlRequest = { subtype: 'initialize' } | { subtype: 'interrupt' } | { subtype: 'set_model'; model: string };
+export type AssistantBlock = { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown };
+export type StreamEvent =
+  | { kind: 'init'; sessionId: string; model: string; permissionMode: string; slashCommands: string[] }
+  | { kind: 'text-delta'; text: string }
+  | { kind: 'assistant'; blocks: AssistantBlock[] } // thinking 블록은 버린다
+  | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string }
+  | { kind: 'local-output'; text: string } // 로컬 명령(/model 등) 출력 에코
+  | { kind: 'result'; ok: boolean; subtype: string; text: string; denials: { toolName: string; toolUseId: string }[] }
+  | { kind: 'control-response'; requestId: string; ok: boolean; payload: any }
+  | { kind: 'rate-limit'; info: unknown }
+  | { kind: 'ignored'; type: string };
