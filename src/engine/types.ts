@@ -55,3 +55,18 @@ export type StreamEvent =
 
 export type SessionStatus = 'idle' | 'working' | 'stopped' | 'error';
 export type AgentStatus = SessionStatus | 'awaiting'; // awaiting = 승인 대기 — 엔진이 겹쳐 계산
+
+export type Decision =
+  | { type: 'allow' }
+  | { type: 'allow-always' }
+  | { type: 'deny'; message?: string }
+  | { type: 'answer'; answers: Record<string, string> };
+export interface PendingRequest {
+  id: string;
+  agentId: AgentId;
+  toolName: string;
+  input: unknown;
+  toolUseId?: string;
+  kind: 'permission' | 'question';
+  createdAt: number;
+}
