@@ -97,6 +97,16 @@ describe('RelationMap — 요약 칩', () => {
     await renderMap()
     expect((screen.getByRole('button', { name: '승인 기다림 0' }) as HTMLButtonElement).disabled).toBe(true)
   })
+
+  it('수가 0 인 칩은 뒤로 물러난다(조용한 칩 — 흐린 점·수), 0 이 아닌 칩은 제 색 그대로', async () => {
+    snapshot.agents = [agent('w', { status: 'working', pos: { x: 64, y: 64 } }), agent('s', { pos: { x: 500, y: 64 } })]
+    snapshot.messages = [msg('m1', 'w', 's', 'pending', 5)]
+    await renderMap()
+    const chip = (name: string) => screen.getByRole('button', { name })
+    expect(chip('승인 기다림 0').classList.contains('zero')).toBe(true)
+    expect(chip('작업 중 1').classList.contains('zero')).toBe(false)
+    expect(chip('받은 메시지 1').classList.contains('zero')).toBe(false)
+  })
 })
 
 describe('RelationMap — 확대 조절', () => {

@@ -510,6 +510,16 @@ code {
   color: var(--text);
 }
 
+/* 수가 0 인 칩 — 뒤로 물러난다: 점은 옅은 회색, 글·수는 보조 글색. 0 이 아닌 칩만 제 색으로 눈에 띈다 */
+.sum button.zero,
+.sum button.zero b {
+  color: var(--muted);
+}
+
+.sum button.zero .dot {
+  background: var(--border-strong);
+}
+
 .zc {
   bottom: 16px;
   font-size: 12px;
