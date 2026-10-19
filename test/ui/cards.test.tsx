@@ -113,6 +113,13 @@ describe('받은 메시지 카드', () => {
     expect(c.querySelector('.md strong')!.textContent).toBe('응답')
   })
 
+  it('보낸 에이전트가 지워졌으면 이름 자리에 "지워진 에이전트"(관계도의 메시지 창과 같은 말)', async () => {
+    snapshot.messages = [msg({ id: 'm1', from: 'gone' })]
+    await renderPanel('s')
+    const c = card('지워진 에이전트가 보낸 메시지')
+    expect(c.querySelector('.pin-h')!.textContent).toContain('지워진 에이전트')
+  })
+
   it('[일 시키기] 는 approveMessage 를 그 메시지 id 로', async () => {
     snapshot.messages = [msg({ id: 'm1' })]
     await renderPanel('s')

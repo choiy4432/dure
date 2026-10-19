@@ -55,7 +55,7 @@ function Pins({ agentId, open, onOpenChange }: {
   const agent = v.agents.find(a => a.id === agentId)
   if (!agent) return <div className="pnl-pins" />
 
-  const nameOf = (id: AgentId) => v.agents.find(a => a.id === id)?.name ?? '지운 에이전트'
+  const nameOf = (id: AgentId) => v.agents.find(a => a.id === id)?.name ?? '지워진 에이전트'
   const requests = v.requests.filter(r => r.agentId === agentId).sort(byCreated)
   const inbox = v.messages.filter(m => m.to === agentId && isWaiting(m)).sort(byCreated) as Shown[]
   const held = v.messages.some(m => m.roomId === agent.roomId && m.state === 'held')

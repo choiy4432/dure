@@ -1245,11 +1245,6 @@ code {
   color: var(--text-3);
 }
 
-.band-h b {
-  font-weight: 700;
-  color: var(--danger-text);
-}
-
 /* 고정 카드 자리 — 카드가 없으면 자리도 없다. 많으면 패널의 60% 까지만, 넘치면 이 안에서 스크롤 */
 .pnl-pins {
   flex: none;
@@ -1279,7 +1274,7 @@ code {
 .pin-b::-webkit-scrollbar-thumb,
 .ask-json::-webkit-scrollbar-thumb {
   background: var(--border-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-box);
   border: 3px solid transparent;
   background-clip: padding-box;
 }
@@ -1728,7 +1723,7 @@ code {
 
 .conv::-webkit-scrollbar-thumb {
   background: var(--border-strong);
-  border-radius: 10px;
+  border-radius: var(--radius-box);
   border: 3px solid var(--bg);
 }
 

@@ -386,12 +386,14 @@ describe('AgentMenu', () => {
 })
 
 describe('PanelHeader — 띠', () => {
-  it('오류면 머리 아래 빨간 띠 — 오류 글과 다시 시도 안내', async () => {
+  it('오류면 머리 아래 빨간 띠 — 오류 글과 다시 켜지는 안내(누르는 것처럼 보이는 굵은 글 없음)', async () => {
     snapshot.agents = [agent('w', { name: '웹 화면', status: 'error', errorText: '프로세스가 예기치 않게 끝났어요 (코드 1)' })]
     await renderPanel()
     const band = document.querySelector('.band.err')!
     expect(band.textContent).toContain('프로세스가 예기치 않게 끝났어요 (코드 1)')
-    expect(band.textContent).toContain('다시 시도')
+    expect(band.querySelector('.band-h')!.textContent).toBe('다음에 일을 시키면 다시 켜져요')
+    expect(band.querySelector('b')).toBeNull()
+    expect(band.textContent).not.toContain('다시 시도')
   })
 
   it('묻지 않고 실행하는 에이전트면 앰버 띠', async () => {

@@ -153,9 +153,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
           <CircleAlert className="i" aria-hidden="true" />
           <div className="band-tx">
             <span className="band-t">{agent.errorText || '오류로 멈췄어요'}</span>
-            <span className="band-h">
-              <b>다시 시도</b> · 다음에 일을 시키면 다시 켜져요
-            </span>
+            <span className="band-h">다음에 일을 시키면 다시 켜져요</span>
           </div>
         </div>
       )}
