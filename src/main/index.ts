@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
 import { resolveClaudeCommand } from './claudeCommand'
-import { registerIpc } from './ipc'
+import { logEngineErrors, registerIpc } from './ipc'
 import { appPageMatcher, focusExisting, guardNavigation } from './window'
 
 let mainWindow: BrowserWindow | null = null
@@ -100,6 +100,7 @@ if (!app.requestSingleInstanceLock()) {
           claude,
           autoStart: false,
         })
+        logEngineErrors(engine)
       }
       // 순서: 엔진 만들기 → registerIpc(리스너 붙이기) → engine.start() → 창. claude 가 없으면 engine 은 null 이고 snapshot 이 claudeMissing 을 알린다.
       registerIpc(
@@ -111,7 +112,11 @@ if (!app.requestSingleInstanceLock()) {
         {
           async pickFolder() {
             if (nextE2eFolder) return nextE2eFolder()
-            const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+            // 창을 부모로 — 앱 뒤에 숨지 않는 모달 대화상자
+            const options: Electron.OpenDialogOptions = { properties: ['openDirectory'] }
+            const r = mainWindow && !mainWindow.isDestroyed()
+              ? await dialog.showOpenDialog(mainWindow, options)
+              : await dialog.showOpenDialog(options)
             return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0]
           },
           async openFolder(path) {

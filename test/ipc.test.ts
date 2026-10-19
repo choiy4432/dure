@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { registerIpc } from '../src/main/ipc'
+import { logEngineErrors, registerIpc } from '../src/main/ipc'
 import { appPageMatcher } from '../src/main/window'
 import { CHANNEL, EVENT_NAMES, METHODS } from '../src/shared/ipcContract'
 import type { Engine } from '../src/engine'
@@ -201,3 +201,13 @@ describe('registerIpc', () => {
   })
 })
 
+describe('logEngineErrors', () => {
+  it('엔진 오류는 main 기록에 종류와 문구만 남긴다', () => {
+    const { engine } = fakeEngine()
+    const log = vi.fn()
+    logEngineErrors(engine, log)
+    engine.emit('engine-error', { agentId: 'a1', message: 'EPERM: 기록을 쓰지 못했어요' })
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(log).toHaveBeenCalledWith('[두레] engine-error:', 'EPERM: 기록을 쓰지 못했어요')
+  })
+})

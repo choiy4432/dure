@@ -79,6 +79,14 @@ function senderUrl(event: unknown): string | undefined {
   return typeof url === 'string' ? url : undefined
 }
 
+/** 엔진 오류를 main 기록에 남긴다 — 종류와 문구만(사람이 쓴 글·파일 내용은 넣지 않는다) */
+export function logEngineErrors(
+  engine: Engine,
+  log: (...args: unknown[]) => void = console.error,
+): void {
+  engine.on('engine-error', (p: { message: string }) => log('[두레] engine-error:', p.message))
+}
+
 /** `dure:invoke` 하나로 화이트리스트 메서드를 엔진에 잇고, 엔진 이벤트를 `dure:event` 로 내보낸다. */
 export function registerIpc(
   ipc: IpcLike,
