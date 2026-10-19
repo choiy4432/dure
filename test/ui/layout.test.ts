@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { Position, getBezierPath } from '@xyflow/react'
 import {
-  CELL, GAP_X, GAP_Y, MARGIN, NODE_SIZE, edgeEnds, edgePath, isUnplaced, labelPoint, pairBow, placeMissing, placeNew,
+  CELL, GAP_X, GAP_Y, MARGIN, NODE_SIZE, curvePoint, edgeEnds, edgePath, isUnplaced, pairBow, placeMissing, placeNew,
   type Point, type Rect, type Side,
 } from '../../src/renderer/map/layout'
 
@@ -141,7 +141,7 @@ describe('edgeEnds', () => {
   })
 })
 
-describe('엣지 선과 상태 알약 자리 — edgePath · labelPoint · pairBow', () => {
+describe('엣지 선과 상태 알약 자리 — edgePath · pairBow · 알약은 곡선 한가운데(curvePoint 0.5)', () => {
   const rect = (x: number, y: number, w = W, h = H) => ({ x, y, w, h })
   const SIDE: Record<Side, Position> = { left: Position.Left, right: Position.Right, top: Position.Top, bottom: Position.Bottom }
   const nums = (d: string) => d.match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/g)!.map(Number)
@@ -167,7 +167,7 @@ describe('엣지 선과 상태 알약 자리 — edgePath · labelPoint · pairB
       })
       expect(pairBow(e, 0, s, t)).toEqual({ x: 0, y: 0 })
       nums(edgePath(e)).forEach((v, i) => expect(v).toBeCloseTo(nums(d)[i], 6))
-      const p = labelPoint(e, 0, s, t)
+      const p = curvePoint(e, 0.5, pairBow(e, 0, s, t))
       expect(p.x).toBeCloseTo(lx, 6)
       expect(p.y).toBeCloseTo(ly, 6)
     }
@@ -193,8 +193,9 @@ describe('엣지 선과 상태 알약 자리 — edgePath · labelPoint · pairB
     const ba = edgeEnds(b, a, 12)
     const bowA = pairBow(ab, -12, a, b, pill)
     const bowB = pairBow(ba, 12, b, a, pill)
-    const pa = labelPoint(ab, -12, a, b, pill)
-    const pb = labelPoint(ba, 12, b, a, pill)
+    // HandoffEdge 처럼 — 알약은 휜 곡선의 한가운데
+    const pa = curvePoint(ab, 0.5, bowA)
+    const pb = curvePoint(ba, 0.5, bowB)
     // 떨어져 있다 — 가로로든 세로로든 알약 크기 + 틈
     expect(Math.abs(pa.x - pb.x) >= w + GAP || Math.abs(pa.y - pb.y) >= 24 + GAP).toBe(true)
     // 제 곡선(그리는 그 선) 한가운데

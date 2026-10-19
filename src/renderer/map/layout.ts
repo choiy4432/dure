@@ -194,12 +194,3 @@ export function pairBow(e: EdgeEnds, shift: number, from: Rect, to: Rect, pill: 
   const push = p / 0.75
   return { x: n.x * push, y: n.y * push }
 }
-
-/**
- * 엣지 상태 알약 자리 — 곡선 한가운데. 짝 엣지면 휜 곡선(pairBow)의 한가운데라, 두 알약이 떨어져 있고 각자 제 곡선 위다.
- * 짝이 아니면 React Flow 의 라벨 자리와 같다.
- */
-export function labelPoint(e: EdgeEnds, shift: number, from: Rect, to: Rect, pill: Size = LABEL_SIZE): Point {
-  return curvePoint(e, 0.5, pairBow(e, shift, from, to, pill))
-}
-
