@@ -12,34 +12,47 @@ export interface Rect extends Point, Size {}
 
 /** 카드 크기(base.css .nd 너비·최소 높이와 같은 수) */
 export const NODE_SIZE: Size = { w: 256, h: 136 }
-/** 격자 칸 사이 · 격자 바깥 여백 */
-export const GRID_GAP = 64
+/**
+ * 격자 한 칸 — 너비는 카드, 높이는 가장 큰 카드 상태: 승인 칸(.ap)에 제목이 두 줄인 카드 217px.
+ * base.css 로 잰 값 = 테두리 2 + .nh 64 + .ap 111(테두리 1 + 위아래 8 + 제목 2줄 36 + 2 + code 18 + 2 + 단추 줄 36) + .nf 40.
+ * 승인 칸 카드는 304px 로 넓어지지만 오른쪽으로만 — 가로 칸 사이(GAP_X)가 그만큼을 받아 준다.
+ */
+export const CELL: Size = { w: NODE_SIZE.w, h: 217 }
+/** 가로 칸 사이 — 이웃 카드 사이 엣지의 라벨 알약(약 90~110px) 양쪽으로 선과 화살촉이 보이게(넓은 승인 카드 옆도 152px 남는다) */
+export const GAP_X = 200
+/** 세로 칸 사이 — 가장 큰 카드 아래로도 이만큼 */
+export const GAP_Y = 64
+/** 격자 바깥 여백 */
+export const MARGIN = 64
 const COLS = 3
 
 const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 
-/** 엔진이 처음 준 자리 {0,0} = 아직 자리를 안 정함(격자 첫 칸은 GRID_GAP 에서 시작해 겹치지 않는다) */
+/** 엔진이 처음 준 자리 {0,0} = 아직 자리를 안 정함(격자 첫 칸은 MARGIN 에서 시작해 겹치지 않는다) */
 export const isUnplaced = (p: Point) => p.x === 0 && p.y === 0
 
-/** 새 에이전트 자리 — 3열 격자(칸 사이 64px)에서 놓인 카드와 겹치지 않는 첫 칸 */
-export function placeNew(existing: Point[], size: Size = NODE_SIZE): Point {
-  const taken = existing.map(p => ({ ...p, ...size }))
+/**
+ * 새 에이전트 자리 — 3열 격자(가로 칸 사이 200px · 세로 64px)에서 놓인 카드와 겹치지 않는 첫 칸.
+ * 이미 저장된 자리는 건드리지 않는다 — 새로 놓을 때만 이 격자를 쓴다.
+ */
+export function placeNew(existing: Point[], cell: Size = CELL): Point {
+  const taken = existing.map(p => ({ ...p, ...cell }))
   for (let i = 0; ; i++) {
-    const cell = {
-      x: GRID_GAP + (i % COLS) * (size.w + GRID_GAP),
-      y: GRID_GAP + Math.floor(i / COLS) * (size.h + GRID_GAP),
+    const at = {
+      x: MARGIN + (i % COLS) * (cell.w + GAP_X),
+      y: MARGIN + Math.floor(i / COLS) * (cell.h + GAP_Y),
     }
-    if (!taken.some(t => overlaps(t, { ...cell, ...size }))) return cell
+    if (!taken.some(t => overlaps(t, { ...at, ...cell }))) return at
   }
 }
 
 /** 자리 없는({0,0}) 에이전트마다 차례로 자리를 정한다 — 이미 놓인 카드·앞에서 정한 자리와 겹치지 않게 */
-export function placeMissing(agents: { id: string; pos: Point }[], size: Size = NODE_SIZE): Map<string, Point> {
+export function placeMissing(agents: { id: string; pos: Point }[], cell: Size = CELL): Map<string, Point> {
   const taken = agents.filter(a => !isUnplaced(a.pos)).map(a => a.pos)
   const out = new Map<string, Point>()
   for (const a of agents) {
     if (!isUnplaced(a.pos)) continue
-    const p = placeNew(taken, size)
+    const p = placeNew(taken, cell)
     taken.push(p)
     out.set(a.id, p)
   }
