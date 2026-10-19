@@ -4,6 +4,7 @@ import { createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
 import { resolveClaudeCommand } from './claudeCommand'
 import { registerIpc } from './ipc'
+import { appPageMatcher, focusExisting, guardNavigation } from './window'
 
 let mainWindow: BrowserWindow | null = null
 let engine: Engine | null = null
@@ -27,6 +28,10 @@ function e2eFolders(raw: string | undefined): (() => string | null) | null {
   return () => (next < list.length ? list[next++] : null)
 }
 
+const indexFile = join(__dirname, '../renderer/index.html')
+/** 두레 화면 자신의 주소인가 — IPC 요청·창 안 이동을 이걸로 가린다 */
+const isAppPage = appPageMatcher({ devUrl: process.env.ELECTRON_RENDERER_URL, indexFile })
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1440,
@@ -48,10 +53,15 @@ function createWindow(): BrowserWindow {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
   })
+  guardNavigation(win.webContents, isAppPage)
+  // 닫힌 창을 붙들지 않는다 — 끄는 동안(최대 5초) 또 켜면 second-instance 가 파괴된 창을 건드려 오류 상자가 떴다
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null
+  })
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    void win.loadFile(join(__dirname, '../renderer/index.html'))
+    void win.loadFile(indexFile)
   }
   return win
 }
@@ -59,11 +69,7 @@ function createWindow(): BrowserWindow {
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (!mainWindow) return
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.focus()
-  })
+  app.on('second-instance', () => focusExisting(mainWindow))
 
   let quitting = false
   app.on('before-quit', (event) => {
@@ -112,6 +118,7 @@ if (!app.requestSingleInstanceLock()) {
             const err = await shell.openPath(path)
             if (err) throw new Error(err)
           },
+          isAppPage,
         },
       )
       engine?.start()

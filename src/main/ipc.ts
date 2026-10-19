@@ -10,6 +10,8 @@ export interface IpcLike {
 export interface IpcDeps {
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
+  /** 요청을 보낸 프레임 주소가 두레 화면인가 — 아니면 거절(window.ts 의 appPageMatcher) */
+  isAppPage(url: string | undefined): boolean
 }
 
 const NOT_ALLOWED = '허용되지 않은 요청이에요'
@@ -71,6 +73,12 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/** 요청을 보낸 프레임의 주소 — 프레임이 없으면(닫힘 등) undefined */
+function senderUrl(event: unknown): string | undefined {
+  const url = (event as { senderFrame?: { url?: unknown } | null } | null)?.senderFrame?.url
+  return typeof url === 'string' ? url : undefined
+}
+
 /** `dure:invoke` 하나로 화이트리스트 메서드를 엔진에 잇고, 엔진 이벤트를 `dure:event` 로 내보낸다. */
 export function registerIpc(
   ipc: IpcLike,
@@ -78,8 +86,10 @@ export function registerIpc(
   send: (channel: string, payload: unknown) => void,
   deps: IpcDeps,
 ): void {
-  ipc.handle(CHANNEL.invoke, async (_event, req): Promise<InvokeResult> => {
+  ipc.handle(CHANNEL.invoke, async (event, req): Promise<InvokeResult> => {
     try {
+      // 두레 화면이 아닌 곳(창 안으로 들어온 다른 페이지·프레임)의 요청은 받지 않는다
+      if (!deps.isAppPage(senderUrl(event))) throw new Error(NOT_ALLOWED)
       const { method, args } = (req ?? {}) as Partial<InvokeRequest>
       if (typeof method !== 'string' || !Object.hasOwn(HANDLERS, method)) throw new Error(NOT_ALLOWED)
       if (method === 'snapshot') return { ok: true, value: snapshot(engine) }

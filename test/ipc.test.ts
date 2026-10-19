@@ -1,6 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { registerIpc } from '../src/main/ipc'
+import { appPageMatcher } from '../src/main/window'
 import { CHANNEL, EVENT_NAMES, METHODS } from '../src/shared/ipcContract'
 import type { Engine } from '../src/engine'
 
@@ -45,16 +48,23 @@ function fakeEngine() {
   return { engine: e as Engine & EventEmitter, calls }
 }
 
+/** 앱 화면의 주소 — 빌드된 out/renderer/index.html */
+const INDEX = path.resolve('out/renderer/index.html')
+const APP_URL = pathToFileURL(INDEX).href
+const fromApp = { senderFrame: { url: APP_URL } }
+const isAppPage = appPageMatcher({ indexFile: INDEX })
+
 function setup(withEngine = true) {
   const handlers = new Map<string, Fn>()
   const ipc = { handle: (ch: string, fn: Fn) => void handlers.set(ch, fn) }
   const sent: [string, any][] = []
-  const deps = { pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}) }
+  const deps = { pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), isAppPage }
   const fe = fakeEngine()
   registerIpc(ipc, withEngine ? fe.engine : null, (ch, p) => sent.push([ch, p]), deps)
-  const call = (method: string, ...args: unknown[]) =>
-    handlers.get(CHANNEL.invoke)!(null, { method, args }) as Promise<any>
-  return { call, sent, deps, ...fe }
+  const callFrom = (event: unknown, method: string, ...args: unknown[]) =>
+    handlers.get(CHANNEL.invoke)!(event, { method, args }) as Promise<any>
+  const call = (method: string, ...args: unknown[]) => callFrom(fromApp, method, ...args)
+  return { call, callFrom, sent, deps, ...fe }
 }
 
 describe('registerIpc', () => {
@@ -70,9 +80,10 @@ describe('registerIpc', () => {
     registerIpc({ handle: (c, f) => void handlers.set(c, f) }, fakeEngine().engine, () => {}, {
       pickFolder: async () => null,
       openFolder: async () => {},
+      isAppPage,
     })
-    expect(await handlers.get(CHANNEL.invoke)!(null, null)).toMatchObject({ ok: false })
-    expect(await handlers.get(CHANNEL.invoke)!(null, { method: 5 })).toMatchObject({ ok: false })
+    expect(await handlers.get(CHANNEL.invoke)!(fromApp, null)).toMatchObject({ ok: false })
+    expect(await handlers.get(CHANNEL.invoke)!(fromApp, { method: 5 })).toMatchObject({ ok: false })
   })
 
   it('forwards each method to the same-named engine method with its args', async () => {
@@ -123,7 +134,7 @@ describe('registerIpc', () => {
     const e = fakeEngine()
     registerIpc({ handle: () => {} }, e.engine, () => {
       throw new Error('Object has been destroyed')
-    }, { pickFolder: async () => null, openFolder: async () => {} })
+    }, { pickFolder: async () => null, openFolder: async () => {}, isAppPage })
     expect(() => e.engine.emit('held', { roomId: 'r1' })).not.toThrow()
   })
 
@@ -162,4 +173,31 @@ describe('registerIpc', () => {
     expect(await call('renameRoom', 'r1', '')).toEqual({ ok: false, error: '방 이름이 비었어요' })
     expect(await call('removeAgent', 'zz')).toEqual({ ok: false, error: '에이전트를 찾을 수 없습니다.' })
   })
+
+  it('앱 화면이 아닌 곳(다른 주소·프레임 없음)에서 온 요청은 거절 — 엔진에 닿지 않고 스택도 없다', async () => {
+    const { callFrom, calls, deps } = setup()
+    const foreign = [
+      { senderFrame: { url: 'https://evil.example/index.html' } },
+      { senderFrame: { url: pathToFileURL(path.resolve('out/renderer/other.html')).href } },
+      { senderFrame: { url: 'file:///C:/Windows/index.html' } },
+      { senderFrame: null },
+      {},
+      null,
+    ]
+    for (const ev of foreign) {
+      expect(await callFrom(ev, 'addRoom', 'x')).toEqual({ ok: false, error: '허용되지 않은 요청이에요' })
+      expect(await callFrom(ev, 'snapshot')).toEqual({ ok: false, error: '허용되지 않은 요청이에요' })
+      expect(await callFrom(ev, 'pickFolder')).toEqual({ ok: false, error: '허용되지 않은 요청이에요' })
+    }
+    expect(calls).toEqual([])
+    expect(deps.pickFolder).not.toHaveBeenCalled()
+  })
+
+  it('앱 화면에서 온 요청은 통과 — 주소 뒤 #·? 가 붙어도', async () => {
+    const { callFrom } = setup()
+    expect(await callFrom(fromApp, 'addRoom', 'x')).toEqual({ ok: true, value: { id: 'r2' } })
+    expect((await callFrom({ senderFrame: { url: `${APP_URL}#/x` } }, 'snapshot')).ok).toBe(true)
+    expect((await callFrom({ senderFrame: { url: `${APP_URL}?a=1` } }, 'snapshot')).ok).toBe(true)
+  })
 })
+
