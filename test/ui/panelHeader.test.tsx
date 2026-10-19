@@ -1,0 +1,396 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react'
+import type { AgentDescription, PendingRequest } from '../../src/engine/types'
+import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
+
+const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
+  id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
+})
+const request = (over: Partial<PendingRequest> = {}): PendingRequest => ({
+  id: 'q1', agentId: 'w', toolName: 'Write', input: { file_path: 'C:\\w\\a.ts' }, kind: 'permission',
+  createdAt: Date.now(), ...over,
+})
+const DESC: AgentDescription = {
+  commands: [],
+  permissionMode: 'default',
+  models: [
+    { value: 'default', displayName: 'Default', description: '추천 모델' },
+    { value: 'opus', displayName: 'Opus', description: '가장 똑똑한 모델' },
+    { value: 'sonnet', displayName: 'Sonnet', description: '빠르고 균형 잡힌 모델' },
+  ],
+}
+
+let snapshot: Snapshot
+let api: Record<'describe' | 'setModel' | 'updateAgent' | 'removeAgent' | 'newConversation' | 'interrupt' | 'openFolder', ReturnType<typeof vi.fn>>
+
+// 엔진처럼 — 바꾼 값은 다음 스냅샷에 들어 있다(엔진은 에이전트 바뀜 이벤트를 보내지 않는다)
+const patch = (id: string, p: Partial<AgentView>) => {
+  snapshot = { ...snapshot, agents: snapshot.agents.map(a => (a.id === id ? { ...a, ...p } : a)) }
+}
+
+beforeEach(() => {
+  vi.resetModules()
+  snapshot = {
+    claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }],
+    agents: [agent('w', { name: '웹 화면', role: '화면 구현' }), agent('p', { name: '기획', role: '기획서 · 문구' })],
+    messages: [], requests: [], autoChainLimit: 3,
+  }
+  api = {
+    describe: vi.fn(async (_id: string) => DESC),
+    setModel: vi.fn(async (id: string, model: string | null) => patch(id, { model })),
+    updateAgent: vi.fn(async (id: string, p: Partial<AgentView>) => {
+      const name = p.name?.trim()
+      if (name !== undefined && snapshot.agents.some(a => a.id !== id && a.name === name)) {
+        throw new Error(`이미 있는 이름입니다: ${name}`)
+      }
+      patch(id, p)
+      return snapshot.agents.find(a => a.id === id)
+    }),
+    removeAgent: vi.fn(async (id: string) => {
+      snapshot = { ...snapshot, agents: snapshot.agents.filter(a => a.id !== id) }
+    }),
+    newConversation: vi.fn(async (_id: string) => {}),
+    interrupt: vi.fn(async (_id: string) => {}),
+    openFolder: vi.fn(async (_path: string) => {}),
+  }
+  ;(window as any).dure = { ...api, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
+})
+afterEach(() => cleanup())
+
+/** 기다리던 약속(describe·refresh 등)이 다 풀리게 */
+const settle = () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
+
+async function renderPanel(select: string | null = 'w') {
+  const { getStore } = await import('../../src/renderer/state/store')
+  const { AgentPanel } = await import('../../src/renderer/panel/AgentPanel')
+  await act(async () => { await getStore().init() })
+  const r = render(<AgentPanel />)
+  if (select) await act(async () => { getStore().selectAgent(select) })
+  await settle()
+  return { ...r, store: getStore() }
+}
+
+const stopButton = () => screen.getByRole('button', { name: '멈추기' }) as HTMLButtonElement
+const modelChip = () => screen.getByRole('button', { name: /^모델/ }) as HTMLButtonElement
+
+describe('AgentPanel — 고른 에이전트가 없을 때', () => {
+  it('조용한 안내만, 패널 이름은 에이전트', async () => {
+    await renderPanel(null)
+    expect(screen.getByText('관계도에서 에이전트를 골라 보세요')).toBeTruthy()
+    expect(screen.getByRole('complementary', { name: '에이전트' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '멈추기' })).toBeNull()
+    expect(api.describe).not.toHaveBeenCalled()
+  })
+
+  it('고르면 머리에 이름·역할, 패널 이름은 에이전트 이름', async () => {
+    await renderPanel()
+    const panel = screen.getByRole('complementary', { name: '웹 화면' })
+    expect(within(panel).getByText('웹 화면')).toBeTruthy()
+    expect(within(panel).getByText('화면 구현')).toBeTruthy()
+    expect(panel.querySelector('.av.b')?.textContent).toBe('웹')
+  })
+})
+
+describe('PanelHeader — 멈추기', () => {
+  it.each([
+    ['작업 중', { status: 'working' }, [], true],
+    ['승인 기다림(상태)', { status: 'awaiting' }, [], true],
+    ['승인 기다림(남은 요청)', { status: 'idle' }, [request()], true],
+    ['대기', { status: 'idle' }, [], false],
+    ['멈춘 프로세스', { status: 'stopped' }, [], false],
+    ['오류', { status: 'error', errorText: '끝났어요' }, [], false],
+  ] as const)('%s → 활성 %s', async (_label, over, requests, enabled) => {
+    snapshot.agents = [agent('w', { name: '웹 화면', ...over })]
+    snapshot.requests = [...requests]
+    await renderPanel()
+    expect(stopButton().disabled).toBe(!enabled)
+    if (!enabled) return
+    await act(async () => { fireEvent.click(stopButton()) })
+    expect(api.interrupt).toHaveBeenCalledTimes(1)
+    expect(api.interrupt).toHaveBeenCalledWith('w')
+  })
+
+  it('상태 알약 — 작업 중은 초록, 승인 기다림은 앰버, 대기·멈춤', async () => {
+    snapshot.agents = [
+      agent('w', { name: '웹 화면', status: 'working' }),
+      agent('d', { name: '디자인', status: 'awaiting' }),
+      agent('s', { name: '서버' }),
+      agent('e', { name: '오류', status: 'error', errorText: 'x' }),
+    ]
+    const { store } = await renderPanel()
+    const pill = () => document.querySelector('.ph .pill')!
+    expect(pill().textContent).toBe('작업 중')
+    expect(pill().classList.contains('w')).toBe(true)
+    await act(async () => store.selectAgent('d'))
+    expect(pill().textContent).toBe('승인 기다림')
+    expect(pill().classList.contains('p')).toBe(true)
+    await act(async () => store.selectAgent('s'))
+    expect(pill().textContent).toBe('대기')
+    await act(async () => store.selectAgent('e'))
+    expect(pill().textContent).toBe('멈춤')
+    expect(pill().classList.contains('e')).toBe(true)
+  })
+})
+
+describe('PanelHeader — 자동 스위치', () => {
+  it('누르면 updateAgent(id, {auto}) 를 부르고 스냅샷을 다시 받아 켜진다', async () => {
+    await renderPanel()
+    const sw = screen.getByRole('switch', { name: '자동' })
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    await act(async () => { fireEvent.click(sw) })
+    await settle()
+    expect(api.updateAgent).toHaveBeenCalledWith('w', { auto: true })
+    expect(screen.getByRole('switch', { name: '자동' }).getAttribute('aria-checked')).toBe('true')
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: '자동' })) })
+    await settle()
+    expect(api.updateAgent).toHaveBeenLastCalledWith('w', { auto: false })
+    expect(screen.getByRole('switch', { name: '자동' }).getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('실패하면 엔진 문구를 머리에 보여 주고 스위치는 그대로', async () => {
+    api.updateAgent.mockRejectedValueOnce(new Error('에이전트를 찾을 수 없습니다: w'))
+    await renderPanel()
+    await act(async () => { fireEvent.click(screen.getByRole('switch', { name: '자동' })) })
+    await settle()
+    expect(screen.getByRole('alert').textContent).toContain('에이전트를 찾을 수 없습니다: w')
+    expect(screen.getByRole('switch', { name: '자동' }).getAttribute('aria-checked')).toBe('false')
+  })
+})
+
+describe('ModelPicker', () => {
+  it('describe 는 패널을 열 때 한 번 — 다른 에이전트로 갔다 와도 다시 부르지 않는다', async () => {
+    const { store } = await renderPanel()
+    expect(api.describe).toHaveBeenCalledTimes(1)
+    expect(api.describe).toHaveBeenCalledWith('w')
+    await act(async () => store.selectAgent('p'))
+    await settle()
+    await act(async () => store.selectAgent('w'))
+    await settle()
+    expect(api.describe.mock.calls.map(c => c[0])).toEqual(['w', 'p'])
+  })
+
+  it('칩은 지금 모델 이름 — 모델이 없으면 default', async () => {
+    snapshot.agents = [agent('w', { name: '웹 화면', model: 'sonnet' }), agent('p', { name: '기획' })]
+    const { store } = await renderPanel()
+    expect(modelChip().textContent).toBe('Sonnet')
+    await act(async () => store.selectAgent('p'))
+    await settle()
+    expect(modelChip().textContent).toBe('Default')
+  })
+
+  it('고르면 setModel — default 는 null 로, 지금 모델엔 표시', async () => {
+    snapshot.agents = [agent('w', { name: '웹 화면', model: 'sonnet' })]
+    await renderPanel()
+    fireEvent.click(modelChip())
+    const menu = screen.getByRole('menu', { name: '모델' })
+    const items = within(menu).getAllByRole('menuitemradio')
+    expect(items.map(i => i.querySelector('.mi-t')?.textContent)).toEqual(['Default', 'Opus', 'Sonnet'])
+    expect(items.map(i => i.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true'])
+    expect(within(menu).getByText('빠르고 균형 잡힌 모델')).toBeTruthy()
+
+    await act(async () => { fireEvent.click(items[0]) })
+    await settle()
+    expect(api.setModel).toHaveBeenCalledWith('w', null)
+    expect(screen.queryByRole('menu', { name: '모델' })).toBeNull()
+    expect(modelChip().textContent).toBe('Default')
+
+    fireEvent.click(modelChip())
+    await act(async () => { fireEvent.click(screen.getByRole('menuitemradio', { name: /Opus/ })) })
+    await settle()
+    expect(api.setModel).toHaveBeenLastCalledWith('w', 'opus')
+    expect(modelChip().textContent).toBe('Opus')
+  })
+
+  it('describe 가 실패하면 칩은 "모델" 만, 누르면 다시 시도', async () => {
+    api.describe.mockRejectedValueOnce(new Error('claude 를 시작하지 못했어요'))
+    snapshot.agents = [agent('w', { name: '웹 화면', model: 'sonnet' })]
+    await renderPanel()
+    expect(modelChip().textContent).toBe('모델')
+    await act(async () => { fireEvent.click(modelChip()) })
+    await settle()
+    expect(api.describe).toHaveBeenCalledTimes(2)
+    expect(modelChip().textContent).toBe('Sonnet')
+  })
+
+  it('밖에서 열고 닫을 수 있다(open · onOpenChange) — Esc 로 닫으면 onOpenChange(false)', async () => {
+    const { ModelPicker } = await import('../../src/renderer/panel/ModelPicker')
+    const onOpenChange = vi.fn()
+    render(
+      <ModelPicker
+        agentId="w"
+        model={null}
+        description={{ state: 'ready', value: DESC }}
+        onRetry={() => {}}
+        open
+        onOpenChange={onOpenChange}
+      />,
+    )
+    const menu = screen.getByRole('menu', { name: '모델' })
+    fireEvent.keyDown(menu, { key: 'Escape' })
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+    // 제어 모드 — 부모가 open 을 바꾸기 전엔 그대로 열려 있다
+    expect(screen.getByRole('menu', { name: '모델' })).toBeTruthy()
+  })
+})
+
+describe('AgentMenu', () => {
+  const openMenu = () => fireEvent.click(screen.getByRole('button', { name: '메뉴' }))
+  const item = (name: string) => screen.getByRole('menuitem', { name })
+
+  it('지우기는 확인 대화상자를 거쳐야만 removeAgent — 취소·Esc·바깥 누르기는 부르지 않는다', async () => {
+    const { store } = await renderPanel()
+    openMenu()
+    fireEvent.click(item('지우기'))
+    let dlg = screen.getByRole('alertdialog')
+    expect(dlg.textContent).toContain('에이전트 웹 화면을 지울까요?')
+    expect(dlg.textContent).toContain('대화 기록도 지워져요.')
+    expect(api.removeAgent).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dlg).getByRole('button', { name: '취소' }))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+
+    openMenu()
+    fireEvent.click(item('지우기'))
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+
+    openMenu()
+    fireEvent.click(item('지우기'))
+    fireEvent.pointerDown(document.querySelector('.dlg-bd')!)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(api.removeAgent).not.toHaveBeenCalled()
+
+    openMenu()
+    fireEvent.click(item('지우기'))
+    dlg = screen.getByRole('alertdialog')
+    const confirm = within(dlg).getByRole('button', { name: '지우기' })
+    expect(confirm.classList.contains('dng')).toBe(true)
+    await act(async () => { fireEvent.click(confirm) })
+    await settle()
+    expect(api.removeAgent).toHaveBeenCalledTimes(1)
+    expect(api.removeAgent).toHaveBeenCalledWith('w')
+    expect(store.getState().selectedAgentId).toBeNull()
+    expect(screen.getByText('관계도에서 에이전트를 골라 보세요')).toBeTruthy()
+  })
+
+  it('지우기에 실패하면 대화상자에 엔진 문구', async () => {
+    api.removeAgent.mockRejectedValueOnce(new Error('에이전트를 찾을 수 없습니다: w'))
+    await renderPanel()
+    openMenu()
+    fireEvent.click(item('지우기'))
+    await act(async () => { fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: '지우기' })) })
+    await settle()
+    expect(within(screen.getByRole('alertdialog')).getByText('에이전트를 찾을 수 없습니다: w')).toBeTruthy()
+  })
+
+  it('새 대화는 확인을 거쳐 newConversation', async () => {
+    await renderPanel()
+    openMenu()
+    fireEvent.click(item('새 대화'))
+    const dlg = screen.getByRole('alertdialog')
+    expect(dlg.textContent).toContain('지금까지 대화를 접고 새로 시작할까요?')
+    expect(api.newConversation).not.toHaveBeenCalled()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '새로 시작' })) })
+    await settle()
+    expect(api.newConversation).toHaveBeenCalledWith('w')
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('폴더 열기는 openFolder(에이전트 폴더)', async () => {
+    await renderPanel()
+    openMenu()
+    await act(async () => { fireEvent.click(item('폴더 열기')) })
+    expect(api.openFolder).toHaveBeenCalledWith('C:\\w')
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('이름·역할 바꾸기는 같은 자리 입력 — 엔진 오류 문구를 그대로, 고치면 저장', async () => {
+    await renderPanel()
+    openMenu()
+    fireEvent.click(item('이름·역할 바꾸기'))
+    const name = screen.getByRole('textbox', { name: '이름' }) as HTMLInputElement
+    const role = screen.getByRole('textbox', { name: '역할' }) as HTMLInputElement
+    expect(name.value).toBe('웹 화면')
+    expect(role.value).toBe('화면 구현')
+    expect(document.activeElement).toBe(name)
+
+    fireEvent.change(name, { target: { value: '기획' } })
+    await act(async () => { fireEvent.keyDown(name, { key: 'Enter' }) })
+    await settle()
+    expect(screen.getByText('이미 있는 이름입니다: 기획')).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: '이름' })).toBeTruthy()
+
+    fireEvent.change(name, { target: { value: '웹 화면 2' } })
+    fireEvent.change(role, { target: { value: '화면 · 접근성' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '저장' })) })
+    await settle()
+    expect(api.updateAgent).toHaveBeenLastCalledWith('w', { name: '웹 화면 2', role: '화면 · 접근성' })
+    expect(screen.queryByRole('textbox', { name: '이름' })).toBeNull()
+    expect(screen.getByRole('complementary', { name: '웹 화면 2' })).toBeTruthy()
+    expect(screen.getByText('화면 · 접근성')).toBeTruthy()
+  })
+
+  it('Esc 는 바꾸기를 접는다(저장 안 함)', async () => {
+    await renderPanel()
+    openMenu()
+    fireEvent.click(item('이름·역할 바꾸기'))
+    const name = screen.getByRole('textbox', { name: '이름' })
+    fireEvent.change(name, { target: { value: '다른 이름' } })
+    fireEvent.keyDown(name, { key: 'Escape' })
+    expect(screen.queryByRole('textbox', { name: '이름' })).toBeNull()
+    expect(api.updateAgent).not.toHaveBeenCalled()
+    expect(screen.getByText('웹 화면')).toBeTruthy()
+  })
+})
+
+describe('PanelHeader — 띠', () => {
+  it('오류면 머리 아래 빨간 띠 — 오류 글과 다시 시도 안내', async () => {
+    snapshot.agents = [agent('w', { name: '웹 화면', status: 'error', errorText: '프로세스가 예기치 않게 끝났어요 (코드 1)' })]
+    await renderPanel()
+    const band = document.querySelector('.band.err')!
+    expect(band.textContent).toContain('프로세스가 예기치 않게 끝났어요 (코드 1)')
+    expect(band.textContent).toContain('다시 시도')
+  })
+
+  it('묻지 않고 실행하는 에이전트면 앰버 띠', async () => {
+    snapshot.agents = [agent('w', { name: '웹 화면', bypass: true })]
+    await renderPanel()
+    expect(document.querySelector('.band.warn')!.textContent).toBe('이 에이전트는 묻지 않고 실행해요 (Claude 설정의 전부 허용)')
+    expect(document.querySelector('.band.err')).toBeNull()
+  })
+})
+
+describe('ConfirmDialog', () => {
+  it('열리면 안으로 포커스, Tab 은 대화상자 안에서만 돈다', async () => {
+    const { ConfirmDialog } = await import('../../src/renderer/shell/ConfirmDialog')
+    const onConfirm = vi.fn()
+    const onCancel = vi.fn()
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    const { rerender } = render(
+      <ConfirmDialog open title="지울까요?" body="되돌릴 수 없어요." confirmLabel="지우기" danger onConfirm={onConfirm} onCancel={onCancel} />,
+    )
+    const dlg = screen.getByRole('alertdialog', { name: '지울까요?' })
+    const [cancel, ok] = within(dlg).getAllByRole('button')
+    expect(cancel.textContent).toBe('취소')
+    expect(ok.textContent).toBe('지우기')
+    // 위험한 확인은 취소에 먼저 포커스
+    expect(document.activeElement).toBe(cancel)
+    ok.focus()
+    fireEvent.keyDown(ok, { key: 'Tab' })
+    expect(document.activeElement).toBe(cancel)
+    fireEvent.keyDown(cancel, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(ok)
+    fireEvent.keyDown(ok, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    fireEvent.click(ok)
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+    // 닫히면 연 자리로 포커스를 돌려준다
+    rerender(<ConfirmDialog open={false} title="지울까요?" confirmLabel="지우기" onConfirm={onConfirm} onCancel={onCancel} />)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(document.activeElement).toBe(outside)
+    outside.remove()
+  })
+})

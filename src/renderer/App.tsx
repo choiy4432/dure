@@ -4,6 +4,7 @@ import { TopBar } from './shell/TopBar'
 import { SplitView } from './shell/SplitView'
 import { Empty } from './shell/Empty'
 import { RelationMap } from './map/RelationMap'
+import { AgentPanel } from './panel/AgentPanel'
 
 // 방 고르기·방 만들기·에이전트 추가·설정 대화상자는 아직 없다 — 생기면 아래 처리들을 잇는다
 const openRoomMenu = () => {}
@@ -18,7 +19,6 @@ export function App() {
       claudeMissing: s.claudeMissing,
       roomName: room?.name ?? null,
       agentCount: room ? s.agents.filter(a => a.roomId === room.id).length : 0,
-      selectedName: s.agents.find(a => a.id === s.selectedAgentId)?.name ?? null,
     }
   })
 
@@ -43,7 +43,7 @@ export function App() {
             {v.agentCount === 0 ? <Empty kind="agent" onAction={openAddAgent} /> : <RelationMap />}
           </main>
         }
-        right={<aside className="pnl" aria-label={v.selectedName ?? '에이전트'} />}
+        right={<AgentPanel />}
       />
     )
   }

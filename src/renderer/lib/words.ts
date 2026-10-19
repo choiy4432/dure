@@ -1,5 +1,26 @@
 // 화면 문구 도우미 — 조사(이/가 …)와 '방금 · N분 전' 같은 시각 말
 
+import type { DisplayStatus } from '../state/selectors'
+
+/** 표시 상태 낱말 — 관계도 카드 바닥과 패널 머리 알약이 같은 말을 쓴다 */
+export const STATUS_WORD: Record<DisplayStatus, string> = {
+  working: '작업 중',
+  awaiting: '승인 기다림',
+  idle: '대기',
+  stopped: '대기',
+  error: '멈춤',
+}
+
+/** 아바타 글자 — 이름의 첫 글자(영문은 대문자) */
+export function initial(name: string): string {
+  return Array.from(name.trim())[0]?.toUpperCase() ?? '?'
+}
+
+/** 엔진 오류를 화면에 그대로 — 엔진의 한국어 문구만 온다(스택은 오지 않는다) */
+export function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
+}
+
 export type JosaPair = '이/가' | '을/를' | '은/는' | '과/와'
 
 // 숫자를 읽은 소리에 받침이 있는가 — 영 일 이 삼 사 오 육 칠 팔 구

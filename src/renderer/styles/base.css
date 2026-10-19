@@ -989,3 +989,427 @@ code {
     display: none;
   }
 }
+
+/* ── 에이전트 패널 ───────────────────────────────── */
+
+/* 고른 에이전트가 없을 때 */
+.pnl-hint {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 24px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* 머리(시안 .ph) */
+.ph {
+  flex: none;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ph-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 이름·역할 입력칸이 열리면 아바타·버튼은 위에 맞춘다 */
+.ph-row-edit {
+  align-items: flex-start;
+}
+
+.ph-r2 {
+  margin-top: 12px;
+}
+
+/* 목록이 열려 있는 동안 여는 버튼은 눌린 모양 */
+.ph .ib[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.ph .av {
+  width: 40px;
+  height: 40px;
+  font-size: 15px;
+  margin-right: 4px;
+}
+
+.ph-id {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pn {
+  margin: 0;
+  font-size: 17px;
+  line-height: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.pr {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.ph-acts {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 입력칸 옆 버튼은 이름 칸 높이에 맞춰 위로 */
+.ph-acts-top {
+  align-self: flex-start;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* 멈추기 아이콘 — 시안처럼 16px 칸 가운데 8px 네모 */
+.ph-stop {
+  margin: 0 2.5px;
+}
+
+/* 상태 알약 — 기본은 대기(회색) */
+.pill {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pill.w {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.pill.p {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.pill.e {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+.ph .sw {
+  flex: none;
+  margin-left: auto;
+}
+
+/* 패널 머리에서 실패한 일(멈추기·자동·모델·폴더 열기)의 엔진 문구 */
+.ph-msg {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--danger-text);
+  overflow-wrap: anywhere;
+}
+
+/* 이름·역할 바꾸기 */
+.ph-edit {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.inp {
+  display: block;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  background: var(--bg);
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: inherit;
+  color: var(--text);
+  caret-color: var(--primary);
+}
+
+.inp::placeholder {
+  color: var(--muted);
+}
+
+.inp:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: var(--ring-soft);
+}
+
+.inp[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.inp-n {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* 칸 아래 오류 글 */
+.fe {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--danger-text);
+  overflow-wrap: anywhere;
+}
+
+/* 머리 아래 띠 — 오류(빨강) · 묻지 않고 실행(앰버) */
+.band {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 20px;
+  border-bottom: 1px solid;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.band .i {
+  margin-top: 1px;
+}
+
+.band.err {
+  background: var(--danger-bg);
+  border-bottom-color: var(--danger-border);
+  color: var(--danger-text);
+}
+
+.band.warn {
+  background: var(--warn-bg);
+  border-bottom-color: var(--warn-border);
+  color: var(--text);
+}
+
+.band.warn .i {
+  color: var(--warn-text);
+}
+
+.band-tx {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.band-t {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.band-h {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.band-h b {
+  font-weight: 700;
+  color: var(--danger-text);
+}
+
+/* 고정 카드 자리 — 카드가 없으면 자리도 없다 */
+.pnl-pins:empty {
+  display: none;
+}
+
+/* 대화 자리 */
+.pnl-chat {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* 떠 있는 목록(모델 · 메뉴) — 여는 버튼과 같은 칸에 */
+.mp {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+}
+
+.mp .chip {
+  max-width: 100%;
+}
+
+.chip-l {
+  max-width: 200px;
+}
+
+.pop {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 240px;
+  max-width: 320px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  box-shadow: var(--shadow-pop);
+}
+
+.pop.end {
+  left: auto;
+  right: 0;
+  min-width: 200px;
+}
+
+.mi {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 20px;
+  text-align: left;
+  color: var(--text);
+}
+
+.mi:hover,
+.mi:focus-visible {
+  outline: none;
+  background: var(--hover);
+}
+
+.mi .i {
+  color: var(--muted);
+}
+
+.mi-tx {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mi-t {
+  font-weight: 500;
+}
+
+.mi-d {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mi .mi-ck {
+  color: var(--primary);
+}
+
+.mi.dng-t,
+.mi.dng-t .i {
+  color: var(--danger-text);
+}
+
+.pop-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border-soft);
+}
+
+.pop-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--muted);
+}
+
+/* 확인 대화상자 */
+.dlg-bd {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--overlay);
+}
+
+.dlg {
+  width: 400px;
+  max-width: 100%;
+  padding: 20px 20px 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-node);
+  box-shadow: var(--shadow-dlg);
+}
+
+.dlg-t {
+  margin: 0;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.dlg-d {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--muted);
+}
+
+.dlg-err {
+  margin: 10px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--danger-text);
+}
+
+.dlg-ab {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* 위험 버튼(지우기) */
+.dng {
+  background: var(--danger-solid);
+  color: var(--on-danger);
+  box-shadow: var(--shadow-sm);
+}
+
+.dng:hover:not(:disabled) {
+  background: var(--danger-solid-hover);
+}

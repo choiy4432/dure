@@ -6,7 +6,7 @@ import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
 import { displayStatus, unreadFor, type DisplayStatus } from '../state/selectors'
 import { requestTarget, requestTitle } from '../lib/toolSummary'
-import { ago, josa, lasting } from '../lib/words'
+import { ago, initial, josa, lasting, STATUS_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
 
 export type AgentFlowNode = Node<Record<string, never>, 'agent'>
@@ -14,12 +14,12 @@ export type AgentFlowNode = Node<Record<string, never>, 'agent'>
 const ACTIVITY_MAX = 40
 const ERROR_MAX = 30
 
-const STATUS: Record<DisplayStatus, { label: string; dot: string; tone: string }> = {
-  working: { label: '작업 중', dot: 'g', tone: 'w' },
-  awaiting: { label: '승인 기다림', dot: 'a', tone: 'p' },
-  idle: { label: '대기', dot: 's', tone: '' },
-  stopped: { label: '대기', dot: 's', tone: '' },
-  error: { label: '멈춤', dot: 'r', tone: 'e' },
+const STATUS: Record<DisplayStatus, { dot: string; tone: string }> = {
+  working: { dot: 'g', tone: 'w' },
+  awaiting: { dot: 'a', tone: 'p' },
+  idle: { dot: 's', tone: '' },
+  stopped: { dot: 's', tone: '' },
+  error: { dot: 'r', tone: 'e' },
 }
 
 const STATUS_LINE: Record<DisplayStatus, string> = {
@@ -36,8 +36,6 @@ function clip(text: string, max: number): string {
   const chars = Array.from(flat)
   return chars.length > max ? chars.slice(0, max).join('') + '…' : flat
 }
-
-const firstChar = (name: string) => Array.from(name.trim())[0]?.toUpperCase() ?? '?'
 
 function useCardView(agentId: AgentId) {
   return useDure(s => {
@@ -143,7 +141,7 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
     >
       <div className="nh">
         <span className={`av${selected ? ' b' : ''}`} aria-hidden="true">
-          {firstChar(agent.name)}
+          {initial(agent.name)}
         </span>
         <div className="nt">
           <span className="nn">
@@ -178,7 +176,7 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
       <div className="nf">
         <span className={`st${st.tone ? ` ${st.tone}` : ''}`}>
           <i className={`dot ${st.dot}`} aria-hidden="true" />
-          <span className="st-l">{st.label}</span>
+          <span className="st-l">{STATUS_WORD[status]}</span>
           {errorText && (
             <span className="nf-err trunc" title={errorText}>
               {clip(errorText, ERROR_MAX)}

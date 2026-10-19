@@ -1,0 +1,132 @@
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Ref } from 'react'
+import { Ellipsis, FolderOpen, MessageSquarePlus, Pencil, Trash2 } from 'lucide-react'
+import type { AgentId } from '../../engine/types'
+import { getStore } from '../state/store'
+import { errorMessage, josa } from '../lib/words'
+import { moveMenuFocus, useDismiss } from '../lib/popover'
+import { ConfirmDialog } from '../shell/ConfirmDialog'
+
+interface Props {
+  agent: { id: AgentId; name: string; folder: string }
+  /** '이름·역할 바꾸기' — 머리가 같은 자리에 입력칸을 연다 */
+  onEdit: () => void
+  /** 폴더 열기 등이 실패했을 때 엔진 문구 */
+  onError: (message: string) => void
+  /** 메뉴 버튼 — 바꾸기를 마친 뒤 포커스를 돌려받는 자리 */
+  buttonRef?: Ref<HTMLButtonElement>
+}
+
+type Ask = 'renew' | 'remove' | null
+
+/** 패널 머리의 … 메뉴 — 이름·역할 바꾸기 · 새 대화 · 폴더 열기 · 지우기 */
+export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
+  const [open, setOpen] = useState(false)
+  const [ask, setAsk] = useState<Ask>(null)
+  const wrap = useRef<HTMLSpanElement>(null)
+  const btn = useRef<HTMLButtonElement | null>(null)
+  const menu = useRef<HTMLDivElement>(null)
+  const close = useCallback(() => setOpen(false), [])
+  useDismiss(open, wrap, close)
+
+  useEffect(() => {
+    if (open) menu.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+  }, [open])
+
+  const setButton = (el: HTMLButtonElement | null) => {
+    btn.current = el
+    if (typeof buttonRef === 'function') buttonRef(el)
+    else if (buttonRef) buttonRef.current = el
+  }
+
+  // 항목을 고르면 메뉴를 닫고 포커스를 메뉴 버튼에 — 대화상자가 닫힐 때 그리로 돌아온다
+  const choose = (fn: () => void) => () => {
+    setOpen(false)
+    btn.current?.focus()
+    fn()
+  }
+
+  const openFolder = () => {
+    window.dure.openFolder(agent.folder).catch(e => onError(errorMessage(e)))
+  }
+
+  const renew = async () => {
+    await window.dure.newConversation(agent.id) // 실패하면 대화상자에 문구
+    setAsk(null)
+    await getStore().refresh().catch(e => onError(errorMessage(e)))
+  }
+
+  const remove = async () => {
+    await window.dure.removeAgent(agent.id)
+    setAsk(null)
+    // 지운 에이전트는 스냅샷에서 빠지고 선택도 풀린다 — 패널은 '골라 보세요' 로
+    await getStore().refresh().catch(e => onError(errorMessage(e)))
+  }
+
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
+      btn.current?.focus()
+      return
+    }
+    if (e.key === 'Tab') {
+      setOpen(false)
+      return
+    }
+    moveMenuFocus(e)
+  }
+
+  return (
+    <span className="mp" ref={wrap}>
+      <button
+        ref={setButton}
+        type="button"
+        className="ib"
+        aria-label="메뉴"
+        title="메뉴"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(o => !o)}
+      >
+        <Ellipsis className="i" aria-hidden="true" />
+      </button>
+      {open && (
+        <div ref={menu} className="pop end" role="menu" aria-label="메뉴" onKeyDown={onKey}>
+          <button type="button" role="menuitem" className="mi" onClick={choose(onEdit)}>
+            <Pencil className="i" aria-hidden="true" />
+            이름·역할 바꾸기
+          </button>
+          <button type="button" role="menuitem" className="mi" onClick={choose(() => setAsk('renew'))}>
+            <MessageSquarePlus className="i" aria-hidden="true" />새 대화
+          </button>
+          <button type="button" role="menuitem" className="mi" onClick={choose(openFolder)}>
+            <FolderOpen className="i" aria-hidden="true" />
+            폴더 열기
+          </button>
+          <div className="pop-sep" role="separator" />
+          <button type="button" role="menuitem" className="mi dng-t" onClick={choose(() => setAsk('remove'))}>
+            <Trash2 className="i" aria-hidden="true" />
+            지우기
+          </button>
+        </div>
+      )}
+      <ConfirmDialog
+        open={ask === 'renew'}
+        title="지금까지 대화를 접고 새로 시작할까요?"
+        confirmLabel="새로 시작"
+        onConfirm={renew}
+        onCancel={() => setAsk(null)}
+      />
+      <ConfirmDialog
+        open={ask === 'remove'}
+        title={`에이전트 ${agent.name}${josa(agent.name, '을/를')} 지울까요?`}
+        body="대화 기록도 지워져요."
+        confirmLabel="지우기"
+        danger
+        onConfirm={remove}
+        onCancel={() => setAsk(null)}
+      />
+    </span>
+  )
+}

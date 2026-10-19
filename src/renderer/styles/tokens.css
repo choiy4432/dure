@@ -44,7 +44,11 @@
   --warn-code-text: #78350F;
   --danger: #EF4444;           /* 안 읽음·멈춤 */
   --danger-text: #B91C1C;      /* 멈춤 글(흰 바탕 위 읽히는 빨강) */
-  --on-danger: #FFFFFF;        /* 빨간 배지 위 글 */
+  --on-danger: #FFFFFF;        /* 빨간 배지·위험 버튼 위 글 */
+  --danger-bg: #FEF2F2;        /* 오류 띠 */
+  --danger-border: #FECACA;
+  --danger-solid: #DC2626;     /* 위험 버튼(지우기) — 흰 글이 읽히는 빨강 */
+  --danger-solid-hover: #B91C1C;
   --idle: #94A3B8;             /* 대기 */
 
   /* 반경 */
@@ -66,6 +70,9 @@
   --shadow-node-sel: 0 0 0 1px var(--primary), 0 0 0 5px rgba(37, 99, 235, 0.12), 0 8px 20px -6px rgba(15, 23, 42, 0.14);
   --shadow-box: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 12px -4px rgba(15, 23, 42, 0.08);
   --ring-soft: 0 0 0 3px rgba(37, 99, 235, 0.15);   /* 입력창 포커스 */
+  --shadow-pop: 0 1px 2px rgba(15, 23, 42, 0.05), 0 12px 28px -8px rgba(15, 23, 42, 0.18);   /* 떠 있는 목록(모델·메뉴) */
+  --shadow-dlg: 0 1px 2px rgba(15, 23, 42, 0.06), 0 24px 48px -12px rgba(15, 23, 42, 0.28);  /* 대화상자 */
+  --overlay: rgba(15, 23, 42, 0.32);   /* 대화상자 뒤 막 */
 
   /* 글꼴 */
   --font: 'Noto Sans KR', system-ui, sans-serif;
