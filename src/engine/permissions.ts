@@ -4,8 +4,10 @@ import type { ApproveResult } from './mcpServer';
 import type { Store } from './store';
 import type { AgentId, Decision, PendingRequest } from './types';
 
-export const DENY_DEFAULT = '사용자가 거절했습니다.';
-const CANCELLED = '요청이 취소되었습니다.'; // 부른 쪽이 끊겨 Claude 에겐 닿지 않는다
+import { DENY } from '../shared/denyTexts';
+
+export const DENY_DEFAULT: string = DENY.userDenied;
+const CANCELLED: string = DENY.requestCancelled; // 부른 쪽이 끊겨 Claude 에겐 닿지 않는다
 const QUESTION_TOOL = 'AskUserQuestion';
 
 interface Entry {

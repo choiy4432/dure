@@ -10,6 +10,7 @@ import { buildRoomPrompt } from './roomPrompt';
 import { ClaudeSession } from './claudeSession';
 import { startMcpServer, type McpServerHandle } from './mcpServer';
 import { Permissions } from './permissions';
+import { DENY } from '../shared/denyTexts';
 import { Router, AUTO_CHAIN_LIMIT } from './router';
 import type {
   Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, Decision, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, RelayMessage, Room, RoomId, StreamEvent, UserPart,
@@ -66,9 +67,9 @@ export interface Engine extends EventEmitter {
 }
 
 const STOP_LIMIT_MS = 5000; // ClaudeSession.stop() 의 kill 뒤 대기는 끝이 없다 — 엔진이 따로 끊는다
-const EXITED = 'Claude 가 종료되었습니다.';
-const STOPPED_BY_USER = '사용자가 멈췄습니다.';
-const TURN_ENDED = '차례가 끝났습니다.';
+const EXITED: string = DENY.claudeExited;
+const STOPPED_BY_USER: string = DENY.userStopped;
+const TURN_ENDED: string = DENY.turnEnded;
 const TOOL_TEXT_KEEP = 2000;
 const STOPPED_NOTICE = '멈췄어요';
 const NO_AGENT = '에이전트를 찾을 수 없습니다.';

@@ -1,4 +1,5 @@
 import type { HistoryItem } from '../../engine/types'
+import { DENY_TEXTS } from '../../shared/denyTexts'
 import { toolSummary, type ToolIcon } from '../lib/toolSummary'
 
 export interface ActionLine {
@@ -21,20 +22,19 @@ export type ChatLine =
   | { kind: 'streaming'; text: string }
 
 const OUTPUT_MAX = 2000
-// 엔진이 거절·취소·중단 때 도구 결과로 돌려주는 문구 (permissions.ts · engine.ts)
-const DENY_TEXTS = new Set([
-  '사용자가 거절했습니다.',
-  '요청이 취소되었습니다.',
-  '차례가 끝났습니다.',
-  '사용자가 멈췄습니다.',
-  'Claude 가 종료되었습니다.',
-])
-const RELAY_HEAD = /^\[두레 메시지 — 보낸 쪽: ([^\n]*?)\([^()\n]*\)\]\n?/
+const RELAY_PREFIX = '[두레 메시지 — 보낸 쪽: '
 
-function stripRelay(text: string): { from: string; body: string } | null {
-  const m = RELAY_HEAD.exec(text)
-  if (!m) return null
-  return { from: m[1], body: text.slice(m[0].length) }
+// 첫 줄이 '[두레 메시지 — 보낸 쪽: 이름(역할)]' 이어야 한다. 이름 = 첫 '(' 앞이라 역할 안 괄호는 상관없다.
+// 읽지 못하면 이름 없이 통째로 — 전달된 글이 '내 말'로 둔갑하지 않게.
+function stripRelay(text: string): { from: string; body: string } {
+  const nl = text.indexOf('\n')
+  const first = nl === -1 ? text : text.slice(0, nl)
+  if (first.startsWith(RELAY_PREFIX) && first.endsWith(')]')) {
+    const inner = first.slice(RELAY_PREFIX.length, -1)
+    const paren = inner.indexOf('(')
+    if (paren !== -1) return { from: inner.slice(0, paren).trim(), body: nl === -1 ? '' : text.slice(nl + 1) }
+  }
+  return { from: '', body: text }
 }
 
 export function buildTranscript(
@@ -74,7 +74,7 @@ export function buildTranscript(
                 id: b.id,
                 ...s,
                 allowed: !r.viaApproval && !r.isError,
-                denied: r.isError && DENY_TEXTS.has(r.text),
+                denied: r.isError && DENY_TEXTS.includes(r.text),
                 output: r.text.slice(0, OUTPUT_MAX),
               })
             }

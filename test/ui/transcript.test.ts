@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildTranscript } from '../../src/renderer/state/transcript'
+import { DENY } from '../../src/shared/denyTexts'
 import type { HistoryItem } from '../../src/engine/types'
 
 const human = (text: string, t = 1): HistoryItem => ({ t, kind: 'user', source: 'human', parts: [{ type: 'text', text }] })
@@ -59,6 +60,21 @@ describe('buildTranscript', () => {
       parts: [{ type: 'text', text: '[두레 메시지 — 보낸 쪽: 기획(기획서 · 문구)]\n본문' }],
     }
     expect(buildTranscript([it], undefined).lines[0]).toEqual({ kind: 'relay', from: '기획', text: '본문', at: 5 })
+  })
+  it('역할 안에 괄호가 있어도 이름만 남긴다', () => {
+    const it: HistoryItem = {
+      t: 5, kind: 'user', source: 'relay',
+      parts: [{ type: 'text', text: '[두레 메시지 — 보낸 쪽: 기획(API(내부))]\n본문\n둘째 줄' }],
+    }
+    expect(buildTranscript([it], undefined).lines[0]).toEqual({ kind: 'relay', from: '기획', text: '본문\n둘째 줄', at: 5 })
+  })
+  it('머리를 못 읽어도 relay 출처면 relay 줄(이름 빈 값, 본문 통째)', () => {
+    const it: HistoryItem = { t: 6, kind: 'user', source: 'relay', parts: [{ type: 'text', text: '머리 없는 글' }] }
+    expect(buildTranscript([it], undefined).lines[0]).toEqual({ kind: 'relay', from: '', text: '머리 없는 글', at: 6 })
+  })
+  it.each(Object.values(DENY))('거절 문구 %s 는 denied', (msg) => {
+    const { lines } = buildTranscript([asst([{ type: 'tool_use', id: 'd', name: 'Bash', input: {} }]), res('d', msg, true)], undefined)
+    expect((lines[0] as any).actions[0]).toMatchObject({ denied: true, allowed: false })
   })
   it('이미지는 개수로, 알림·로컬 출력은 줄로', () => {
     const { lines } = buildTranscript(
