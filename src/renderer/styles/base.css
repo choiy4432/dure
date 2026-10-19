@@ -412,20 +412,38 @@ code {
   text-wrap: balance; /* 두 줄이면 고르게 — 마지막 낱말 하나만 남지 않게 */
 }
 
-/* 오류 원문 — 본문 아래 작게(한국어가 아닐 때만) */
+.empty-card .btn {
+  margin-top: 12px;
+}
+
+/* 오류 원문 펼치기 — [다시 시도] 아래 작은 글 버튼(한국어가 아닌 원문일 때만) */
+.empty-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 4px;
+  color: var(--text-3);
+}
+
+.empty-more[aria-expanded="true"] .i {
+  transform: rotate(180deg);
+}
+
+/* 오류 원문 — 펼쳤을 때만, 작은 mono 칸에 왼쪽 맞춤 */
 .empty-x {
-  margin: 4px 0 0;
+  align-self: stretch;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--subtle);
   font-family: var(--mono);
   font-size: 12px;
   line-height: 18px;
   letter-spacing: 0;
-  color: var(--muted);
+  color: var(--text-3);
+  text-align: left;
   overflow-wrap: anywhere;
-  text-wrap: balance;
-}
-
-.empty-card .btn {
-  margin-top: 12px;
 }
 
 /* ── 관계도 ─────────────────────────────────────── */

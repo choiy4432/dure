@@ -1,4 +1,5 @@
-import { Plus, RotateCw } from 'lucide-react'
+import { useId, useState } from 'react'
+import { ChevronDown, Plus, RotateCw } from 'lucide-react'
 
 export type EmptyKind = 'claude' | 'room' | 'agent' | 'load'
 
@@ -15,7 +16,7 @@ interface Props {
   onAction?: () => void
   /** 제목 아래 글을 바꿔 쓴다(한국어 엔진 문구가 온 불러오기 오류) */
   text?: string
-  /** 본문 아래 작은 회색 mono 줄 — 한국어가 아닌 오류 원문 */
+  /** 한국어가 아닌 오류 원문 — 처음엔 접힌 '자세히' 안에 두고, 펼치면 작은 mono 줄로 */
   detail?: string
   /** 버튼을 막는다(다시 불러오는 중) */
   busy?: boolean
@@ -31,14 +32,33 @@ export function Empty({ kind, onAction, text, detail, busy }: Props) {
       <div className="empty-card" role={kind === 'load' ? 'alert' : undefined}>
         <p className="empty-t">{c.title}</p>
         {body && <p className="empty-d">{body}</p>}
-        {detail && <p className="empty-x">{detail}</p>}
         {c.action && (
           <button type="button" className="btn pri" onClick={onAction} disabled={busy}>
             <Icon className="i" />
             {c.action}
           </button>
         )}
+        {detail && <Detail text={detail} />}
       </div>
     </div>
+  )
+}
+
+/** 오류 원문 — 기본은 접힘. 개발자가 아닌 사람에게 영어 원문을 먼저 보이지 않는다 */
+function Detail({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  const id = useId()
+  return (
+    <>
+      <button type="button" className="lk empty-more" aria-expanded={open} aria-controls={id} onClick={() => setOpen(o => !o)}>
+        자세히
+        <ChevronDown className="i" size={14} aria-hidden="true" />
+      </button>
+      {open && (
+        <p className="empty-x" id={id}>
+          {text}
+        </p>
+      )}
+    </>
   )
 }

@@ -126,7 +126,7 @@ describe('App 셸', () => {
     expect(snap).toHaveBeenCalledTimes(3)
   })
 
-  it('불러오기 오류 문구 — 한글이 없는 원문(IPC 등)은 한국어 안내를 본문으로, 원문은 작은 줄로만', async () => {
+  it('불러오기 오류 문구 — 한글이 없는 원문(IPC 등)은 한국어 안내를 본문으로, 원문은 접힌 "자세히" 안에만', async () => {
     const raw = "Error invoking remote method 'dure:invoke': Error: No handler registered for 'dure:invoke'"
     ;(window as any).dure.snapshot = vi.fn().mockRejectedValueOnce(new Error(raw)).mockImplementation(async () => snapshot)
     const { getStore } = await import('../../src/renderer/state/store')
@@ -137,9 +137,21 @@ describe('App 셸', () => {
     expect(within(card).getByText('두레를 불러오지 못했어요')).toBeTruthy()
     const main = within(card).getByText('잠시 뒤 다시 시도해 주세요. 계속 안 되면 두레를 껐다 켜 주세요.')
     expect(main.classList.contains('empty-d')).toBe(true)
+    expect(within(card).getByRole('button', { name: '다시 시도' })).toBeTruthy()
+
+    // 처음엔 접혀 있다 — 원문은 화면에 없다
+    const more = within(card).getByRole('button', { name: '자세히' })
+    expect(more.getAttribute('aria-expanded')).toBe('false')
+    expect(within(card).queryByText(raw)).toBeNull()
+
+    // 펼치면 작은 mono 줄로, 다시 누르면 접힌다
+    fireEvent.click(more)
+    expect(more.getAttribute('aria-expanded')).toBe('true')
     const detail = within(card).getByText(raw)
-    expect(detail.classList.contains('empty-x')).toBe(true) // 작은 회색 mono 줄
-    expect(detail).not.toBe(main)
+    expect(detail.classList.contains('empty-x')).toBe(true)
+    expect(more.getAttribute('aria-controls')).toBe(detail.id)
+    fireEvent.click(more)
+    expect(within(card).queryByText(raw)).toBeNull()
   })
 
   it('불러오기 오류 문구 — 한글 원문(엔진 문구)은 그대로 본문, 일반 안내·작은 줄은 없다', async () => {
@@ -152,6 +164,7 @@ describe('App 셸', () => {
     expect(within(card).getByText('설정 파일을 읽지 못했어요').classList.contains('empty-d')).toBe(true)
     expect(within(card).queryByText('잠시 뒤 다시 시도해 주세요. 계속 안 되면 두레를 껐다 켜 주세요.')).toBeNull()
     expect(card.querySelector('.empty-x')).toBeNull()
+    expect(within(card).queryByRole('button', { name: '자세히' })).toBeNull()
   })
 
   it('빈 화면 버튼은 onAction 을 부른다', async () => {
