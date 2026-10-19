@@ -11,7 +11,7 @@ const logFile = process.env.FAKE_CLAUDE_LOG;
 const log = (s) => {
   if (logFile) fs.appendFileSync(logFile, s + '\n');
 };
-log(JSON.stringify({ argv }));
+log(JSON.stringify({ argv, pid: process.pid, mcpToolTimeout: process.env.MCP_TOOL_TIMEOUT ?? null }));
 
 const sessionId = flag('--resume') ?? flag('--session-id') ?? 'fake-session';
 let model = flag('--model') ?? 'default';
@@ -143,8 +143,12 @@ async function control(msg) {
   if (sub === 'initialize') {
     await ok({
       commands: [{ name: 'compact', description: '대화 요약', argumentHint: '' }],
-      models: [{ value: 'default', displayName: 'Default' }, { value: 'sonnet', displayName: 'Sonnet' }],
+      models: [
+        { value: 'default', displayName: 'Default' },
+        { value: 'sonnet', displayName: 'Sonnet', description: '빠름', resolvedModel: 'fake-sonnet' },
+      ],
       current_permission_mode: permissionMode,
+      account: { email: 'fake-user@example.com', subscriptionType: 'max' }, // 진짜처럼 — 엔진은 버려야 한다
     });
   } else if (sub === 'set_model') {
     model = msg.request.model;
