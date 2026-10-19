@@ -81,3 +81,22 @@ export interface PendingRequest {
   kind: 'permission' | 'question';
   createdAt: number;
 }
+
+export interface EngineEventMap {
+  'agent-event': { agentId: AgentId; event: StreamEvent; viaApproval?: boolean };
+  status: { agentId: AgentId; status: AgentStatus; errorText: string | null };
+  message: RelayMessage;
+  held: { roomId: RoomId };
+  request: PendingRequest;
+  'request-resolved': { id: string; agentId: AgentId };
+  flags: { agentId: AgentId; bypass: boolean };
+  'engine-error': { agentId: string | null; message: string };
+  history: { agentId: AgentId; item: HistoryItem };
+  'held-input': { agentId: AgentId; count: number };
+}
+
+export interface AgentDescription {
+  commands: { name: string; description: string; argumentHint: string }[];
+  models: { value: string; displayName: string; description?: string }[];
+  permissionMode: string;
+}

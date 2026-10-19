@@ -9,5 +9,5 @@
     "noEmit": true
   },
   "include": ["src", "test", "scripts", "electron.vite.config.ts"],
-  "exclude": ["src/main", "src/preload", "src/renderer", "test/ui", "test/claudeCommand.test.ts"]
+  "exclude": ["src/main", "src/preload", "src/renderer", "test/ui", "test/claudeCommand.test.ts", "test/ipc.test.ts"]
 }

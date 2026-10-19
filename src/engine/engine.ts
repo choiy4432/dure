@@ -12,7 +12,7 @@ import { startMcpServer, type McpServerHandle } from './mcpServer';
 import { Permissions } from './permissions';
 import { Router, AUTO_CHAIN_LIMIT } from './router';
 import type {
-  Agent, AgentId, AgentPatch, AgentStatus, Decision, HistoryItem, HistoryPart, PendingRequest, RelayMessage, Room, RoomId, StreamEvent, UserPart,
+  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, Decision, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, RelayMessage, Room, RoomId, StreamEvent, UserPart,
 } from './types';
 
 export interface EngineOptions {
@@ -22,25 +22,6 @@ export interface EngineOptions {
   env?: NodeJS.ProcessEnv;
   /** 기본 true — false 면 대기 메시지 전달(flushAll)을 미루고 engine.start() 가 한다(리스너를 붙인 뒤 부르기 위함) */
   autoStart?: boolean;
-}
-
-export interface EngineEventMap {
-  'agent-event': { agentId: AgentId; event: StreamEvent; viaApproval?: boolean };
-  status: { agentId: AgentId; status: AgentStatus; errorText: string | null };
-  message: RelayMessage;
-  held: { roomId: RoomId };
-  request: PendingRequest;
-  'request-resolved': { id: string; agentId: AgentId };
-  flags: { agentId: AgentId; bypass: boolean };
-  'engine-error': { agentId: string | null; message: string };
-  history: { agentId: AgentId; item: HistoryItem };
-  'held-input': { agentId: AgentId; count: number };
-}
-
-export interface AgentDescription {
-  commands: { name: string; description: string; argumentHint: string }[];
-  models: { value: string; displayName: string; description?: string }[];
-  permissionMode: string;
 }
 
 // 이벤트:

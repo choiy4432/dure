@@ -1,12 +1,12 @@
-import { app, BrowserWindow, dialog, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { join } from 'node:path'
 import { createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
 import { resolveClaudeCommand } from './claudeCommand'
+import { registerIpc } from './ipc'
 
 let mainWindow: BrowserWindow | null = null
 let engine: Engine | null = null
-let claudeMissing = false
 let exitCode = 0
 
 function createWindow(): BrowserWindow {
@@ -29,9 +29,6 @@ function createWindow(): BrowserWindow {
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
-  })
-  win.webContents.on('did-finish-load', () => {
-    if (claudeMissing) win.webContents.send('dure:claude-missing', true)
   })
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
@@ -77,11 +74,26 @@ if (!app.requestSingleInstanceLock()) {
           claude,
           autoStart: false,
         })
-        // Task 4: registerIpc(engine, ...) goes here, BEFORE engine.start().
-        engine.start()
-      } else {
-        claudeMissing = true
       }
+      // 순서: 엔진 만들기 → registerIpc(리스너 붙이기) → engine.start() → 창. claude 가 없으면 engine 은 null 이고 snapshot 이 claudeMissing 을 알린다.
+      registerIpc(
+        ipcMain,
+        engine,
+        (ch, payload) => {
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(ch, payload)
+        },
+        {
+          async pickFolder() {
+            const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+            return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0]
+          },
+          async openFolder(path) {
+            const err = await shell.openPath(path)
+            if (err) throw new Error(err)
+          },
+        },
+      )
+      engine?.start()
       mainWindow = createWindow()
 
       const smokeMs = Number(process.env.DURE_SMOKE_EXIT_MS)

@@ -8,5 +8,5 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["src/main", "src/preload", "src/shared", "src/engine", "test/claudeCommand.test.ts", "electron.vite.config.ts"]
+  "include": ["src/main", "src/preload", "src/shared", "src/engine", "test/claudeCommand.test.ts", "test/ipc.test.ts", "electron.vite.config.ts"]
 }
