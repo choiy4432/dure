@@ -988,3 +988,86 @@ test('engine: removeAgent 는 기록 파일도 지운다', async () => {
   await e.removeAgent(a.id);
   expect(fs.existsSync(file)).toBe(false);
 });
+
+test('autoStart false → createEngine 직후엔 queued 가 안 가고 start() 뒤에 간다', async () => {
+  const e1 = await start();
+  const { room, a, b } = setup(e1);
+  e1.updateAgent(b.id, { auto: true });
+  // B 를 못 읽는 상태로 queued 를 남긴다 — 로그에 직접 쓴다
+  await e1.shutdown();
+  openMessageLog(dataDir).create({ roomId: room.id, from: a.id, to: b.id, text: '나중에', state: 'queued' });
+  const e2 = await createEngine({
+    dataDir,
+    claude: { command: process.execPath, argsPrefix: [FAKE] },
+    env: { FAKE_CLAUDE_LOG: logFile },
+    autoStart: false,
+  });
+  engines.push(e2);
+  expect(e2.messages()[0].state).toBe('queued');
+  const done = resultOf(e2, b.id);
+  e2.start();
+  e2.start(); // 두 번째는 아무 일도 안 한다
+  await done;
+  expect(e2.messages()[0].state).toBe('delivered');
+});
+
+test('heldInput: 작업 중 sendUser 두 번 → 2, 차례가 끝나며 1 → 0, 이벤트도 바뀔 때마다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const counts: number[] = [];
+  e.on('held-input', (v: { agentId: string; count: number }) => v.agentId === a.id && counts.push(v.count));
+  await e.sendUser(a.id, text('SLOW'));
+  expect(e.heldInput(a.id)).toBe(0);
+  await e.sendUser(a.id, text('echo 하나'));
+  await e.sendUser(a.id, text('echo 둘'));
+  expect(e.heldInput(a.id)).toBe(2);
+  const done = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === a.id && x.event.kind === 'result' && x.event.text.includes('둘'));
+  await e.interrupt(a.id);
+  await done;
+  expect(e.heldInput(a.id)).toBe(0);
+  expect(counts).toEqual([1, 0, 1, 2, 1, 0]); // SLOW 는 넣자마자 나가고(1→0), 둘은 줄에 서고(1→2), 차례마다 하나씩(1→0)
+});
+
+test('flags(): init 전엔 bypass false, FAKE_PERMISSION_MODE=bypassPermissions 이면 init 뒤 true', async () => {
+  const e = await start({ FAKE_PERMISSION_MODE: 'bypassPermissions' });
+  const { a, b } = setup(e);
+  expect(e.flags(a.id)).toEqual({ bypass: false });
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나'));
+  await done;
+  expect(e.flags(a.id)).toEqual({ bypass: true });
+  expect(e.flags(b.id)).toEqual({ bypass: false });
+});
+
+test('자동 전달 상한: 기본 3 · 저장돼 재시작 뒤에도 · 잘못된 값은 throw', async () => {
+  const e = await start();
+  expect(e.autoChainLimit()).toBe(3);
+  for (const bad of [0, -1, 1.5, NaN]) expect(() => e.setAutoChainLimit(bad)).toThrow('상한은 1 이상이어야 해요.');
+  expect(e.autoChainLimit()).toBe(3);
+  e.setAutoChainLimit(5);
+  expect(e.autoChainLimit()).toBe(5);
+  expect(JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'))).toEqual({ autoChainLimit: 5 });
+  await e.shutdown();
+  const e2 = await start();
+  expect(e2.autoChainLimit()).toBe(5);
+});
+
+test('settings.json 이 깨졌으면 기본값 3', async () => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), '{깨짐');
+  const e = await start();
+  expect(e.autoChainLimit()).toBe(3);
+});
+
+test('approve 에 mcp__dure__ 도구 → 사람에게 안 묻고 바로 거절, request 이벤트 없음', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const requests: unknown[] = [];
+  e.on('request', (r) => requests.push(r));
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나')); // 프로세스를 띄워 mcp.json 을 만든다
+  await done;
+  expect(await approveDirect(a.id, 'mcp__dure__send_message')).toEqual({ behavior: 'deny', message: '두레 도구는 승인 대상이 아니에요.' });
+  expect(requests).toEqual([]);
+  expect(e.pendingRequests(a.id)).toEqual([]);
+});

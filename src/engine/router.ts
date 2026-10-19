@@ -29,6 +29,11 @@ export class Router extends EventEmitter {
     this.limit = d.limit ?? AUTO_CHAIN_LIMIT;
   }
 
+  /** 자동 전달 상한을 바꾼다 — 이미 센 연속 횟수는 그대로 */
+  setLimit(n: number): void {
+    this.limit = n;
+  }
+
   chain(roomId: RoomId): number {
     return this.chains.get(roomId) ?? 0;
   }

@@ -269,3 +269,19 @@ test('requeue: delivered 가 아니거나 없는 메시지는 아무 일도 안 
   expect(seen).toEqual(['dismissed']);
   expect(deliver).not.toHaveBeenCalled();
 });
+
+test('setLimit: 바꾼 상한이 바로 적용되고 이미 센 연속 횟수는 그대로', () => {
+  auto(b.id);
+  busy.add(b.id);
+  router.send(a.id, 'Backend', '1');
+  router.send(a.id, 'Backend', '2');
+  router.send(a.id, 'Backend', '3');
+  expect(router.chain(roomId)).toBe(3);
+  router.send(a.id, 'Backend', '4');
+  expect(log.list({ states: ['held'] })).toHaveLength(1);
+  router.setLimit(5);
+  expect(router.chain(roomId)).toBe(3);
+  router.send(a.id, 'Backend', '5');
+  expect(router.chain(roomId)).toBe(4);
+  expect(log.list({ states: ['held'] })).toHaveLength(1);
+});

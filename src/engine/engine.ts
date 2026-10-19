@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { openStore, type Store } from './store';
+import { openStore, renameRetrying, type Store } from './store';
 import { openMessageLog, type MessageLog } from './messageLog';
 import { openHistory, type History } from './history';
 import { buildArgs, buildMcpConfig, SPAWN_ENV_EXTRA } from './claudeArgs';
@@ -10,7 +10,7 @@ import { buildRoomPrompt } from './roomPrompt';
 import { ClaudeSession } from './claudeSession';
 import { startMcpServer, type McpServerHandle } from './mcpServer';
 import { Permissions } from './permissions';
-import { Router } from './router';
+import { Router, AUTO_CHAIN_LIMIT } from './router';
 import type {
   Agent, AgentId, AgentPatch, AgentStatus, Decision, HistoryItem, HistoryPart, PendingRequest, RelayMessage, Room, RoomId, StreamEvent, UserPart,
 } from './types';
@@ -20,6 +20,21 @@ export interface EngineOptions {
   claude: { command: string; argsPrefix?: string[] };
   autoChainLimit?: number;
   env?: NodeJS.ProcessEnv;
+  /** 기본 true — false 면 대기 메시지 전달(flushAll)을 미루고 engine.start() 가 한다(리스너를 붙인 뒤 부르기 위함) */
+  autoStart?: boolean;
+}
+
+export interface EngineEventMap {
+  'agent-event': { agentId: AgentId; event: StreamEvent; viaApproval?: boolean };
+  status: { agentId: AgentId; status: AgentStatus; errorText: string | null };
+  message: RelayMessage;
+  held: { roomId: RoomId };
+  request: PendingRequest;
+  'request-resolved': { id: string; agentId: AgentId };
+  flags: { agentId: AgentId; bypass: boolean };
+  'engine-error': { agentId: string | null; message: string };
+  history: { agentId: AgentId; item: HistoryItem };
+  'held-input': { agentId: AgentId; count: number };
 }
 
 export interface AgentDescription {
@@ -35,8 +50,11 @@ export interface AgentDescription {
 //  'request'     PendingRequest   'request-resolved' { id; agentId }
 //  'flags'       { agentId; bypass: boolean }   (init.permissionMode === 'bypassPermissions')
 //  'history'     { agentId; item: HistoryItem }   (대화 기록에 한 항목이 더해질 때마다 — text-delta·init·rate-limit 은 기록하지 않는다)
+//  'held-input'  { agentId; count }   (보낼 차례를 기다리는 사람 입력 수가 바뀔 때마다)
 //  'engine-error' { agentId: string | null; message: string }  (프로세스 이벤트 처리·듣는 쪽에서 난 오류 — 앱을 죽이지 않고 알린다)
 export interface Engine extends EventEmitter {
+  /** autoStart: false 로 만들었을 때 대기 메시지 전달을 시작한다(여러 번 불러도 한 번만) */
+  start(): void;
   rooms(): Room[];
   agents(roomId?: RoomId): Agent[];
   addRoom(name: string): Room;
@@ -46,6 +64,10 @@ export interface Engine extends EventEmitter {
   updateAgent(id: AgentId, p: Pick<AgentPatch, 'name' | 'role' | 'auto' | 'pos' | 'color'>): Agent;
   removeAgent(id: AgentId): Promise<void>;
   status(id: AgentId): AgentStatus;
+  heldInput(id: AgentId): number;
+  flags(id: AgentId): { bypass: boolean };
+  setAutoChainLimit(n: number): void;
+  autoChainLimit(): number;
   errorText(id: AgentId): string | null;
   sendUser(id: AgentId, parts: UserPart[]): Promise<void>;
   interrupt(id: AgentId): Promise<void>;
@@ -69,6 +91,9 @@ const TURN_ENDED = '차례가 끝났습니다.';
 const TOOL_TEXT_KEEP = 2000;
 const STOPPED_NOTICE = '멈췄어요';
 const NO_AGENT = '에이전트를 찾을 수 없습니다.';
+const LIMIT_INVALID = '상한은 1 이상이어야 해요.';
+const DURE_TOOL_PREFIX = 'mcp__dure__';
+const DURE_TOOL_DENIED = '두레 도구는 승인 대상이 아니에요.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
 
 /** 프로세스에 써 넣었지만 아직 아무 이벤트도 안 온 줄 — 읽기 전에 죽으면 되살린다 */
@@ -82,6 +107,9 @@ class EngineImpl extends EventEmitter implements Engine {
   private described = new WeakMap<ClaudeSession, Promise<AgentDescription>>();
   private inFlight = new WeakMap<ClaudeSession, InFlight>();
   private removing = new Set<AgentId>();
+  private bypass = new Map<AgentId, boolean>(); // 마지막 init 의 권한 모드
+  private started = false;
+  private limit: number;
   private closed = false;
   private closing: Promise<void> | null = null;
   private perms: Permissions;
@@ -90,11 +118,12 @@ class EngineImpl extends EventEmitter implements Engine {
 
   constructor(private o: EngineOptions, private store: Store, private log: MessageLog, private hist: History) {
     super();
+    this.limit = this.loadLimit(o.autoChainLimit ?? AUTO_CHAIN_LIMIT);
     this.perms = new Permissions(store);
     this.router = new Router({
       store,
       log,
-      limit: o.autoChainLimit,
+      limit: this.limit,
       deliver: (id, text, messageId) => this.sendTo(id, this.ensure(id), [{ type: 'text', text }], { kind: 'relay', messageId }),
       isBusy: (id) => this.waiting(id) || (this.held.get(id)?.length ?? 0) > 0,
     });
@@ -114,7 +143,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.router.on('held', (h: { roomId: RoomId }) => this.guard(null, () => this.emit('held', h)));
   }
 
-  async start(): Promise<void> {
+  async init(): Promise<void> {
     this.mcp = await startMcpServer({
       listAgents: (agentId) => {
         const me = this.caller(agentId);
@@ -123,11 +152,43 @@ class EngineImpl extends EventEmitter implements Engine {
       },
       sendMessage: (agentId, to, text) => this.router.send(this.caller(agentId).id, to, text),
       approve: (agentId, args, signal) => {
+        if (String(args.tool_name).startsWith(DURE_TOOL_PREFIX)) return Promise.resolve({ behavior: 'deny', message: DURE_TOOL_DENIED });
         if (this.closed || this.removing.has(agentId)) return Promise.resolve({ behavior: 'deny', message: EXITED });
         return this.perms.request(agentId, args, signal); // 부른 프로세스가 끊기면 카드도 사라진다
       },
     });
+    if (this.o.autoStart !== false) this.start();
+  }
+
+  start(): void {
+    if (this.started || this.closed) return;
+    this.started = true;
     this.router.flushAll();
+  }
+
+  // ── 설정 ──
+  private settingsFile() { return path.join(this.o.dataDir, 'settings.json'); }
+
+  /** 저장된 값이 없거나 깨졌으면 fallback */
+  private loadLimit(fallback: number): number {
+    try {
+      const n = JSON.parse(fs.readFileSync(this.settingsFile(), 'utf8'))?.autoChainLimit;
+      return Number.isInteger(n) && n >= 1 ? n : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  autoChainLimit(): number { return this.limit; }
+
+  setAutoChainLimit(n: number): void {
+    if (!Number.isInteger(n) || n < 1) throw new Error(LIMIT_INVALID);
+    const file = this.settingsFile();
+    fs.mkdirSync(this.o.dataDir, { recursive: true });
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify({ autoChainLimit: n }, null, 2));
+    renameRetrying(`${file}.tmp`, file);
+    this.limit = n;
+    this.router.setLimit(n);
   }
 
   // ── 방·에이전트 ──
@@ -161,7 +222,10 @@ class EngineImpl extends EventEmitter implements Engine {
     } finally {
       this.removing.delete(id);
       this.shown.delete(id);
+      const had = this.held.get(id)?.length ?? 0;
       this.held.delete(id); // 기다리던 사람 입력은 에이전트와 함께 버린다
+      this.bypass.delete(id);
+      if (had > 0) this.guard(id, () => this.emit('held-input', { agentId: id, count: 0 }));
     }
   }
 
@@ -172,6 +236,16 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     if (s) return s.status;
     return this.errors.has(id) ? 'error' : 'idle';
+  }
+
+  heldInput(id: AgentId): number {
+    this.need(id);
+    return this.held.get(id)?.length ?? 0;
+  }
+
+  flags(id: AgentId): { bypass: boolean } {
+    this.need(id);
+    return { bypass: this.bypass.get(id) ?? false };
   }
 
   errorText(id: AgentId): string | null {
@@ -193,6 +267,7 @@ class EngineImpl extends EventEmitter implements Engine {
       q.pop();
       throw e;
     }
+    this.emitHeld(id);
     this.pump(id); // 차례 중·승인 대기면 그대로 두고, 그 차례의 result 에서 보낸다 — 두 줄을 동시에 보내지 않는다
   }
 
@@ -293,7 +368,10 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     if (!s || s.status !== 'idle' || this.perms.pending(id).length > 0) return;
     const next = this.held.get(id)?.shift();
-    if (next) this.sendTo(id, s, next, { kind: 'human', parts: next });
+    if (next) {
+      this.emitHeld(id);
+      this.sendTo(id, s, next, { kind: 'human', parts: next });
+    }
     else this.router.onIdle(id);
   }
 
@@ -315,6 +393,10 @@ class EngineImpl extends EventEmitter implements Engine {
     const full = { t: Date.now(), ...item } as HistoryItem;
     this.hist.append(id, full);
     this.guard(id, () => this.emit('history', { agentId: id, item: full }));
+  }
+
+  private emitHeld(id: AgentId): void {
+    this.guard(id, () => this.emit('held-input', { agentId: id, count: this.held.get(id)?.length ?? 0 }));
   }
 
   private heldOf(id: AgentId): UserPart[][] {
@@ -394,7 +476,11 @@ class EngineImpl extends EventEmitter implements Engine {
       this.guard(id, () => {
         if (this.store.agent(id)?.started === false) this.store.updateAgent(id, { started: true });
       });
-      this.guard(id, () => this.emit('flags', { agentId: id, bypass: ev.permissionMode === 'bypassPermissions' }));
+      this.guard(id, () => {
+        const bypass = ev.permissionMode === 'bypassPermissions';
+        this.bypass.set(id, bypass);
+        this.emit('flags', { agentId: id, bypass });
+      });
     }
     if (ev.kind === 'tool-result') {
       this.guard(id, () =>
@@ -460,7 +546,10 @@ class EngineImpl extends EventEmitter implements Engine {
     const lost = this.inFlight.get(s);
     this.inFlight.delete(s);
     if (lost?.kind === 'relay') this.router.requeue(lost.messageId);
-    else if (lost) this.heldOf(id).unshift(lost.parts);
+    else if (lost) {
+      this.heldOf(id).unshift(lost.parts);
+      this.emitHeld(id);
+    }
   }
 
   private emitStatus(id: AgentId): void {
@@ -501,6 +590,6 @@ function toDescription(p: any): AgentDescription {
 
 export async function createEngine(o: EngineOptions): Promise<Engine> {
   const engine = new EngineImpl(o, openStore(o.dataDir), openMessageLog(o.dataDir), openHistory(o.dataDir));
-  await engine.start();
+  await engine.init();
   return engine;
 }

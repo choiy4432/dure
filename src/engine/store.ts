@@ -30,7 +30,7 @@ const RENAME_BACKOFF_MS = 20;
 const pause = new Int32Array(new SharedArrayBuffer(4));
 
 /** renameSync — 잠금 오류면 RENAME_BACKOFF_MS 쉬고 RENAME_RETRIES 번까지 다시, 그래도 안 되면 던진다 */
-function renameRetrying(from: string, to: string): void {
+export function renameRetrying(from: string, to: string): void {
   for (let retry = 0; ; retry++) {
     try {
       fs.renameSync(from, to);
