@@ -45,6 +45,17 @@ export function ChatList({ agentId }: { agentId: AgentId }) {
     }
   }, [lines, v.streaming, v.status])
 
+  // 칸이 줄어도(창 크기 · 위에 카드가 생김) 맨 아래에 붙어 있었으면 바닥을 지킨다 — 줄어드는 건 스크롤 이벤트가 안 온다
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      if (stick.current && keep.current === null) el.scrollTop = el.scrollHeight
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
   const showMore = () => {
     const el = box.current
     if (el) keep.current = el.scrollHeight - el.scrollTop

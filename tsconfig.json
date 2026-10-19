@@ -8,6 +8,6 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["src", "test", "scripts", "electron.vite.config.ts"],
+  "include": ["src", "test", "scripts", "e2e", "electron.vite.config.ts", "playwright.config.ts"],
   "exclude": ["src/main", "src/preload", "src/renderer", "test/ui", "test/claudeCommand.test.ts", "test/ipc.test.ts"]
 }

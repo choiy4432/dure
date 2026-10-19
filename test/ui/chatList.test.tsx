@@ -235,4 +235,58 @@ describe('ChatList — 따라 내려가기', () => {
     await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '쓰는 중' } })
     expect(el.scrollTop).toBe(100)
   })
+
+  describe('대화 칸이 줄 때(창 크기 · 위에 카드가 생김)', () => {
+    let observed: { cb: ResizeObserverCallback; targets: Element[] }[]
+    beforeEach(() => {
+      observed = []
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          private entry: { cb: ResizeObserverCallback; targets: Element[] }
+          constructor(cb: ResizeObserverCallback) {
+            this.entry = { cb, targets: [] }
+            observed.push(this.entry)
+          }
+          observe(el: Element) {
+            this.entry.targets.push(el)
+          }
+          unobserve() {}
+          disconnect() {
+            this.entry.targets = []
+          }
+        },
+      )
+    })
+    afterEach(() => vi.unstubAllGlobals())
+    /** el 을 지켜보는 ResizeObserver 들에 크기가 바뀌었다고 알린다 */
+    const resized = (el: Element) =>
+      act(() => {
+        for (const o of observed) if (o.targets.includes(el)) o.cb([], {} as ResizeObserver)
+      })
+
+    it('맨 아래에 붙어 있었으면 바닥을 지킨다 — 마지막 줄이 칸 밑으로 숨지 않게', async () => {
+      await renderPanel()
+      const el = conv()
+      const size = { scrollHeight: 1000, clientHeight: 400 }
+      fakeScroll(el, size)
+      el.scrollTop = 600
+      fireEvent.scroll(el)
+      size.clientHeight = 300
+      await resized(el)
+      expect(el.scrollTop).toBe(1000)
+    })
+
+    it('위로 올려 읽는 중이면 그대로 둔다', async () => {
+      await renderPanel()
+      const el = conv()
+      const size = { scrollHeight: 1000, clientHeight: 400 }
+      fakeScroll(el, size)
+      el.scrollTop = 100
+      fireEvent.scroll(el)
+      size.clientHeight = 300
+      await resized(el)
+      expect(el.scrollTop).toBe(100)
+    })
+  })
 })

@@ -9,6 +9,24 @@ let mainWindow: BrowserWindow | null = null
 let engine: Engine | null = null
 let exitCode = 0
 
+// Test-only hook: DURE_USER_DATA isolates the data folder (and the single-instance lock, which lives there) — set before anything reads it.
+if (process.env.DURE_USER_DATA) app.setPath('userData', process.env.DURE_USER_DATA)
+
+/** Test-only hook: DURE_E2E_FOLDERS (JSON array) — pickFolder hands these out in order instead of opening the dialog, then null. */
+function e2eFolders(raw: string | undefined): (() => string | null) | null {
+  if (!raw) return null
+  const bad = new Error('DURE_E2E_FOLDERS 는 JSON 배열이어야 해요')
+  let list: unknown
+  try {
+    list = JSON.parse(raw)
+  } catch {
+    throw bad
+  }
+  if (!Array.isArray(list) || !list.every((x) => typeof x === 'string')) throw bad
+  let next = 0
+  return () => (next < list.length ? list[next++] : null)
+}
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1440,
@@ -63,10 +81,12 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('window-all-closed', () => app.quit())
 
-  // Test-only hooks: DURE_SMOKE_EXIT_MS (self-quit after N ms), DURE_NO_DIALOG=1 (skip the error box, still exit 1).
+  // Test-only hooks: DURE_SMOKE_EXIT_MS (self-quit after N ms), DURE_NO_DIALOG=1 (skip the error box, still exit 1),
+  // DURE_USER_DATA and DURE_E2E_FOLDERS (above) — the E2E (e2e/app.spec.ts) sets them with DURE_CLAUDE_COMMAND/ARGS.
   void app
     .whenReady()
     .then(async () => {
+      const nextE2eFolder = e2eFolders(process.env.DURE_E2E_FOLDERS)
       const claude = resolveClaudeCommand(process.env, () => locateClaude())
       if (claude) {
         engine = await createEngine({
@@ -84,6 +104,7 @@ if (!app.requestSingleInstanceLock()) {
         },
         {
           async pickFolder() {
+            if (nextE2eFolder) return nextE2eFolder()
             const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
             return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0]
           },

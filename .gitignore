@@ -8,3 +8,5 @@ scripts/probe/*.jsonl
 scripts/probe/mcp*.json
 .impeccable/questions/
 .impeccable/review/
+test-results/
+playwright-report/
