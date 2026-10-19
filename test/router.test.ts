@@ -204,3 +204,34 @@ test('message 이벤트는 만들 때와 상태 바뀔 때마다', () => {
   router.approve(log.list()[0].id);
   expect(seen).toEqual(['pending', 'queued', 'delivered']);
 });
+
+function deadSenderSetup() {
+  const c = store.addAgent({ roomId, name: 'Third', role: '셋째', folder: dir });
+  auto(b.id);
+  busy.add(b.id);
+  router.send(a.id, 'Backend', 'fromA');
+  router.send(c.id, 'Backend', 'fromC');
+  store.removeAgent(a.id);
+  return c;
+}
+
+test('onIdle: 보낸 쪽이 지워진 메시지는 dismissed, 다음 것을 전달', () => {
+  const c = deadSenderSetup();
+  router.onIdle(b.id);
+  const [ma, mc] = log.list({ to: b.id });
+  expect(ma.state).toBe('dismissed');
+  expect(mc.state).toBe('delivered');
+  expect(deliver).toHaveBeenCalledTimes(1);
+  expect(deliver).toHaveBeenCalledWith(b.id, formatDelivery(c, 'fromC'));
+});
+
+test('flushAll: 보낸 쪽이 지워진 메시지는 dismissed, 다음 것을 전달', () => {
+  const c = deadSenderSetup();
+  busy.delete(b.id);
+  router.flushAll();
+  const [ma, mc] = log.list({ to: b.id });
+  expect(ma.state).toBe('dismissed');
+  expect(mc.state).toBe('delivered');
+  expect(deliver).toHaveBeenCalledTimes(1);
+  expect(deliver).toHaveBeenCalledWith(b.id, formatDelivery(c, 'fromC'));
+});

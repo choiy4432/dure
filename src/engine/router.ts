@@ -64,7 +64,7 @@ export class Router extends EventEmitter {
     this.chains.set(roomId, this.chain(roomId) + 1);
     const m = log.create({ roomId, from: from.id, to: target.id, text, state: 'queued' });
     this.record(m);
-    return this.tryDeliver(m.id)
+    return this.tryDeliver(m.id) === 'delivered'
       ? `${target.name} 에게 전달했습니다.`
       : `${target.name} 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.`;
   }
@@ -90,16 +90,18 @@ export class Router extends EventEmitter {
   }
 
   onIdle(agentId: AgentId): void {
-    const [oldest] = this.d.log.list({ to: agentId, states: ['queued'] });
-    if (oldest) this.tryDeliver(oldest.id, true);
+    this.drain(agentId, true);
   }
 
   flushAll(): void {
-    const seen = new Set<AgentId>();
-    for (const m of this.d.log.list({ states: ['queued'] })) {
-      if (seen.has(m.to)) continue;
-      seen.add(m.to);
-      if (!this.d.isBusy(m.to)) this.tryDeliver(m.id);
+    const targets = new Set(this.d.log.list({ states: ['queued'] }).map((m) => m.to));
+    for (const to of targets) if (!this.d.isBusy(to)) this.drain(to, false);
+  }
+
+  /** 받는 쪽의 queued 중 가장 오래된 것을 전달. 보낸 쪽이 지워진 메시지는 취소하고 다음 것으로 넘어간다. */
+  private drain(to: AgentId, ignoreBusy: boolean): void {
+    for (const m of this.d.log.list({ to, states: ['queued'] })) {
+      if (this.tryDeliver(m.id, ignoreBusy) !== 'dismissed') return;
     }
   }
 
@@ -110,19 +112,22 @@ export class Router extends EventEmitter {
   }
 
   /** queued 메시지를 전달 시도(ignoreBusy: 호출한 쪽이 한가하다고 알려 준 경우). 바쁘거나 deliver 가 던지면 queued 로 남는다. */
-  private tryDeliver(id: string, ignoreBusy = false): boolean {
+  private tryDeliver(id: string, ignoreBusy = false): 'delivered' | 'wait' | 'dismissed' {
     const m = this.d.log.get(id);
-    if (!m || m.state !== 'queued') return false;
-    if (!ignoreBusy && this.d.isBusy(m.to)) return false;
+    if (!m || m.state !== 'queued') return 'wait';
+    if (!ignoreBusy && this.d.isBusy(m.to)) return 'wait';
     const from = this.d.store.agent(m.from);
-    if (!from) return false;
+    if (!from) {
+      this.record(this.d.log.setState(id, 'dismissed'));
+      return 'dismissed';
+    }
     try {
       this.d.deliver(m.to, formatDelivery(from, m.text));
     } catch {
-      return false;
+      return 'wait';
     }
     this.record(this.d.log.setState(id, 'delivered'));
-    return true;
+    return 'delivered';
   }
 
   private record(m: RelayMessage): void {
