@@ -180,6 +180,15 @@ describe('EffortControl — 펼침', () => {
     expect(document.activeElement).toBe(chip())
   })
 
+  it('칩에 초점이 있어도 Esc 로 닫는다', () => {
+    mount({ effortNow: 'high' })
+    open()
+    chip().focus()
+    fireEvent.keyDown(chip(), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(chip())
+  })
+
   it('effort 를 못 정하는 모델 → 안내만, 슬라이더 없음', () => {
     mount({ model: 'haiku' })
     open()
@@ -268,5 +277,76 @@ describe('EffortControl — 고친 것(리뷰 1)', () => {
     await act(async () => { fail(new Error('못 바꿔요')) })
     expect(onError).toHaveBeenCalledWith('못 바꿔요')
     expect(slider().getAttribute('aria-valuetext')).toBe('medium')
+  })
+})
+
+describe('EffortControl — 끌어서 바꾸기', () => {
+  const track = () => document.querySelector('.eff-track') as HTMLElement
+  const prep = () => {
+    const t = track()
+    t.getBoundingClientRect = () => ({ left: 0, width: 200, top: 0, height: 4, right: 200, bottom: 4, x: 0, y: 0, toJSON: () => ({}) })
+    t.setPointerCapture = vi.fn()
+    t.releasePointerCapture = vi.fn()
+    return t
+  }
+  const down = (x: number) => fireEvent.pointerDown(track(), { clientX: x, pointerId: 1 })
+  const move = (x: number) => fireEvent.pointerMove(track(), { clientX: x, pointerId: 1 })
+
+  it('막대 오른쪽 끝을 누르면 바로 max, 포인터를 붙잡고 슬라이더로 초점', () => {
+    mount({ effortNow: 'low' })
+    open()
+    const t = prep()
+    down(200)
+    expect(slider().getAttribute('aria-valuetext')).toBe('max')
+    expect(t.setPointerCapture).toHaveBeenCalledWith(1)
+    expect(document.activeElement).toBe(slider())
+  })
+
+  it('왼쪽 끝을 누르고 가운데로 끌면 high 가 바로 보이고, 300ms 뒤 setEffort 한 번(high)', () => {
+    vi.useFakeTimers()
+    mount({ effortNow: 'xhigh' })
+    open()
+    prep()
+    down(0)
+    move(100)
+    expect(slider().getAttribute('aria-valuetext')).toBe('high')
+    act(() => { vi.advanceTimersByTime(300) })
+    expect(setEffort).toHaveBeenCalledTimes(1)
+    expect(setEffort).toHaveBeenCalledWith('w', 'high')
+  })
+
+  it('모델이 지원하는 눈금만 고른다 — 오른쪽 끝은 가장 가까운 high', () => {
+    mount({ model: 'small', effortNow: 'low' })
+    open()
+    prep()
+    down(200)
+    expect(slider().getAttribute('aria-valuetext')).toBe('high')
+  })
+
+  it('두 눈금 한가운데에서 못 쓰는 눈금이면 낮은 쪽', () => {
+    mount({ model: 'small', effortNow: 'low' })
+    open()
+    prep()
+    down(150) // 0.75 → 3(xhigh, 못 씀) → 2(high) 와 4(max, 못 씀)
+    expect(slider().getAttribute('aria-valuetext')).toBe('high')
+  })
+
+  it('손을 떼면 붙잡기를 풀고 그 뒤 움직임은 따라가지 않는다', () => {
+    mount({ effortNow: 'low' })
+    open()
+    const t = prep()
+    down(0)
+    fireEvent.pointerUp(t, { pointerId: 1 })
+    expect(t.releasePointerCapture).toHaveBeenCalledWith(1)
+    move(200)
+    expect(slider().getAttribute('aria-valuetext')).toBe('low')
+  })
+
+  it('누르지 않고 움직이기만 하면 아무 일도 없다', () => {
+    mount({ effortNow: 'low' })
+    open()
+    prep()
+    move(200)
+    expect(slider().getAttribute('aria-valuetext')).toBe('low')
   })
 })

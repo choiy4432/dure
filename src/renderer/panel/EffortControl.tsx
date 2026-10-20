@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { EFFORT_LEVELS, type EffortLevel } from '../../engine/types'
 import { errorMessage } from '../lib/words'
 import { useDismiss } from '../lib/popover'
@@ -35,6 +35,8 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
   const wrap = useRef<HTMLSpanElement>(null)
   const chip = useRef<HTMLButtonElement>(null)
   const slider = useRef<HTMLDivElement>(null)
+  const dragging = useRef(false)
+  const [grab, setGrab] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const close = useCallback(() => setOpen(false), [])
   useDismiss(open, wrap, close)
@@ -133,14 +135,51 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
     return null
   }
 
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      e.stopPropagation()
-      setOpen(false)
-      chip.current?.focus()
-      return
+  // Esc — 초점이 칩에 있어도 닫히게 감싸는 칸에 건다
+  const onEsc = (e: KeyboardEvent<HTMLSpanElement>) => {
+    if (e.key !== 'Escape' || !open) return
+    e.preventDefault()
+    e.stopPropagation()
+    setOpen(false)
+    chip.current?.focus()
+  }
+
+  /** 막대 위 x 좌표 → 모델이 지원하는 가장 가까운 눈금(같은 거리면 낮은 쪽) */
+  const levelAt = (clientX: number, track: HTMLElement): EffortLevel | null => {
+    const r = track.getBoundingClientRect()
+    if (!(r.width > 0)) return null
+    const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width))
+    const i = Math.round(f * (EFFORT_LEVELS.length - 1))
+    for (let d = 0; d < EFFORT_LEVELS.length; d++) {
+      if (i - d >= 0 && allowed(EFFORT_LEVELS[i - d])) return EFFORT_LEVELS[i - d]
+      if (i + d < EFFORT_LEVELS.length && allowed(EFFORT_LEVELS[i + d])) return EFFORT_LEVELS[i + d]
     }
+    return null
+  }
+
+  const follow = (e: PointerEvent<HTMLDivElement>) => {
+    const level = levelAt(e.clientX, e.currentTarget)
+    if (level) choose(level)
+  }
+  const onDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button > 0) return
+    dragging.current = true
+    setGrab(true)
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* 붙잡기를 못 해도 눌린 자리는 반영 */ }
+    e.currentTarget.focus()
+    follow(e)
+  }
+  const onMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (dragging.current) follow(e)
+  }
+  const onUp = (e: PointerEvent<HTMLDivElement>) => {
+    if (!dragging.current) return
+    dragging.current = false
+    setGrab(false)
+    try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* 이미 풀림 */ }
+  }
+
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('button')) return // 눈금·다시 받기 단추는 제 키(Enter·Space)대로
     let next: EffortLevel | null | undefined
     if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = nearest(index, 1)
@@ -153,7 +192,7 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
   }
 
   return (
-    <span className={`mp eff${narrow ? ' narrow' : ''}`} ref={wrap}>
+    <span className={`mp eff${narrow ? ' narrow' : ''}`} ref={wrap} onKeyDown={onEsc}>
       <button
         ref={chip}
         type="button"
@@ -182,7 +221,11 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
               <>
                 <div
                   ref={slider}
-                  className="eff-track"
+                  className={`eff-track${grab ? ' grab' : ''}`}
+                  onPointerDown={onDown}
+                  onPointerMove={onMove}
+                  onPointerUp={onUp}
+                  onPointerCancel={onUp}
                   role="slider"
                   tabIndex={0}
                   aria-label="생각하는 정도"

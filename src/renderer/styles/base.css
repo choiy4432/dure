@@ -2930,6 +2930,7 @@ code {
   border-radius: var(--radius-pill);
   background: var(--border);
   cursor: pointer;
+  touch-action: none;
 }
 
 .eff-track:focus-visible {
@@ -2955,6 +2956,12 @@ code {
   border-radius: var(--radius-dot);
   background: var(--bg);
   border: 2px solid var(--primary);
+  cursor: grab;
+}
+
+.eff-track.grab,
+.eff-track.grab .eff-knob {
+  cursor: grabbing;
 }
 
 .eff-ticks {
