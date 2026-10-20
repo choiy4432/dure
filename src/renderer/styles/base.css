@@ -3170,6 +3170,11 @@ code {
   --clamp-pad: 18px;
 }
 
+/* 마크다운 본문 — 문단 사이 여백(.md 블록 위 8px) 둘만큼 더: 한 줄 문단 셋은 접지 않는다(맞으면 지금 모양 그대로) */
+.clamp-box.clamp-md {
+  --clamp-pad: 16px;
+}
+
 .clamp-more {
   margin-top: 2px;
 }

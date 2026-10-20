@@ -155,7 +155,7 @@ function ChatItemView({ line, folded = false }: Props) {
       return (
         <div className="ci-relay">
           {who}
-          <Clamp>
+          <Clamp className="clamp-md">
             <Markdown text={line.text} />
           </Clamp>
         </div>

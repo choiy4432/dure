@@ -1,5 +1,6 @@
 // E2E — 빌드된 앱(out/)을 가짜 claude(test/fakeClaude.mjs)로 띄워 처음부터 끝까지 한 번 써 본다.
-// 방 만들기 → 에이전트 둘 → 넘김(확인 대기 → 일 시키기 → 전달됨) → 승인 → 큰 이미지 → 다시 켜기 → 검수 캡처 두 장.
+// 방 만들기 → 에이전트 둘 → 넘김(확인 대기 → 일 시키기 → 전달됨) → 승인 → 큰 이미지 → 다시 켜기 → 검수 캡처 두 장
+// → 펼침 캡처 → 받은 메시지 접기(실제 배치로 잰다).
 // 실행: `npm run build` 다음 `npm run e2e`.
 import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import crypto from 'node:crypto'
@@ -18,6 +19,9 @@ const ROOM = '여름 캠페인'
 const PLAN = { name: '기획', role: '기획서 · 문구' }
 const WEB = { name: '웹 화면', role: '화면 만들기' }
 const HANDOFF_TEXT = '배너 문구 바꿔 주세요'
+/** 접기 확인용 — 한 줄 문단 셋(접지 않는다) · 한 줄 문단 여섯(접는다) */
+const THREE_PARAS = ['첫째 줄이에요', '둘째 줄이에요', '셋째 줄이에요']
+const SIX_PARAS = ['하나', '둘', '셋', '넷', '다섯', '여섯'].map((n) => `${n}째 문단이에요`)
 const IMAGE_TEXT = '이 시안 봐 주세요'
 /** 한 장 상한 — 보낸 base64 글 기준(renderer lib/image.ts 와 같은 수) */
 const MAX_SENT = 5 * 1024 * 1024
@@ -417,6 +421,24 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       expect(pop!.y).toBeGreaterThanOrEqual(0)
       expect(pop!.y + pop!.height).toBeLessThanOrEqual(700)
       await page.keyboard.press('Escape')
+    })
+
+    await test.step('8. 받은 메시지 접기 — 한 줄 문단 셋은 그대로, 여섯은 3줄 + 흐림', async () => {
+      await node(page, PLAN.name).locator('.nh').click()
+      await expect(panel(page, PLAN.name)).toBeVisible()
+      await say(page, PLAN.name, `SEND ${WEB.name}: ${THREE_PARAS.join('\n\n')}`)
+      await say(page, PLAN.name, `SEND ${WEB.name}: ${SIX_PARAS.join('\n\n')}`)
+      await node(page, WEB.name).locator('.nh').click()
+      const web = panel(page, WEB.name)
+      const short = web.locator('.pin', { hasText: THREE_PARAS[2] })
+      const long = web.locator('.pin', { hasText: SIX_PARAS[0] })
+      await expect(short.locator('.md p')).toHaveCount(3)
+      await expect(long.locator('.md p')).toHaveCount(6)
+      await page.evaluate(() => document.fonts.ready.then(() => undefined))
+      await expect(short.locator('.clamp-box')).not.toHaveClass(/\bclamped\b/)
+      await expect(short.getByRole('button', { name: '더 보기' })).toHaveCount(0)
+      await expect(long.locator('.clamp-box')).toHaveClass(/\bclamped\b/)
+      await expect(long.getByRole('button', { name: '더 보기' })).toHaveCount(1)
     })
 
     expect(run.pageErrors).toEqual([])

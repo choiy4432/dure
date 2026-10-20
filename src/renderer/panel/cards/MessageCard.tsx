@@ -78,7 +78,7 @@ export function MessageCard({ message, fromName, toName, now, open, onOpenChange
       {open && (
         <>
           <div className="pin-b">
-            <Clamp>
+            <Clamp className="clamp-md">
               <Markdown text={message.text} />
             </Clamp>
           </div>

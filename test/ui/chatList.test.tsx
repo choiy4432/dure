@@ -554,6 +554,7 @@ ${LONG}` }] },
       await renderPanel()
       const relay = conv().querySelector('.ci-relay') as HTMLElement
       expect(relay.querySelector('.clamp-box')).toHaveClass('clamped')
+      expect(relay.querySelector('.clamp-box')).toHaveClass('clamp-md') // 문단 사이 여백만큼 더(접기 기준)
       expect(within(relay).getByRole('button', { name: '더 보기' })).toBeInTheDocument()
       const claude = conv().querySelector('.ci-claude') as HTMLElement
       expect(claude.querySelector('.clamp')).toBeNull()
@@ -569,6 +570,7 @@ ${LONG}` }] },
       expect(conv().querySelector('.ci-local')!.closest('.clamp-box')).toHaveClass('clamped')
       fireEvent.click(within(conv()).getByRole('button', { name: /실행/ }))
       expect(conv().querySelector('.act-out pre')!.closest('.clamp-box')).toHaveClass('clamped')
+      expect(conv().querySelectorAll('.clamp-box.clamp-md')).toHaveLength(0) // 고정폭 출력엔 문단 여백이 없다
     })
   })
 })

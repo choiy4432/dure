@@ -66,6 +66,13 @@ describe('Clamp', () => {
     expect(boxOf(container).style.getPropertyValue('--clamp-lines')).toBe('5')
   })
 
+  it('마크다운 상자(clamp-md)는 문단 사이 여백 둘(16px)만큼 더 — 한 줄 문단 셋은 접지 않는다(실제 배치는 e2e 8단계)', async () => {
+    const fsName: string = 'node:fs'
+    const css: string = (await import(/* @vite-ignore */ fsName)).readFileSync('src/renderer/styles/base.css', 'utf8')
+    expect(css).toMatch(/\.clamp-box\.clamp-md\s*\{[^}]*--clamp-pad:\s*16px/)
+    expect(css).toMatch(/\.md p,[^{]*\{[^}]*margin:\s*8px 0 0/) // 그 16px 의 근거 — 문단 사이 8px
+  })
+
   it('상자 크기가 바뀌면 다시 잰다 — 좁아져서 넘치면 버튼이 생긴다', () => {
     let fire: () => void = () => {}
     vi.stubGlobal('ResizeObserver', class {

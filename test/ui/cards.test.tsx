@@ -107,6 +107,7 @@ describe('받은 메시지 카드', () => {
     await renderPanel('s')
     const c = card('웹 화면이 보낸 메시지')
     expect(c.querySelector('.pin-b .clamp-box')).toHaveClass('clamped')
+    expect(c.querySelector('.pin-b .clamp-box')).toHaveClass('clamp-md') // 문단 사이 여백만큼 더(접기 기준)
     expect(within(c).getByRole('button', { name: '더 보기' })).toBeInTheDocument()
   })
 
