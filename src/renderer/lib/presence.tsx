@@ -230,6 +230,11 @@ function settle(el: MotionTarget, s: MotionStep) {
   if (s.y !== undefined || s.scale !== undefined) el.style.removeProperty('transform')
 }
 
+/** 요소 하나를 쉬는 자리로 들어오게 한다(useMotion 과 같은 값) — 끝나면 transform 을 지운다. 움직임 줄이기는 부르는 쪽이 거른다 */
+export function playEnter(el: MotionTarget, step: MotionStep): void {
+  animate(el, { ...enterProps(step), duration: step.ms, ease: step.ease, onComplete: () => settle(el, step) })
+}
+
 /** 나가는 동안은 누를 수도 초점이 갈 수도 없다 — 그 아래·옆을 누르면 바로 먹힌다 */
 function setInert(el: MotionTarget, on: boolean) {
   if (el instanceof HTMLElement) {
@@ -273,8 +278,7 @@ export function useMotion(
     const { spec, ctx, appear } = live.current
     if (enters.current === null) enters.current = appear ?? (ctx ? ctx.entering() : true)
     if (enters.current && !reducedMotion()) {
-      const step = spec.enter
-      animate(el, { ...enterProps(step), duration: step.ms, ease: step.ease, onComplete: () => settle(el, step) })
+      playEnter(el, spec.enter)
     }
     const unregister = ctx && spec.exit ? ctx.register(id, spec.exit.ms) : undefined
     return () => {

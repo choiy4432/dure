@@ -28,18 +28,18 @@ const ICONS: Record<ToolIcon, ComponentType<LucideProps>> = {
 const ASKS_FIRST = new Set(['수정', '만듦', '실행', '웹에서 찾아봄'])
 
 /** 명령 출력 — 아는 출력(/compact)은 가운데 한국어 한 줄 + 접힌 '자세히'(영어 원문), 모르는 출력은 원문 상자 그대로 */
-function LocalLine({ text }: { text: string }) {
+function LocalLine({ text, index }: { text: string; index?: number }) {
   const [open, setOpen] = useState(false)
   const id = useId()
   const summary = localSummary(text)
   if (!summary)
     return (
-      <Clamp className="clamp-mono pad">
+      <Clamp className="clamp-mono pad" dataLine={index}>
         <pre className="ci-local">{text}</pre>
       </Clamp>
     )
   return (
-    <div className="ci-sys">
+    <div className="ci-sys" data-line={index}>
       <p className="note">
         {summary}
         <button type="button" className="lk sys-more" aria-expanded={open} aria-controls={id} onClick={() => setOpen(o => !o)}>
@@ -101,7 +101,7 @@ function firstLine(text: string): string {
 function LiveLine({ text }: { text: string }) {
   const shown = useFrameValue(text)
   return (
-    <div className="ci-live" aria-busy="true">
+    <div className="ci-live" aria-busy="true" data-line="live">
       <div className="who">Claude</div>
       <Markdown text={shown} caret />
     </div>
@@ -112,14 +112,16 @@ interface Props {
   line: ChatLine
   /** 전달된 메시지가 위 고정 카드에 펼쳐져 있다 — 한 줄(누구에게서 온 메시지 + 첫 줄)로 접는다 */
   folded?: boolean
+  /** 줄 번호(앞에 숨긴 줄 포함) — 뿌리 요소의 data-line. 새 줄이 들어올 때 ChatList 가 집는다 */
+  index?: number
 }
 
 /** 대화 한 줄 — 사람 말풍선 · 전달된 메시지 · Claude 블록(+ 하는 일) · 알림 · 명령 출력 · 흐르는 글 */
-function ChatItemView({ line, folded = false }: Props) {
+function ChatItemView({ line, folded = false, index }: Props) {
   switch (line.kind) {
     case 'me':
       return (
-        <div className="me">
+        <div className="me" data-line={index}>
           {line.images > 0 && (
             <span className="me-img">
               <ImageIcon className="i" aria-hidden="true" />
@@ -146,14 +148,14 @@ function ChatItemView({ line, folded = false }: Props) {
       )
       if (folded) {
         return (
-          <div className="ci-relay fold">
+          <div className="ci-relay fold" data-line={index}>
             {who}
             <p className="fold-t trunc">{firstLine(line.text)}</p>
           </div>
         )
       }
       return (
-        <div className="ci-relay">
+        <div className="ci-relay" data-line={index}>
           {who}
           <Clamp className="clamp-md">
             <Markdown text={line.text} />
@@ -163,7 +165,7 @@ function ChatItemView({ line, folded = false }: Props) {
     }
     case 'claude':
       return (
-        <div className="ci-claude">
+        <div className="ci-claude" data-line={index}>
           <div className="who">Claude</div>
           {line.text && <Markdown text={line.text} />}
           {line.actions.length > 0 && (
@@ -176,9 +178,9 @@ function ChatItemView({ line, folded = false }: Props) {
         </div>
       )
     case 'notice':
-      return <p className="note">{line.text}</p>
+      return <p className="note" data-line={index}>{line.text}</p>
     case 'local':
-      return <LocalLine text={line.text} />
+      return <LocalLine text={line.text} index={index} />
     case 'streaming':
       return <LiveLine text={line.text} />
   }
@@ -190,7 +192,7 @@ const sameAction = (a: ActionLine, b: ActionLine) =>
 
 /** 기록이 하나 늘 때마다 줄 객체는 새로 만들어진다 — 내용이 같으면 다시 그리지 않는다(마크다운을 다시 읽지 않게) */
 function sameLine(prev: Props, next: Props): boolean {
-  if (!!prev.folded !== !!next.folded) return false
+  if (!!prev.folded !== !!next.folded || prev.index !== next.index) return false
   const a = prev.line
   const b = next.line
   if (a === b) return true

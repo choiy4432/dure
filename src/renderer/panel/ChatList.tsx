@@ -7,6 +7,9 @@ import { useNow } from '../lib/useNow'
 import { ChatItem } from './ChatItem'
 import { pinOpen } from './cards/MessageCard'
 import { WorkingRow } from './WorkingRow'
+import { enteringLines, type LineSnap } from './newLines'
+import { Presence, playEnter } from '../lib/presence'
+import { MOTION, reducedMotion } from '../lib/motion'
 
 /** 처음에 그리는 줄 수 · '더 보기' 한 번에 늘리는 수 */
 const PAGE = 300
@@ -67,6 +70,24 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
     }
   }, [lines, v.streaming, v.status, work.on])
 
+  // 보는 동안 새로 온 줄만 아래에서 들어온다 — 처음 그린 것 · 더 보기 · 기록 다시 받기 · 흐르던 글이 줄이 된 것은 아니다
+  const snap = useRef<LineSnap | null>(null)
+  useLayoutEffect(() => {
+    const cur: LineSnap = { agentId, ready: v.status === 'ready', total: hiddenBefore + lines.length, streaming: !!v.streaming }
+    const enter = enteringLines(snap.current, cur)
+    snap.current = cur
+    const el = box.current
+    if (!enter || !el || reducedMotion()) return
+    for (let n = enter.from; n < enter.to; n++) {
+      const node = el.querySelector<HTMLElement>(`[data-line="${n}"]`)
+      if (node) playEnter(node, MOTION.line.enter)
+    }
+    if (enter.live) {
+      const node = el.querySelector<HTMLElement>('[data-line="live"]')
+      if (node) playEnter(node, MOTION.line.enter)
+    }
+  })
+
   // 내가 보냈다 — 내 말이 보이게 맨 아래로, 뒤에 오는 줄(내 말·답)도 따라가게 다시 붙인다
   useLayoutEffect(() => {
     const el = box.current
@@ -113,10 +134,12 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
         )}
         {lines.map((line, i) => (
           // 줄 번호(앞에 숨긴 줄 포함)는 새 줄이 붙어도 그대로 — 펼친 하는 일이 닫히지 않는다
-          <ChatItem key={hiddenBefore + i} line={line} folded={line.kind === 'relay' && !!line.messageId && line.messageId === pinned} />
+          <ChatItem key={hiddenBefore + i} index={hiddenBefore + i} line={line} folded={line.kind === 'relay' && !!line.messageId && line.messageId === pinned} />
         ))}
         {v.streaming && <ChatItem line={{ kind: 'streaming', text: v.streaming }} />}
-        {work.on && <WorkingRow since={work.since} />}
+        <Presence show={work.on}>
+          <WorkingRow since={work.since} />
+        </Presence>
       </section>
     </div>
   )
