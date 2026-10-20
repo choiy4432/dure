@@ -334,6 +334,8 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
 
     await test.step('6. 검수 캡처 — 1440×900 · 1280×800', async () => {
       fs.mkdirSync(REVIEW_DIR, { recursive: true })
+      // 다시 켠 뒤 사용량 전용 프로세스가 값을 가져올 때까지 — 캡처에 위 띠 막대가 보이게
+      await expect(page.locator('header.top .usg-btn')).toContainText('81%', { timeout: 10_000 })
       // 마지막 대화 줄 — 창이 줄어도 대화 칸 밑으로 숨지 않는다(맨 아래에 붙어 있던 목록)
       const lastLine = panel(page, WEB.name).locator('.conv > *').last()
       await capture(run!, 1440, 900, path.join(REVIEW_DIR, 'desktop.png'))
