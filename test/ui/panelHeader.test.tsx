@@ -480,3 +480,17 @@ describe('ConfirmDialog', () => {
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('PanelHeader — effort 칩 자리', () => {
+  it('둘째 줄에서 모델 칩 다음이 effort 칩, 그 다음이 자동 스위치', async () => {
+    snapshot.agents = [agent('w', { name: '웹 화면', effort: 'high' })]
+    await renderPanel()
+    const row = document.querySelector('.ph-r2')!
+    const kids = Array.from(row.children)
+    const model = kids.findIndex(k => k.contains(modelChip()))
+    const eff = kids.findIndex(k => k.querySelector('button[aria-label="effort high"]'))
+    const auto = kids.findIndex(k => k.getAttribute('role') === 'switch')
+    expect(eff).toBe(model + 1)
+    expect(auto).toBe(eff + 1)
+  })
+})

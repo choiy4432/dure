@@ -6,6 +6,7 @@ import { getStore, useDure } from '../state/store'
 import { displayStatus, type DisplayStatus } from '../state/selectors'
 import { errorMessage, fieldError, initial, STATUS_WORD } from '../lib/words'
 import { ModelPicker, type Described } from './ModelPicker'
+import { EffortControl } from './EffortControl'
 import { AgentMenu } from './AgentMenu'
 
 // 상태 알약 — 작업 중 초록 · 승인 기다림 앰버 · 대기 회색 · 멈춤 빨강
@@ -128,6 +129,16 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
             onRetry={onRetryDescribe}
             open={modelOpen}
             onOpenChange={onModelOpenChange}
+            onError={setError}
+          />
+          <EffortControl
+            agentId={agent.id}
+            effort={agent.effort}
+            effortNow={agent.effortNow}
+            model={agent.model}
+            description={description}
+            onLoad={onLoadDescription}
+            onRetry={onRetryDescribe}
             onError={setError}
           />
           <button

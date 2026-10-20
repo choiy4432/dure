@@ -1,0 +1,202 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { EFFORT_LEVELS, type EffortLevel } from '../../engine/types'
+import { errorMessage } from '../lib/words'
+import { useDismiss } from '../lib/popover'
+import type { Described } from './ModelPicker'
+
+interface Props {
+  agentId: string
+  /** 내가 정한 값 */
+  effort: EffortLevel | null
+  /** Claude 가 지금 쓰는 값 */
+  effortNow: EffortLevel | null
+  /** agent.model — null 이면 기본(default) */
+  model: string | null
+  description: Described
+  onLoad: () => void
+  onRetry: () => void
+  /** 못 바꿨을 때 엔진 문구 */
+  onError?: (message: string) => void
+}
+
+/** 패널이 이 너비(px)보다 좁으면 칩은 막대만 */
+const NARROW_PX = 400
+/** 마지막 움직임 뒤 이만큼 가만히 있으면 Claude 에 보낸다 */
+const SEND_DELAY_MS = 300
+/** effort 를 못 정하는 모델 */
+const NO_EFFORT = '이 모델은 effort 를 정할 수 없어요'
+
+/** 패널 머리의 effort 칩(막대 5개 + 단계 이름) + 다섯 단계 슬라이더 */
+export function EffortControl({ agentId, effort, effortNow, model, description, onLoad, onRetry, onError }: Props) {
+  const [open, setOpen] = useState(false)
+  const [narrow, setNarrow] = useState(false)
+  // 움직인 값 — 화면은 바로 이 값, Claude 로는 300 ms 뒤 마지막 값 하나만
+  const [pending, setPending] = useState<EffortLevel | null>(null)
+  const wrap = useRef<HTMLSpanElement>(null)
+  const chip = useRef<HTMLButtonElement>(null)
+  const slider = useRef<HTMLDivElement>(null)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const close = useCallback(() => setOpen(false), [])
+  useDismiss(open, wrap, close)
+
+  const settled = effortNow ?? effort
+  const shown = pending ?? settled
+
+  // 서버 쪽 값이 움직인 값을 따라잡으면 놓는다
+  useEffect(() => {
+    if (pending && settled === pending) setPending(null)
+  }, [pending, settled])
+
+  // 패널(.pnl) 너비 — 좁으면 이름을 숨긴다
+  useLayoutEffect(() => {
+    const host = wrap.current?.closest('.pnl') ?? wrap.current?.parentElement
+    if (!host) return
+    const measure = () => {
+      const w = host.getBoundingClientRect().width
+      setNarrow(w > 0 && w < NARROW_PX)
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(host)
+    return () => ro.disconnect()
+  }, [])
+
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current)
+  }, [])
+
+  // 처음 열 때 한 번 describe — 열기만으로 Claude 를 켜지 않는다(이미 받았으면 안 부름)
+  useEffect(() => {
+    if (open && description.state === 'idle') onLoad()
+  }, [open, description.state, onLoad])
+
+  useEffect(() => {
+    if (open && description.state === 'ready') slider.current?.focus()
+  }, [open, description.state])
+
+  const current = model ?? 'default'
+  const models = description.state === 'ready' ? description.value.models : null
+  const info = models?.find(m => m.value === current)
+  // describe 를 받은 뒤에만 안다 — 목록에 있는데 effort 를 못 정하는 모델이면 막는다
+  const unsupported = !!info && !info.supportsEffort
+  const allowed = (level: EffortLevel) => !info?.effortLevels || info.effortLevels.includes(level)
+
+  const name = shown ?? '내 설정'
+  const label = `effort ${name}`
+  const filled = shown ? EFFORT_LEVELS.indexOf(shown) + 1 : 0
+  const index = shown ? EFFORT_LEVELS.indexOf(shown) : 2
+
+  const choose = (level: EffortLevel) => {
+    if (!allowed(level) || level === shown) return
+    setPending(level)
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => {
+      timer.current = null
+      window.dure.setEffort(agentId, level).catch(e => {
+        setPending(null)
+        onError?.(errorMessage(e))
+      })
+    }, SEND_DELAY_MS)
+  }
+
+  /** from 에서 dir 쪽으로 쓸 수 있는 가장 가까운 눈금 — 없으면 null */
+  const nearest = (from: number, dir: 1 | -1): EffortLevel | null => {
+    for (let i = from + dir; i >= 0 && i < EFFORT_LEVELS.length; i += dir) {
+      if (allowed(EFFORT_LEVELS[i])) return EFFORT_LEVELS[i]
+    }
+    return null
+  }
+
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
+      chip.current?.focus()
+      return
+    }
+    if ((e.target as HTMLElement).closest('button')) return // 눈금·다시 받기 단추는 제 키(Enter·Space)대로
+    let next: EffortLevel | null | undefined
+    if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = nearest(index, 1)
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = nearest(index, -1)
+    else if (e.key === 'Home') next = nearest(-1, 1)
+    else if (e.key === 'End') next = nearest(EFFORT_LEVELS.length, -1)
+    else return
+    e.preventDefault()
+    if (next) choose(next)
+  }
+
+  return (
+    <span className={`mp eff${narrow ? ' narrow' : ''}`} ref={wrap}>
+      <button
+        ref={chip}
+        type="button"
+        className={`chip eff-chip${unsupported ? ' dim' : ''}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={label}
+        title={label}
+        onClick={() => setOpen(o => !o)}
+      >
+        <span className="eff-bars" aria-hidden="true">
+          {EFFORT_LEVELS.map((l, i) => (
+            <i key={l} className={i < filled ? 'on' : undefined} />
+          ))}
+        </span>
+        <span className="eff-v">{name}</span>
+      </button>
+      {open && (
+        <div className="pop eff-pop" role="dialog" aria-label="생각하는 정도(effort)" onKeyDown={onKey}>
+          <h3 className="eff-h">생각하는 정도(effort)</h3>
+          <p className="eff-s">높을수록 꼼꼼하지만 느리고 사용량을 더 써요</p>
+          {description.state === 'ready' ? (
+            unsupported ? (
+              <p className="eff-note">{NO_EFFORT}</p>
+            ) : (
+              <>
+                <div
+                  ref={slider}
+                  className="eff-track"
+                  role="slider"
+                  tabIndex={0}
+                  aria-label="생각하는 정도"
+                  aria-valuemin={0}
+                  aria-valuemax={EFFORT_LEVELS.length - 1}
+                  aria-valuenow={index}
+                  aria-valuetext={EFFORT_LEVELS[index]}
+                >
+                  <span className="eff-fill" style={{ width: `${(index / (EFFORT_LEVELS.length - 1)) * 100}%` }} />
+                  <span className="eff-knob" style={{ left: `${(index / (EFFORT_LEVELS.length - 1)) * 100}%` }} />
+                </div>
+                <div className="eff-ticks">
+                  {EFFORT_LEVELS.map(l => (
+                    <button
+                      key={l}
+                      type="button"
+                      tabIndex={-1}
+                      className={`eff-tick${l === EFFORT_LEVELS[index] ? ' on' : ''}`}
+                      aria-disabled={allowed(l) ? undefined : true}
+                      onClick={() => choose(l)}
+                    >
+                      {l}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )
+          ) : description.state === 'error' ? (
+            <p className="eff-note">
+              모델 정보를 받지 못했어요
+              <button type="button" className="lk" onClick={onRetry}>
+                다시 받기
+              </button>
+            </p>
+          ) : (
+            <p className="eff-note">불러오는 중…</p>
+          )}
+        </div>
+      )}
+    </span>
+  )
+}

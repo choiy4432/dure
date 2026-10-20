@@ -2858,3 +2858,139 @@ code {
   -webkit-appearance: none;
   margin: 0;
 }
+
+/* effort 칩 — 높이가 오르는 막대 5개 + 단계 이름 */
+.eff-chip {
+  padding: 0 10px;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.eff-chip.dim {
+  opacity: 0.5;
+}
+
+.eff-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 13px;
+}
+
+.eff-bars i {
+  display: block;
+  width: 4px;
+  border-radius: var(--radius-xs);
+  background: var(--border-strong);
+}
+
+.eff-bars i:nth-child(1) { height: 5px; }
+.eff-bars i:nth-child(2) { height: 7px; }
+.eff-bars i:nth-child(3) { height: 9px; }
+.eff-bars i:nth-child(4) { height: 11px; }
+.eff-bars i:nth-child(5) { height: 13px; }
+
+.eff-bars i.on {
+  background: var(--primary);
+}
+
+.eff.narrow .eff-v {
+  display: none;
+}
+
+.eff.narrow .eff-chip {
+  padding: 0 8px;
+}
+
+/* effort 펼침 — 슬라이더 */
+.pop.eff-pop {
+  left: auto;
+  right: 0;
+  width: 270px;
+  min-width: 0;
+  padding: 12px 14px;
+  font-size: 12px;
+}
+
+.eff-h {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.eff-s {
+  margin: 2px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.eff-note {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.eff-track {
+  position: relative;
+  height: 4px;
+  margin: 18px 7px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+  cursor: pointer;
+}
+
+.eff-track:focus-visible {
+  outline: none;
+  box-shadow: var(--ring-soft);
+}
+
+.eff-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--primary);
+}
+
+.eff-knob {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: var(--radius-dot);
+  background: var(--bg);
+  border: 2px solid var(--primary);
+}
+
+.eff-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 -2px;
+}
+
+.eff-tick {
+  padding: 3px 4px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.eff-tick:hover:not([aria-disabled="true"]) {
+  background: var(--hover);
+}
+
+.eff-tick.on {
+  color: var(--primary-text);
+  font-weight: 500;
+}
+
+.eff-tick[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
