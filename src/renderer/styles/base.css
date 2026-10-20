@@ -2938,6 +2938,7 @@ code {
 .eff-v {
   display: inline-flex;
   flex-direction: column;
+  text-align: start; /* 버튼 기본 가운데 정렬 대신 — 막대와 이름 사이가 단계마다 같게 */
 }
 
 .eff-v::before,

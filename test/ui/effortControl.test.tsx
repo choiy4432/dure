@@ -121,6 +121,7 @@ describe('EffortControl — 칩 너비(펼침이 칩 오른쪽 끝에 붙어 있
     }
     expect(rule('.eff-v')).toMatch(/display:\s*inline-flex/)
     expect(rule('.eff-v')).toMatch(/flex-direction:\s*column/)
+    expect(rule('.eff-v')).toMatch(/text-align:\s*start/) // 막대와 이름 사이가 단계마다 같게(버튼 기본 가운데 정렬 대신)
     expect(rule('.eff-v::before')).toMatch(/content:\s*attr\(data-w1\)/)
     expect(rule('.eff-v::after')).toMatch(/content:\s*attr\(data-w2\)/)
     const both = rule('.eff-v::before,\n.eff-v::after')
