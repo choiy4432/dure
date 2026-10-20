@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState, type PointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { errorMessage } from '../lib/words'
 import { useDialogFocus } from '../lib/dialog'
+import { MOTION } from '../lib/motion'
+import { Presence, useMotion } from '../lib/presence'
 
 export interface ConfirmDialogProps {
   open: boolean
@@ -22,17 +24,19 @@ export interface ConfirmDialogProps {
 
 /** 앱 안 확인 대화상자 — 브라우저 confirm 대신. 열려 있는 동안 포커스는 안에서만 돈다 */
 export function ConfirmDialog(props: ConfirmDialogProps) {
-  if (!props.open) return null
-  return createPortal(<Dialog {...props} />, document.body)
+  return <Presence show={props.open}>{createPortal(<Dialog {...props} />, document.body)}</Presence>
 }
 
 function Dialog({ title, body, confirmLabel, cancelLabel = '취소', danger, onConfirm, onCancel }: ConfirmDialogProps) {
   const ref = useRef<HTMLDivElement>(null)
+  const backdrop = useRef<HTMLDivElement>(null)
   const confirmButton = useRef<HTMLButtonElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const titleId = useId()
   const bodyId = useId()
+  useMotion(backdrop, MOTION.backdrop)
+  useMotion(ref, MOTION.dialog)
 
   const cancel = () => {
     if (!busy) onCancel()
@@ -75,7 +79,7 @@ function Dialog({ title, body, confirmLabel, cancelLabel = '취소', danger, onC
   }
 
   return (
-    <div className="dlg-bd" onPointerDown={onBackdrop}>
+    <div ref={backdrop} className="dlg-bd" onPointerDown={onBackdrop}>
       <div
         ref={ref}
         className="dlg"

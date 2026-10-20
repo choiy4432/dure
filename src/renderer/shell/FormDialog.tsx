@@ -1,6 +1,8 @@
 import { useId, useRef, type FormEvent, type PointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useDialogFocus } from '../lib/dialog'
+import { MOTION } from '../lib/motion'
+import { useMotion } from '../lib/presence'
 
 interface Props {
   title: string
@@ -28,8 +30,11 @@ export function FormDialog(props: Props) {
 
 function Frame({ title, submitLabel, canSubmit, busy, onSubmit, onClose, error, children }: Props) {
   const ref = useRef<HTMLDivElement>(null)
+  const backdrop = useRef<HTMLDivElement>(null)
   const submitButton = useRef<HTMLButtonElement>(null)
   const titleId = useId()
+  useMotion(backdrop, MOTION.backdrop)
+  useMotion(ref, MOTION.dialog)
 
   const close = () => {
     if (!busy) onClose()
@@ -50,7 +55,7 @@ function Frame({ title, submitLabel, canSubmit, busy, onSubmit, onClose, error, 
   }
 
   return (
-    <div className="dlg-bd" onPointerDown={onBackdrop}>
+    <div ref={backdrop} className="dlg-bd" onPointerDown={onBackdrop}>
       <div
         ref={ref}
         className="dlg dlg-form"

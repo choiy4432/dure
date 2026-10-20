@@ -7,6 +7,7 @@ import { Empty } from './shell/Empty'
 import { NewRoomDialog } from './shell/RoomSwitcher'
 import { AddAgentDialog } from './shell/AddAgentDialog'
 import { SettingsDialog } from './shell/SettingsDialog'
+import { Presence } from './lib/presence'
 import { RelationMap } from './map/RelationMap'
 import { AgentPanel } from './panel/AgentPanel'
 
@@ -68,9 +69,15 @@ export function App() {
           onSettings={() => setDialog('settings')}
         />
         {body}
-        {dialog === 'room' && <NewRoomDialog onClose={close} />}
-        {dialog === 'agent' && v.roomId !== null && <AddAgentDialog roomId={v.roomId} onClose={close} />}
-        {dialog === 'settings' && <SettingsDialog onClose={close} />}
+        <Presence show={dialog === 'room'}>
+          <NewRoomDialog onClose={close} />
+        </Presence>
+        <Presence show={dialog === 'agent'}>
+          {v.roomId !== null && <AddAgentDialog roomId={v.roomId} onClose={close} />}
+        </Presence>
+        <Presence show={dialog === 'settings'}>
+          <SettingsDialog onClose={close} />
+        </Presence>
       </div>
     </LucideProvider>
   )
