@@ -49,7 +49,7 @@ function load(file: string): State {
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!raw || !Array.isArray(raw.rooms) || !Array.isArray(raw.agents)) throw new Error('bad shape');
-    return { version: 1, rooms: raw.rooms, agents: raw.agents };
+    return { version: 1, rooms: raw.rooms, agents: raw.agents.map((a: Agent) => ({ ...a, effort: a.effort ?? null, lastContext: a.lastContext ?? null })) };
   } catch {
     renameRetrying(file, `${file}.broken-${Date.now()}`);
     return empty;
@@ -121,7 +121,7 @@ export function openStore(dataDir: string): Store {
       const agent: Agent = {
         id: crypto.randomUUID(), roomId, name: name.trim(), role, folder,
         sessionId: crypto.randomUUID(), started: false, auto: false, model: null,
-        alwaysAllow: [], pos: { x: 0, y: 0 }, color: null,
+        alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null,
       };
       state.agents.push(agent);
       save();

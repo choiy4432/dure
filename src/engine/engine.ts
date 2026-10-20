@@ -12,6 +12,7 @@ import { startMcpServer, type McpServerHandle } from './mcpServer';
 import { Permissions } from './permissions';
 import { DENY } from '../shared/denyTexts';
 import { Router, AUTO_CHAIN_LIMIT } from './router';
+import { EFFORT_LEVELS, type EffortLevel } from './types';
 import type {
   Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, Decision, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, RelayMessage, Room, RoomId, StreamEvent, UserPart,
 } from './types';
@@ -570,6 +571,12 @@ function toDescription(p: any): AgentDescription {
       value: String(m?.value ?? ''),
       displayName: String(m?.displayName ?? ''),
       ...(typeof m?.description === 'string' ? { description: m.description } : {}),
+      ...(m?.supportsEffort === true
+        ? {
+            supportsEffort: true,
+            effortLevels: list(m?.supportedEffortLevels).filter((l): l is EffortLevel => (EFFORT_LEVELS as readonly unknown[]).includes(l)),
+          }
+        : {}),
     })),
     permissionMode: String(p?.current_permission_mode ?? ''),
   };

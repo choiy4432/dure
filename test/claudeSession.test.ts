@@ -65,7 +65,7 @@ test('initialize 로 명령·모델 목록', async () => {
   s.start();
   const p = await s.request({ subtype: 'initialize' });
   expect(p.commands[0].name).toBe('compact');
-  expect(p.models.map((m: any) => m.value)).toEqual(['default', 'sonnet']);
+  expect(p.models.map((m: any) => m.value)).toEqual(['default', 'sonnet', 'haiku']);
   expect(p.current_permission_mode).toBe('default');
 });
 

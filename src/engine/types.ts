@@ -7,6 +7,27 @@ export interface Room {
   createdAt: number;
 }
 
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+export interface UsageWindow {
+  key: 'session' | 'week' | `model:${string}`;
+  label: string;
+  percent: number;
+  resetsAt: number | null;
+}
+export interface PlanUsage {
+  windows: UsageWindow[];
+  at: number;
+}
+export interface ContextUsage {
+  total: number;
+  max: number;
+  percent: number;
+  autoCompactAt: number | null;
+  at: number;
+}
+
 export interface Agent {
   id: AgentId;
   roomId: RoomId;
@@ -20,10 +41,12 @@ export interface Agent {
   alwaysAllow: string[];
   pos: { x: number; y: number };
   color: string | null;
+  effort: EffortLevel | null;
+  lastContext: ContextUsage | null;
 }
 
 export type AgentPatch = Partial<
-  Pick<Agent, 'name' | 'role' | 'auto' | 'model' | 'alwaysAllow' | 'pos' | 'color' | 'started' | 'sessionId'>
+  Pick<Agent, 'name' | 'role' | 'auto' | 'model' | 'alwaysAllow' | 'pos' | 'color' | 'started' | 'sessionId' | 'effort' | 'lastContext'>
 >;
 
 export type MessageState = 'pending' | 'held' | 'queued' | 'delivered' | 'dismissed';
@@ -40,7 +63,14 @@ export interface RelayMessage {
 }
 
 export type UserPart = { type: 'text'; text: string } | { type: 'image'; mediaType: string; base64: string };
-export type ControlRequest = { subtype: 'initialize' } | { subtype: 'interrupt' } | { subtype: 'set_model'; model: string };
+export type ControlRequest =
+  | { subtype: 'initialize' }
+  | { subtype: 'interrupt' }
+  | { subtype: 'set_model'; model: string }
+  | { subtype: 'apply_flag_settings'; settings: { effortLevel: EffortLevel } }
+  | { subtype: 'get_settings' }
+  | { subtype: 'get_usage'; skip_behaviors: true }
+  | { subtype: 'get_context_usage'; detail: 'summary' };
 export type AssistantBlock = { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown };
 export type StreamEvent =
   | { kind: 'init'; sessionId: string; model: string; permissionMode: string; slashCommands: string[] }
@@ -51,6 +81,7 @@ export type StreamEvent =
   | { kind: 'result'; ok: boolean; subtype: string; text: string; denials: { toolName: string; toolUseId: string }[] }
   | { kind: 'control-response'; requestId: string; ok: boolean; payload: any }
   | { kind: 'rate-limit'; info: unknown }
+  | { kind: 'compacted' }
   | { kind: 'ignored'; type: string };
 
 export type HistoryPart = { type: 'text'; text: string } | { type: 'image'; mediaType: string; bytes: number };
@@ -93,10 +124,13 @@ export interface EngineEventMap {
   'engine-error': { agentId: string | null; message: string };
   history: { agentId: AgentId; item: HistoryItem };
   'held-input': { agentId: AgentId; count: number };
+  usage: PlanUsage | null;
+  context: { agentId: AgentId; value: ContextUsage | null };
+  effort: { agentId: AgentId; effort: EffortLevel | null; effortNow: EffortLevel | null };
 }
 
 export interface AgentDescription {
   commands: { name: string; description: string; argumentHint: string }[];
-  models: { value: string; displayName: string; description?: string }[];
+  models: { value: string; displayName: string; description?: string; supportsEffort?: boolean; effortLevels?: EffortLevel[] }[];
   permissionMode: string;
 }

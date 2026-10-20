@@ -636,8 +636,9 @@ test('describe → commands·models, account 없음', async () => {
   expect(d).toEqual({
     commands: [{ name: 'compact', description: '대화 요약', argumentHint: '' }],
     models: [
-      { value: 'default', displayName: 'Default' },
-      { value: 'sonnet', displayName: 'Sonnet', description: '빠름' }, // resolvedModel 같은 나머지 필드는 버린다
+      { value: 'default', displayName: 'Default', supportsEffort: true, effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      { value: 'sonnet', displayName: 'Sonnet', description: '빠름', supportsEffort: true, effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] }, // resolvedModel 같은 나머지 필드는 버린다
+      { value: 'haiku', displayName: 'Haiku' },
     ],
     permissionMode: 'default',
   });
@@ -650,6 +651,16 @@ test('describe → commands·models, account 없음', async () => {
   await e.newConversation(a.id); // 새 세션이면 다시 묻는다
   await e.describe(a.id);
   expect(controlRequests('initialize')).toHaveLength(2);
+});
+
+test('describe: effort 단계 — haiku 는 없음, 모르는 단계는 빠진다', async () => {
+  const e = await start({ FAKE_EXTRA_LEVEL: 'turbo' });
+  const { a } = setup(e);
+  const d = await e.describe(a.id);
+  const by = (v: string) => d.models.find((m) => m.value === v)!;
+  expect(by('default')).toMatchObject({ supportsEffort: true, effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] });
+  expect(by('haiku')).not.toHaveProperty('supportsEffort');
+  expect(by('haiku')).not.toHaveProperty('effortLevels');
 });
 
 test('setModel 저장 + 살아 있는 세션에 set_model', async () => {

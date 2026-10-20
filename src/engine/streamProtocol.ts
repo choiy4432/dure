@@ -77,6 +77,7 @@ function parseObject(obj: any): StreamEvent {
           slashCommands: Array.isArray(obj.slash_commands) ? obj.slash_commands : [],
         };
       }
+      if (obj.subtype === 'compact_boundary') return { kind: 'compacted' };
       return ignored(`system/${obj.subtype}`);
     case 'stream_event': {
       const d = obj.event?.delta;

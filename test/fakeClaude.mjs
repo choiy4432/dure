@@ -87,6 +87,9 @@ async function callTool(name, args) {
   return r.json?.result?.content?.[0]?.text ?? '';
 }
 
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+let effortNow = process.env.FAKE_EFFORT ?? 'high';
+let turnsDone = 0; // context = 12000 x 끝난 차례 수 (/compact 하면 0 으로)
 let current = null; // 진행 중인 차례 { ended }
 let sequence = 0;
 
@@ -97,8 +100,18 @@ async function turn(text) {
     if (tok.ended) return;
     tok.ended = true;
     current = null;
+    turnsDone++;
     await result(t, extra);
   };
+  if (text.trim() === '/compact') {
+    turnsDone = 0;
+    tok.ended = true;
+    current = null;
+    await emit({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual' } });
+    await emit({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted</local-command-stdout>' } });
+    await result('');
+    return;
+  }
   await init();
   if (text.startsWith('SLOW')) return; // interrupt 가 올 때까지 대기
   if (text.startsWith('CRASH')) {
@@ -152,17 +165,35 @@ async function turn(text) {
 }
 
 
+const usageNow = () => {
+  const inFuture = (ms) => new Date(Date.now() + ms).toISOString();
+  return {
+    rate_limits_available: true,
+    rate_limits: {
+      limits: [
+        { kind: 'session', percent: 12, resets_at: inFuture(2 * 3600e3) },
+        { kind: 'weekly_all', percent: 34, resets_at: inFuture(6 * 86400e3) },
+        { kind: 'weekly_scoped', percent: 81, resets_at: inFuture(6 * 86400e3), scope: { model: { display_name: 'Fable' } } },
+      ],
+    },
+  };
+};
+
 async function control(msg) {
-  if (process.env.FAKE_NO_CONTROL_REPLY === '1') return;
   const rid = msg.request_id;
   const sub = msg.request?.subtype;
+  log(JSON.stringify({ control: sub, request: msg.request }));
+  if (process.env.FAKE_NO_CONTROL_REPLY === '1') return;
   const ok = (response = {}) => emit({ type: 'control_response', response: { subtype: 'success', request_id: rid, response } });
+  const slow = Number(process.env.FAKE_SLOW_CONTROL_MS ?? 0);
   if (sub === 'initialize') {
+    const levels = process.env.FAKE_EXTRA_LEVEL ? [...EFFORTS, process.env.FAKE_EXTRA_LEVEL] : EFFORTS;
     await ok({
       commands: [{ name: 'compact', description: '대화 요약', argumentHint: '' }],
       models: [
-        { value: 'default', displayName: 'Default' },
-        { value: 'sonnet', displayName: 'Sonnet', description: '빠름', resolvedModel: 'fake-sonnet' },
+        { value: 'default', displayName: 'Default', supportsEffort: true, supportedEffortLevels: levels },
+        { value: 'sonnet', displayName: 'Sonnet', description: '빠름', resolvedModel: 'fake-sonnet', supportsEffort: true, supportedEffortLevels: levels },
+        { value: 'haiku', displayName: 'Haiku' },
       ],
       current_permission_mode: permissionMode,
       account: { email: 'fake-user@example.com', subscriptionType: 'max' }, // 진짜처럼 — 엔진은 버려야 한다
@@ -170,6 +201,20 @@ async function control(msg) {
   } else if (sub === 'set_model') {
     model = msg.request.model;
     await ok();
+  } else if (sub === 'get_settings') {
+    if (slow) await sleep(slow);
+    await ok({ effective: { effortLevel: effortNow }, sources: {}, applied: {} });
+  } else if (sub === 'apply_flag_settings') {
+    const lv = msg.request.settings?.effortLevel;
+    if (model !== 'haiku' && typeof lv === 'string') effortNow = lv;
+    await ok();
+  } else if (sub === 'get_usage') {
+    if (process.env.FAKE_USAGE_HANG === '1') return;
+    await ok(process.env.FAKE_USAGE ? JSON.parse(process.env.FAKE_USAGE) : usageNow());
+  } else if (sub === 'get_context_usage') {
+    if (slow) await sleep(slow);
+    const total = 12000 * turnsDone;
+    await ok({ totalTokens: total, maxTokens: 200000, percentage: (total / 200000) * 100, autoCompactThreshold: 167000, isAutoCompactEnabled: true });
   } else if (sub === 'interrupt') {
     await ok();
     if (current && !current.ended) {

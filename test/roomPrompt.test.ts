@@ -4,7 +4,7 @@ import type { Agent } from '../src/engine/types';
 
 const mk = (name: string, role: string): Agent => ({
   id: name, roomId: 'R', name, role, folder: 'F', sessionId: 'S', started: false,
-  auto: false, model: null, alwaysAllow: [], pos: { x: 0, y: 0 }, color: null,
+  auto: false, model: null, alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null,
 } as unknown as Agent);
 
 describe('buildRoomPrompt', () => {

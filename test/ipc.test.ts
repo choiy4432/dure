@@ -125,7 +125,7 @@ describe('registerIpc', () => {
 
   it('forwards every engine event as dure:event { name, payload }', () => {
     const { engine, sent } = setup()
-    expect(EVENT_NAMES).toHaveLength(10)
+    expect(EVENT_NAMES).toHaveLength(13)
     for (const name of EVENT_NAMES) engine.emit(name, { n: name })
     expect(sent).toEqual(EVENT_NAMES.map((name) => [CHANNEL.event, { name, payload: { n: name } }]))
   })

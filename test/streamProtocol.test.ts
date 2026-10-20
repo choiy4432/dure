@@ -7,6 +7,9 @@ describe('parseLine', () => {
       parseLine('{"type":"system","subtype":"init","session_id":"S","model":"m","permissionMode":"default","slash_commands":["compact"],"tools":[]}'),
     ).toEqual({ kind: 'init', sessionId: 'S', model: 'm', permissionMode: 'default', slashCommands: ['compact'] }));
 
+  test('system/compact_boundary → compacted', () =>
+    expect(parseLine('{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual"}}')).toEqual({ kind: 'compacted' }));
+
   test('assistant: thinking 버리고 text·tool_use', () => {
     const line = JSON.stringify({
       type: 'assistant',

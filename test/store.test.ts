@@ -147,3 +147,29 @@ test('updateAgent 는 undefined 값을 무시한다 — 다시 열어도 pos·na
   expect(s.agent(a.id)).toMatchObject({ name: 'a', pos: { x: 0, y: 0 } });
   expect(openStore(dir).agent(a.id)).toMatchObject({ name: 'a', pos: { x: 0, y: 0 } });
 });
+
+test('effort·lastContext 칸이 없는 옛 state.json 은 null 로 열린다', () => {
+  const s = openStore(dir);
+  const r = s.addRoom('A');
+  const a = s.addAgent({ roomId: r.id, name: 'x', role: 'r', folder: dir });
+  expect(a).toMatchObject({ effort: null, lastContext: null });
+  const file = path.join(dir, 'state.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  for (const ag of raw.agents) {
+    delete ag.effort;
+    delete ag.lastContext;
+  }
+  fs.writeFileSync(file, JSON.stringify(raw));
+  const old = openStore(dir).agent(a.id)!;
+  expect(old.effort).toBeNull();
+  expect(old.lastContext).toBeNull();
+});
+
+test('updateAgent 로 effort·lastContext 를 저장하면 다시 열어도 남는다', () => {
+  const s = openStore(dir);
+  const r = s.addRoom('A');
+  const a = s.addAgent({ roomId: r.id, name: 'x', role: 'r', folder: dir });
+  const ctx = { total: 1, max: 2, percent: 50, autoCompactAt: null, at: 3 };
+  s.updateAgent(a.id, { effort: 'low', lastContext: ctx });
+  expect(openStore(dir).agent(a.id)).toMatchObject({ effort: 'low', lastContext: ctx });
+});
