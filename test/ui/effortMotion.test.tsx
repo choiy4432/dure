@@ -43,6 +43,7 @@ const ui = (effortNow: EffortLevel | null) => (
     />
   </div>
 )
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 const chip = () => screen.getByRole('button', { name: /^effort/ })
 const bars = () => Array.from(chip().querySelectorAll<HTMLElement>('.eff-bars i'))
 const knob = () => document.querySelector<HTMLElement>('.eff-knob')!
@@ -110,6 +111,24 @@ describe('effort 움직임', () => {
     expect(bars()[4].style.transform).toBe('')
     expect(bars()[4].classList.contains('on')).toBe(true)
     restore()
+  })
+
+  it('막대가 움직이는 중에 거듭 바뀌어도(max ↔ low, 60ms 간격) 다 끝나면 인라인 transform·색이 남지 않는다', async () => {
+    allowMotion()
+    const { rerender } = render(ui('low'))
+    // 오르는 막대(세로 크기 260ms)가 끝나기 전에 내리고, 내리는 색(200ms)이 끝나기 전에 다시 올린다
+    for (const level of ['max', 'low', 'max', 'low', 'max', 'low', 'max', 'low'] as const) {
+      rerender(ui(level))
+      await sleep(60)
+    }
+    const restore = fastMotion()
+    await sleep(300) // 20배 — 가장 긴 막대(105ms 뒤 260ms)의 몇 배
+    restore()
+    for (const b of bars()) {
+      expect(b.style.transform).toBe('')
+      expect(b.style.backgroundColor).toBe('')
+    }
+    expect(bars().map(b => b.classList.contains('on'))).toEqual([true, false, false, false, false])
   })
 
   it('키를 빠르게 여러 번 → 손잡이는 마지막 단계에서 멈춘다', async () => {

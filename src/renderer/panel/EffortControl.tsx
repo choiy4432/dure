@@ -33,6 +33,12 @@ const MINE = '내 설정'
 /** 칩에 나오는 이름 중 가장 넓은 둘 — 이름 칸에 안 보이게 깔아 칸 너비를 고정한다(base.css .eff-v) */
 const WIDEST = ['medium', MINE] as const
 
+/** 칩 막대 하나에 움직임이 쓴 인라인 값을 지운다 — 켜짐·꺼짐은 on 클래스가 정본 */
+function clearBar(el: HTMLElement) {
+  el.style.removeProperty('transform')
+  el.style.removeProperty('background-color')
+}
+
 /** 패널 머리의 effort 칩(막대 5개 + 단계 이름) + 다섯 단계 슬라이더 */
 export function EffortControl({ agentId, effort, effortNow, model, description, onLoad, onRetry, onError }: Props) {
   const [open, setOpen] = useState(false)
@@ -131,6 +137,9 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
     changed.forEach((i, order) => {
       const el = items[i]
       if (!el) return
+      // 앞 움직임이 아직 돌면 버리고 그 중간 값을 지운다 — 새 움직임은 깨끗한 막대에서 시작한다
+      utils.remove(el)
+      clearBar(el)
       const props: Record<string, unknown> = {}
       const to = up ? on : off
       const from = up ? off : on
@@ -141,9 +150,8 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
         ...props,
         delay: order * MOTION_MS.barStagger,
         ease: 'outQuint',
-        onComplete: self => {
-          utils.cleanInlineStyles(self)
-        },
+        // utils.cleanInlineStyles 는 쓰지 않는다 — 시작할 때 있던 인라인 값(앞 움직임의 중간 값)으로 되돌려 막대가 중간에 멈춰 보였다
+        onComplete: () => clearBar(el),
       })
     })
   }, [filled])
