@@ -693,4 +693,16 @@ describe('Composer — context 링', () => {
     fireEvent.click(screen.getByRole('button', { name: '대화 공간 34% 사용' }))
     expect(screen.getByRole('button', { name: '지금 요약하기' })).toBeDisabled()
   })
+
+  it('승인을 기다리는 중이어도 요약을 막는다 — 같은 안내', async () => {
+    withCtx()
+    snapshot = {
+      ...snapshot,
+      requests: [{ id: 'q1', agentId: 'w', toolName: 'Write', input: { file_path: 'C:\\w\\a.ts' }, kind: 'permission', createdAt: Date.now() }],
+    }
+    await renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: '대화 공간 34% 사용' }))
+    expect(screen.getByRole('button', { name: '지금 요약하기' })).toBeDisabled()
+    expect(screen.getByText('일이 끝나면 요약할 수 있어요')).toBeInTheDocument()
+  })
 })

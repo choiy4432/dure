@@ -7,7 +7,7 @@ interface Props {
   agentId: AgentId
   name: string
   value: ContextUsage | null
-  /** 일하는 중 — 요약은 일이 끝난 뒤에 */
+  /** 일하는 중·승인을 기다리는 중 — 요약은 일이 끝난 뒤에 */
   working: boolean
   onCompact: () => void
 }

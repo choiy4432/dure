@@ -43,9 +43,12 @@ const hasFiles = (types: ArrayLike<string> | undefined) => Array.from(types ?? [
 export function Composer({ agentId, name, description, onLoadCommands, onRetryCommands, onOpenModel, onSent }: Props) {
   const heldInput = useDure(s => s.agents.find(a => a.id === agentId)?.heldInput ?? 0)
   const lastContext = useDure(s => s.agents.find(a => a.id === agentId)?.lastContext ?? null)
+  // 일하는 중이거나 승인을 기다리는 중 — 그동안은 요약하지 않는다(차례가 끝난 뒤에)
   const working = useDure(s => {
     const a = s.agents.find(x => x.id === agentId)
-    return !!a && displayStatus(a, s.requests) === 'working'
+    if (!a) return false
+    const d = displayStatus(a, s.requests)
+    return d === 'working' || d === 'awaiting'
   })
   const { text, attached } = useDraft(agentId)
   const setText = (next: string) => updateDraft(agentId, d => (d.text === next ? d : { ...d, text: next }))
