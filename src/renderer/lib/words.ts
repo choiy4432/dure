@@ -149,3 +149,11 @@ export function resetText(resetsAt: number, now: number): string {
   const t = new Date(resetsAt)
   return `${t.getMonth() + 1}월 ${t.getDate()}일(${'일월화수목금토'[t.getDay()]}) ${two(t.getHours())}:${two(t.getMinutes())} 초기화`
 }
+
+/** 토큰 수 — 1만 아래 '3,400' · 10만 아래 '1.2만'·'5만' · 그 위 '34만'·'100만' */
+export function tokensText(n: number): string {
+  if (n < 10_000) return n.toLocaleString('ko-KR')
+  const man = n / 10_000
+  if (man < 10) return `${Number(man.toFixed(1))}만`
+  return `${Math.round(man)}만`
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ago, elapsed, fieldError, josa, lasting, localSummary, resetText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
+import { ago, elapsed, fieldError, josa, lasting, localSummary, resetText, tokensText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
 
 describe('fieldError — 엔진 오류를 칸 아래 안내로', () => {
   it('이름 겹침은 해요체로, 다음 할 일까지 — 받침 따라 이라는/라는, 모르면 (이)라는', () => {
@@ -101,5 +101,20 @@ describe('사용량 말', () => {
     expect(usageRowLabel(w('session', 'x'))).toBe('5시간')
     expect(usageRowLabel(w('week', 'x'))).toBe('1주 · 모든 모델')
     expect(usageRowLabel(w('model:fable', 'Fable'))).toBe('1주 · Fable 전용')
+  })
+})
+
+describe('tokensText', () => {
+  it('1만 아래는 천 단위 쉼표', () => {
+    expect(tokensText(3400)).toBe('3,400')
+    expect(tokensText(9999)).toBe('9,999')
+  })
+  it('만 단위 — 10만 아래는 소수 한 자리(.0 은 뺌)', () => {
+    expect(tokensText(12000)).toBe('1.2만')
+    expect(tokensText(50000)).toBe('5만')
+  })
+  it('10만 이상은 반올림 정수', () => {
+    expect(tokensText(340000)).toBe('34만')
+    expect(tokensText(1000000)).toBe('100만')
   })
 })

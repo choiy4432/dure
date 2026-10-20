@@ -645,3 +645,52 @@ describe('Composer — 에이전트마다 쓰던 글·이미지(이번 실행 �
     expect(chips()).toHaveLength(1)
   })
 })
+
+describe('Composer — context 링', () => {
+  const withCtx = (over: Partial<AgentView> = {}) => {
+    snapshot = {
+      ...snapshot,
+      agents: snapshot.agents.map(a => (a.id === 'w'
+        ? { ...a, lastContext: { total: 340000, max: 1_000_000, percent: 34, autoCompactAt: 967_000, at: 1 }, ...over }
+        : a)),
+    }
+  }
+
+  it('lastContext 가 없으면 링이 없다', async () => {
+    await renderPanel()
+    expect(screen.queryByRole('button', { name: /^대화 공간/ })).toBeNull()
+  })
+
+  it('있으면 보내기 단추 바로 앞에 있다', async () => {
+    withCtx()
+    await renderPanel()
+    const ring = screen.getByRole('button', { name: '대화 공간 34% 사용' })
+    expect(ring.closest('.ctx')!.nextElementSibling).toBe(sendButton())
+  })
+
+  it('[지금 요약하기] 는 /compact 를 보낸다', async () => {
+    withCtx()
+    await renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: '대화 공간 34% 사용' }))
+    fireEvent.click(screen.getByRole('button', { name: '지금 요약하기' }))
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledWith('w', [{ type: 'text', text: '/compact' }])
+  })
+
+  it('보내지 못하면 입력창 아래 오류 줄에 문구', async () => {
+    withCtx()
+    api.sendUser.mockRejectedValueOnce(new Error('지금은 보낼 수 없어요'))
+    await renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: '대화 공간 34% 사용' }))
+    fireEvent.click(screen.getByRole('button', { name: '지금 요약하기' }))
+    await settle()
+    expect(screen.getByRole('alert')).toHaveTextContent('지금은 보낼 수 없어요')
+  })
+
+  it('일하는 중이면 요약을 막는다', async () => {
+    withCtx({ status: 'working' })
+    await renderPanel()
+    fireEvent.click(screen.getByRole('button', { name: '대화 공간 34% 사용' }))
+    expect(screen.getByRole('button', { name: '지금 요약하기' })).toBeDisabled()
+  })
+})

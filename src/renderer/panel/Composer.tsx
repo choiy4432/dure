@@ -5,6 +5,8 @@ import {
 import { ArrowUp, Image as ImageIcon, X } from 'lucide-react'
 import type { AgentId, UserPart } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
+import { displayStatus } from '../state/selectors'
+import { ContextRing } from './ContextRing'
 import { errorMessage, RENEW_CONFIRM } from '../lib/words'
 import { IMAGE_TYPES, prepareImage } from '../lib/image'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
@@ -40,6 +42,11 @@ const hasFiles = (types: ArrayLike<string> | undefined) => Array.from(types ?? [
  */
 export function Composer({ agentId, name, description, onLoadCommands, onRetryCommands, onOpenModel, onSent }: Props) {
   const heldInput = useDure(s => s.agents.find(a => a.id === agentId)?.heldInput ?? 0)
+  const lastContext = useDure(s => s.agents.find(a => a.id === agentId)?.lastContext ?? null)
+  const working = useDure(s => {
+    const a = s.agents.find(x => x.id === agentId)
+    return !!a && displayStatus(a, s.requests) === 'working'
+  })
   const { text, attached } = useDraft(agentId)
   const setText = (next: string) => updateDraft(agentId, d => (d.text === next ? d : { ...d, text: next }))
   const setAttached = (fn: (list: Attached[]) => Attached[]) => updateDraft(agentId, d => ({ ...d, attached: fn(d.attached) }))
@@ -136,6 +143,17 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
       setError(errorMessage(e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  /** 대화 공간 링의 [지금 요약하기] — /compact 를 보낸다(실패는 입력창 아래 오류 줄) */
+  const compact = async () => {
+    setError(null)
+    try {
+      await window.dure.sendUser(agentId, [{ type: 'text', text: '/compact' }])
+      onSent?.(agentId)
+    } catch (e) {
+      setError(errorMessage(e))
     }
   }
 
@@ -304,6 +322,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
           <input ref={filePick} type="file" accept={IMAGE_TYPES.join(',')} multiple hidden onChange={onPick} />
           <span className="tb-sp" />
           {heldInput > 0 && <span className="held-in">보낼 차례를 기다리는 입력 {heldInput}개</span>}
+          <ContextRing agentId={agentId} name={name} value={lastContext} working={working} onCompact={() => void compact()} />
           <button type="button" className="send" aria-label="보내기" title="보내기" disabled={!canSend} onClick={() => void send()}>
             <ArrowUp className="i" aria-hidden="true" />
           </button>
