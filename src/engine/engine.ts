@@ -40,6 +40,7 @@ export interface EngineOptions {
 //  'held-input'  { agentId; count }   (보낼 차례를 기다리는 사람 입력 수가 바뀔 때마다)
 //  'effort'      { agentId; effort; effortNow }   (고른 값이 바뀌거나 Claude 에게 지금 값을 읽을 때마다)
 //  'context'     { agentId; value: ContextUsage | null }   (차례 끝에 대화 공간을 받았을 때 · 요약·새 대화 직후엔 null)
+//  'model-now'   { agentId; modelNow }   (차례의 init 이 알려 준 모델 id 가 바뀔 때 · setModel 은 null 로 비운다)
 //  'usage'       PlanUsage | null   (플랜 사용량을 받을 때마다 — 모르는 모양·한도 없음이면 null)
 //  'engine-error' { agentId: string | null; message: string }  (프로세스 이벤트 처리·듣는 쪽에서 난 오류 — 앱을 죽이지 않고 알린다)
 export interface Engine extends EventEmitter {
@@ -67,6 +68,8 @@ export interface Engine extends EventEmitter {
   setEffort(id: AgentId, level: EffortLevel): Promise<void>;
   /** 마지막으로 Claude 에게 읽은 지금 effort — 모르면 null */
   effortNow(id: AgentId): EffortLevel | null;
+  /** 마지막 init 이 알려 준, 지금 실제로 쓰는 모델 id — 모르면 null */
+  modelNow(id: AgentId): string | null;
   describe(id: AgentId): Promise<AgentDescription>;
   /** 마지막으로 받은 플랜 사용량 — 아직 없거나 모르는 모양·꺼짐이면 null */
   usage(): PlanUsage | null;
@@ -107,6 +110,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private inFlight = new WeakMap<ClaudeSession, InFlight>();
   private removing = new Set<AgentId>();
   private bypass = new Map<AgentId, boolean>(); // 마지막 init 의 권한 모드
+  private modelNows = new Map<AgentId, string>(); // 마지막 init 의 풀린 모델 id
   private effortNows = new Map<AgentId, EffortLevel>(); // Claude 에게 마지막으로 읽은 지금 effort
   private compactedTurn = new WeakSet<ClaudeSession>(); // 이번 차례에 요약됨 — 그 차례의 result 뒤엔 값을 받지 않는다
   private started = false;
@@ -240,6 +244,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.held.delete(id); // 기다리던 사람 입력은 에이전트와 함께 버린다
       this.bypass.delete(id);
       this.effortNows.delete(id);
+      this.modelNows.delete(id);
       if (had > 0) this.guard(id, () => this.emit('held-input', { agentId: id, count: 0 }));
     }
   }
@@ -317,8 +322,17 @@ class EngineImpl extends EventEmitter implements Engine {
   async setModel(id: AgentId, model: string | null) {
     this.need(id);
     this.store.updateAgent(id, { model });
+    this.guard(id, () => this.setModelNow(id, null)); // 다음 차례가 풀 모델은 다르다
     const s = this.sessions.get(id);
     if (s) await s.request({ subtype: 'set_model', model: model ?? 'default' });
+  }
+
+  private setModelNow(id: AgentId, value: string | null) {
+    if (this.removing.has(id) || !this.store.agent(id)) return;
+    if ((this.modelNows.get(id) ?? null) === value) return;
+    if (value === null) this.modelNows.delete(id);
+    else this.modelNows.set(id, value);
+    this.emit('model-now', { agentId: id, modelNow: value });
   }
 
   async setEffort(id: AgentId, level: EffortLevel) {
@@ -328,6 +342,10 @@ class EngineImpl extends EventEmitter implements Engine {
     this.emitEffort(id);
     const s = this.sessions.get(id);
     if (s) void this.syncEffort(id, s);
+  }
+
+  modelNow(id: AgentId): string | null {
+    return this.modelNows.get(id) ?? null;
   }
 
   effortNow(id: AgentId): EffortLevel | null {
@@ -594,6 +612,7 @@ class EngineImpl extends EventEmitter implements Engine {
         this.bypass.set(id, bypass);
         this.emit('flags', { agentId: id, bypass });
       });
+      this.guard(id, () => this.setModelNow(id, ev.model || null));
     }
     if (ev.kind === 'tool-result') {
       this.guard(id, () =>

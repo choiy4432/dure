@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ago, elapsed, fieldError, josa, lasting, localSummary, modelText, modelVersionName, resetText, tokensText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
+import { ago, elapsed, fieldError, josa, lasting, localSummary, modelText, modelVersionName, nodeModelLabel, resetText, tokensText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
 
 describe('fieldError — 엔진 오류를 칸 아래 안내로', () => {
   it('이름 겹침은 해요체로, 다음 할 일까지 — 받침 따라 이라는/라는, 모르면 (이)라는', () => {
@@ -116,6 +116,21 @@ describe('tokensText', () => {
   it('10만 이상은 반올림 정수', () => {
     expect(tokensText(340000)).toBe('34만')
     expect(tokensText(1000000)).toBe('100만')
+  })
+})
+
+describe('nodeModelLabel — 관계도 카드의 모델 이름', () => {
+  it('지금 풀린 모델이 있으면 그 버전 이름', () => {
+    expect(nodeModelLabel(null, 'claude-opus-5-5')).toBe('Opus 5.5')
+    expect(nodeModelLabel('sonnet', 'claude-opus-5-5')).toBe('Opus 5.5')
+  })
+  it('없으면 고른 모델 — 버전 id 면 버전, 별명이면 계열 이름', () => {
+    expect(nodeModelLabel('opus', null)).toBe('Opus')
+    expect(nodeModelLabel('claude-opus-4-8', null)).toBe('Opus 4.8')
+  })
+  it('둘 다 없거나 읽을 수 없으면 기본 모델', () => {
+    expect(nodeModelLabel(null, null)).toBe('기본 모델')
+    expect(nodeModelLabel(null, 'weird')).toBe('기본 모델')
   })
 })
 

@@ -210,7 +210,7 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await addAgent(page, WEB, w.webFolder)
       for (const a of [PLAN, WEB]) {
         await expect(node(page, a.name).locator('.au')).toHaveText('자동 끔')
-        await expect(node(page, a.name).locator('.nr')).toHaveText(a.role)
+        await expect(node(page, a.name).locator('.nr')).toContainText(a.role)
       }
       // 새로 만든 에이전트가 골라져 있다 — 자동 스위치는 꺼짐
       await expect(panel(page, WEB.name).getByRole('switch', { name: '자동' })).toHaveAttribute('aria-checked', 'false')
@@ -365,7 +365,7 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await shot('usage-open.png', page.locator('header.top .usg-btn'), page.locator('.usg-pop'))
       await page.keyboard.press('Escape')
       await shot('effort-open.png', web.locator('.eff-chip'), web.locator('.eff-pop'))
-      await expect(web.getByRole('slider', { name: '생각하는 정도' })).toBeVisible()
+      await expect(web.getByRole('slider', { name: '생각하는 정도' })).toBeFocused()
       await page.keyboard.press('Escape')
       await shot('context-open.png', web.locator('.ctx-btn'), web.locator('.ctx-pop'))
       await page.keyboard.press('Escape')
@@ -376,8 +376,7 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       // 패널을 가장 좁게(360) — 가르는 줄에 키보드로 닿는다
       await page.getByRole('separator', { name: '관계도와 패널 너비' }).focus()
       for (let i = 0; i < 30; i++) await page.keyboard.press('ArrowRight')
-      await page.waitForTimeout(400)
-      expect((await web.boundingBox())!.width).toBeLessThanOrEqual(361)
+      await expect.poll(async () => (await web.boundingBox())!.width).toBeLessThanOrEqual(361)
       await shot('context-open-narrow.png', web.locator('.ctx-btn'), web.locator('.ctx-pop'))
       const pop = await web.locator('.ctx-pop').boundingBox()
       const pnl = await web.boundingBox()

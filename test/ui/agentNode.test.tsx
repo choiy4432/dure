@@ -5,7 +5,7 @@ import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, effortNow: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
 })
 const request = (over: Partial<PendingRequest> = {}): PendingRequest => ({
   id: 'q1', agentId: 'd', toolName: 'Write', input: { file_path: 'C:\\w\\src\\styles\\tokens.css' }, kind: 'permission',
@@ -113,7 +113,33 @@ describe('AgentNode — 카드 내용', () => {
     expect(nameEl.classList.contains('trunc')).toBe(true)
     expect(roleEl.classList.contains('trunc')).toBe(true)
     expect(nameEl.getAttribute('title')).toBe(name)
-    expect(roleEl.getAttribute('title')).toBe(role)
+    expect(roleEl.parentElement!.getAttribute('title')).toBe(`${role} · 기본 모델`)
+  })
+
+  it("역할 옆에 모델 · effort — '기획서 · 문구 · Opus 5.5 · high', 역할만 말줄임", async () => {
+    snapshot.agents = [agent('d', { role: '기획서 · 문구', modelNow: 'claude-opus-5-5', effortNow: 'high' })]
+    const { card } = await renderCard()
+    const line = card.querySelector('.nr') as HTMLElement
+    expect(line.textContent).toBe('기획서 · 문구 · Opus 5.5 · high')
+    expect(line.getAttribute('title')).toBe('기획서 · 문구 · Opus 5.5 · high')
+    expect(screen.getByText('기획서 · 문구').classList.contains('trunc')).toBe(true)
+    expect(line.querySelector('.nr-meta')!.classList.contains('keep')).toBe(true)
+  })
+
+  it('effort 를 모르면 그 부분(과 구분 점)이 없다 · 정한 값만 있으면 그 값', async () => {
+    snapshot.agents = [agent('d', { role: '기획서', model: 'opus' })]
+    const { card } = await renderCard()
+    expect(card.querySelector('.nr')!.textContent).toBe('기획서 · Opus')
+    cleanup()
+    snapshot.agents = [agent('d', { role: '기획서', model: 'opus', effort: 'low' })]
+    const again = await renderCard()
+    expect(again.card.querySelector('.nr')!.textContent).toBe('기획서 · Opus · low')
+  })
+
+  it('역할이 비면 앞 구분 점 없이 모델 · effort 만', async () => {
+    snapshot.agents = [agent('d', { role: '', modelNow: 'claude-opus-5-5', effortNow: 'max' })]
+    const { card } = await renderCard()
+    expect(card.querySelector('.nr')!.textContent).toBe('Opus 5.5 · max')
   })
 
   it('받은 메시지 배지 = 확인 대기·상한 대기 수, 한 줄 요약은 누가 보냈는지', async () => {

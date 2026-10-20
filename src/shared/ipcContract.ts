@@ -9,6 +9,8 @@ export interface AgentView extends Agent {
   heldInput: number
   /** Claude 에게 마지막으로 읽은 지금 effort — 모르면 null */
   effortNow: EffortLevel | null
+  /** 차례의 init 에서 읽은, 지금 실제로 쓰는 모델 id(예: claude-opus-5-5) — 모르면 null */
+  modelNow: string | null
 }
 
 export interface Snapshot {
@@ -66,7 +68,7 @@ export const METHODS = [
 const EVENT_FLAGS: Record<keyof EngineEventMap, true> = {
   'agent-event': true, status: true, message: true, held: true, request: true,
   'request-resolved': true, flags: true, 'engine-error': true, history: true, 'held-input': true,
-  usage: true, context: true, effort: true,
+  usage: true, context: true, effort: true, 'model-now': true,
 }
 export const EVENT_NAMES = Object.keys(EVENT_FLAGS) as (keyof EngineEventMap)[]
 

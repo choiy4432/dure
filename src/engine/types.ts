@@ -127,6 +127,7 @@ export interface EngineEventMap {
   usage: PlanUsage | null;
   context: { agentId: AgentId; value: ContextUsage | null };
   effort: { agentId: AgentId; effort: EffortLevel | null; effortNow: EffortLevel | null };
+  'model-now': { agentId: AgentId; modelNow: string | null };
 }
 
 export interface AgentDescription {

@@ -40,6 +40,14 @@ export function modelVersionName(id: string): string | null {
   return `${family} ${m[2]}${m[3] ? `.${m[3]}` : ''}${m[4] ? ' (긴 대화)' : ''}`
 }
 
+/** 관계도 카드의 모델 이름 — 지금 풀린 모델 > 고른 모델(버전 id 면 버전, 별명이면 계열) > 기본 모델 */
+export function nodeModelLabel(model: string | null, modelNow: string | null): string {
+  const now = modelNow ? modelVersionName(modelNow) : null
+  if (now) return now
+  if (model) return modelVersionName(model) ?? modelText(model).name
+  return '기본 모델'
+}
+
 // 'Opus 5.5' 처럼 띄어 쓴 숫자 낱말이 있는 이름만 버전 이름으로 본다('Opus (1M context)' 는 아니다)
 const HAS_VERSION = /(?:^|\s)\d+(?:\.\d+)?(?:\s|$)/
 

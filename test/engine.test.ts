@@ -694,6 +694,33 @@ test('setModel 저장 + 살아 있는 세션에 set_model', async () => {
   expect(spawns()).toHaveLength(1);
 });
 
+test('modelNow: 차례의 init 에서 풀린 모델 id 를 기억하고 model-now 를 알린다 · setModel 이 비운다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  expect(e.modelNow(a.id)).toBeNull();
+  const got: { agentId: string; modelNow: string | null }[] = [];
+  e.on('model-now', (v) => got.push(v));
+  const ev = waitFor(e, 'model-now', (x: any) => x.modelNow !== null);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나'));
+  expect(await ev).toEqual({ agentId: a.id, modelNow: 'claude-opus-5-5' });
+  await done;
+  expect(e.modelNow(a.id)).toBe('claude-opus-5-5');
+
+  // 같은 값이면 다시 알리지 않는다
+  const done2 = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 둘'));
+  await done2;
+  expect(got).toHaveLength(1);
+
+  await e.setModel(a.id, 'haiku');
+  expect(e.modelNow(a.id)).toBeNull();
+  expect(got).toEqual([
+    { agentId: a.id, modelNow: 'claude-opus-5-5' },
+    { agentId: a.id, modelNow: null },
+  ]);
+});
+
 test('FAKE_PERMISSION_MODE=bypassPermissions → flags bypass true', async () => {
   const e = await start({ FAKE_PERMISSION_MODE: 'bypassPermissions' });
   const { a } = setup(e);

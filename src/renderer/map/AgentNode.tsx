@@ -6,7 +6,7 @@ import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
 import { displayStatus, unreadFor, type DisplayStatus } from '../state/selectors'
 import { requestTarget, requestTitle } from '../lib/toolSummary'
-import { ago, initial, josa, lasting, STATUS_WORD } from '../lib/words'
+import { ago, initial, josa, lasting, nodeModelLabel, STATUS_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { popOnce, useRise } from '../lib/motion'
 
@@ -137,6 +137,10 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
   if (!v) return null
 
   const { agent, request, unread, selected, status } = v
+  // 역할 옆 '모델 · effort' — effort 는 Claude Code 가 쓰는 단계 이름 그대로
+  const level = agent.effortNow ?? agent.effort
+  const meta = [nodeModelLabel(agent.model, agent.modelNow), level].filter(Boolean).join(' · ')
+  const roleLine = agent.role ? `${agent.role} · ${meta}` : meta
   const st = STATUS[status]
   const time = timeText(v, now)
   const errorText = status === 'error' && agent.errorText ? agent.errorText : null
@@ -162,8 +166,9 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
               </span>
             )}
           </span>
-          <span className="nr trunc" title={agent.role}>
-            {agent.role}
+          <span className="nr" title={roleLine}>
+            {agent.role && <span className="trunc">{agent.role}</span>}
+            <span className="nr-meta keep">{agent.role ? ` · ${meta}` : meta}</span>
           </span>
         </div>
         <span className={`au${agent.auto ? ' on' : ''}`}>{agent.auto ? '자동 켬' : '자동 끔'}</span>

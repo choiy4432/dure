@@ -752,9 +752,17 @@ code {
 }
 
 .nr {
+  display: flex;
+  min-width: 0;
   font-size: 13px;
   line-height: 18px;
   color: var(--muted);
+}
+
+/* 모델 · effort — 역할만 말줄임, 이쪽은 줄지 않는다 */
+.nr-meta.keep {
+  flex: none;
+  white-space: pre;
 }
 
 /* 묻지 않고 실행하는 에이전트 표시 */

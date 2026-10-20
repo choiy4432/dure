@@ -5,7 +5,7 @@ import type { AgentView, DureApi, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, roomId = 'r1', over: Partial<AgentView> = {}): AgentView => ({
   id, roomId, name: id, role: '', folder: '/x', sessionId: '', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, lastContext: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
 })
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   claudeMissing: false,
@@ -477,6 +477,19 @@ describe('usage · context · effort events', () => {
     expect([a.effort, a.effortNow]).toEqual(['max', 'high'])
     expect(store.getState().agents.find(x => x.id === 'b')!.effort).toBeNull()
     emit('effort', { agentId: 'nobody', effort: 'low', effortNow: null })
+    expect(store.getState().agents).toHaveLength(3)
+  })
+
+  it('model-now 사건은 그 에이전트의 modelNow 만 바꾼다', async () => {
+    const { api, emit } = fake()
+    const store = createStore(api)
+    await store.init()
+    emit('model-now', { agentId: 'a', modelNow: 'claude-opus-5-5' })
+    expect(store.getState().agents.find(x => x.id === 'a')!.modelNow).toBe('claude-opus-5-5')
+    expect(store.getState().agents.find(x => x.id === 'b')!.modelNow).toBeNull()
+    emit('model-now', { agentId: 'a', modelNow: null })
+    expect(store.getState().agents.find(x => x.id === 'a')!.modelNow).toBeNull()
+    emit('model-now', { agentId: 'nobody', modelNow: 'x' })
     expect(store.getState().agents).toHaveLength(3)
   })
 

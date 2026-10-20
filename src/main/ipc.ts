@@ -25,6 +25,7 @@ function agentViews(engine: Engine): AgentView[] {
     bypass: engine.flags(a.id).bypass,
     heldInput: engine.heldInput(a.id),
     effortNow: engine.effortNow(a.id),
+    modelNow: engine.modelNow(a.id),
   }))
 }
 

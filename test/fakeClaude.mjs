@@ -25,7 +25,7 @@ const hang = knob === `${myName}:hang`;
 const mute = knob === `${myName}:mute`;
 
 const sessionId = flag('--resume') ?? flag('--session-id') ?? 'fake-session';
-let model = flag('--model') ?? 'default';
+let model = flag('--model') ?? 'claude-opus-5-5'; // --model 이 없으면 기본 모델이 풀린 id 를 알린다
 const permissionMode = process.env.FAKE_PERMISSION_MODE || 'default';
 let mcp = null;
 try {

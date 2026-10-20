@@ -28,6 +28,7 @@ function fakeEngine() {
     pendingRequests: () => [],
     autoChainLimit: () => 8,
     effortNow: () => 'high',
+    modelNow: () => 'claude-opus-5-5',
     usage: () => ({ windows: [{ key: 'session', label: '5시간', percent: 40, resetsAt: null }], at: 1 }),
     setEffort: rec('setEffort', Promise.resolve()),
     refreshUsage: rec('refreshUsage'),
@@ -124,14 +125,14 @@ describe('registerIpc', () => {
       claudeMissing: false,
       autoChainLimit: 8,
       rooms: [{ id: 'r1' }],
-      agents: [{ id: 'a1', status: 'idle', errorText: null, bypass: true, heldInput: 2, effortNow: 'high' }],
+      agents: [{ id: 'a1', status: 'idle', errorText: null, bypass: true, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5' }],
       usage: { windows: [{ key: 'session', percent: 40 }] },
     })
   })
 
   it('forwards every engine event as dure:event { name, payload }', () => {
     const { engine, sent } = setup()
-    expect(EVENT_NAMES).toHaveLength(13)
+    expect(EVENT_NAMES).toHaveLength(14)
     for (const name of EVENT_NAMES) engine.emit(name, { n: name })
     expect(sent).toEqual(EVENT_NAMES.map((name) => [CHANNEL.event, { name, payload: { n: name } }]))
   })
