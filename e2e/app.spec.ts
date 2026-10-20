@@ -334,15 +334,21 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       // effort — 칩 high → 슬라이더 오른쪽 한 칸 → xhigh, Claude 로 세션 명령 /effort xhigh 가 간다(대화엔 안 보인다)
       const chip = web.locator('.eff-chip')
       await expect(chip).toContainText('high')
+      const chipBox = await chip.boundingBox()
       await chip.click()
       const slider = web.getByRole('slider', { name: '생각하는 정도' })
       await expect(slider).toBeFocused({ timeout: 10_000 })
+      const popLeft = async () => (await web.locator('.eff-pop').boundingBox())?.x
+      const popBefore = await popLeft()
       await page.keyboard.press('ArrowRight')
       await expect(chip).toContainText('xhigh')
       await expect
         .poll(() => fs.readFileSync(w.log, 'utf8').split(/\r?\n/)
         .filter((l) => l.includes('"/effort xhigh"')).length)
         .toBeGreaterThan(0)
+      // 단계 이름이 바뀌어도 칩 너비·펼침 자리는 그대로
+      expect((await chip.boundingBox())?.width).toBe(chipBox?.width)
+      expect(await popLeft()).toBe(popBefore)
       await expect(web.locator('.me', { hasText: '/effort' })).toHaveCount(0)
       await expect(chip).toHaveText('xhigh') // Claude 의 답(지금 값)이 와도 xhigh 그대로
       await page.keyboard.press('Escape')

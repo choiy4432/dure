@@ -100,6 +100,35 @@ describe('EffortControl — 칩', () => {
   })
 })
 
+describe('EffortControl — 칩 너비(펼침이 칩 오른쪽 끝에 붙어 있어 칩이 늘면 펼침·막대가 움직인다)', () => {
+  it.each([...ALL, null])('단계 이름 칸은 가장 긴 이름(medium · 내 설정)을 깔고 있다 — %s', level => {
+    mount({ effortNow: level })
+    const v = chip().querySelector('.eff-v')!
+    expect(v.textContent).toBe(level ?? '내 설정')
+    expect([v.getAttribute('data-w1'), v.getAttribute('data-w2')]).toEqual(['medium', '내 설정'])
+  })
+
+  it('base.css — 깐 이름은 높이 0·안 보이게, 칸은 그중 가장 넓은 것만큼', async () => {
+    const fsName: string = 'node:fs'
+    const css: string = (await import(/* @vite-ignore */ fsName))
+      .readFileSync('src/renderer/styles/base.css', 'utf8')
+      .replace(/\r\n/g, '\n')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+    // 빈 줄 뒤에서 시작하는 규칙 하나의 본문(.eff.narrow .eff-v · 묶은 선택자의 둘째 줄과 섞이지 않게)
+    const rule = (sel: string) => {
+      const at = css.indexOf(`\n\n${sel} {`)
+      return at < 0 ? '' : css.slice(at, css.indexOf('}', at))
+    }
+    expect(rule('.eff-v')).toMatch(/display:\s*inline-flex/)
+    expect(rule('.eff-v')).toMatch(/flex-direction:\s*column/)
+    expect(rule('.eff-v::before')).toMatch(/content:\s*attr\(data-w1\)/)
+    expect(rule('.eff-v::after')).toMatch(/content:\s*attr\(data-w2\)/)
+    const both = rule('.eff-v::before,\n.eff-v::after')
+    expect(both).toMatch(/height:\s*0/)
+    expect(both).toMatch(/visibility:\s*hidden/)
+  })
+})
+
 describe('EffortControl — 펼침', () => {
   it('열면 아직 안 받은 describe 를 한 번 부른다', () => {
     const onLoad = vi.fn()
@@ -375,6 +404,25 @@ describe('EffortControl — 끌어서 바꾸기', () => {
     expect(t.releasePointerCapture).toHaveBeenCalledWith(1)
     move(200)
     expect(slider().getAttribute('aria-valuetext')).toBe('low')
+  })
+
+  it('끄는 동안 막대 위치는 누른 순간에 잰 것 — 그 사이 막대가 옮겨 가도 고르는 단계가 바뀌지 않는다', () => {
+    mount({ effortNow: 'low' })
+    open()
+    const t = prep()
+    let left = 0
+    const read = vi.fn(() => ({ left, width: 200, top: 0, height: 4, right: left + 200, bottom: 4, x: left, y: 0, toJSON: () => ({}) }))
+    t.getBoundingClientRect = read
+    down(0)
+    left = 30 // 칩 너비가 바뀌어 펼침이 옮겨 갔다
+    move(150) // 누른 순간 기준 150/200 → xhigh (지금 위치로 다시 재면 120/200 → high)
+    expect(slider().getAttribute('aria-valuetext')).toBe('xhigh')
+    expect(read).toHaveBeenCalledTimes(1)
+    fireEvent.pointerUp(t, { pointerId: 1 })
+    left = 0
+    down(200) // 다음 끌기는 새로 잰다
+    expect(slider().getAttribute('aria-valuetext')).toBe('max')
+    expect(read).toHaveBeenCalledTimes(2)
   })
 
   it('누르지 않고 움직이기만 하면 아무 일도 없다', () => {

@@ -25,6 +25,10 @@ const NARROW_PX = 400
 const SEND_DELAY_MS = 300
 /** effort 를 못 정하는 모델 */
 const NO_EFFORT = '이 모델은 effort 를 정할 수 없어요'
+/** 아직 안 고름 */
+const MINE = '내 설정'
+/** 칩에 나오는 이름 중 가장 넓은 둘 — 이름 칸에 안 보이게 깔아 칸 너비를 고정한다(base.css .eff-v) */
+const WIDEST = ['medium', MINE] as const
 
 /** 패널 머리의 effort 칩(막대 5개 + 단계 이름) + 다섯 단계 슬라이더 */
 export function EffortControl({ agentId, effort, effortNow, model, description, onLoad, onRetry, onError }: Props) {
@@ -36,6 +40,8 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
   const chip = useRef<HTMLButtonElement>(null)
   const slider = useRef<HTMLDivElement>(null)
   const dragging = useRef(false)
+  // 누른 순간에 잰 막대 자리 — 끄는 동안 다시 재지 않는다(무엇이 막대를 옮겨도 손 밑 단계가 흔들리지 않게)
+  const dragRect = useRef<DOMRect | null>(null)
   const [grab, setGrab] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const close = useCallback(() => setOpen(false), [])
@@ -96,7 +102,7 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
   const unsupported = !!info && !info.supportsEffort
   const allowed = (level: EffortLevel) => !info?.effortLevels || info.effortLevels.includes(level)
 
-  const name = shown ?? '내 설정'
+  const name = shown ?? MINE
   const label = `effort ${name}`
   const filled = shown ? EFFORT_LEVELS.indexOf(shown) + 1 : 0
   const index = shown ? EFFORT_LEVELS.indexOf(shown) : 2
@@ -144,10 +150,10 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
     chip.current?.focus()
   }
 
-  /** 막대 위 x 좌표 → 모델이 지원하는 가장 가까운 눈금(같은 거리면 낮은 쪽) */
-  const levelAt = (clientX: number, track: HTMLElement): EffortLevel | null => {
-    const r = track.getBoundingClientRect()
-    if (!(r.width > 0)) return null
+  /** 막대(누른 순간의 자리) 위 x 좌표 → 모델이 지원하는 가장 가까운 눈금(같은 거리면 낮은 쪽) */
+  const levelAt = (clientX: number): EffortLevel | null => {
+    const r = dragRect.current
+    if (!r || !(r.width > 0)) return null
     const f = Math.min(1, Math.max(0, (clientX - r.left) / r.width))
     const i = Math.round(f * (EFFORT_LEVELS.length - 1))
     for (let d = 0; d < EFFORT_LEVELS.length; d++) {
@@ -158,12 +164,13 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
   }
 
   const follow = (e: PointerEvent<HTMLDivElement>) => {
-    const level = levelAt(e.clientX, e.currentTarget)
+    const level = levelAt(e.clientX)
     if (level) choose(level)
   }
   const onDown = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button > 0) return
     dragging.current = true
+    dragRect.current = e.currentTarget.getBoundingClientRect()
     setGrab(true)
     try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* 붙잡기를 못 해도 눌린 자리는 반영 */ }
     e.currentTarget.focus()
@@ -175,6 +182,7 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
   const onUp = (e: PointerEvent<HTMLDivElement>) => {
     if (!dragging.current) return
     dragging.current = false
+    dragRect.current = null
     setGrab(false)
     try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* 이미 풀림 */ }
   }
@@ -208,7 +216,9 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
             <i key={l} className={i < filled ? 'on' : undefined} />
           ))}
         </span>
-        <span className="eff-v">{name}</span>
+        <span className="eff-v" data-w1={WIDEST[0]} data-w2={WIDEST[1]}>
+          {name}
+        </span>
       </button>
       {open && (
         <div className="pop eff-pop" role="dialog" aria-label="생각하는 정도(effort)" onKeyDown={onKey}>

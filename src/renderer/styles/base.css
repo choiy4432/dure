@@ -2933,6 +2933,28 @@ code {
   background: var(--primary);
 }
 
+/* 단계 이름 칸 — 가장 넓은 이름 둘(data-w1·w2: medium · 내 설정)을 높이 0 으로 깔아 늘 그만큼의 너비.
+   펼침이 칩 오른쪽 끝에 붙어 있어, 칩이 이름 길이를 따라 늘면 펼침·막대가 손 밑에서 옮겨 간다 */
+.eff-v {
+  display: inline-flex;
+  flex-direction: column;
+}
+
+.eff-v::before,
+.eff-v::after {
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+
+.eff-v::before {
+  content: attr(data-w1);
+}
+
+.eff-v::after {
+  content: attr(data-w2);
+}
+
 .eff.narrow .eff-v {
   display: none;
 }
