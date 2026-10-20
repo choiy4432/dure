@@ -12,6 +12,8 @@ import { popOnce, useRise } from '../lib/motion'
 
 export type AgentFlowNode = Node<Record<string, never>, 'agent'>
 
+/** 이보다 긴 역할은 최소 6em 을 지킨다(.nr .floor) — 짧은 역할은 제 폭 그대로 */
+const ROLE_FLOOR_CHARS = 6
 const ACTIVITY_MAX = 40
 const ERROR_MAX = 30
 
@@ -167,7 +169,7 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
             )}
           </span>
           <span className="nr" title={roleLine}>
-            {agent.role && <span className="trunc">{agent.role}</span>}
+            {agent.role && <span className={`trunc${agent.role.length > ROLE_FLOOR_CHARS ? ' floor' : ''}`}>{agent.role}</span>}
             <span className="nr-meta keep">{agent.role ? ` · ${meta}` : meta}</span>
           </span>
         </div>

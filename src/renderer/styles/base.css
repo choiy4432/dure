@@ -771,10 +771,17 @@ code {
 
 .nr {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   font-size: 13px;
   line-height: 18px;
   color: var(--muted);
+}
+
+/* 긴 역할은 모델·effort 에 밀려도 6em 아래로 줄지 않는다 — 모자라면 모델·effort 가 다음 줄로 */
+.nr .trunc.floor {
+  flex: 1 1 6em;
+  min-width: 6em;
 }
 
 /* 모델 · effort — 역할만 말줄임, 이쪽은 줄지 않는다 */

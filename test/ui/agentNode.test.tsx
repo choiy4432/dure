@@ -136,6 +136,21 @@ describe('AgentNode — 카드 내용', () => {
     expect(again.card.querySelector('.nr')!.textContent).toBe('기획서 · Opus · low')
   })
 
+  it('긴 역할만 최소 폭(6em) 규칙을 받고, 그 규칙은 CSS 에 있다', async () => {
+    snapshot.agents = [agent('d', { role: '기획서 · 문구 · 행사 페이지 카피 전부', modelNow: 'claude-opus-5[1m]', effortNow: 'xhigh' })]
+    const { card } = await renderCard()
+    expect(card.querySelector('.nr .trunc')!.classList.contains('floor')).toBe(true)
+    expect(card.querySelector('.nr')!.textContent).toBe('기획서 · 문구 · 행사 페이지 카피 전부 · Opus 5 (긴 대화) · xhigh')
+    cleanup()
+    snapshot.agents = [agent('d', { role: '기획서' })]
+    const short = await renderCard()
+    expect(short.card.querySelector('.nr .trunc')!.classList.contains('floor')).toBe(false)
+    const fsName: string = 'node:fs'
+    const css: string = (await import(/* @vite-ignore */ fsName)).readFileSync('src/renderer/styles/base.css', 'utf8')
+    expect(css).toMatch(/\.nr \.trunc\.floor\s*\{[^}]*min-width:\s*6em/)
+    expect(css).toMatch(/\.nr\s*\{[^}]*flex-wrap:\s*wrap/)
+  })
+
   it('역할이 비면 앞 구분 점 없이 모델 · effort 만', async () => {
     snapshot.agents = [agent('d', { role: '', modelNow: 'claude-opus-5-5', effortNow: 'max' })]
     const { card } = await renderCard()
