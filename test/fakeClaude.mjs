@@ -288,5 +288,9 @@ if (hang) {
       void turn(text);
     }
   });
-  rl.on('close', () => process.exit(0));
+  // FAKE_IGNORE_STDIN_END=1 — stdin 이 닫혀도 안 꺼진다(엔진이 끝까지 기다리다 죽이는지 보려고)
+  rl.on('close', () => {
+    if (process.env.FAKE_IGNORE_STDIN_END === '1') setInterval(() => {}, 1 << 30);
+    else process.exit(0);
+  });
 }

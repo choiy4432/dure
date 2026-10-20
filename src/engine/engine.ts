@@ -108,6 +108,8 @@ const EFFORT_BUSY = '/effort 차례가 끝나면 보낸다';
 /** /effort 답을 기다리는 한도 — 띄운 직후엔 CLI 시작·--resume 대화 읽기까지 기다리므로 넉넉히 */
 const EFFORT_TIMEOUT_MS = 30_000;
 const EFFORT_STUCK = 'effort 를 정하는 동안 Claude 가 답하지 않아 다시 띄웠어요 — 이번 실행엔 고른 effort 를 적용하지 못했어요.';
+/** 위 일을 사람에게 — 그 에이전트 대화에 안내 한 줄 */
+const EFFORT_STUCK_NOTICE = 'effort 를 적용하지 못해 기본값으로 이어 가요';
 
 /** 엔진이 써 넣은 /effort 한 줄 — 그 result 까지 */
 interface EffortTurn {
@@ -139,6 +141,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private limit: number;
   private closed = false;
   private closing: Promise<void> | null = null;
+  private stopping = new Set<Promise<void>>(); // 끄는 중인 세션(상한 STOP_LIMIT_MS) — 맵에서 빠졌어도 shutdown 이 기다린다
   private perms: Permissions;
   private router: Router;
   private mcp!: McpServerHandle;
@@ -326,8 +329,12 @@ class EngineImpl extends EventEmitter implements Engine {
     this.perms.cancelForAgent(id, STOPPED_BY_USER);
     const s = this.sessions.get(id);
     if (!s) return;
-    // 엔진이 보낸 /effort 차례 중(화면엔 기다리는 입력 때문에 작업 중) — 같은 프로세스에 이어 쓰지 않고 다시 띄운다(답 없음과 같은 길)
-    if (this.effortTurn.has(s)) return this.restartAfterEffort(id, s, 'interrupt');
+    // 엔진이 보낸 /effort 차례 중 — 기다리는 사람 입력이 있으면(화면엔 작업 중) 같은 프로세스에 이어 쓰지 않고 다시 띄운다(답 없음과 같은 길).
+    // 없으면(남은 승인 카드만 멈춤) 카드만 치우고 그 /effort 는 그대로 끝나게 둔다
+    if (this.effortTurn.has(s)) {
+      if ((this.held.get(id)?.length ?? 0) > 0) return this.restartAfterEffort(id, s, 'interrupt');
+      return;
+    }
     const wasWorking = s.status === 'working';
     await s.interrupt();
     if (wasWorking) this.guard(id, () => this.record(id, { kind: 'notice', text: STOPPED_NOTICE }));
@@ -429,7 +436,8 @@ class EngineImpl extends EventEmitter implements Engine {
       this.closed = true;
       const ids = [...this.sessions.keys()];
       for (const r of this.perms.pending()) this.perms.cancelForAgent(r.agentId, EXITED);
-      await Promise.all([this.stopWatcher(), ...ids.map((id) => this.endSession(id))]);
+      // 맵에서 이미 빠진 채 끄는 중인 세션(다시 띄우기·새 대화)도 기다린다 — 각각 STOP_LIMIT_MS 상한
+      await Promise.all([this.stopWatcher(), ...ids.map((id) => this.endSession(id)), ...this.stopping]);
       await this.mcp.close();
     })();
     return this.closing;
@@ -673,14 +681,19 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * /effort 에 답이 없거나(timeout) 그 사이 사람이 멈췄다(interrupt). 같은 프로세스에 다음 줄을 이어 쓰면 늦게 온 /effort 답이
-   * 그 줄의 답처럼 보이고 그 차례를 일찍 끝낸다 — 대신 세션을 끝내고, /effort 없이 다시 띄워 기다리던 입력·메시지를 보낸다.
-   * /effort 는 고르기·모델 바꾸기 전까지 다시 보내지 않는다(effortBroken).
+   * 그 줄의 답처럼 보이고 그 차례를 일찍 끝낸다 — 대신 세션을 끝내고, 다시 띄워 기다리던 입력·메시지를 보낸다.
+   * 답이 없었으면 /effort 없이 띄우고 고르기·모델 바꾸기 전까지 다시 보내지 않는다(effortBroken · 대화에 안내 한 줄).
+   * 멈추기면 /effort 부터 다시 보낸다(멀쩡한데 느린 시작일 수 있다 — 정말 막혔으면 다시 시간 초과가 잡는다).
    */
   private async restartAfterEffort(id: AgentId, s: ClaudeSession, why: 'timeout' | 'interrupt'): Promise<void> {
     try {
       if (this.closed || !this.effortTurn.has(s) || !this.live(id, s)) return;
-      this.effortBroken.add(id);
-      if (why === 'timeout') this.guard(id, () => this.emit('engine-error', { agentId: id, message: EFFORT_STUCK }));
+      if (why === 'timeout') {
+        // 막힌 CLI — 이번 실행 동안 /effort 없이(고르기·모델 바꾸기 전까지). 멈추기는 멀쩡한 /effort 일 수 있어 다시 띄울 때 /effort 부터 다시 보낸다
+        this.effortBroken.add(id);
+        this.guard(id, () => this.emit('engine-error', { agentId: id, message: EFFORT_STUCK }));
+        this.guard(id, () => this.record(id, { kind: 'notice', text: EFFORT_STUCK_NOTICE }));
+      }
       await this.endSession(id); // 기다리던 입력·queued 메시지는 그대로 — /effort 는 보낸 줄로 치지 않아 되살릴 것이 없다
       if (this.closed || this.removing.has(id) || !this.store.agent(id)) return;
       const waiting = (this.held.get(id)?.length ?? 0) > 0 || this.log.list({ to: id, states: ['queued'] }).length > 0;
@@ -840,8 +853,13 @@ class EngineImpl extends EventEmitter implements Engine {
     const limit = new Promise<void>((r) => {
       timer = setTimeout(r, STOP_LIMIT_MS);
     });
-    await Promise.race([s.stop().catch(() => undefined), limit]);
-    clearTimeout(timer);
+    const stopped = Promise.race([s.stop().catch(() => undefined), limit]).then(() => clearTimeout(timer));
+    this.stopping.add(stopped);
+    try {
+      await stopped;
+    } finally {
+      this.stopping.delete(stopped);
+    }
     this.restoreInFlight(id, s); // 멈출 때까지도 못 읽은 줄
   }
 

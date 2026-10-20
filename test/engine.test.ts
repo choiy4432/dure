@@ -1410,6 +1410,11 @@ test('effort: get_settings 답이 오기 전에 에이전트를 지우면 그 �
 });
 
 // ── effort: /effort 차례 중의 일(넘김 · 죽음 · 새 대화 · 답 없음 · 멈추기) ──
+/** 답 없는 /effort 의 시험용 한도 — 바쁜 기계에서도 가짜 claude 가 뜨고 줄을 읽을 만큼 */
+const EFFORT_WAIT = 1000;
+/** 다시 띄우기를 거치는 차례의 result — 한도 + 끄기 + 다시 띄우기까지 */
+const slowResultOf = (e: Engine, agentId: string) =>
+  waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === agentId && x.event.kind === 'result', EFFORT_WAIT * 8);
 /** 그 이름(-n)으로 뜬 프로세스마다, 받은 사용자 줄 — 띄운 차례대로(가짜 claude 가 줄마다 pid 를 남긴다) */
 const linesByProcess = (name: string): string[][] => {
   const log = readLog();
@@ -1475,44 +1480,64 @@ test('effort: /effort 차례 중에 새 대화 — 새 세션이 다시 /effort,
 });
 
 test('effort: /effort 에 끝내 답이 없으면 — 시간이 지나 다시 띄우고(effort 없이) 기다리던 입력을 보낸다 · engine-error · 고르면 다시 해 본다', async () => {
-  const e = await start({ FAKE_EFFORT_SILENT: '1' }, false, { effortTimeoutMs: 300 });
+  const e = await start({ FAKE_EFFORT_SILENT: '1' }, false, { effortTimeoutMs: EFFORT_WAIT });
   const { b } = setup(e);
   const errs: { agentId: string | null; message: string }[] = [];
   e.on('engine-error', (x) => errs.push(x));
   const statuses: string[] = [];
   e.on('status', (x: StatusEvent) => x.agentId === b.id && statuses.push(x.status));
   await e.setEffort(b.id, 'max');
-  const done = resultOf(e, b.id);
+  const done = slowResultOf(e, b.id);
   await e.sendUser(b.id, text('echo 하나'));
   expect(e.status(b.id)).toBe('working'); // 첫 입력이 멈춘 듯 보이지 않게 — 멈추기도 켜진다
   expect(await resultText(done)).toBe('받음: echo 하나');
   expect(linesByProcess('B')).toEqual([['/effort max'], ['echo 하나']]);
   expect(errs).toEqual([{ agentId: b.id, message: expect.stringContaining('effort') }]);
+  // 사람에게도 보이게 — 대화에 안내 한 줄(보낸 입력보다 앞)
+  expect(e.history(b.id).slice(0, 2).map((h) => (h.kind === 'notice' ? `notice:${h.text}` : h.kind))).toEqual([
+    'notice:effort 를 적용하지 못해 기본값으로 이어 가요',
+    'user',
+  ]);
   await until('내 설정(가짜 high)을 읽음', () => e.effortNow(b.id) === 'high'); // 적용 못 한 값 대신 실제로 쓰는 값
   expect(statuses).toEqual(['working', 'idle']); // 다시 띄우는 사이에 대기로 깜박이지 않는다
 
   await e.setEffort(b.id, 'low'); // 고르면 다시 /effort 를 해 본다
   await until('/effort low 를 씀', () => linesByProcess('B')[1]?.includes('/effort low') ?? false);
-  await until('두 번째 시간 초과', () => errs.length === 2);
+  await until('두 번째 시간 초과', () => errs.length === 2, EFFORT_WAIT * 6);
   await sleep(200);
   expect(spawnsOf('B')).toHaveLength(2); // 기다리는 입력·메시지가 없으면 다시 띄우지 않는다
   expect(e.status(b.id)).toBe('idle');
-});
+}, 20_000);
 
 test('effort: 막힌 /effort 를 다시 띄우면 줄에 선 넘김 메시지도 새 세션으로 간다', async () => {
-  const e = await start({ FAKE_EFFORT_SILENT: '1' }, false, { effortTimeoutMs: 300 });
+  const e = await start({ FAKE_EFFORT_SILENT: '1' }, false, { effortTimeoutMs: EFFORT_WAIT });
   const { a, b } = setup(e);
   e.updateAgent(b.id, { auto: true });
   await e.setEffort(b.id, 'max');
-  const bDone = resultOf(e, b.id);
+  const bDone = slowResultOf(e, b.id);
   await e.sendUser(a.id, text('SEND B: 안녕'));
   expect(await resultText(bDone)).toBe(`받음: ${RELAY_HI}`);
   expect(linesByProcess('B')).toEqual([['/effort max'], [RELAY_HI]]);
   expect(e.messages()[0].state).toBe('delivered');
-});
+  await e.setModel(b.id, 'sonnet'); // 모델을 바꾸면 다시 /effort 를 해 본다
+  await until('/effort max 를 다시 씀', () => linesByProcess('B')[1]?.includes('/effort max') ?? false);
+}, 20_000);
 
-test('effort: /effort 차례 중 멈추기 — 같은 프로세스에 이어 쓰지 않고 다시 띄운다(effort 없이) · 모델을 바꾸면 다시 해 본다', async () => {
-  const e = await start({ FAKE_EFFORT_SILENT: '1' }, false, { effortTimeoutMs: 60_000 });
+test('effort: 다시 띄우려고 옛 claude 를 끄는 중에 shutdown 해도 그 프로세스가 꺼질 때까지 기다린다', async () => {
+  const e = await start({ FAKE_EFFORT_SILENT: '1', FAKE_IGNORE_STDIN_END: '1' }, false, { effortTimeoutMs: EFFORT_WAIT });
+  const { b } = setup(e);
+  await e.setEffort(b.id, 'max');
+  const stuck = waitFor(e, 'engine-error', () => true, EFFORT_WAIT * 6);
+  await e.sendUser(b.id, text('echo 하나'));
+  await until('/effort 를 읽음', () => effortLines().length === 1);
+  await stuck; // 다시 띄우기가 옛 프로세스를 끄기 시작했다(stdin 을 닫아도 안 꺼지는 claude)
+  const { pid } = lastSpawnOf('B');
+  await e.shutdown();
+  expect(isAlive(pid)).toBe(false);
+}, 20_000);
+
+test('effort: /effort 차례 중 멈추기 — 같은 프로세스에 이어 쓰지 않고 다시 띄워 /effort 부터 다시, 고른 effort 는 그대로', async () => {
+  const e = await start({ FAKE_SLOW_EFFORT_MS: '600' }); // 멀쩡하지만 느린 시작('보냈다, 아차, 멈춤')
   const { b } = setup(e);
   const errs: unknown[] = [];
   e.on('engine-error', (x) => errs.push(x));
@@ -1523,12 +1548,34 @@ test('effort: /effort 차례 중 멈추기 — 같은 프로세스에 이어 쓰
   expect(e.status(b.id)).toBe('working');
   await e.interrupt(b.id);
   expect(await resultText(done)).toBe('받음: echo 하나');
-  expect(linesByProcess('B')).toEqual([['/effort max'], ['echo 하나']]);
+  expect(linesByProcess('B')).toEqual([['/effort max'], ['/effort max', 'echo 하나']]);
+  expect(e.effortNow(b.id)).toBe('max'); // 화면이 기본값으로 돌아가지 않는다
   expect(errs).toEqual([]); // 사람이 멈춘 것 — 오류가 아니다
   expect(JSON.stringify(e.history(b.id))).not.toContain('멈췄어요');
 
-  await e.setModel(b.id, 'sonnet'); // 모델을 바꾸면 다시 /effort 를 해 본다
-  await until('/effort max 를 다시 씀', () => linesByProcess('B')[1]?.includes('/effort max') ?? false);
+  const next = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === b.id && x.event.kind === 'result' && x.event.text.includes('둘'));
+  await e.sendUser(b.id, text('echo 둘'));
+  await next;
+  expect(linesByProcess('B')).toEqual([['/effort max'], ['/effort max', 'echo 하나', 'echo 둘']]);
+  expect(e.effortNow(b.id)).toBe('max');
+});
+
+test('effort: /effort 차례 중 남은 승인 카드에서 멈추기 — 기다리는 입력이 없으면 카드만 치우고 세션은 그대로', async () => {
+  const e = await start({ FAKE_SLOW_EFFORT_MS: '800' });
+  const { a } = setup(e);
+  await settledTurn(e, a.id);
+  await e.setEffort(a.id, 'low');
+  await until('/effort 를 씀', () => effortLines().length === 1);
+  const req = waitFor<PendingRequest>(e, 'request');
+  const stray = approveDirect(a.id, 'Edit'); // 떠난 프로세스가 남긴 것 같은 호출
+  await req;
+  expect(e.status(a.id)).toBe('awaiting');
+  const heard = waitFor(e, 'effort', (x: any) => x.effortNow === 'low');
+  await e.interrupt(a.id);
+  expect(await stray).toEqual({ behavior: 'deny', message: '사용자가 멈췄습니다.' });
+  await heard; // 같은 세션의 /effort 가 그대로 끝난다
+  expect(spawnsOf('A')).toHaveLength(1);
+  expect(e.status(a.id)).toBe('idle');
 });
 
 test('effort: /effort 차례가 끝나면 남은 승인 요청도 정리한다 — 차례가 끝났습니다', async () => {
