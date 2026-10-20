@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Agent, AgentId, AgentPatch, Room, RoomId } from './types';
+import { EFFORT_LEVELS, type Agent, type AgentId, type AgentPatch, type ContextUsage, type EffortLevel, type Room, type RoomId } from './types';
 
 export interface Store {
   rooms(): Room[];
@@ -43,13 +43,38 @@ export function renameRetrying(from: string, to: string): void {
   }
 }
 
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/** 저장된 effort — 아는 단계가 아니면(손댄 파일·옛 값) null */
+function savedEffort(v: unknown): EffortLevel | null {
+  return (EFFORT_LEVELS as readonly unknown[]).includes(v) ? (v as EffortLevel) : null;
+}
+
+/** 저장된 마지막 대화 공간 — 수가 아닌 total·max·percent 가 있으면 null(링을 그리지 않는다) */
+function savedContext(v: unknown): ContextUsage | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const c = v as Record<string, unknown>;
+  if (!finite(c.total) || !finite(c.max) || c.max <= 0 || !finite(c.percent)) return null;
+  return {
+    total: c.total,
+    max: c.max,
+    percent: c.percent,
+    autoCompactAt: finite(c.autoCompactAt) && c.autoCompactAt > 0 ? c.autoCompactAt : null,
+    at: finite(c.at) ? c.at : 0,
+  };
+}
+
 function load(file: string): State {
   const empty: State = { version: 1, rooms: [], agents: [] };
   if (!fs.existsSync(file)) return empty;
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!raw || !Array.isArray(raw.rooms) || !Array.isArray(raw.agents)) throw new Error('bad shape');
-    return { version: 1, rooms: raw.rooms, agents: raw.agents.map((a: Agent) => ({ ...a, effort: a.effort ?? null, lastContext: a.lastContext ?? null })) };
+    return {
+      version: 1,
+      rooms: raw.rooms,
+      agents: raw.agents.map((a: Agent) => ({ ...a, effort: savedEffort(a.effort), lastContext: savedContext(a.lastContext) })),
+    };
   } catch {
     renameRetrying(file, `${file}.broken-${Date.now()}`);
     return empty;

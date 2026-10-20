@@ -165,6 +165,35 @@ test('effort·lastContext 칸이 없는 옛 state.json 은 null 로 열린다', 
   expect(old.lastContext).toBeNull();
 });
 
+test('깨지거나 손댄 state.json 의 effort·lastContext 는 null 로 열린다 — 다른 칸은 그대로', () => {
+  const s = openStore(dir);
+  const r = s.addRoom('A');
+  const ids = ['turbo', 'num', 'str', 'ctx', 'maxless', 'ok'].map((name) => s.addAgent({ roomId: r.id, name, role: 'r', folder: dir }).id);
+  const file = path.join(dir, 'state.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const good = { total: 12000, max: 200000, percent: 6, autoCompactAt: 167000, at: 5 };
+  const bad: Record<string, { effort: unknown; lastContext: unknown }> = {
+    turbo: { effort: 'turbo', lastContext: 'big' },
+    num: { effort: 3, lastContext: { total: '12000', max: 200000, percent: 6, autoCompactAt: null, at: 1 } },
+    str: { effort: 'HIGH', lastContext: [1, 2] },
+    ctx: { effort: 'max', lastContext: { total: Number.NaN, max: 200000, percent: 6, autoCompactAt: null, at: 1 } },
+    maxless: { effort: null, lastContext: { total: 1, percent: 6, autoCompactAt: null, at: 1 } },
+    ok: { effort: 'xhigh', lastContext: good },
+  };
+  for (const ag of raw.agents) Object.assign(ag, bad[ag.name]);
+  fs.writeFileSync(file, JSON.stringify(raw));
+  const back = openStore(dir);
+  const [turbo, num, str, ctx, maxless, ok] = ids.map((id) => back.agent(id)!);
+  expect([turbo.effort, turbo.lastContext]).toEqual([null, null]);
+  expect([num.effort, num.lastContext]).toEqual([null, null]);
+  expect([str.effort, str.lastContext]).toEqual([null, null]);
+  expect([ctx.effort, ctx.lastContext]).toEqual(['max', null]);
+  expect([maxless.effort, maxless.lastContext]).toEqual([null, null]);
+  expect([ok.effort, ok.lastContext]).toEqual(['xhigh', good]);
+  expect(turbo).toMatchObject({ name: 'turbo', role: 'r', roomId: r.id });
+  expect(fs.readdirSync(dir).filter((f) => f.includes('.broken-'))).toEqual([]); // 칸 하나가 깨졌다고 파일 전체를 버리지 않는다
+});
+
 test('updateAgent 로 effort·lastContext 를 저장하면 다시 열어도 남는다', () => {
   const s = openStore(dir);
   const r = s.addRoom('A');
