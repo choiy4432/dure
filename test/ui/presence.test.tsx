@@ -267,4 +267,27 @@ describe('PresenceList', () => {
     rerender(<List keys={['a']} />)
     expect(queryByTestId('b')).toBeNull()
   })
+
+  it('같은 key 가 다른 묶음(배열 ↔ 낱개)으로 옮겨도 같은 자식이다 — 나갔다 다시 들어오지 않는다', async () => {
+    allowMotion()
+    // 고정 카드 자리처럼 — 받은 메시지 목록(배열)에 있던 것이 '최근 전달된 것' 자리(낱개)로 옮긴다
+    const row = (k: string) => (
+      <MotionDiv key={k} motion={MOTION.line} data-testid={k} className="row">
+        {k}
+      </MotionDiv>
+    )
+    const Groups = ({ waiting, delivered }: { waiting: string[]; delivered: string | null }) => (
+      <PresenceList>
+        {waiting.map(row)}
+        {delivered && row(delivered)}
+      </PresenceList>
+    )
+    const { rerender, container, getByTestId } = render(<Groups waiting={['m']} delivered={null} />)
+    const m = getByTestId('m')
+    rerender(<Groups waiting={[]} delivered="m" />)
+    expect(container.querySelectorAll('.row')).toHaveLength(1)
+    expect(getByTestId('m')).toBe(m)
+    expect(m.hasAttribute('inert')).toBe(false)
+    expect(m.style.opacity).toBe('')
+  })
 })

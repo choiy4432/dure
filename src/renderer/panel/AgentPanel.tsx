@@ -20,6 +20,24 @@ type Shown = RelayMessage & { state: ShownState }
 const isWaiting = (m: RelayMessage): m is Shown => m.state === 'pending' || m.state === 'queued'
 const byCreated = (a: { createdAt: number }, b: { createdAt: number }) => a.createdAt - b.createdAt
 
+const px = (v: string) => parseFloat(v) || 0
+
+/**
+ * 카드들이 배치에서 차지하는 높이(안쪽 여백 포함)가 칸보다 큰가 — transform 은 세지 않는다(offset* 은 transform 을 모른다).
+ * scrollHeight 는 들어오는 카드가 아래로 비켜 선 자리(translateY)까지 넘침으로 센다. 그 몇 px 은 .more 의 아래 여백이 덮어,
+ * scrollHeight 로 재면 넘침 → .more → 안 넘침 → .more 없음 → 넘침 … 이 한 그리기 안에서 끝없이 돈다(React #185).
+ */
+function overflows(el: HTMLElement): boolean {
+  const first = el.firstElementChild
+  const last = el.lastElementChild
+  if (!(first instanceof HTMLElement) || !(last instanceof HTMLElement)) return false // 카드가 없다(자리도 없다)
+  const cs = getComputedStyle(el)
+  // 첫 카드의 바깥 여백 위 ~ 마지막 카드의 바깥 여백 아래 — 두 카드의 offsetTop 기준이 같아 스크롤 자리와 상관없다
+  const top = first.offsetTop - px(getComputedStyle(first).marginTop)
+  const bottom = last.offsetTop + last.offsetHeight + px(getComputedStyle(last).marginBottom)
+  return bottom - top + px(cs.paddingTop) + px(cs.paddingBottom) > el.clientHeight + 1
+}
+
 /** 고정 카드 자리가 넘쳐 스크롤되는지 — 그럴 때만 아래 경계선을 그어 잘린 카드가 대화와 섞이지 않게 */
 function useOverflows(ref: RefObject<HTMLElement | null>): boolean {
   const [over, setOver] = useState(false)
@@ -27,7 +45,7 @@ function useOverflows(ref: RefObject<HTMLElement | null>): boolean {
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    const check = () => setOver(el.scrollHeight > el.clientHeight + 1)
+    const check = () => setOver(overflows(el))
     check()
     if (typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(check)

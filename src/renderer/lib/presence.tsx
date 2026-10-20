@@ -152,8 +152,8 @@ interface Entry {
 /** 지난번에 그린 것(prev)에 이번 자식(next)을 맞춘다 — 빠진 key 는 원래 자리(앞 이웃 바로 뒤)에 나가는 것으로 남긴다 */
 function merge(prev: Entry[], next: ReactElement[], appear: boolean): Entry[] {
   const was = new Map(prev.map(e => [e.key, e]))
-  const out: Entry[] = next.map(el => {
-    const key = el.key as Key
+  const out: Entry[] = next.map((el, i) => {
+    const key: Key = el.key ?? `#${i}` // key 없는 자식(쓰지 말 것)도 서로 겹치지는 않게 — 자리 번호
     return { key, el, show: true, appear: was.get(key)?.appear ?? appear }
   })
   const now = new Set(out.map(e => e.key))
@@ -173,8 +173,21 @@ function merge(prev: Entry[], next: ReactElement[], appear: boolean): Entry[] {
 }
 
 /**
+ * 자식을 한 줄로 편다 — 배열 안의 것도 제 key 그대로.
+ * Children.toArray 는 key 앞에 묶음 자리를 붙여(.1:$id · .$id) 같은 key 가 다른 묶음으로 옮기면(받은 목록 → 최근 전달된 자리)
+ * 새 자식으로 본다 — 옛것은 나가고 같은 것이 하나 더 들어왔다.
+ */
+function keyed(children: ReactNode): ReactElement[] {
+  const out: ReactElement[] = []
+  Children.forEach(children, child => {
+    if (isValidElement(child)) out.push(child)
+  })
+  return out
+}
+
+/**
  * key 가 있는 자식 목록 — 빠진 key 는 제자리에 남아 나가고, 새 key 는 들어온다. 처음 그릴 때의 key 는 들어오지 않는다.
- * 자식은 모두 key 가 있어야 한다.
+ * 자식은 모두 key 가 있어야 하고, 묶음(배열)이 달라도 key 가 겹치면 안 된다 — key 하나가 자식 하나다.
  */
 export function PresenceList(props: { children: ReactNode }): ReactNode {
   const committed = useRef<Entry[]>([])
@@ -182,7 +195,7 @@ export function PresenceList(props: { children: ReactNode }): ReactNode {
   const gone = useRef(new Set<Key>()) // 다 나간 key — 다음 렌더에서 뺀다
   const [, redraw] = useReducer((n: number) => n + 1, 0)
 
-  const next = Children.toArray(props.children).filter(isValidElement)
+  const next = keyed(props.children)
   const entries = merge(committed.current, next, mounted.current).filter(e => e.show || !gone.current.has(e.key))
 
   useLayoutEffect(() => {
