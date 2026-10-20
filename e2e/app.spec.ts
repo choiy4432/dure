@@ -409,6 +409,17 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       // 좁은 끝(창 1100×700, 패널 360) — 링 펼침이 패널·창 안에 머문다
       await run!.app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [1100, 700])
       await page.waitForFunction(() => window.innerWidth === 1100 && window.innerHeight === 700)
+      // 12px 글자로도 위 띠 막대 셋이 1100px 에 들어간다(한 막대 모드는 1100 미만부터)
+      await expect(page.locator('header.top .usg')).toHaveCount(3)
+      const fit = await page.evaluate(() => {
+        const top = document.querySelector('header.top') as HTMLElement
+        const btn = (document.querySelector('header.top .usg-btn') as HTMLElement).getBoundingClientRect()
+        const last = (document.querySelector('header.top') as HTMLElement).lastElementChild!.getBoundingClientRect()
+        return { over: top.scrollWidth - top.clientWidth, btnRight: btn.right, lastRight: last.right, w: window.innerWidth }
+      })
+      expect(fit.over).toBeLessThanOrEqual(0)
+      expect(fit.btnRight).toBeLessThanOrEqual(fit.w)
+      expect(fit.lastRight).toBeLessThanOrEqual(fit.w + 0.5)
       // 패널을 가장 좁게(360) — 가르는 줄에 키보드로 닿는다
       await page.getByRole('separator', { name: '관계도와 패널 너비' }).focus()
       for (let i = 0; i < 30; i++) await page.keyboard.press('ArrowRight')
