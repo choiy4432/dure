@@ -7,6 +7,7 @@ import { Presence } from '../../src/renderer/lib/presence'
 import { useExpand } from '../../src/renderer/lib/expand'
 import { Clamp } from '../../src/renderer/lib/Clamp'
 import { Empty } from '../../src/renderer/shell/Empty'
+import { MessageCard } from '../../src/renderer/panel/cards/MessageCard'
 import { allowMotion, fastMotion } from './motion'
 
 vi.mock('animejs', async orig => {
@@ -199,5 +200,68 @@ describe('접기·펼치기 높이', () => {
     expect(seen.length).toBeGreaterThan(0)
     expect(seen.every(Boolean)).toBe(true)
     restore()
+  })
+})
+
+describe('받은 메시지 카드 접기·펼치기 — 여백 차이도 높이로', () => {
+  const message = { id: 'm1', roomId: 'r1', from: 'p', to: 'w', text: '본문', createdAt: 1, updatedAt: 1, state: 'pending' as const }
+  const Card = ({ open }: { open: boolean }) => (
+    <MessageCard message={message} fromName="기획" toName="웹" now={2} open={open} onOpenChange={() => {}} />
+  )
+  const parts = (card: Element) => ({
+    gap: card.querySelector<HTMLElement>(':scope > .pin-gap'), // 머리 위 여백(펼친 카드만)
+    body: card.querySelector<HTMLElement>(':scope > .pin-open'), // 본문 + 아래 여백
+  })
+
+  it('접는 순간 카드 여백(클래스)은 그대로 — 머리 위 여백과 본문(아래 여백 포함)이 함께 높이 0 으로 접히고, 다 접힌 뒤에도 클래스가 바뀌지 않는다', async () => {
+    allowMotion()
+    const restore = fastMotion(50)
+    const { rerender, container } = render(<Card open />)
+    const card = container.querySelector('section.pin')!
+    const cls = card.className
+    const { gap, body } = parts(card)
+    expect(gap).toBeTruthy()
+    expect(body).toBeTruthy()
+    // 머리 위 여백은 머리 앞에, 본문은 머리 뒤에
+    const head = card.querySelector('.pin-h')!
+    expect(gap!.compareDocumentPosition(head) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(body!.compareDocumentPosition(head) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+
+    rerender(<Card open={false} />)
+    expect(card.className).toBe(cls) // 여백을 바꾸는 클래스가 누르는 순간 붙지 않는다
+    expect(gap).toHaveAttribute('inert')
+    expect(body).toHaveAttribute('inert')
+    expect((callFor(gap!)![1] as any).height.to).toBe('0px')
+    expect((callFor(body!)![1] as any).height.to).toBe('0px')
+    await waitFor(() => expect(parts(card).gap).toBeNull(), { timeout: 1500 })
+    expect(parts(card).body).toBeNull()
+    expect(card.className).toBe(cls) // 다 접힌 뒤에도 — 여백은 상자와 함께 이미 접혔다
+    restore()
+  })
+
+  it('펼칠 때도 카드 여백(클래스)은 그대로 — 머리 위 여백과 본문이 함께 높이 0 에서 자란다', () => {
+    allowMotion()
+    const { rerender, container } = render(<Card open={false} />)
+    const card = container.querySelector('section.pin')!
+    const cls = card.className
+    expect(parts(card).gap).toBeNull()
+    expect(parts(card).body).toBeNull()
+    rerender(<Card open />)
+    expect(card.className).toBe(cls)
+    const { gap, body } = parts(card)
+    expect((callFor(gap!)![1] as any).height.from).toBe('0px')
+    expect((callFor(body!)![1] as any).height.from).toBe('0px')
+  })
+
+  it('움직임 줄이기면 같은 렌더에서 머리 위 여백·본문이 함께 생기고 사라진다', () => {
+    const { rerender, container } = render(<Card open />)
+    const card = container.querySelector('section.pin')!
+    rerender(<Card open={false} />)
+    expect(parts(card).gap).toBeNull()
+    expect(parts(card).body).toBeNull()
+    rerender(<Card open />)
+    expect(parts(card).gap).toBeTruthy()
+    expect(parts(card).body).toBeTruthy()
+    expect(animate).not.toHaveBeenCalled()
   })
 })

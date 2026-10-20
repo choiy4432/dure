@@ -553,10 +553,15 @@ code {
   transform: rotate(180deg);
 }
 
-/* 오류 원문 — 펼쳤을 때만, 작은 mono 칸에 왼쪽 맞춤 */
+/* 오류 원문 — 펼쳤을 때만, 작은 mono 칸에 왼쪽 맞춤.
+   카드의 flex gap 4px 은 접기·펼치기 상자(.xp) 쪽에서 되돌리고 상자 안 margin 으로 둔다 — 상자와 함께 자라고 접힌다 */
+.empty-card > .xp {
+  margin-top: -4px;
+}
+
 .empty-x {
   align-self: stretch;
-  margin: 0;
+  margin: 4px 0 0;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1490,9 +1495,24 @@ code {
   background: var(--subtle);
 }
 
-/* 접힌 카드 — 머리 한 줄만 */
-.pin.fold {
+/* 받은 메시지 카드 — 접힌 모습(머리 한 줄, 위아래 8px)이 바탕이다. 펼치면 머리 위 4px(.pin-gap)·본문 아래 6px(.pin-open 끝)가
+   접기·펼치기 상자(.xp) 안에서 높이로 붙어 12·14px 이 된다 — 여백을 클래스로 바꾸면 누르는 순간 10px 튀었다 */
+.pin.msg {
   padding-block: 8px;
+}
+
+.pin-gap::before,
+.pin-open::after {
+  content: '';
+  display: block;
+}
+
+.pin-gap::before {
+  height: 4px;
+}
+
+.pin-open::after {
+  height: 6px;
 }
 
 .pin-h {
@@ -2196,16 +2216,16 @@ code {
   text-align: center;
 }
 
-/* 아는 명령 출력(/compact) — 가운데 한 줄 + '자세히'(펼치면 아래에 원문 상자) */
+/* 아는 명령 출력(/compact) — 가운데 한 줄 + '자세히'(펼치면 아래에 원문 상자).
+   원문 상자 위 8px 은 flex gap 이 아니라 상자 안 margin — 접기·펼치기 상자(.xp)와 함께 자라고 접힌다(gap 이면 생기고 떨어지는 순간 튄다) */
 .ci-sys {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
 }
 
 .ci-sys .ci-local {
-  align-self: stretch;
+  margin-top: 8px;
 }
 
 .sys-more {

@@ -56,7 +56,11 @@ export function MessageCard({ message, fromName, toName, now, open, onOpenChange
   }
 
   return (
-    <section ref={root} className={`pin${open ? '' : ' fold'}`} aria-label={label}>
+    <section ref={root} className="pin msg" aria-label={label}>
+      {/* 펼친 카드의 머리 위 4px — 접힌 카드(위아래 8px)와의 여백 차이도 본문과 함께 높이로 잇는다(base.css .pin.msg) */}
+      <Presence show={open}>
+        <ExpandBox outer="pin-gap" />
+      </Presence>
       <div className="pin-h">
         <button type="button" className="pin-tg" aria-expanded={open} onClick={() => onOpenChange(!open)}>
           <Pin className="i" aria-hidden="true" />
@@ -80,6 +84,7 @@ export function MessageCard({ message, fromName, toName, now, open, onOpenChange
         </span>
         {state !== 'delivered' && <MessageMenu onDismiss={() => setAsking(true)} />}
       </div>
+      {/* 본문 — 아래 여백 6px(.pin-open::after)까지 이 상자 안에 있다 */}
       <Presence show={open}>
         <ExpandBox outer="pin-open">
           <div className="pin-b">
