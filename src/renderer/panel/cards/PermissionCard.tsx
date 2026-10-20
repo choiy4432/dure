@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import type { Decision, PendingRequest } from '../../../engine/types'
 import { requestTarget, requestTitle } from '../../lib/toolSummary'
 import { ago } from '../../lib/words'
 import { useCall } from './useCall'
+import { useMotion } from '../../lib/presence'
+import { MOTION } from '../../lib/motion'
 
 // 자세히 — 파일 전체를 쓰는 입력은 아주 길 수 있다. 앞부분만
 const DETAIL_MAX = 4000
@@ -27,6 +29,8 @@ interface Props {
 /** 권한 카드 — 관계도 카드의 앰버 칸과 같은 제목·대상, 자세히(입력 접힘) · [허용] [거절] · 항상 허용 */
 export function PermissionCard({ request, agent, now }: Props) {
   const { busy, error, call } = useCall()
+  const root = useRef<HTMLElement>(null)
+  useMotion(root, MOTION.line)
   const [more, setMore] = useState(false)
   const title = requestTitle(agent.name, request.toolName, request.input)
   const target = requestTarget(request.toolName, request.input, agent.folder)
@@ -34,7 +38,7 @@ export function PermissionCard({ request, agent, now }: Props) {
   const answer = (d: Decision) => call(() => window.dure.answerRequest(request.id, d), 'hold')
 
   return (
-    <section className="pin ask" aria-label={title}>
+    <section ref={root} className="pin ask" aria-label={title}>
       <div className="ask-h">
         <b className="ask-t">{title}</b>
         <span className="pin-t">{ago(request.createdAt, now)}</span>

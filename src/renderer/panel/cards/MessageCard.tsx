@@ -4,7 +4,7 @@ import type { RelayMessage } from '../../../engine/types'
 import { Markdown } from '../../lib/Markdown'
 import { Clamp } from '../../lib/Clamp'
 import { moveMenuFocus, useDismiss } from '../../lib/popover'
-import { MotionDiv, Presence } from '../../lib/presence'
+import { MotionDiv, Presence, useMotion } from '../../lib/presence'
 import { MOTION } from '../../lib/motion'
 import { ago, josa } from '../../lib/words'
 import { ConfirmDialog } from '../../shell/ConfirmDialog'
@@ -40,6 +40,8 @@ interface Props {
 /** 받은 메시지 카드(시안 .pin) — 머리 '보낸 → 받는 · 시간 · 상태', 본문 마크다운, 확인 대기면 [일 시키기] [나중에] */
 export function MessageCard({ message, fromName, toName, now, open, onOpenChange }: Props) {
   const { busy, error, call } = useCall()
+  const root = useRef<HTMLElement>(null)
+  useMotion(root, MOTION.line)
   const [asking, setAsking] = useState(false)
   const { id, state } = message
   const pending = state === 'pending'
@@ -53,7 +55,7 @@ export function MessageCard({ message, fromName, toName, now, open, onOpenChange
   }
 
   return (
-    <section className={`pin${open ? '' : ' fold'}`} aria-label={label}>
+    <section ref={root} className={`pin${open ? '' : ' fold'}`} aria-label={label}>
       <div className="pin-h">
         <button type="button" className="pin-tg" aria-expanded={open} onClick={() => onOpenChange(!open)}>
           <Pin className="i" aria-hidden="true" />

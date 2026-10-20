@@ -1,8 +1,10 @@
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { MessageCircleQuestionMark } from 'lucide-react'
 import type { PendingRequest } from '../../../engine/types'
 import { ago } from '../../lib/words'
 import { useCall } from './useCall'
+import { useMotion } from '../../lib/presence'
+import { MOTION } from '../../lib/motion'
 
 interface Option {
   label: string
@@ -50,6 +52,8 @@ function answersOf(questions: Question[], chosen: string[][]): Record<string, st
 /** 질문 카드 — Claude 가 보기를 주고 묻는 것(AskUserQuestion). 다 고르면 [답 보내기], 아니면 '대답 안 함' */
 export function QuestionCard({ request, now }: { request: PendingRequest; now: number }) {
   const { busy, error, call } = useCall()
+  const root = useRef<HTMLElement>(null)
+  useMotion(root, MOTION.line)
   const questions = readQuestions(request.input)
   const [chosen, setChosen] = useState<string[][]>(() => questions.map(() => []))
   const name = useId()
@@ -70,7 +74,7 @@ export function QuestionCard({ request, now }: { request: PendingRequest; now: n
   const skip = () => call(() => window.dure.answerRequest(request.id, { type: 'deny' }), 'hold')
 
   return (
-    <section className="pin qc" aria-label="질문이 있어요">
+    <section ref={root} className="pin qc" aria-label="질문이 있어요">
       <div className="ask-h">
         <MessageCircleQuestionMark className="i qc-ic" aria-hidden="true" />
         <b className="ask-t">질문이 있어요</b>

@@ -10,6 +10,7 @@ import { MessageCard, pinOpen, type ShownState } from './cards/MessageCard'
 import { PermissionCard } from './cards/PermissionCard'
 import { QuestionCard } from './cards/QuestionCard'
 import { HeldChainCard } from './cards/HeldChainCard'
+import { PresenceList } from '../lib/presence'
 import { ChatList } from './ChatList'
 import { Composer } from './Composer'
 
@@ -74,16 +75,18 @@ function Pins({ agentId, open, onOpenChange }: {
 
   return (
     <div ref={box} className={`pnl-pins${over ? ' more' : ''}`}>
-      {requests.map(r =>
-        r.kind === 'question' ? (
-          <QuestionCard key={r.id} request={r} now={now} />
-        ) : (
-          <PermissionCard key={r.id} request={r} agent={agent} now={now} />
-        ),
-      )}
-      {inbox.map(card)}
-      {held && <HeldChainCard roomId={agent.roomId} limit={v.limit} />}
-      {delivered && card(delivered)}
+      <PresenceList key={agentId}>
+        {requests.map(r =>
+          r.kind === 'question' ? (
+            <QuestionCard key={r.id} request={r} now={now} />
+          ) : (
+            <PermissionCard key={r.id} request={r} agent={agent} now={now} />
+          ),
+        )}
+        {inbox.map(card)}
+        {held && <HeldChainCard key="held" roomId={agent.roomId} limit={v.limit} />}
+        {delivered && card(delivered)}
+      </PresenceList>
     </div>
   )
 }
