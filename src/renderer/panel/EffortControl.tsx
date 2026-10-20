@@ -42,10 +42,18 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
   const settled = effortNow ?? effort
   const shown = pending ?? settled
 
-  // 서버 쪽 값이 움직인 값을 따라잡으면 놓는다
+  // 보낼 값(마지막 움직임) — 안 보낸 채 사라질 때 이 값을 보낸다
+  const last = useRef<EffortLevel | null>(null)
+  const agentRef = useRef(agentId)
+  agentRef.current = agentId
+
+  // 실제 값(내가 정한 값·Claude 가 쓰는 값)이 바뀌면 화면은 그 값을 따른다 — 아직 안 보낸 움직임이 있으면 그대로
   useEffect(() => {
-    if (pending && settled === pending) setPending(null)
-  }, [pending, settled])
+    if (timer.current === null) {
+      last.current = null
+      setPending(null)
+    }
+  }, [effort, effortNow])
 
   // 패널(.pnl) 너비 — 좁으면 이름을 숨긴다
   useLayoutEffect(() => {
@@ -62,8 +70,12 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
     return () => ro.disconnect()
   }, [])
 
+  // 사라질 때(다른 에이전트를 고르거나 패널이 닫힘) 아직 안 보낸 마지막 값은 보낸다
   useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current)
+    if (timer.current === null || last.current === null) return
+    clearTimeout(timer.current)
+    timer.current = null
+    void window.dure.setEffort(agentRef.current, last.current).catch(() => {})
   }, [])
 
   // 처음 열 때 한 번 describe — 열기만으로 Claude 를 켜지 않는다(이미 받았으면 안 부름)
@@ -90,13 +102,26 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
   const choose = (level: EffortLevel) => {
     if (!allowed(level) || level === shown) return
     setPending(level)
+    last.current = level
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => {
       timer.current = null
-      window.dure.setEffort(agentId, level).catch(e => {
-        setPending(null)
-        onError?.(errorMessage(e))
-      })
+      window.dure.setEffort(agentId, level).then(
+        () => {
+          // 더 새 움직임이 없으면 화면은 실제 값으로
+          if (last.current === level) {
+            last.current = null
+            setPending(null)
+          }
+        },
+        e => {
+          if (last.current === level) {
+            last.current = null
+            setPending(null)
+          }
+          onError?.(errorMessage(e))
+        },
+      )
     }, SEND_DELAY_MS)
   }
 

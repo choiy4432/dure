@@ -213,3 +213,60 @@ describe('EffortControl — 펼침', () => {
     expect(onError).toHaveBeenCalledWith('지금은 못 바꿔요')
   })
 })
+
+describe('EffortControl — 고친 것(리뷰 1)', () => {
+  it('300ms 안에 사라져도(다른 에이전트 고름) 마지막 값을 원래 에이전트로 한 번 보낸다', () => {
+    vi.useFakeTimers()
+    const { unmount } = mount({ effortNow: 'high' })
+    open()
+    key('ArrowRight')
+    act(() => { vi.advanceTimersByTime(100) })
+    expect(setEffort).not.toHaveBeenCalled()
+    unmount()
+    expect(setEffort).toHaveBeenCalledTimes(1)
+    expect(setEffort).toHaveBeenCalledWith('w', 'xhigh')
+    act(() => { vi.advanceTimersByTime(500) })
+    expect(setEffort).toHaveBeenCalledTimes(1)
+  })
+
+  it('보낸 뒤 Claude 가 다른 값을 알려 주면 칩은 그 값이다', async () => {
+    vi.useFakeTimers()
+    const view = (now: EffortLevel) => (
+      <div className="pnl">
+        <EffortControl agentId="w" effort="high" effortNow={now} model={null} description={ready()} onLoad={() => {}} onRetry={() => {}} />
+      </div>
+    )
+    const { rerender } = render(view('high'))
+    open()
+    key('ArrowRight')
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    rerender(view('medium'))
+    expect(chip().textContent).toBe('medium')
+  })
+
+  it('보낸 값이 그대로 실제 값이 안 돼도 보내기가 끝나면 실제 값으로 돌아간다', async () => {
+    vi.useFakeTimers()
+    mount({ effortNow: 'high' })
+    open()
+    key('ArrowRight')
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(chip().textContent).toBe('high')
+  })
+
+  it('먼저 보낸 것이 실패해도 그 사이 새로 움직인 값은 지우지 않는다', async () => {
+    vi.useFakeTimers()
+    let fail: (e: Error) => void = () => {}
+    setEffort.mockImplementationOnce(() => new Promise((_, rej) => { fail = rej }))
+    const onError = vi.fn()
+    mount({ effortNow: 'high', onError })
+    open()
+    key('ArrowRight')
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    key('ArrowLeft')
+    key('ArrowLeft')
+    expect(slider().getAttribute('aria-valuetext')).toBe('medium')
+    await act(async () => { fail(new Error('못 바꿔요')) })
+    expect(onError).toHaveBeenCalledWith('못 바꿔요')
+    expect(slider().getAttribute('aria-valuetext')).toBe('medium')
+  })
+})
