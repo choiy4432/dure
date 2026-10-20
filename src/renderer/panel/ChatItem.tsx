@@ -6,6 +6,7 @@ import {
 import type { ActionLine, ChatLine } from '../state/transcript'
 import type { ToolIcon } from '../lib/toolSummary'
 import { Markdown } from '../lib/Markdown'
+import { Clamp } from '../lib/Clamp'
 import { localSummary } from '../lib/words'
 
 const ICONS: Record<ToolIcon, ComponentType<LucideProps>> = {
@@ -30,7 +31,12 @@ function LocalLine({ text }: { text: string }) {
   const [open, setOpen] = useState(false)
   const id = useId()
   const summary = localSummary(text)
-  if (!summary) return <pre className="ci-local">{text}</pre>
+  if (!summary)
+    return (
+      <Clamp className="clamp-mono pad">
+        <pre className="ci-local">{text}</pre>
+      </Clamp>
+    )
   return (
     <div className="ci-sys">
       <p className="note">
@@ -72,7 +78,11 @@ function Action({ a }: { a: ActionLine }) {
       </button>
       {open && (
         <div className="act-out">
-          {a.output ? <pre>{a.output}</pre> : <p className="act-none">보여 줄 내용이 없어요</p>}
+          {a.output ? (
+            <Clamp className="clamp-mono">
+              <pre>{a.output}</pre>
+            </Clamp>
+          ) : <p className="act-none">보여 줄 내용이 없어요</p>}
           {a.truncated && <p className="act-cut">전체는 길어서 생략</p>}
         </div>
       )}
@@ -133,7 +143,9 @@ function ChatItemView({ line, folded = false }: Props) {
       return (
         <div className="ci-relay">
           {who}
-          <Markdown text={line.text} />
+          <Clamp>
+            <Markdown text={line.text} />
+          </Clamp>
         </div>
       )
     }

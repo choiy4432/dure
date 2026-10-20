@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Keyb
 import { ArrowRight, Check, ChevronDown, Clock, Ellipsis, Pin, Trash2 } from 'lucide-react'
 import type { RelayMessage } from '../../../engine/types'
 import { Markdown } from '../../lib/Markdown'
+import { Clamp } from '../../lib/Clamp'
 import { moveMenuFocus, useDismiss } from '../../lib/popover'
 import { ago, josa } from '../../lib/words'
 import { ConfirmDialog } from '../../shell/ConfirmDialog'
@@ -77,7 +78,9 @@ export function MessageCard({ message, fromName, toName, now, open, onOpenChange
       {open && (
         <>
           <div className="pin-b">
-            <Markdown text={message.text} />
+            <Clamp>
+              <Markdown text={message.text} />
+            </Clamp>
           </div>
           {pending && (
             <div className="ab pin-ab">

@@ -472,4 +472,39 @@ describe('ChatList — 명령 출력', () => {
     expect(within(conv()).getByText('Total cost: $0.12')).toHaveClass('ci-local')
     expect(within(conv()).queryByRole('button', { name: '자세히' })).toBeNull()
   })
+
+  describe('긴 메시지는 3줄 + 흐림', () => {
+    const LONG = '긴 줄 '.repeat(200)
+    beforeEach(() => {
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) { return this.classList.contains('clamp-box') ? 300 : 0 })
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) { return this.classList.contains('clamp-box') ? 54 : 0 })
+    })
+    afterEach(() => vi.restoreAllMocks())
+
+    it('받은 메시지는 접힌 상자 안 + 더 보기, 같은 길이의 Claude 답은 접지 않는다', async () => {
+      history.mockResolvedValueOnce([
+        { t: 1, kind: 'user', source: 'relay', parts: [{ type: 'text', text: `[두레 메시지 — 보낸 쪽: 기획(기획서 · 문구)]
+${LONG}` }] },
+        { t: 2, kind: 'assistant', blocks: [{ type: 'text', text: LONG }] },
+      ] satisfies HistoryItem[])
+      await renderPanel()
+      const relay = conv().querySelector('.ci-relay') as HTMLElement
+      expect(relay.querySelector('.clamp-box')).toHaveClass('clamped')
+      expect(within(relay).getByRole('button', { name: '더 보기' })).toBeInTheDocument()
+      const claude = conv().querySelector('.ci-claude') as HTMLElement
+      expect(claude.querySelector('.clamp')).toBeNull()
+    })
+
+    it('열어 본 하는 일 출력과 모르는 명령 출력도 접힌다', async () => {
+      history.mockResolvedValueOnce([
+        { t: 1, kind: 'assistant', blocks: [{ type: 'tool_use', id: 'x', name: 'Bash', input: { command: 'cat big.log' } }] },
+        { t: 2, kind: 'tool-result', toolUseId: 'x', isError: false, text: LONG, viaApproval: true },
+        { t: 3, kind: 'local-output', text: LONG },
+      ] satisfies HistoryItem[])
+      await renderPanel()
+      expect(conv().querySelector('.ci-local')!.closest('.clamp-box')).toHaveClass('clamped')
+      fireEvent.click(within(conv()).getByRole('button', { name: /실행/ }))
+      expect(conv().querySelector('.act-out pre')!.closest('.clamp-box')).toHaveClass('clamped')
+    })
+  })
 })

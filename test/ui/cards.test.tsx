@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import '@testing-library/jest-dom/vitest'
 import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react'
 import type { Decision, EngineEventMap, PendingRequest, RelayMessage } from '../../src/engine/types'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
@@ -99,6 +100,16 @@ const card = (name: string) => screen.getByRole('region', { name })
 const toggle = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('button[aria-expanded]')!
 
 describe('받은 메시지 카드', () => {
+  it('긴 본문은 3줄만 보이고 흐려진다', async () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) { return this.classList.contains('clamp-box') ? 300 : 0 })
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) { return this.classList.contains('clamp-box') ? 54 : 0 })
+    snapshot.messages = [msg({ id: 'm1', text: '긴 줄 '.repeat(200) })]
+    await renderPanel('s')
+    const c = card('웹 화면이 보낸 메시지')
+    expect(c.querySelector('.pin-b .clamp-box')).toHaveClass('clamped')
+    expect(within(c).getByRole('button', { name: '더 보기' })).toBeInTheDocument()
+  })
+
   it('머리에 보낸 이름 → 받는 이름 · 시간 · 확인 대기, 본문은 마크다운(파일 이름은 mono)', async () => {
     snapshot.messages = [msg({ id: 'm1', text: '파일은 `src/api/user.ts` 의 **응답** 이에요' })]
     await renderPanel('s')

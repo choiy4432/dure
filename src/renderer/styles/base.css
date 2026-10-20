@@ -1526,8 +1526,6 @@ code {
 /* 본문 — 길면 이 안에서 스크롤(버튼은 늘 보이게) */
 .pin-b {
   margin-top: 8px;
-  max-height: 176px;
-  overflow-y: auto;
 }
 
 .pin .ab {
@@ -2116,8 +2114,6 @@ code {
 
 .act-out pre {
   margin: 0;
-  max-height: 240px;
-  overflow: auto;
   font-family: var(--mono);
   font-size: 12px;
   line-height: 18px;
@@ -2185,8 +2181,6 @@ code {
 /* 명령(/cost 등) 출력 */
 .ci-local {
   margin: 0;
-  max-height: 240px;
-  overflow: auto;
   padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -3112,4 +3106,33 @@ code {
 
 .ctx-go {
   margin-top: 8px;
+}
+
+/* 긴 내용은 3줄 + 아래 흐림 — 마스크는 알파만 쓰므로 색은 아무 토큰이나 */
+.clamp-box {
+  line-height: inherit;
+}
+
+.clamp-box.lim {
+  max-height: calc(var(--clamp-lines) * 1lh + var(--clamp-pad, 0px));
+  overflow: hidden;
+}
+
+.clamp-box.clamped {
+  cursor: pointer;
+  -webkit-mask-image: linear-gradient(to bottom, var(--text) calc(100% - 1.6lh), transparent);
+  mask-image: linear-gradient(to bottom, var(--text) calc(100% - 1.6lh), transparent);
+}
+
+/* 고정폭 출력(하는 일 · 명령) — 줄 높이 18px, 테두리 상자는 위아래 여백 + 테두리만큼 더 */
+.clamp-box.clamp-mono {
+  line-height: 18px;
+}
+
+.clamp-box.clamp-mono.pad {
+  --clamp-pad: 18px;
+}
+
+.clamp-more {
+  margin-top: 2px;
 }
