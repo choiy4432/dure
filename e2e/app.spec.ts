@@ -211,6 +211,9 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       for (const a of [PLAN, WEB]) {
         await expect(node(page, a.name).locator('.au')).toHaveText('자동 끔')
         await expect(node(page, a.name).locator('.nr')).toContainText(a.role)
+        // 역할은 모델·effort 에 밀려 잘리지 않는다 — 말줄임 없이 다 보인다
+        const clipped = await node(page, a.name).locator('.nr .trunc').evaluate((el) => el.scrollWidth > el.clientWidth)
+        expect(clipped).toBe(false)
       }
       // 새로 만든 에이전트가 골라져 있다 — 자동 스위치는 꺼짐
       await expect(panel(page, WEB.name).getByRole('switch', { name: '자동' })).toHaveAttribute('aria-checked', 'false')

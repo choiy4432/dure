@@ -24,6 +24,7 @@ export function useFrameValue<T>(value: T): T {
 
   useEffect(() => () => {
     if (frame.current !== null && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(frame.current)
+    frame.current = null // StrictMode 의 다시 켜기에서도 새 장을 걸 수 있게
   }, [])
 
   return shown
