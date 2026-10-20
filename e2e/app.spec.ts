@@ -279,6 +279,38 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await expect(web.locator('.ci-claude', { hasText: `받음: ${IMAGE_TEXT}` })).toBeVisible()
     })
 
+    let ringBefore = ''
+    await test.step('4++. 위 띠 사용량 · effort 칩/슬라이더 · context 링', async () => {
+      const web = panel(page, WEB.name)
+      // 사용량 전용 프로세스가 앱을 켠 뒤 에이전트 없이도 값을 가져온다
+      const usage = page.locator('header.top .usg-btn')
+      for (const t of ['5시간', '12%', 'Fable', '81%']) await expect(usage).toContainText(t, { timeout: 5000 })
+
+      // 링 — 차례가 끝난 뒤 % 글자, 누르면 토큰 수
+      const ring = web.locator('.ctx-btn')
+      await expect(ring).toHaveText(/^\d+%$/)
+      ringBefore = (await ring.textContent()) ?? ''
+      await ring.click()
+      await expect(web.getByRole('dialog', { name: /^대화 공간/ })).toContainText(/만 \/ 20만 토큰/)
+      await page.keyboard.press('Escape')
+      await expect(web.locator('.ctx-pop')).toHaveCount(0)
+
+      // effort — 칩 high → 슬라이더 오른쪽 한 칸 → xhigh, Claude 로 apply_flag_settings 가 간다
+      const chip = web.locator('.eff-chip')
+      await expect(chip).toContainText('high')
+      await chip.click()
+      const slider = web.getByRole('slider', { name: '생각하는 정도' })
+      await expect(slider).toBeFocused({ timeout: 10_000 })
+      await page.keyboard.press('ArrowRight')
+      await expect(chip).toContainText('xhigh')
+      await expect
+        .poll(() => fs.readFileSync(w.log, 'utf8').split(/\r?\n/)
+        .filter((l) => l.includes('apply_flag_settings') && l.includes('xhigh')).length)
+        .toBeGreaterThan(0)
+      await page.keyboard.press('Escape')
+      await expect(web.locator('.eff-pop')).toHaveCount(0)
+    })
+
     expect(run.pageErrors).toEqual([])
 
     await test.step('5. 종료 → 같은 userData 로 다시 켜기 → 대화가 남아 있다', async () => {
@@ -296,6 +328,8 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       // 지난 승인 요청은 남지 않는다
       await expect(page.locator('.ap')).toHaveCount(0)
       await expect(page.locator('.el')).toHaveText(/^전달됨/)
+      // 저장해 둔 마지막 context — 다시 켠 직후에도 켜기 전과 같은 %
+      await expect(web.locator('.ctx-btn')).toHaveText(ringBefore)
     })
 
     await test.step('6. 검수 캡처 — 1440×900 · 1280×800', async () => {
@@ -312,6 +346,45 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       const mapBox = await page.locator('main.cv').boundingBox()
       expect(mapBox?.width ?? 0).toBeGreaterThanOrEqual(400)
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    })
+
+    await test.step('7. 펼침 캡처 — 사용량 · effort · context (1440×900) + 좁은 끝 context', async () => {
+      const web = panel(page, WEB.name)
+      const shot = async (file: string, open: Locator, pop: Locator): Promise<void> => {
+        await open.click()
+        await expect(pop).toBeVisible()
+        await page.evaluate(() => document.fonts.ready.then(() => undefined))
+        await page.waitForTimeout(300)
+        await page.screenshot({ path: path.join(REVIEW_DIR, file), scale: 'css' })
+        return
+      }
+      await run!.app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [1440, 900])
+      await page.waitForFunction(() => window.innerWidth === 1440 && window.innerHeight === 900)
+      await shot('usage-open.png', page.locator('header.top .usg-btn'), page.locator('.usg-pop'))
+      await page.keyboard.press('Escape')
+      await shot('effort-open.png', web.locator('.eff-chip'), web.locator('.eff-pop'))
+      await expect(web.getByRole('slider', { name: '생각하는 정도' })).toBeVisible()
+      await page.keyboard.press('Escape')
+      await shot('context-open.png', web.locator('.ctx-btn'), web.locator('.ctx-pop'))
+      await page.keyboard.press('Escape')
+
+      // 좁은 끝(창 1100×700, 패널 360) — 링 펼침이 패널·창 안에 머문다
+      await run!.app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [1100, 700])
+      await page.waitForFunction(() => window.innerWidth === 1100 && window.innerHeight === 700)
+      // 패널을 가장 좁게(360) — 가르는 줄에 키보드로 닿는다
+      await page.getByRole('separator', { name: '관계도와 패널 너비' }).focus()
+      for (let i = 0; i < 30; i++) await page.keyboard.press('ArrowRight')
+      await page.waitForTimeout(400)
+      expect((await web.boundingBox())!.width).toBeLessThanOrEqual(361)
+      await shot('context-open-narrow.png', web.locator('.ctx-btn'), web.locator('.ctx-pop'))
+      const pop = await web.locator('.ctx-pop').boundingBox()
+      const pnl = await web.boundingBox()
+      console.log(`context 펼침(좁은 끝): 패널 ${JSON.stringify(pnl)} · 펼침 ${JSON.stringify(pop)}`)
+      expect(pop!.x).toBeGreaterThanOrEqual(pnl!.x - 0.5)
+      expect(pop!.x + pop!.width).toBeLessThanOrEqual(pnl!.x + pnl!.width + 0.5)
+      expect(pop!.y).toBeGreaterThanOrEqual(0)
+      expect(pop!.y + pop!.height).toBeLessThanOrEqual(700)
+      await page.keyboard.press('Escape')
     })
 
     expect(run.pageErrors).toEqual([])

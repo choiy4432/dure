@@ -34,7 +34,7 @@ export function ContextRing({ name, value, working, onCompact }: Props) {
   const warn = percent >= WARN_AT * (autoCompactAt ? (autoCompactAt / max) * 100 : 100)
   const fill = Math.min(100, Math.max(0, percent))
 
-  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+  const onKey = (e: KeyboardEvent<HTMLSpanElement>) => {
     if (e.key !== 'Escape') return
     e.preventDefault()
     e.stopPropagation()
@@ -43,7 +43,7 @@ export function ContextRing({ name, value, working, onCompact }: Props) {
   }
 
   return (
-    <span className={`ctx${warn ? ' warn' : ''}`} ref={wrap}>
+    <span className={`ctx${warn ? ' warn' : ''}`} ref={wrap} onKeyDown={onKey}>
       <button
         ref={btn}
         type="button"
@@ -67,7 +67,7 @@ export function ContextRing({ name, value, working, onCompact }: Props) {
         <span className="ctx-n">{percent}%</span>
       </button>
       {open && (
-        <div className="pop ctx-pop" role="dialog" aria-label={`대화 공간 · ${name}`} onKeyDown={onKey}>
+        <div className="pop ctx-pop" role="dialog" aria-label={`대화 공간 · ${name}`}>
           <h3 className="ctx-h">
             대화 공간 <span>· {name}</span>
           </h3>
