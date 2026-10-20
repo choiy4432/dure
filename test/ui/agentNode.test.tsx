@@ -113,7 +113,7 @@ describe('AgentNode — 카드 내용', () => {
     expect(nameEl.classList.contains('trunc')).toBe(true)
     expect(roleEl.classList.contains('trunc')).toBe(true)
     expect(nameEl.getAttribute('title')).toBe(name)
-    expect(roleEl.parentElement!.getAttribute('title')).toBe(`${role} · 기본 모델`)
+    expect(roleEl.closest('.nr')!.getAttribute('title')).toBe(`${role} · 기본 모델`)
   })
 
   it("역할 옆에 모델 · effort — '기획서 · 문구 · Opus 5.5 · high', 역할만 말줄임", async () => {
@@ -124,6 +124,10 @@ describe('AgentNode — 카드 내용', () => {
     expect(line.getAttribute('title')).toBe('기획서 · 문구 · Opus 5.5 · high')
     expect(screen.getByText('기획서 · 문구').classList.contains('trunc')).toBe(true)
     expect(line.querySelector('.nr-meta')!.classList.contains('keep')).toBe(true)
+    // 줄이 나뉘어도 둘째 줄이 "·" 로 시작하지 않는다 — 구분 점은 역할 묶음 쪽에
+    expect(line.querySelector('.nr-meta')!.textContent).toBe('Opus 5.5 · high')
+    expect(line.querySelector('.nr-meta')!.textContent!.startsWith('·')).toBe(false)
+    expect(line.querySelector('.nr-role')!.textContent).toBe('기획서 · 문구 · ')
   })
 
   it('effort 를 모르면 그 부분(과 구분 점)이 없다 · 정한 값만 있으면 그 값', async () => {
@@ -139,18 +143,18 @@ describe('AgentNode — 카드 내용', () => {
   it('긴 역할만 최소 폭(6em) 규칙을 받고, 그 규칙은 CSS 에 있다', async () => {
     snapshot.agents = [agent('d', { role: '기획서 · 문구 · 행사 페이지 카피 전부', modelNow: 'claude-opus-5[1m]', effortNow: 'xhigh' })]
     const { card } = await renderCard()
-    expect(card.querySelector('.nr .trunc')!.classList.contains('floor')).toBe(true)
+    expect(card.querySelector('.nr-role')!.classList.contains('floor')).toBe(true)
     expect(card.querySelector('.nr')!.textContent).toBe('기획서 · 문구 · 행사 페이지 카피 전부 · Opus 5 (긴 대화) · xhigh')
     cleanup()
     snapshot.agents = [agent('d', { role: '기획서' })]
     const short = await renderCard()
-    expect(short.card.querySelector('.nr .trunc')!.classList.contains('floor')).toBe(false)
+    expect(short.card.querySelector('.nr-role')!.classList.contains('floor')).toBe(false)
     const fsName: string = 'node:fs'
     const css: string = (await import(/* @vite-ignore */ fsName)).readFileSync('src/renderer/styles/base.css', 'utf8')
     // 최소 폭은 바탕 크기(6em) + 줄 나눔(wrap)이 지킨다 — 글보다 넓어지지 않는다(모델·effort 가 역할 바로 뒤에, 실제 배치는 e2e 2단계)
-    expect(css).toMatch(/\.nr \.trunc\.floor\s*\{[^}]*flex:\s*1 1 6em/)
-    expect(css).toMatch(/\.nr \.trunc\.floor\s*\{[^}]*max-width:\s*max-content/)
-    expect(css).not.toMatch(/\.nr \.trunc\.floor\s*\{[^}]*min-width/)
+    expect(css).toMatch(/\.nr-role\.floor\s*\{[^}]*flex:\s*1 1 6em/)
+    expect(css).toMatch(/\.nr-role\.floor\s*\{[^}]*max-width:\s*max-content/)
+    expect(css).not.toMatch(/\.nr-role\.floor\s*\{[^}]*min-width/)
     expect(css).toMatch(/\.nr\s*\{[^}]*flex-wrap:\s*wrap/)
   })
 

@@ -169,8 +169,14 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
             )}
           </span>
           <span className="nr" title={roleLine}>
-            {agent.role && <span className={`trunc${agent.role.length > ROLE_FLOOR_CHARS ? ' floor' : ''}`}>{agent.role}</span>}
-            <span className="nr-meta keep">{agent.role ? ` · ${meta}` : meta}</span>
+            {agent.role && (
+              // 구분 점은 역할 쪽에 붙인다 — 줄이 나뉘어도 둘째 줄이 "·" 로 시작하지 않는다
+              <span className={`nr-role${agent.role.length > ROLE_FLOOR_CHARS ? ' floor' : ''}`}>
+                <span className="trunc">{agent.role}</span>
+                <span className="nr-sep keep"> · </span>
+              </span>
+            )}
+            <span className="nr-meta keep">{meta}</span>
           </span>
         </div>
         <span className={`au${agent.auto ? ' on' : ''}`}>{agent.auto ? '자동 켬' : '자동 끔'}</span>
