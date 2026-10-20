@@ -2193,12 +2193,7 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* 흐르는 글 — 끝에 깜빡이는 커서 */
-.live-t {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
+/* 흐르는 글 — 마크다운(.md) 마지막 글 끝에 깜빡이는 커서 */
 
 .caret {
   display: inline-block;

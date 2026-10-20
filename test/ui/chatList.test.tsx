@@ -14,6 +14,7 @@ let handlers: Record<string, ((p: any) => void)[]>
 let history: Mock<(id: string) => Promise<HistoryItem[]>>
 
 const emit = <K extends keyof EngineEventMap>(k: K, p: EngineEventMap[K]) => act(() => (handlers[k] ?? []).forEach(f => f(p)))
+const frames = () => act(async () => { await new Promise(r => setTimeout(r, 60)) })
 const settle = () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
 
 // canon 의 웹 화면 대화 — 사람 말 → Claude 답 + 하는 일 셋(읽음 · 수정 · 허용된 일 npm run build)
@@ -206,6 +207,7 @@ describe('ChatList — 줄마다', () => {
     await renderPanel()
     await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '메인 배너 문구를 ' } })
     await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '바꾸는 중이에요…' } })
+    await frames()
     const live = conv().querySelector('.ci-live') as HTMLElement
     expect(live).toHaveTextContent('메인 배너 문구를 바꾸는 중이에요…')
     expect(live.querySelector('.caret')).not.toBeNull()
@@ -213,6 +215,37 @@ describe('ChatList — 줄마다', () => {
     await emit('history', { agentId: 'w', item: { t: 9, kind: 'assistant', blocks: [{ type: 'text', text: '메인 배너 문구를 바꿨어요' }] } })
     expect(conv().querySelector('.ci-live')).toBeNull()
     expect(conv()).toHaveTextContent('메인 배너 문구를 바꿨어요')
+  })
+})
+
+describe('ChatList — 흐르는 글의 마크다운', () => {
+  it('쓰는 중에도 굵게·코드가 같은 모양으로, 커서는 그대로', async () => {
+    await renderPanel()
+    await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '**굵게** 와 `코드`' } })
+    await frames()
+    const live = conv().querySelector('.ci-live') as HTMLElement
+    expect(live.querySelector('strong')).toHaveTextContent('굵게')
+    expect(live.querySelector('code')).toHaveTextContent('코드')
+    expect(live.querySelector('.caret')).not.toBeNull()
+    expect(live.querySelector('.caret')).toHaveAttribute('aria-hidden', 'true')
+    expect(live.querySelector('p .caret')).not.toBeNull()
+  })
+
+  it('쓰다 만 목록도 그리고 커서는 마지막 항목 끝에', async () => {
+    await renderPanel()
+    await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '- 하나\n- 둘' } })
+    await frames()
+    const live = conv().querySelector('.ci-live') as HTMLElement
+    expect(live.querySelectorAll('li')).toHaveLength(2)
+    expect(live.querySelector('li:last-child .caret')).not.toBeNull()
+  })
+
+  it('델타가 빠르게 열 번 와도 마지막까지 다 그린다', async () => {
+    await renderPanel()
+    for (let i = 0; i < 10; i++) await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: `조각${i} ` } })
+    await frames()
+    const live = conv().querySelector('.ci-live') as HTMLElement
+    expect(live).toHaveTextContent('조각0 조각1 조각2 조각3 조각4 조각5 조각6 조각7 조각8 조각9')
   })
 })
 

@@ -6,6 +6,7 @@ import {
 import type { ActionLine, ChatLine } from '../state/transcript'
 import type { ToolIcon } from '../lib/toolSummary'
 import { Markdown } from '../lib/Markdown'
+import { useFrameValue } from '../lib/useFrameValue'
 import { Clamp } from '../lib/Clamp'
 import { localSummary } from '../lib/words'
 
@@ -96,6 +97,17 @@ function firstLine(text: string): string {
   return line.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, '').replace(/[`*]/g, '').trim()
 }
 
+/** 흐르는 글 — 마크다운으로, 한 장에 한 번만 다시 읽는다 */
+function LiveLine({ text }: { text: string }) {
+  const shown = useFrameValue(text)
+  return (
+    <div className="ci-live" aria-busy="true">
+      <div className="who">Claude</div>
+      <Markdown text={shown} caret />
+    </div>
+  )
+}
+
 interface Props {
   line: ChatLine
   /** 전달된 메시지가 위 고정 카드에 펼쳐져 있다 — 한 줄(누구에게서 온 메시지 + 첫 줄)로 접는다 */
@@ -168,15 +180,7 @@ function ChatItemView({ line, folded = false }: Props) {
     case 'local':
       return <LocalLine text={line.text} />
     case 'streaming':
-      return (
-        <div className="ci-live" aria-busy="true">
-          <div className="who">Claude</div>
-          <p className="live-t">
-            {line.text}
-            <span className="caret" aria-hidden="true" />
-          </p>
-        </div>
-      )
+      return <LiveLine text={line.text} />
   }
 }
 
