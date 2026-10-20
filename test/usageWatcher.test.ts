@@ -16,13 +16,18 @@ const RAW = {
 const ANSWER_MS = 10;
 const USAGE_REQ = { subtype: 'get_usage', skip_behaviors: true };
 
-/** ClaudeSession 흉내 — 답은 ANSWER_MS 뒤, hang 이면 진짜처럼 timeoutMs 뒤 거부, stop() 은 남은 요청을 거부한다 */
-function fakeSession(o: { raw?: unknown; hang?: boolean; status?: string } = {}) {
+/**
+ * ClaudeSession 흉내 — 답은 ANSWER_MS 뒤, hang 이면 진짜처럼 timeoutMs 뒤 거부, stop() 은 남은 요청을 거부한다.
+ * stopMs 를 주면 진짜처럼 끝나기까지 시간이 걸린다(여러 번 불러도 같은 끝을 기다린다) — 'never' 면 끝나지 않는다.
+ */
+function fakeSession(o: { raw?: unknown; hang?: boolean; status?: string; stopMs?: number | 'never' } = {}) {
+  let ending: Promise<void> | null = null;
   const f = {
     status: o.status ?? 'idle',
     log: [] as string[],
     requests: [] as { req: unknown; timeoutMs: number }[],
     pending: null as null | { reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> },
+    ended: false,
     start() {
       f.log.push('start');
     },
@@ -42,13 +47,23 @@ function fakeSession(o: { raw?: unknown; hang?: boolean; status?: string } = {})
         f.pending = { reject, timer };
       });
     },
-    async stop() {
+    stop(): Promise<void> {
       f.log.push('stop');
       if (f.pending) {
         clearTimeout(f.pending.timer);
         f.pending.reject(new Error('프로세스가 종료되었습니다'));
         f.pending = null;
       }
+      const ms = o.stopMs ?? 0;
+      ending ??=
+        ms === 'never'
+          ? new Promise<void>(() => {})
+          : ms === 0
+            ? Promise.resolve()
+            : new Promise<void>((r) => setTimeout(r, ms));
+      return ending.then(() => {
+        f.ended = true;
+      });
     },
   };
   return f;
@@ -263,5 +278,45 @@ describe('usage: UsageWatcher', () => {
     await p;
     expect(h.emitted).toEqual([]);
     expect(h.w.current()).toBeNull();
+  });
+
+  test('stop(): 시간 초과 뒤 끄는 중인 사용량 전용 프로세스도 끄고, 끝날 때까지 기다린다', async () => {
+    const h = harness({ probe: () => fakeSession({ hang: true, stopMs: 3000 }) });
+    void h.w.refresh();
+    await vi.advanceTimersByTimeAsync(15_000); // 시간 초과 → 끄기 시작(끝나기까지 3 초)
+    const p = h.probes[0];
+    expect(p.log).toEqual(['start', 'request', 'stop']);
+    expect(p.ended).toBe(false);
+    let done = false;
+    const stopping = h.w.stop().then(() => {
+      done = true;
+    });
+    expect(p.log).toEqual(['start', 'request', 'stop', 'stop']);
+    await vi.advanceTimersByTimeAsync(2999);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await stopping;
+    expect(done).toBe(true);
+    expect(p.ended).toBe(true);
+  });
+
+  test('끄기가 끝나지 않는 사용량 전용 프로세스가 있어도 다음 받기는 막히지 않는다 — 살아 있는 세션에 묻는다', async () => {
+    const h = harness({ probe: () => fakeSession({ stopMs: 'never' }) });
+    let firstDone = false;
+    void h.w.refresh().then(() => {
+      firstDone = true;
+    });
+    await vi.advanceTimersByTimeAsync(ANSWER_MS);
+    expect(h.emitted).toHaveLength(1);
+    expect(h.probes[0].log).toEqual(['start', 'request', 'stop']);
+    expect(firstDone).toBe(true);
+    const live = fakeSession();
+    h.live = live;
+    const again = h.w.refresh();
+    expect(live.requests).toEqual([{ req: USAGE_REQ, timeoutMs: 15_000 }]);
+    await vi.advanceTimersByTimeAsync(ANSWER_MS);
+    await again;
+    expect(h.emitted).toHaveLength(2);
+    expect(h.probes).toHaveLength(1);
   });
 });

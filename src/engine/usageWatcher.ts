@@ -33,7 +33,8 @@ export class UsageWatcher {
   private value: PlanUsage | null = null;
   private receivedAt: number | null = null; // 마지막으로 답을 받은 시각(값이 null 이어도)
   private inflight: Promise<void> | null = null;
-  private probe: ClaudeSession | null = null; // 떠 있는 사용량 전용 claude
+  /** 떠 있는 사용량 전용 claude — 끄기가 끝날 때까지 붙잡는다(끄는 중에 앱이 꺼져도 함께 끄게) */
+  private probes = new Set<ClaudeSession>();
   private startTimer: ReturnType<typeof setTimeout> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
@@ -81,9 +82,8 @@ export class UsageWatcher {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.startTimer = null;
     this.pollTimer = null;
-    const p = this.probe;
-    this.probe = null;
-    if (p) await p.stop().catch(() => undefined);
+    // 끄는 중인 것도 다시 stop() — 같은 끝을 기다린다(ClaudeSession.stop 은 두 번 불러도 된다)
+    await Promise.all([...this.probes].map((p) => p.stop().catch(() => undefined)));
   }
 
   private refreshIfOld(): void {
@@ -96,7 +96,7 @@ export class UsageWatcher {
       let s = this.d.liveSession();
       if (!s) {
         probe = this.d.spawnProbe();
-        this.probe = probe;
+        this.probes.add(probe);
         probe.start();
         s = probe;
       }
@@ -109,10 +109,17 @@ export class UsageWatcher {
     } catch {
       /* 실패·시간 초과·세션 종료 — 전 값 그대로, 다음 계기(차례 끝·주기·펼침)에 다시 묻는다 */
     } finally {
-      if (probe) {
-        if (this.probe === probe) this.probe = null;
-        await probe.stop().catch(() => undefined); // 답을 받았든 못 받았든 바로 끈다
-      }
+      if (probe) this.endProbe(probe); // 답을 받았든 못 받았든 바로 끈다
     }
+  }
+
+  /** 끄기를 기다리지 않는다 — 끄기가 멈춰도 다음 받기(inflight)를 막지 않게. 끝나면 놓는다 */
+  private endProbe(p: ClaudeSession): void {
+    void p
+      .stop()
+      .catch(() => undefined)
+      .then(() => {
+        this.probes.delete(p);
+      });
   }
 }
