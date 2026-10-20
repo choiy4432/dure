@@ -4,6 +4,8 @@ import type { RelayMessage } from '../../../engine/types'
 import { Markdown } from '../../lib/Markdown'
 import { Clamp } from '../../lib/Clamp'
 import { moveMenuFocus, useDismiss } from '../../lib/popover'
+import { MotionDiv, Presence } from '../../lib/presence'
+import { MOTION } from '../../lib/motion'
 import { ago, josa } from '../../lib/words'
 import { ConfirmDialog } from '../../shell/ConfirmDialog'
 import { useCall } from './useCall'
@@ -177,8 +179,8 @@ function MessageMenu({ onDismiss }: { onDismiss: () => void }) {
       >
         <Ellipsis className="i" aria-hidden="true" />
       </button>
-      {open && (
-        <div ref={menu} className="pop fix" style={at} role="menu" aria-label="메시지 메뉴" onKeyDown={onKey}>
+      <Presence show={open}>
+        <MotionDiv motion={MOTION.pop} origin="top right" ref={menu} className="pop fix" style={at ?? undefined} role="menu" aria-label="메시지 메뉴" onKeyDown={onKey}>
           <button
             type="button"
             role="menuitem"
@@ -192,8 +194,8 @@ function MessageMenu({ onDismiss }: { onDismiss: () => void }) {
             <Trash2 className="i" aria-hidden="true" />
             버리기
           </button>
-        </div>
-      )}
+        </MotionDiv>
+      </Presence>
     </span>
   )
 }

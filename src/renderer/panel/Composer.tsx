@@ -12,6 +12,7 @@ import { IMAGE_TYPES, prepareImage } from '../lib/image'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
 import type { Described } from './ModelPicker'
 import { matchCommands, slashOptionId, SlashMenu, type SlashEntry } from './SlashMenu'
+import { Presence } from '../lib/presence'
 import { getDraft, nextAttachKey, updateDraft, useDraft, type Attached } from './drafts'
 
 /** 본문 줄 높이(px, base.css 와 같다) — 입력창은 8줄까지 늘고 그 뒤로는 안에서 스크롤 */
@@ -265,7 +266,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
         onDragLeave={onDragLeave}
         onDrop={onDrop}
       >
-        {menuOpen && (
+        <Presence show={menuOpen}>
           <SlashMenu
             id={listId}
             description={description}
@@ -275,7 +276,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
             onHover={setActive}
             onRetry={onRetryCommands}
           />
-        )}
+        </Presence>
         {attached.length > 0 && (
           <div className="atts">
             {attached.map(a =>

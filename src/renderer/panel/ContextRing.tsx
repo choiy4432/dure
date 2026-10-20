@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState, type KeyboardEvent } from 'react'
 import type { AgentId, ContextUsage } from '../../engine/types'
 import { useDismiss } from '../lib/popover'
+import { MotionDiv, Presence } from '../lib/presence'
+import { MOTION } from '../lib/motion'
 import { tokensText } from '../lib/words'
 
 interface Props {
@@ -66,8 +68,8 @@ export function ContextRing({ name, value, working, onCompact }: Props) {
         </svg>
         <span className="ctx-n">{percent}%</span>
       </button>
-      {open && (
-        <div className="pop ctx-pop" role="dialog" aria-label={`대화 공간 · ${name}`}>
+      <Presence show={open}>
+        <MotionDiv motion={MOTION.popUp} origin="bottom right" className="pop ctx-pop" role="dialog" aria-label={`대화 공간 · ${name}`}>
           <h3 className="ctx-h">
             대화 공간 <span>· {name}</span>
           </h3>
@@ -97,8 +99,8 @@ export function ContextRing({ name, value, working, onCompact }: Props) {
             지금 요약하기
           </button>
           {working && <p className="ctx-note">일이 끝나면 요약할 수 있어요</p>}
-        </div>
-      )}
+        </MotionDiv>
+      </Presence>
     </span>
   )
 }

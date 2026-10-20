@@ -6,6 +6,8 @@ import type { Room, RoomId } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { errorMessage, josa } from '../lib/words'
 import { moveMenuFocus, useDismiss } from '../lib/popover'
+import { MotionDiv, Presence } from '../lib/presence'
+import { MOTION } from '../lib/motion'
 import { ConfirmDialog } from './ConfirmDialog'
 import { FormDialog } from './FormDialog'
 
@@ -206,8 +208,8 @@ export function RoomSwitcher() {
           <span className="room-name">{current?.name}</span>
           <ChevronDown className="i" aria-hidden="true" />
         </button>
-        {open && (
-          <div ref={list} className="pop rs" role="dialog" aria-label="방" onKeyDown={onListKey}>
+        <Presence show={open}>
+          <MotionDiv motion={MOTION.pop} origin="top left" ref={list} className="pop rs" role="dialog" aria-label="방" onKeyDown={onListKey}>
             <ul className="rs-list">
               {v.rooms.map(r => (
                 <li key={r.id} className="rs-row">
@@ -246,11 +248,13 @@ export function RoomSwitcher() {
                       >
                         <Ellipsis className="i" aria-hidden="true" />
                       </button>
-                      {menu?.id === r.id && (
-                        <div
+                      <Presence show={menu?.id === r.id}>
+                        <MotionDiv
+                          motion={MOTION.pop}
+                          origin="top left"
                           ref={roomMenu}
                           className="pop fix"
-                          style={menu.at}
+                          style={menu?.at}
                           role="menu"
                           aria-label={`${r.name} 메뉴`}
                           onKeyDown={onMenuKey}
@@ -264,8 +268,8 @@ export function RoomSwitcher() {
                             <Trash2 className="i" aria-hidden="true" />
                             지우기
                           </button>
-                        </div>
-                      )}
+                        </MotionDiv>
+                      </Presence>
                     </>
                   )}
                 </li>
@@ -297,8 +301,8 @@ export function RoomSwitcher() {
                 <Plus className="i" aria-hidden="true" />새 방
               </button>
             )}
-          </div>
-        )}
+          </MotionDiv>
+        </Presence>
       </span>
       <ConfirmDialog
         open={ask !== null}

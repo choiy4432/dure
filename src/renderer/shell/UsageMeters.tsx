@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Keyb
 import type { UsageWindow } from '../../engine/types'
 import { useDure } from '../state/store'
 import { useDismiss } from '../lib/popover'
+import { MotionDiv, Presence } from '../lib/presence'
+import { MOTION } from '../lib/motion'
 import { useMedia } from '../lib/useMedia'
 import { useNow } from '../lib/useNow'
 import { ago, resetText, usageBarLabel, usageRowLabel } from '../lib/words'
@@ -63,8 +65,8 @@ export function UsageMeters() {
           </span>
         ))}
       </button>
-      {open && (
-        <div className="pop end usg-pop" role="dialog" aria-label="사용량">
+      <Presence show={open}>
+        <MotionDiv motion={MOTION.pop} origin="top right" className="pop end usg-pop" role="dialog" aria-label="사용량">
           <h5 className="usg-h">
             사용량 <span>· 내 계정</span>
           </h5>
@@ -81,8 +83,8 @@ export function UsageMeters() {
             </div>
           ))}
           <div className="usg-at">{ago(usage.at, now)} 기준</div>
-        </div>
-      )}
+        </MotionDiv>
+      </Presence>
     </span>
   )
 }

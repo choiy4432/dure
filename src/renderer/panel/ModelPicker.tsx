@@ -4,6 +4,8 @@ import type { AgentDescription, AgentId } from '../../engine/types'
 import { getStore } from '../state/store'
 import { errorMessage, modelText } from '../lib/words'
 import { moveMenuFocus, useDismiss } from '../lib/popover'
+import { MotionDiv, Presence } from '../lib/presence'
+import { MOTION } from '../lib/motion'
 
 /**
  * describe(id) 결과 — 패널이 에이전트마다 한 번 받아 둔다.
@@ -112,8 +114,10 @@ export function ModelPicker({ agentId, model, description, onLoad, onRetry, open
         <span className="chip-l trunc">{label}</span>
         <ChevronDown className="i" aria-hidden="true" />
       </button>
-      {isOpen && (
-        <div
+      <Presence show={isOpen}>
+        <MotionDiv
+          motion={MOTION.pop}
+          origin="top left"
           ref={menu}
           className="pop"
           role="menu"
@@ -158,8 +162,8 @@ export function ModelPicker({ agentId, model, description, onLoad, onRetry, open
           ) : (
             <p className="pop-note">모델 목록을 불러오는 중…</p>
           )}
-        </div>
-      )}
+        </MotionDiv>
+      </Presence>
     </span>
   )
 }

@@ -4,6 +4,8 @@ import type { AgentId } from '../../engine/types'
 import { getStore } from '../state/store'
 import { errorMessage, josa, RENEW_CONFIRM } from '../lib/words'
 import { moveMenuFocus, useDismiss } from '../lib/popover'
+import { MotionDiv, Presence } from '../lib/presence'
+import { MOTION } from '../lib/motion'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
 
 interface Props {
@@ -91,8 +93,8 @@ export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
       >
         <Ellipsis className="i" aria-hidden="true" />
       </button>
-      {open && (
-        <div ref={menu} className="pop end" role="menu" aria-label="메뉴" onKeyDown={onKey}>
+      <Presence show={open}>
+        <MotionDiv motion={MOTION.pop} origin="top right" ref={menu} className="pop end" role="menu" aria-label="메뉴" onKeyDown={onKey}>
           <button type="button" role="menuitem" className="mi" onClick={choose(onEdit)}>
             <Pencil className="i" aria-hidden="true" />
             이름·역할 바꾸기
@@ -109,8 +111,8 @@ export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
             <Trash2 className="i" aria-hidden="true" />
             지우기
           </button>
-        </div>
-      )}
+        </MotionDiv>
+      </Presence>
       <ConfirmDialog
         open={ask === 'renew'}
         title={RENEW_CONFIRM.title}

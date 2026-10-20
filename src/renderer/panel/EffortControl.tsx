@@ -2,6 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Keyboar
 import { EFFORT_LEVELS, type EffortLevel } from '../../engine/types'
 import { errorMessage } from '../lib/words'
 import { useDismiss } from '../lib/popover'
+import { MotionDiv, Presence } from '../lib/presence'
+import { MOTION } from '../lib/motion'
 import type { Described } from './ModelPicker'
 
 interface Props {
@@ -220,8 +222,8 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
           {name}
         </span>
       </button>
-      {open && (
-        <div className="pop eff-pop" role="dialog" aria-label="생각하는 정도(effort)" onKeyDown={onKey}>
+      <Presence show={open}>
+        <MotionDiv motion={MOTION.pop} origin="top right" className="pop eff-pop" role="dialog" aria-label="생각하는 정도(effort)" onKeyDown={onKey}>
           <h3 className="eff-h">생각하는 정도(effort)</h3>
           <p className="eff-s">높을수록 꼼꼼하지만 느리고 사용량을 더 써요</p>
           {description.state === 'ready' ? (
@@ -278,8 +280,8 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
           ) : (
             <p className="eff-note">불러오는 중…</p>
           )}
-        </div>
-      )}
+        </MotionDiv>
+      </Presence>
     </span>
   )
 }

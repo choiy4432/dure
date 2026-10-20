@@ -1,5 +1,7 @@
 import type { AgentDescription } from '../../engine/types'
 import type { Described } from './ModelPicker'
+import { MotionDiv } from '../lib/presence'
+import { MOTION } from '../lib/motion'
 
 export type SlashCommand = AgentDescription['commands'][number]
 
@@ -85,7 +87,7 @@ interface Props {
 export function SlashMenu({ id, description, items, active, onPick, onHover, onRetry }: Props) {
   const keepFocus = (e: { preventDefault(): void }) => e.preventDefault()
   return (
-    <div id={id} className="slash" role="listbox" aria-label="명령" onMouseDown={keepFocus}>
+    <MotionDiv motion={MOTION.popUp} origin="bottom left" id={id} className="slash" role="listbox" aria-label="명령" onMouseDown={keepFocus}>
       {description.state === 'error' ? (
         <div className="pop-note">
           명령을 불러오지 못했어요
@@ -112,6 +114,6 @@ export function SlashMenu({ id, description, items, active, onPick, onHover, onR
           </div>
         ))
       )}
-    </div>
+    </MotionDiv>
   )
 }
