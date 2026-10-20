@@ -1404,6 +1404,71 @@ test('effort: get_settings 답이 오기 전에 에이전트를 지우면 그 �
   expect(e.effortNow(a.id)).toBeNull();
 });
 
+// ── effort: /effort 차례 중의 일(넘김 · 죽음 · 새 대화 · 답 없음 · 멈추기) ──
+/** 그 이름(-n)으로 뜬 프로세스마다, 받은 사용자 줄 — 띄운 차례대로(가짜 claude 가 줄마다 pid 를 남긴다) */
+const linesByProcess = (name: string): string[][] => {
+  const log = readLog();
+  const pids = log.filter((x) => Array.isArray(x.argv) && flagValue(x.argv, '-n') === name).map((x) => x.pid);
+  return pids.map((pid) =>
+    log
+      .filter((x) => x.type === 'user' && x.pid === pid)
+      .map((x) => x.message.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')),
+  );
+};
+const RELAY_HI = '[두레 메시지 — 보낸 쪽: A(기획)]\n안녕';
+
+test('effort: 막 띄운 세션이 /effort 차례 중이면 넘김 메시지는 기다렸다가 그 뒤에 — 한 번만 기록', async () => {
+  const e = await start({ FAKE_SLOW_EFFORT_MS: '400' });
+  const { a, b } = setup(e);
+  e.updateAgent(b.id, { auto: true });
+  await e.setEffort(b.id, 'max');
+  const aDone = resultOf(e, a.id);
+  const bDone = resultOf(e, b.id);
+  await e.sendUser(a.id, text('SEND B: 안녕'));
+  expect(await resultText(aDone)).toBe('B 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+  expect(await resultText(bDone)).toBe(`받음: ${RELAY_HI}`);
+  expect(linesByProcess('B')).toEqual([['/effort max', RELAY_HI]]);
+  expect(e.history(b.id).filter((h) => h.kind === 'user')).toHaveLength(1);
+  expect(e.messages()[0].state).toBe('delivered');
+  expect(e.effortNow(b.id)).toBe('max');
+});
+
+test('effort: /effort 차례 중에 claude 가 죽으면 — 기록 없음 · 기다리던 입력은 남고 · 다음에 띄우면 다시 /effort 부터', async () => {
+  const e = await start({ FAKE_SLOW_EFFORT_MS: '600' });
+  const { b } = setup(e);
+  await e.setEffort(b.id, 'low');
+  await e.sendUser(b.id, text('echo 하나'));
+  await until('/effort 를 씀', () => effortLines().length === 1);
+  process.kill(lastSpawnOf('B').pid);
+  await until('오류', () => e.status(b.id) === 'error');
+  expect(e.heldInput(b.id)).toBe(1);
+  const results: string[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === b.id && x.event.kind === 'result' && results.push(x.event.text));
+  await e.sendUser(b.id, text('echo 둘'));
+  await until('두 차례', () => results.length === 2);
+  expect(results).toEqual(['받음: echo 하나', '받음: echo 둘']);
+  expect(linesByProcess('B')).toEqual([['/effort low'], ['/effort low', 'echo 하나', 'echo 둘']]);
+  expect(JSON.stringify(e.history(b.id, { all: true }))).not.toContain('/effort');
+});
+
+test('effort: /effort 차례 중에 새 대화 — 새 세션이 다시 /effort, 기다리던 입력은 그 뒤 · 옛 세션 것은 안 보인다', async () => {
+  const e = await start({ FAKE_SLOW_EFFORT_MS: '400' });
+  const { b } = setup(e);
+  await e.setEffort(b.id, 'xhigh');
+  await e.sendUser(b.id, text('echo 하나'));
+  await until('/effort 를 씀', () => effortLines().length === 1);
+  const events: string[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === b.id && events.push(x.event.kind));
+  const done = resultOf(e, b.id);
+  await e.newConversation(b.id);
+  expect(await resultText(done)).toBe('받음: echo 하나');
+  expect(linesByProcess('B')).toEqual([['/effort xhigh'], ['/effort xhigh', 'echo 하나']]);
+  expect(events).toEqual(['init', 'text-delta', 'assistant', 'result']);
+  expect(e.history(b.id).filter((h) => h.kind === 'user')).toHaveLength(1);
+  expect(JSON.stringify(e.history(b.id, { all: true }))).not.toContain('/effort');
+  expect(e.effortNow(b.id)).toBe('xhigh');
+});
+
 // ── context ──
 const contextEvents = (e: Engine) => {
   const got: { agentId: string; value: any }[] = [];

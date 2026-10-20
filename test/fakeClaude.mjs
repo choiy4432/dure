@@ -94,10 +94,10 @@ let current = null; // 진행 중인 차례 { ended }
 let sequence = 0;
 
 // 로컬 명령 /effort — 진짜(2.1.304, probe9)처럼 init · 안내 글 · result(비용 0). 모델을 부르지 않으니 끝난 차례로 세지 않고(context 그대로),
-// get_settings 의 값도 바꾸지 않는다(세션 effort 는 설정 층에 안 보인다). FAKE_EFFORT_REPLY 가 있으면 그 글로 답하고,
-// FAKE_SLOW_EFFORT_MS 만큼 늦게 답한다.
+// get_settings 의 값도 바꾸지 않는다(세션 effort 는 설정 층에 안 보인다). 손잡이:
+//   FAKE_EFFORT_REPLY=<글>       그 글로 답한다          FAKE_SLOW_EFFORT_MS=<ms>   그만큼 늦게 답한다
 async function effortCommand(arg) {
-  log(JSON.stringify({ local: 'effort', arg }));
+  log(JSON.stringify({ local: 'effort', arg, pid: process.pid }));
   await init();
   const slowEffort = Number(process.env.FAKE_SLOW_EFFORT_MS ?? 0);
   if (slowEffort) await sleep(slowEffort);
@@ -260,13 +260,14 @@ if (hang) {
   const rl = readline.createInterface({ input: process.stdin });
   rl.on('line', (line) => {
     if (!line.trim()) return;
-    log(line);
     let msg;
     try {
       msg = JSON.parse(line);
     } catch {
+      log(line);
       return;
     }
+    log(JSON.stringify({ ...msg, pid: process.pid })); // 어느 프로세스가 받은 줄인지(argv 줄의 pid 와 맞춘다)
     if (msg.type === 'control_request') void control(msg);
     else if (msg.type === 'user' && !mute) {
       const content = msg.message?.content ?? [];
