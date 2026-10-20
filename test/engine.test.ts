@@ -1531,6 +1531,39 @@ test('effort: /effort 차례 중 멈추기 — 같은 프로세스에 이어 쓰
   await until('/effort max 를 다시 씀', () => linesByProcess('B')[1]?.includes('/effort max') ?? false);
 });
 
+test('effort: /effort 차례가 끝나면 남은 승인 요청도 정리한다 — 차례가 끝났습니다', async () => {
+  const e = await start({ FAKE_SLOW_EFFORT_MS: '300' });
+  const { a } = setup(e);
+  await settledTurn(e, a.id);
+  await e.setEffort(a.id, 'low');
+  await until('/effort 를 씀', () => effortLines().length === 1);
+  const leftoverReq = waitFor<PendingRequest>(e, 'request');
+  const leftover = approveDirect(a.id, 'Edit'); // 떠난 프로세스가 남긴 것 같은 호출
+  await leftoverReq;
+  expect(await leftover).toEqual({ behavior: 'deny', message: '차례가 끝났습니다.' });
+  expect(e.pendingRequests()).toEqual([]);
+  expect(e.effortNow(a.id)).toBe('low');
+});
+
+test('effort: 답이 로컬 출력(local-command-stdout)으로 와도 읽는다 — 기록엔 없다', async () => {
+  const e = await start({ FAKE_EFFORT_LOCAL_OUTPUT: '1' });
+  const { a } = setup(e);
+  await settledTurn(e, a.id);
+  const heard = waitFor(e, 'effort', (x: any) => x.effortNow === 'max');
+  await e.setEffort(a.id, 'max');
+  await heard;
+  expect(JSON.stringify(e.history(a.id))).not.toContain('Set effort level');
+});
+
+test('effort: /effort 차례 중 온 rate-limit 은 평소처럼 알린다', async () => {
+  const e = await start({ FAKE_EFFORT_RATE_LIMIT: '1' });
+  const { a } = setup(e);
+  await settledTurn(e, a.id);
+  const rl = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === a.id && x.event.kind === 'rate-limit');
+  await e.setEffort(a.id, 'max');
+  expect((await rl).event).toMatchObject({ kind: 'rate-limit', info: { status: 'allowed' } });
+});
+
 // ── context ──
 const contextEvents = (e: Engine) => {
   const got: { agentId: string; value: any }[] = [];

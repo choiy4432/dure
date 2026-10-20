@@ -650,8 +650,12 @@ class EngineImpl extends EventEmitter implements Engine {
     const turn = this.effortTurn.get(s)!;
     if (ev.kind === 'init') {
       this.noteInit(id, ev); // /effort 만 받은 세션도 저장된다 — started 를 남겨야 다음 실행이 --resume 한다(같은 --session-id 는 거절됨)
+    } else if (ev.kind === 'rate-limit') {
+      this.onEvent(id, ev); // 사용량 신호는 평소처럼 알린다(기록은 원래 안 한다)
     } else if (ev.kind === 'assistant') {
       turn.heard ??= effortSaid(ev.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
+    } else if (ev.kind === 'local-output') {
+      turn.heard ??= effortSaid(ev.text); // 답을 <local-command-stdout> 로 내는 CLI 도 있을 수 있다
     } else if (ev.kind === 'result') {
       this.endEffortTurn(s);
       const heard = turn.heard ?? effortSaid(ev.text);
@@ -661,6 +665,7 @@ class EngineImpl extends EventEmitter implements Engine {
         this.effortNows.set(id, heard);
         this.emitEffort(id);
       }
+      this.perms.cancelForAgent(id, TURN_ENDED); // 끝난 차례에 남은 승인 질문(떠난 프로세스의 호출 등) — 평소 result 와 같게
       this.pump(id);
       this.emitStatus(id);
     }

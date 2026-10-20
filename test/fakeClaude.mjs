@@ -97,12 +97,15 @@ let sequence = 0;
 // get_settings 의 값도 바꾸지 않는다(세션 effort 는 설정 층에 안 보인다). 손잡이:
 //   FAKE_EFFORT_REPLY=<글>       그 글로 답한다          FAKE_SLOW_EFFORT_MS=<ms>   그만큼 늦게 답한다
 //   FAKE_EFFORT_SILENT=1         읽기만 하고 끝내 답하지 않는다(막힌 /effort)
+//   FAKE_EFFORT_LOCAL_OUTPUT=1   글을 어시스턴트 대신 <local-command-stdout> 사용자 줄로(result 글은 빈칸)
+//   FAKE_EFFORT_RATE_LIMIT=1     답 앞에 rate_limit_event 한 줄
 async function effortCommand(arg) {
   log(JSON.stringify({ local: 'effort', arg, pid: process.pid }));
   if (process.env.FAKE_EFFORT_SILENT === '1') return;
   await init();
   const slowEffort = Number(process.env.FAKE_SLOW_EFFORT_MS ?? 0);
   if (slowEffort) await sleep(slowEffort);
+  if (process.env.FAKE_EFFORT_RATE_LIMIT === '1') await emit({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } });
   const said =
     process.env.FAKE_EFFORT_REPLY ??
     (EFFORTS.includes(arg)
@@ -110,6 +113,11 @@ async function effortCommand(arg) {
       : arg
         ? `Invalid argument: ${arg}. Valid options are: low, medium, high, xhigh, max, auto, ultracode [on|off]`
         : 'Usage: /effort <low|medium|high|xhigh|max|auto|ultracode [on|off]>');
+  if (process.env.FAKE_EFFORT_LOCAL_OUTPUT === '1') {
+    await emit({ type: 'user', message: { role: 'user', content: `<local-command-stdout>${said}</local-command-stdout>` } });
+    await result('', { total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+    return;
+  }
   await assistant([{ type: 'text', text: said }]);
   await result(said, { total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
 }
