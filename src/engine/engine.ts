@@ -34,6 +34,7 @@ export interface EngineOptions {
 //  'flags'       { agentId; bypass: boolean }   (init.permissionMode === 'bypassPermissions')
 //  'history'     { agentId; item: HistoryItem }   (대화 기록에 한 항목이 더해질 때마다 — text-delta·init·rate-limit 은 기록하지 않는다)
 //  'held-input'  { agentId; count }   (보낼 차례를 기다리는 사람 입력 수가 바뀔 때마다)
+//  'effort'      { agentId; effort; effortNow }   (고른 값이 바뀌거나 Claude 에게 지금 값을 읽을 때마다)
 //  'engine-error' { agentId: string | null; message: string }  (프로세스 이벤트 처리·듣는 쪽에서 난 오류 — 앱을 죽이지 않고 알린다)
 export interface Engine extends EventEmitter {
   /** autoStart: false 로 만들었을 때 대기 메시지 전달을 시작한다(여러 번 불러도 한 번만) */
@@ -56,6 +57,10 @@ export interface Engine extends EventEmitter {
   interrupt(id: AgentId): Promise<void>;
   newConversation(id: AgentId): Promise<void>;
   setModel(id: AgentId, model: string | null): Promise<void>;
+  /** 저장하고, 세션이 살아 있으면 바로 적용한다(없으면 다음에 띄울 때) — Claude 를 켜지 않는다 */
+  setEffort(id: AgentId, level: EffortLevel): Promise<void>;
+  /** 마지막으로 Claude 에게 읽은 지금 effort — 모르면 null */
+  effortNow(id: AgentId): EffortLevel | null;
   describe(id: AgentId): Promise<AgentDescription>;
   history(id: AgentId, o?: { all?: boolean; limit?: number }): HistoryItem[];
   messages(f?: Parameters<MessageLog['list']>[0]): RelayMessage[];
@@ -77,6 +82,7 @@ const NO_AGENT = '에이전트를 찾을 수 없습니다.';
 const LIMIT_INVALID = '상한은 1 이상이어야 해요.';
 const DURE_TOOL_PREFIX = 'mcp__dure__';
 const DURE_TOOL_DENIED = '두레 도구는 승인 대상이 아니에요.';
+const EFFORT_UNKNOWN = '알 수 없는 effort 예요.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
 
 /** 프로세스에 써 넣었지만 아직 아무 이벤트도 안 온 줄 — 읽기 전에 죽으면 되살린다 */
@@ -91,6 +97,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private inFlight = new WeakMap<ClaudeSession, InFlight>();
   private removing = new Set<AgentId>();
   private bypass = new Map<AgentId, boolean>(); // 마지막 init 의 권한 모드
+  private effortNows = new Map<AgentId, EffortLevel>(); // Claude 에게 마지막으로 읽은 지금 effort
   private started = false;
   private limit: number;
   private closed = false;
@@ -208,6 +215,7 @@ class EngineImpl extends EventEmitter implements Engine {
       const had = this.held.get(id)?.length ?? 0;
       this.held.delete(id); // 기다리던 사람 입력은 에이전트와 함께 버린다
       this.bypass.delete(id);
+      this.effortNows.delete(id);
       if (had > 0) this.guard(id, () => this.emit('held-input', { agentId: id, count: 0 }));
     }
   }
@@ -286,6 +294,19 @@ class EngineImpl extends EventEmitter implements Engine {
     this.store.updateAgent(id, { model });
     const s = this.sessions.get(id);
     if (s) await s.request({ subtype: 'set_model', model: model ?? 'default' });
+  }
+
+  async setEffort(id: AgentId, level: EffortLevel) {
+    this.need(id);
+    if (!(EFFORT_LEVELS as readonly unknown[]).includes(level)) throw new Error(EFFORT_UNKNOWN);
+    this.store.updateAgent(id, { effort: level });
+    this.emitEffort(id);
+    const s = this.sessions.get(id);
+    if (s) void this.syncEffort(id, s);
+  }
+
+  effortNow(id: AgentId): EffortLevel | null {
+    return this.effortNows.get(id) ?? null;
   }
 
   describe(id: AgentId): Promise<AgentDescription> {
@@ -449,7 +470,32 @@ class EngineImpl extends EventEmitter implements Engine {
     this.errors.delete(id);
     this.sessions.set(id, s);
     this.emitStatus(id);
+    void this.syncEffort(id, s); // 기다리지 않는다
     return s;
+  }
+
+  /** 저장된 effort 가 있으면 적용하고, 이어서 Claude 의 지금 값을 읽는다 — 실패·시간 초과는 정상 흐름이라 조용히 넘어간다 */
+  private async syncEffort(id: AgentId, s: ClaudeSession): Promise<void> {
+    const live = () => this.sessions.get(id) === s && !this.removing.has(id) && !!this.store.agent(id);
+    try {
+      const want = this.store.agent(id)?.effort;
+      if (want) await s.request({ subtype: 'apply_flag_settings', settings: { effortLevel: want } });
+      const res: any = await s.request({ subtype: 'get_settings' });
+      if (!live()) return;
+      const now = res?.effective?.effortLevel;
+      if (!(EFFORT_LEVELS as readonly unknown[]).includes(now)) return;
+      this.effortNows.set(id, now);
+      this.emitEffort(id);
+    } catch {
+      /* 요청 실패·세션 종료 — 표시만 비운 채 둔다 */
+    }
+  }
+
+  private emitEffort(id: AgentId): void {
+    if (this.removing.has(id)) return;
+    const a = this.store.agent(id);
+    if (!a) return;
+    this.guard(id, () => this.emit('effort', { agentId: id, effort: a.effort, effortNow: this.effortNow(id) }));
   }
 
   private onEvent(id: AgentId, ev: StreamEvent): void {
