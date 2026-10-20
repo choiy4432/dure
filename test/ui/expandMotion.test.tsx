@@ -15,9 +15,11 @@ vi.mock('animejs', async orig => {
 })
 
 // jsdom 에는 레이아웃이 없다 — 상자 높이를 흉내 낸다
+let offset = 60
 beforeEach(() => {
+  offset = 60
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => 120)
-  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(() => 60)
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(() => offset)
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => 54)
 })
 afterEach(() => {
@@ -157,7 +159,45 @@ describe('접기·펼치기 높이', () => {
     allowMotion()
     render(<Empty kind="load" detail="boom" />)
     fireEvent.click(screen.getByRole('button', { name: /자세히/ }))
-    const p = callFor(document.querySelector('.empty-x')!)![1] as any
+    const p = callFor(document.querySelector('.empty-x')!.parentElement!)![1] as any
     expect(p.height.from).toBe('0px')
+  })
+
+  it('접히는 도중 다시 보이면 같은 노드가 지금 높이에서 제 높이로 다시 자란다', () => {
+    allowMotion()
+    const restore = fastMotion(1)
+    render(<Harness />)
+    fireEvent.click(screen.getByText('토글'))
+    const body = screen.getByTestId('body')
+    fireEvent.click(screen.getByText('토글')) // 접기 시작
+    expect(body.hasAttribute('inert')).toBe(true)
+    offset = 30 // 접히는 중 지금 높이
+    vi.mocked(animate).mockClear()
+    fireEvent.click(screen.getByText('토글')) // 다시 열기
+    expect(screen.getByTestId('body')).toBe(body)
+    expect(body.hasAttribute('inert')).toBe(false)
+    const p = callFor(body)![1] as any
+    expect(p.height).toEqual({ from: '30px', to: '120px' })
+    restore()
+  })
+
+  it('긴 메시지 접기가 끝나는 순간: 인라인 높이를 지울 때 이미 lim 이 붙어 있다(한 프레임도 제한 없이 그려지지 않는다)', async () => {
+    allowMotion()
+    const restore = fastMotion(50)
+    const { container } = render(<Clamp>길어요</Clamp>)
+    const box = container.querySelector('.clamp-box') as HTMLElement
+    fireEvent.click(screen.getByRole('button', { name: '더 보기' }))
+    await waitFor(() => expect(box.style.height).toBe(''))
+    fireEvent.click(screen.getByRole('button', { name: '접기' }))
+    const seen: boolean[] = []
+    const orig = CSSStyleDeclaration.prototype.removeProperty
+    vi.spyOn(CSSStyleDeclaration.prototype, 'removeProperty').mockImplementation(function (this: CSSStyleDeclaration, name: string) {
+      if (name === 'height' && this === box.style) seen.push(box.classList.contains('lim'))
+      return orig.call(this, name)
+    })
+    await waitFor(() => expect(box).toHaveClass('clamped'), { timeout: 2000 })
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.every(Boolean)).toBe(true)
+    restore()
   })
 })

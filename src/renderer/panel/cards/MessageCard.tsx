@@ -81,7 +81,7 @@ export function MessageCard({ message, fromName, toName, now, open, onOpenChange
         {state !== 'delivered' && <MessageMenu onDismiss={() => setAsking(true)} />}
       </div>
       <Presence show={open}>
-        <ExpandBox as="div" className="pin-open">
+        <ExpandBox outer="pin-open">
           <div className="pin-b">
             <Clamp className="clamp-md">
               <Markdown text={message.text} />

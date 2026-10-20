@@ -24,7 +24,7 @@ export function Clamp({ lines = 3, className, dataLine, children }: Props) {
   // 펼친 모습(lim 없음) — 접을 때는 높이가 줄어든 뒤에야 풀린다. 움직임 줄이기면 open 과 늘 같다
   const [expanded, setExpanded] = useState(false)
   const [over, setOver] = useState(false)
-  const from = useRef<ReturnType<typeof readSize> | null>(null) // 누르는 순간의 크기
+  const from = useRef<number | null>(null) // 누르는 순간의 크기
   const moved = useRef(false)
 
   const measure = useCallback(() => {
@@ -49,7 +49,7 @@ export function Clamp({ lines = 3, className, dataLine, children }: Props) {
     moved.current = false
     const el = box.current
     const start = from.current
-    if (!el || !start || reducedMotion()) return
+    if (!el || start === null || reducedMotion()) return
     if (open) {
       growFrom(el, start)
       return
@@ -60,15 +60,18 @@ export function Clamp({ lines = 3, className, dataLine, children }: Props) {
     utils.remove(el)
     el.style.overflow = 'hidden'
     animate(el, {
-      height: { from: `${start.height}px`, to: `${to}px` },
+      height: { from: `${start}px`, to: `${to}px` },
       duration: MOTION_MS.expand,
       ease: 'outCubic',
       onComplete: () => {
+        // 인라인 높이를 지우는 순간 상자가 높이 제한 없이 그려지지 않게 — 클래스를 먼저 붙인다(다음 렌더가 같은 값을 쓴다)
+        el.classList.add('lim')
+        if (over) el.classList.add('clamped')
         clearSize(el)
         setExpanded(false)
       },
     })
-  }, [open])
+  }, [open, over])
   useEffect(() => {
     const el = box.current
     return () => {

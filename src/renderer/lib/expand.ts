@@ -3,49 +3,29 @@ import { animate, utils } from 'animejs'
 import { MOTION_MS, reducedMotion } from './motion'
 import { setInert, usePresenceApi } from './presence'
 
-// 접기·펼치기 — 높이로 이어진다(spec §3). 높이와 함께 위아래 안쪽 여백·윗 테두리도 같이 줄고 늘어, 0 에서 시작해도 상자 모양이 튀지 않는다.
+// 접기·펼치기 — 높이만 움직인다(spec §3). 꾸밈이 있는 요소는 바깥 상자(.xp) 안에 두어 여백·테두리가 따로 튀지 않는다.
 
-const SIDES = ['paddingTop', 'paddingBottom', 'borderTopWidth'] as const
-const KEBAB: Record<(typeof SIDES)[number], string> = {
-  paddingTop: 'padding-top',
-  paddingBottom: 'padding-bottom',
-  borderTopWidth: 'border-top-width',
-}
-type Sizes = Record<'height' | (typeof SIDES)[number], number>
-
-const ZERO: Sizes = { height: 0, paddingTop: 0, paddingBottom: 0, borderTopWidth: 0 }
 const px = (n: number) => `${n}px`
 
 /** 인라인 크기를 지운다 — 스타일시트 값(제 크기)으로 돌아간다 */
 export function clearSize(el: HTMLElement): void {
   el.style.removeProperty('height')
   el.style.removeProperty('overflow')
-  for (const k of SIDES) el.style.removeProperty(KEBAB[k])
 }
 
-/** 지금 보이는 크기 */
-function current(el: HTMLElement): Sizes {
-  const cs = getComputedStyle(el)
-  return {
-    height: el.offsetHeight,
-    paddingTop: parseFloat(cs.paddingTop) || 0,
-    paddingBottom: parseFloat(cs.paddingBottom) || 0,
-    borderTopWidth: parseFloat(cs.borderTopWidth) || 0,
-  }
+/** 지금 보이는 높이 */
+export function readSize(el: HTMLElement): number {
+  return el.offsetHeight
 }
 
 /** from 에서 제 크기로 자란다(from 이 없으면 0 에서). 끝나면 인라인 크기를 지운다 */
-export function growFrom(el: HTMLElement, from: Sizes | null, onDone?: () => void): void {
-  const start = from ?? ZERO
+export function growFrom(el: HTMLElement, from: number | null, onDone?: () => void): void {
   utils.remove(el)
   clearSize(el)
-  const to = current(el)
-  to.height = Math.max(el.scrollHeight, to.height)
-  const props: Record<string, { from: string; to: string }> = {}
-  for (const k of ['height', ...SIDES] as const) props[k] = { from: px(start[k]), to: px(to[k]) }
+  const to = Math.max(el.scrollHeight, el.offsetHeight)
   el.style.overflow = 'hidden'
   animate(el, {
-    ...props,
+    height: { from: px(from ?? 0), to: px(to) },
     duration: MOTION_MS.expand,
     ease: 'outQuint',
     onComplete: () => {
@@ -57,16 +37,11 @@ export function growFrom(el: HTMLElement, from: Sizes | null, onDone?: () => voi
 
 /** 지금 크기에서 0 으로 접는다 */
 export function shrink(el: HTMLElement, onDone: () => void): void {
-  const start = current(el)
+  const start = el.offsetHeight
   utils.remove(el)
   el.style.overflow = 'hidden'
-  const props: Record<string, { from: string; to: string }> = {}
-  for (const k of ['height', ...SIDES] as const) props[k] = { from: px(start[k]), to: '0px' }
-  animate(el, { ...props, duration: MOTION_MS.expand, ease: 'outCubic', onComplete: onDone })
+  animate(el, { height: { from: px(start), to: '0px' }, duration: MOTION_MS.expand, ease: 'outCubic', onComplete: onDone })
 }
-
-/** 지금 크기 읽기 — Clamp 가 쓴다 */
-export const readSize = current
 
 /**
  * Presence 안의 펼친 내용 — 생기면 높이 0 → 제 높이, 나가면 → 0 (MOTION_MS.expand, 들어옴 outQuint · 나감 outCubic).
@@ -123,6 +98,6 @@ export function useExpand(ref: RefObject<HTMLElement | null>): void {
       clearSize(el)
       return
     }
-    growFrom(el, current(el))
+    growFrom(el, readSize(el))
   }, [leaving, ref, id])
 }

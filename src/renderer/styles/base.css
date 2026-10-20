@@ -3190,6 +3190,12 @@ code {
   line-height: inherit;
 }
 
+/* 펼침 바깥 상자 — 높이만 움직이고 안쪽 꾸밈은 그대로(안의 바깥 여백이 새지 않게 flow-root) */
+.xp {
+  display: flow-root;
+  align-self: stretch;
+}
+
 .clamp-box.lim {
   max-height: calc(var(--clamp-lines) * 1lh + var(--clamp-pad, 0px));
   overflow: hidden;
