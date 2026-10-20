@@ -7,7 +7,7 @@ const MIN = 60_000
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, effortNow: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
 })
 const request = (over: Partial<PendingRequest> = {}): PendingRequest => ({
   id: 'q1', agentId: 'd', toolName: 'Edit', input: { file_path: 'C:\\w\\src\\styles\\tokens.css', old_string: 'a', new_string: 'b' },
@@ -52,7 +52,7 @@ beforeEach(() => {
       agent('s', { name: '서버', role: 'API · 데이터' }),
       agent('x', { name: '다른 방 사람', roomId: 'r2' }),
     ],
-    messages: [], requests: [], autoChainLimit: 3,
+    messages: [], requests: [], autoChainLimit: 3, usage: null,
   }
   api = {
     approveMessage: vi.fn(async (_id: string) => {}),

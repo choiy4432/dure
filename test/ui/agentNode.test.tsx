@@ -5,7 +5,7 @@ import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, effortNow: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
 })
 const request = (over: Partial<PendingRequest> = {}): PendingRequest => ({
   id: 'q1', agentId: 'd', toolName: 'Write', input: { file_path: 'C:\\w\\src\\styles\\tokens.css' }, kind: 'permission',
@@ -26,7 +26,7 @@ beforeEach(() => {
   handlers = {}
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }],
-    agents: [agent('d', { name: '디자인' })], messages: [], requests: [], autoChainLimit: 3,
+    agents: [agent('d', { name: '디자인' })], messages: [], requests: [], autoChainLimit: 3, usage: null,
   }
   api = { answerRequest: vi.fn(async (_id: string, _d: Decision) => {}) }
   ;(window as any).dure = {

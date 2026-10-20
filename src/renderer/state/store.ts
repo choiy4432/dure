@@ -36,6 +36,7 @@ type Ev = { [K in keyof EngineEventMap]: { name: K; payload: EngineEventMap[K] }
 
 const EVENTS: (keyof EngineEventMap)[] = [
   'agent-event', 'status', 'message', 'request', 'request-resolved', 'flags', 'history', 'held-input',
+  'usage', 'context', 'effort',
 ]
 
 const sameItem = (a: HistoryItem, b: HistoryItem) => JSON.stringify(a) === JSON.stringify(b)
@@ -48,7 +49,7 @@ function assistantText(item: HistoryItem): string {
 
 export function createStore(api: DureApi): Store {
   let state: UiState = {
-    claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0,
+    claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, lastText: {}, lastDelivered: {},
     statusSince: {}, loadError: null,
   }
@@ -100,6 +101,22 @@ export function createStore(api: DureApi): Store {
       case 'held-input': {
         const p = ev.payload
         state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, heldInput: p.count } : a)) }
+        break
+      }
+      case 'usage':
+        state = { ...state, usage: ev.payload }
+        break
+      case 'context': {
+        const p = ev.payload
+        state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, lastContext: p.value } : a)) }
+        break
+      }
+      case 'effort': {
+        const p = ev.payload
+        state = {
+          ...state,
+          agents: state.agents.map(a => (a.id === p.agentId ? { ...a, effort: p.effort, effortNow: p.effortNow } : a)),
+        }
         break
       }
       case 'message': {

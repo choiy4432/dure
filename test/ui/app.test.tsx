@@ -5,14 +5,14 @@ import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 const room = (id: string, name = id) => ({ id, name, createdAt: 1 })
 const agent = (id: string, roomId: string, name: string): AgentView => ({
   id, roomId, name, role: '역할', folder: 'C:/w', sessionId: 's', started: false, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null, status: 'idle', errorText: null, bypass: false, heldInput: 0,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null, effortNow: null, status: 'idle', errorText: null, bypass: false, heldInput: 0,
 })
 
 let snapshot: Snapshot
 beforeEach(() => {
   vi.resetModules()
   localStorage.clear()
-  snapshot = { claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 3 }
+  snapshot = { claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 3, usage: null }
   ;(window as any).dure = {
     snapshot: async () => snapshot, history: async () => [], on: () => () => {}, updateAgent: async () => ({}),
   }

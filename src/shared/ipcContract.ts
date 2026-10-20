@@ -1,5 +1,5 @@
 import type {
-  Agent, AgentDescription, AgentId, EngineEventMap, AgentStatus, Decision, HistoryItem, PendingRequest, RelayMessage, Room, RoomId, UserPart,
+  Agent, AgentDescription, AgentId, EffortLevel, EngineEventMap, AgentStatus, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, UserPart,
 } from '../engine/types'
 
 export interface AgentView extends Agent {
@@ -7,6 +7,8 @@ export interface AgentView extends Agent {
   errorText: string | null
   bypass: boolean
   heldInput: number
+  /** Claude 에게 마지막으로 읽은 지금 effort — 모르면 null */
+  effortNow: EffortLevel | null
 }
 
 export interface Snapshot {
@@ -16,6 +18,8 @@ export interface Snapshot {
   messages: RelayMessage[]
   requests: PendingRequest[]
   autoChainLimit: number
+  /** 플랜 사용량 — claude 가 없거나 아직 모르면 null */
+  usage: PlanUsage | null
 }
 
 export interface DureApi {
@@ -33,6 +37,8 @@ export interface DureApi {
   interrupt(id: AgentId): Promise<void>
   newConversation(id: AgentId): Promise<void>
   setModel(id: AgentId, model: string | null): Promise<void>
+  setEffort(id: AgentId, level: EffortLevel): Promise<void>
+  refreshUsage(): Promise<void>
   describe(id: AgentId): Promise<AgentDescription>
   history(id: AgentId, o?: { all?: boolean }): Promise<HistoryItem[]>
   approveMessage(id: string): Promise<void>
@@ -51,7 +57,7 @@ export const CHANNEL = { invoke: 'dure:invoke', event: 'dure:event' } as const
 /** invoke 로 부를 수 있는 이름 — DureApi 의 메서드 중 on 만 빠진다(on 은 preload 안에서 처리) */
 export const METHODS = [
   'snapshot', 'addRoom', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
-  'sendUser', 'interrupt', 'newConversation', 'setModel', 'describe', 'history',
+  'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
   'pickFolder', 'openFolder',
 ] as const satisfies readonly Exclude<keyof DureApi, 'on'>[]

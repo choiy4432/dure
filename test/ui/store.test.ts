@@ -5,13 +5,13 @@ import type { AgentView, DureApi, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, roomId = 'r1', over: Partial<AgentView> = {}): AgentView => ({
   id, roomId, name: id, role: '', folder: '/x', sessionId: '', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, lastContext: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
 })
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   claudeMissing: false,
   rooms: [{ id: 'r1', name: '첫 방', createdAt: 2 }, { id: 'r2', name: '둘째', createdAt: 1 }],
   agents: [agent('a'), agent('b'), agent('c', 'r2')],
-  messages: [], requests: [], autoChainLimit: 5, ...over,
+  messages: [], requests: [], autoChainLimit: 5, usage: null, ...over,
 })
 const note = (text: string, t = 1): HistoryItem => ({ t, kind: 'notice', text })
 
@@ -432,5 +432,68 @@ describe('store 처음 불러오기 실패', () => {
     expect(s.getState().loadError).toBeNull()
     await s.init()
     expect(s.getState().loadError).toBeNull()
+  })
+})
+
+describe('usage · context · effort events', () => {
+  const usage = { windows: [{ key: 'session' as const, label: '5시간', percent: 40, resetsAt: null }], at: 1 }
+  const ctx = { total: 10, max: 100, percent: 10, autoCompactAt: null, at: 2 }
+
+  it('snapshot 의 usage 가 상태에 들어간다', async () => {
+    const { api } = fake({ snapshot: async () => snap({ usage }) })
+    const store = createStore(api)
+    await store.init()
+    expect(store.getState().usage).toEqual(usage)
+  })
+
+  it('usage 사건이 바꾸고 null 도 받는다', async () => {
+    const { api, emit } = fake()
+    const store = createStore(api)
+    await store.init()
+    emit('usage', usage)
+    expect(store.getState().usage).toEqual(usage)
+    emit('usage', null)
+    expect(store.getState().usage).toBeNull()
+  })
+
+  it('context 사건은 그 에이전트 lastContext 만 바꾼다', async () => {
+    const { api, emit } = fake()
+    const store = createStore(api)
+    await store.init()
+    emit('context', { agentId: 'a', value: ctx })
+    const s = store.getState()
+    expect(s.agents.find(a => a.id === 'a')!.lastContext).toEqual(ctx)
+    expect(s.agents.find(a => a.id === 'b')!.lastContext).toBeNull()
+    emit('context', { agentId: 'nobody', value: ctx })
+    expect(store.getState().agents.map(a => a.lastContext)).toEqual([ctx, null, null])
+  })
+
+  it('effort 사건은 effort · effortNow 를 바꾼다', async () => {
+    const { api, emit } = fake()
+    const store = createStore(api)
+    await store.init()
+    emit('effort', { agentId: 'a', effort: 'max', effortNow: 'high' })
+    const a = store.getState().agents.find(x => x.id === 'a')!
+    expect([a.effort, a.effortNow]).toEqual(['max', 'high'])
+    expect(store.getState().agents.find(x => x.id === 'b')!.effort).toBeNull()
+    emit('effort', { agentId: 'nobody', effort: 'low', effortNow: null })
+    expect(store.getState().agents).toHaveLength(3)
+  })
+
+  it('스냅샷을 기다리는 동안 온 셋도 버퍼를 거쳐 적용된다', async () => {
+    let release!: (s: Snapshot) => void
+    const { api, emit } = fake({ snapshot: () => new Promise<Snapshot>(r => { release = r }) })
+    const store = createStore(api)
+    const p = store.init()
+    emit('usage', usage)
+    emit('context', { agentId: 'a', value: ctx })
+    emit('effort', { agentId: 'a', effort: 'low', effortNow: 'low' })
+    release(snap())
+    await p
+    const s = store.getState()
+    const a = s.agents.find(x => x.id === 'a')!
+    expect(s.usage).toEqual(usage)
+    expect(a.lastContext).toEqual(ctx)
+    expect([a.effort, a.effortNow]).toEqual(['low', 'low'])
   })
 })

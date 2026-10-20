@@ -6,7 +6,7 @@ const room = (id: string) => ({ id, name: id, createdAt: 1 })
 let snapshot: Snapshot
 beforeEach(() => {
   vi.resetModules()
-  snapshot = { claudeMissing: false, rooms: [room('r1')], agents: [], messages: [], requests: [], autoChainLimit: 5 }
+  snapshot = { claudeMissing: false, rooms: [room('r1')], agents: [], messages: [], requests: [], autoChainLimit: 5, usage: null }
   ;(window as any).dure = { snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
 })
 

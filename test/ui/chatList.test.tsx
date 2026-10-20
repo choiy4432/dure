@@ -6,7 +6,7 @@ import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, effortNow: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
 })
 
 let snapshot: Snapshot
@@ -39,7 +39,7 @@ beforeEach(() => {
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }],
     agents: [agent('w', { name: '웹 화면', role: '화면 구현' }), agent('p', { name: '기획', role: '기획서 · 문구' })],
-    messages: [], requests: [], autoChainLimit: 3,
+    messages: [], requests: [], autoChainLimit: 3, usage: null,
   }
   history = vi.fn(async (_id: string) => CANON)
   ;(window as any).dure = {

@@ -10,7 +10,7 @@ beforeEach(() => {
   localStorage.clear()
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }], agents: [],
-    messages: [], requests: [], autoChainLimit: 3,
+    messages: [], requests: [], autoChainLimit: 3, usage: null,
   }
   setAutoChainLimit = vi.fn(async (n: number) => {
     snapshot = { ...snapshot, autoChainLimit: n }

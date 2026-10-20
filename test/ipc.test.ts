@@ -27,6 +27,10 @@ function fakeEngine() {
     messages: () => [],
     pendingRequests: () => [],
     autoChainLimit: () => 8,
+    effortNow: () => 'high',
+    usage: () => ({ windows: [{ key: 'session', label: '5시간', percent: 40, resetsAt: null }], at: 1 }),
+    setEffort: rec('setEffort', Promise.resolve()),
+    refreshUsage: rec('refreshUsage'),
     addRoom: rec('addRoom', { id: 'r2' }),
     renameRoom: rec('renameRoom', { id: 'r1' }),
     removeRoom: rec('removeRoom', Promise.resolve()),
@@ -95,6 +99,7 @@ describe('registerIpc', () => {
       newConversation: ['a1'], setModel: ['a1', null], describe: ['a1'], history: ['a1', { all: true }],
       approveMessage: ['m1'], dismissMessage: ['m1'], continueHeld: ['r1'],
       answerRequest: ['q1', { type: 'allow' }], setAutoChainLimit: [5],
+      setEffort: ['a1', 'high'], refreshUsage: [],
     }
     for (const [m, a] of Object.entries(args)) {
       const r = await call(m, ...a)
@@ -119,7 +124,8 @@ describe('registerIpc', () => {
       claudeMissing: false,
       autoChainLimit: 8,
       rooms: [{ id: 'r1' }],
-      agents: [{ id: 'a1', status: 'idle', errorText: null, bypass: true, heldInput: 2 }],
+      agents: [{ id: 'a1', status: 'idle', errorText: null, bypass: true, heldInput: 2, effortNow: 'high' }],
+      usage: { windows: [{ key: 'session', percent: 40 }] },
     })
   })
 
@@ -142,7 +148,7 @@ describe('registerIpc', () => {
     const { call, sent } = setup(false)
     const s = await call('snapshot')
     expect(s.value).toEqual({
-      claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0,
+      claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, usage: null,
     })
     expect(await call('addRoom', 'x')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })
     expect(await call('pickFolder')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })

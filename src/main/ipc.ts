@@ -24,12 +24,13 @@ function agentViews(engine: Engine): AgentView[] {
     errorText: engine.errorText(a.id),
     bypass: engine.flags(a.id).bypass,
     heldInput: engine.heldInput(a.id),
+    effortNow: engine.effortNow(a.id),
   }))
 }
 
 function snapshot(engine: Engine | null): Snapshot {
   if (!engine) {
-    return { claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0 }
+    return { claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, usage: null }
   }
   return {
     claudeMissing: false,
@@ -38,6 +39,7 @@ function snapshot(engine: Engine | null): Snapshot {
     messages: engine.messages(),
     requests: engine.pendingRequests(),
     autoChainLimit: engine.autoChainLimit(),
+    usage: engine.usage(),
   }
 }
 
@@ -54,6 +56,8 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   interrupt: (e, _d, id) => e.interrupt(id),
   newConversation: (e, _d, id) => e.newConversation(id),
   setModel: (e, _d, id, model) => e.setModel(id, model),
+  setEffort: (e, _d, id, level) => e.setEffort(id, level),
+  refreshUsage: (e) => e.refreshUsage(),
   describe: (e, _d, id) => e.describe(id),
   history: (e, _d, id, o) => e.history(id, o),
   approveMessage: (e, _d, id) => e.approveMessage(id),
