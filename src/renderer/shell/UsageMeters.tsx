@@ -1,15 +1,23 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { UsageWindow } from '../../engine/types'
 import { useDure } from '../state/store'
 import { useDismiss } from '../lib/popover'
 import { MotionDiv, Presence } from '../lib/presence'
-import { MOTION } from '../lib/motion'
+import { MOTION, MOTION_MS } from '../lib/motion'
+import { useMeterWidth } from '../lib/meter'
 import { useMedia } from '../lib/useMedia'
 import { useNow } from '../lib/useNow'
 import { ago, resetText, usageBarLabel, usageRowLabel } from '../lib/words'
 
 const pct = (p: number) => Math.round(p)
-const fill = (p: number): CSSProperties => ({ width: `${Math.max(0, Math.min(100, p))}%` })
+const clamp = (p: number) => Math.max(0, Math.min(100, p))
+
+/** 막대 채움 — 처음 값은 바로, 바뀌면 바뀐 값까지 이어서 찬다(width 는 useMeterWidth 가 쓴다) */
+function Fill({ percent }: { percent: number }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  useMeterWidth(ref, clamp(percent), MOTION_MS.meter)
+  return <span ref={ref} />
+}
 /** 초기화 시각이 지난 창 — 새 값을 받을 때까지(엔진이 곧 다시 묻는다) 옛 % 로 경고하지 않는다 */
 const passed = (w: UsageWindow, now: number) => w.resetsAt !== null && w.resetsAt <= now
 const level = (w: UsageWindow, now: number) => (passed(w, now) ? '' : w.percent >= 100 ? ' danger' : w.percent >= 80 ? ' warn' : '')
@@ -59,7 +67,7 @@ export function UsageMeters() {
           <span key={w.key} className={`usg${level(w, now)}`}>
             <span className="usg-l">{usageBarLabel(w)}</span>
             <span className="usg-bar" aria-hidden="true">
-              <span style={fill(w.percent)} />
+              <Fill percent={w.percent} />
             </span>
             <b>{valueText(w, now)}</b>
           </span>
@@ -75,7 +83,7 @@ export function UsageMeters() {
               <span>{usageRowLabel(w)}</span>
               <b>{valueText(w, now)}</b>
               <span className="usg-bl">
-                <span style={fill(w.percent)} />
+                <Fill percent={w.percent} />
               </span>
               {w.resetsAt !== null && (
                 <span className="usg-rs">{passed(w, now) ? '초기화됨 · 새로 확인 중' : resetText(w.resetsAt, now)}</span>

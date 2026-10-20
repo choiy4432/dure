@@ -8,7 +8,9 @@ import { displayStatus, unreadFor, type DisplayStatus } from '../state/selectors
 import { requestTarget, requestTitle } from '../lib/toolSummary'
 import { ago, initial, josa, lasting, nodeModelLabel, STATUS_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
-import { popOnce, useRise } from '../lib/motion'
+import { MOTION, popOnce, useRise } from '../lib/motion'
+import { useMotion } from '../lib/presence'
+import { peekFresh, takeFresh } from './freshNodes'
 
 export type AgentFlowNode = Node<Record<string, never>, 'agent'>
 
@@ -131,6 +133,11 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
   const now = useNow()
   // 넘김 서명 — 받은 메시지가 늘 때(도착하는 순간) 배지가 한 번 튄다. 처음 그릴 때·줄어들 때·움직임 줄이기는 튀지 않는다
   const rise = useRise(v?.unread ?? 0)
+  // 방금 더한 에이전트의 카드만 나타난다 — 앱 시작·방 바꾸기로 다시 그려진 카드는 표가 없어 그대로 있다
+  const [appear] = useState(() => peekFresh(agentId))
+  useEffect(() => void takeFresh(agentId), [agentId])
+  const card = useRef<HTMLDivElement | null>(null)
+  useMotion(card, MOTION.node, { appear })
   const badge = useRef<HTMLElement | null>(null)
   const setBadge = useCallback((el: HTMLElement | null) => {
     badge.current = el
@@ -150,6 +157,7 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
   return (
     // 권한 요청 칸이 있으면 시안처럼 넓게(304px) — [허용][거절]·링크가 한 줄에 들어가 카드가 격자 한 칸(layout.ts CELL, 높이 217) 안에 머문다
     <div
+      ref={card}
       className={`nd${selected ? ' sel' : ''}${request ? ' pend' : ''}${request?.kind === 'permission' ? ' wide' : ''}`}
       data-status={status}
     >

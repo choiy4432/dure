@@ -2,7 +2,8 @@ import { useCallback, useRef, useState, type KeyboardEvent } from 'react'
 import type { AgentId, ContextUsage } from '../../engine/types'
 import { useDismiss } from '../lib/popover'
 import { MotionDiv, Presence } from '../lib/presence'
-import { MOTION } from '../lib/motion'
+import { MOTION, MOTION_MS } from '../lib/motion'
+import { useTweenValue } from '../lib/meter'
 import { tokensText } from '../lib/words'
 
 interface Props {
@@ -21,6 +22,18 @@ const R = (SIZE - STROKE) / 2
 const CIRC = 2 * Math.PI * R
 /** 자동 요약 지점의 이만큼부터 앰버 */
 const WARN_AT = 0.8
+
+/** 링 — 처음 값은 바로, 바뀌면 호가 바뀐 길이까지 이어서 돈다(stroke-dasharray 는 useTweenValue 가 쓴다) */
+function Ring({ fill }: { fill: number }) {
+  const fg = useRef<SVGCircleElement>(null)
+  useTweenValue(fill, MOTION_MS.ring, v => fg.current?.setAttribute('stroke-dasharray', `${(CIRC * v) / 100} ${CIRC}`))
+  return (
+    <svg className="ctx-ring" width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} aria-hidden="true">
+      <circle className="ctx-bg" cx={SIZE / 2} cy={SIZE / 2} r={R} />
+      <circle ref={fg} className="ctx-fg" cx={SIZE / 2} cy={SIZE / 2} r={R} transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`} />
+    </svg>
+  )
+}
 
 /** 입력창 아래 줄의 대화 공간 링 + 누르면 펼침(쓴 토큰 · 자동 요약 지점 · 지금 요약하기) */
 export function ContextRing({ name, value, working, onCompact }: Props) {
@@ -55,17 +68,7 @@ export function ContextRing({ name, value, working, onCompact }: Props) {
         aria-label={`대화 공간 ${percent}% 사용`}
         onClick={() => setOpen(o => !o)}
       >
-        <svg className="ctx-ring" width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} aria-hidden="true">
-          <circle className="ctx-bg" cx={SIZE / 2} cy={SIZE / 2} r={R} />
-          <circle
-            className="ctx-fg"
-            cx={SIZE / 2}
-            cy={SIZE / 2}
-            r={R}
-            strokeDasharray={`${(CIRC * fill) / 100} ${CIRC}`}
-            transform={`rotate(-90 ${SIZE / 2} ${SIZE / 2})`}
-          />
-        </svg>
+        <Ring fill={fill} />
         <span className="ctx-n">{percent}%</span>
       </button>
       <Presence show={open}>

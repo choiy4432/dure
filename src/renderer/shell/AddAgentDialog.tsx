@@ -4,6 +4,7 @@ import type { RoomId } from '../../engine/types'
 import { getStore } from '../state/store'
 import { errorMessage, fieldError } from '../lib/words'
 import { placeMissing } from '../map/layout'
+import { markFresh } from '../map/freshNodes'
 import { FormDialog } from './FormDialog'
 
 type Field = 'folder' | 'name' | 'other'
@@ -62,6 +63,7 @@ export function AddAgentDialog({ roomId, onClose }: Props) {
     try {
       const agent = await window.dure.addAgent({ roomId, name: name.trim(), role: role.trim(), folder })
       agentId = agent.id
+      markFresh(agent.id)
       // 자리 — 이 방의 카드와 겹치지 않는 첫 칸(관계도가 같은 셈으로 정하는 자리)을 새로 받기 전에 한 번 저장.
       // 저장된 자리로 오므로 관계도가 {0,0} 을 보고 또 정해 저장하지 않는다. 실패하면 관계도가 대신 정한다.
       const seats = store.getState().agents.filter(a => a.roomId === roomId).map(a => ({ id: a.id, pos: a.pos }))
