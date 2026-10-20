@@ -206,6 +206,10 @@ async function control(msg) {
     if (slow) await sleep(slow);
     await ok({ effective: { effortLevel: effortNow }, sources: {}, applied: {} });
   } else if (sub === 'apply_flag_settings') {
+    if (process.env.FAKE_APPLY_FAIL === '1') {
+      await emit({ type: 'control_response', response: { subtype: 'error', request_id: rid, error: 'apply failed' } });
+      return;
+    }
     const lv = msg.request.settings?.effortLevel;
     if (model !== 'haiku' && typeof lv === 'string') effortNow = lv;
     await ok();

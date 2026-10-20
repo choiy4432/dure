@@ -339,6 +339,8 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     if (!(EFFORT_LEVELS as readonly unknown[]).includes(level)) throw new Error(EFFORT_UNKNOWN);
     this.store.updateAgent(id, { effort: level });
+    // 전에 읽은 지금 값은 버린다 — 남겨 두면 화면이 새로 고른 값 대신 옛 값으로 돌아간다(다음 get_settings 가 채운다)
+    this.effortNows.delete(id);
     this.emitEffort(id);
     const s = this.sessions.get(id);
     if (s) void this.syncEffort(id, s);
@@ -523,6 +525,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.guard(id, () => {
         if (this.sessions.get(id) !== s) return; // 엔진이 끝낸 세션은 endSession 이 정리
         this.sessions.delete(id);
+        this.guard(id, () => this.forgetEffortNow(id));
         if (!expected) {
           this.guard(id, () => this.restoreInFlight(id, s)); // 기록 실패여도 아래 정리는 한다
           const why = s.errorText ?? EXITED;
@@ -548,12 +551,22 @@ class EngineImpl extends EventEmitter implements Engine {
     return s;
   }
 
-  /** 저장된 effort 가 있으면 적용하고, 이어서 Claude 의 지금 값을 읽는다 — 실패·시간 초과는 정상 흐름이라 조용히 넘어간다 */
+  /**
+   * 저장된 effort 가 있으면 적용하고, 이어서 Claude 의 지금 값을 읽는다 — 적용이 실패해도 읽기는 한다(지금 값이 비어 있지 않게).
+   * 실패·시간 초과는 정상 흐름이라 조용히 넘어간다.
+   */
   private async syncEffort(id: AgentId, s: ClaudeSession): Promise<void> {
     const live = () => this.live(id, s);
+    const want = this.store.agent(id)?.effort;
+    if (want) {
+      try {
+        await s.request({ subtype: 'apply_flag_settings', settings: { effortLevel: want } });
+      } catch {
+        /* 못 바꿨다 — 그래도 지금 값은 읽는다 */
+      }
+      if (!live()) return;
+    }
     try {
-      const want = this.store.agent(id)?.effort;
-      if (want) await s.request({ subtype: 'apply_flag_settings', settings: { effortLevel: want } });
       const res: any = await s.request({ subtype: 'get_settings' });
       if (!live()) return;
       const now = res?.effective?.effortLevel;
@@ -586,6 +599,12 @@ class EngineImpl extends EventEmitter implements Engine {
   /** 늦게 온 답을 받아도 되는가 — 그 세션이 아직 그 에이전트의 세션이고 에이전트도 있다 */
   private live(id: AgentId, s: ClaudeSession): boolean {
     return this.sessions.get(id) === s && !this.removing.has(id) && !!this.store.agent(id);
+  }
+
+  /** Claude 에게 읽은 지금 effort 를 잊는다(세션이 끝남·모델 바뀜) — 알고 있었으면 사건으로 알린다(화면은 내가 정한 값으로) */
+  private forgetEffortNow(id: AgentId): void {
+    if (!this.effortNows.delete(id)) return;
+    if (!this.closed) this.emitEffort(id);
   }
 
   private emitEffort(id: AgentId): void {
@@ -676,6 +695,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     this.sessions.delete(id);
     this.errors.delete(id);
+    this.guard(id, () => this.forgetEffortNow(id)); // 끝난 세션의 지금 값은 다음 세션의 값이 아니다
     this.perms.cancelForAgent(id, EXITED);
     if (!s) return;
     let timer: NodeJS.Timeout | undefined;

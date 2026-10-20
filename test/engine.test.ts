@@ -1219,6 +1219,70 @@ test('effort: 모르는 단계는 던지고 저장하지 않는다', async () =>
   expect(agentOf(e, a.id).effort).toBeNull();
 });
 
+/** 차례 하나를 끝내고 Claude 의 지금 effort(가짜 기본 high)를 읽어 둔다 */
+async function settledTurn(e: Engine, id: string, want = 'high'): Promise<void> {
+  const read = waitFor(e, 'effort', (x: any) => x.agentId === id && x.effortNow === want);
+  const done = resultOf(e, id);
+  await e.sendUser(id, text('echo 하나'));
+  await done;
+  await read;
+}
+
+test('effort: 새 대화 뒤 고르면 옛 세션의 지금 값(high)이 따라오지 않는다 — 사건의 effortNow 는 null', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await settledTurn(e, a.id);
+  const cleared = waitFor(e, 'effort', (x: any) => x.agentId === a.id && x.effortNow === null);
+  await e.newConversation(a.id);
+  expect(await cleared).toEqual({ agentId: a.id, effort: null, effortNow: null });
+  expect(e.effortNow(a.id)).toBeNull();
+  const got = effortEvents(e);
+  await e.setEffort(a.id, 'low');
+  expect(got).toEqual([{ agentId: a.id, effort: 'low', effortNow: null }]);
+  expect(e.effortNow(a.id)).toBeNull();
+});
+
+test('effort: 살아 있는 세션에 고르면 먼저 지금 값을 잊고(null) 다시 읽어 채운다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await settledTurn(e, a.id);
+  const got = effortEvents(e);
+  const refilled = waitFor(e, 'effort', (x: any) => x.effortNow === 'low');
+  await e.setEffort(a.id, 'low');
+  await refilled;
+  expect(got).toEqual([
+    { agentId: a.id, effort: 'low', effortNow: null },
+    { agentId: a.id, effort: 'low', effortNow: 'low' },
+  ]);
+});
+
+test('effort: apply 가 실패해도 get_settings 로 지금 값을 다시 읽는다', async () => {
+  const e = await start({ FAKE_APPLY_FAIL: '1' });
+  const { a } = setup(e);
+  await settledTurn(e, a.id);
+  const before = controlRequests('get_settings').length;
+  const got = effortEvents(e);
+  await e.setEffort(a.id, 'low');
+  await until('apply 실패 뒤 get_settings', () => controlRequests('get_settings').length === before + 1);
+  await until('다시 읽은 값의 사건', () => got.length === 2);
+  expect(controlRequests('apply_flag_settings')).toHaveLength(1);
+  expect(got).toEqual([
+    { agentId: a.id, effort: 'low', effortNow: null },
+    { agentId: a.id, effort: 'low', effortNow: 'high' },
+  ]);
+  expect(e.effortNow(a.id)).toBe('high');
+});
+
+test('effort: 세션이 예기치 않게 끝나면 지금 값을 잊는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await settledTurn(e, a.id);
+  const cleared = waitFor(e, 'effort', (x: any) => x.agentId === a.id && x.effortNow === null);
+  await e.sendUser(a.id, text('CRASH'));
+  expect(await cleared).toEqual({ agentId: a.id, effort: null, effortNow: null });
+  expect(e.effortNow(a.id)).toBeNull();
+});
+
 test('effort: get_settings 답이 오기 전에 에이전트를 지우면 그 에이전트의 사건이 오지 않는다', async () => {
   const e = await start({ FAKE_SLOW_CONTROL_MS: '300' });
   const { a } = setup(e);

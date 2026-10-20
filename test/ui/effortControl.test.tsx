@@ -253,6 +253,26 @@ describe('EffortControl — 고친 것(리뷰 1)', () => {
     expect(chip().textContent).toBe('medium')
   })
 
+  it('옛 지금 값(high)에서 low 로 고른 뒤 엔진이 지금 값을 비워(null) 알리면 칩은 고른 low 다', async () => {
+    vi.useFakeTimers()
+    const view = (effort: EffortLevel | null, now: EffortLevel | null) => (
+      <div className="pnl">
+        <EffortControl agentId="w" effort={effort} effortNow={now} model={null} description={ready()} onLoad={() => {}} onRetry={() => {}} />
+      </div>
+    )
+    const { rerender } = render(view(null, 'high'))
+    open()
+    key('Home')
+    expect(chip().textContent).toBe('low')
+    rerender(view('low', null)) // setEffort 가 보낸 사건 — 내가 정한 값 low, 지금 값은 모름
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(setEffort).toHaveBeenCalledWith('w', 'low')
+    expect(chip().textContent).toBe('low')
+    expect(slider().getAttribute('aria-valuetext')).toBe('low')
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+    expect(chip().textContent).toBe('low')
+  })
+
   it('보낸 값이 그대로 실제 값이 안 돼도 보내기가 끝나면 실제 값으로 돌아간다', async () => {
     vi.useFakeTimers()
     mount({ effortNow: 'high' })
