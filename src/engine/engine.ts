@@ -323,8 +323,11 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     this.store.updateAgent(id, { model });
     this.guard(id, () => this.setModelNow(id, null)); // 다음 차례가 풀 모델은 다르다
+    this.guard(id, () => this.forgetEffortNow(id)); // 모델이 바뀌면 지금 effort 도 다시 읽을 때까지 모른다
     const s = this.sessions.get(id);
-    if (s) await s.request({ subtype: 'set_model', model: model ?? 'default' });
+    if (!s) return;
+    await s.request({ subtype: 'set_model', model: model ?? 'default' });
+    if (this.live(id, s)) void this.syncEffort(id, s); // 고른 effort 를 새 모델에 다시 적용하고 지금 값을 다시 읽는다
   }
 
   private setModelNow(id: AgentId, value: string | null) {

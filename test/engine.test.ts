@@ -1283,6 +1283,28 @@ test('effort: 세션이 예기치 않게 끝나면 지금 값을 잊는다', asy
   expect(e.effortNow(a.id)).toBeNull();
 });
 
+test('effort: 모델을 바꾸면 지금 값을 잊고, set_model 뒤 고른 값을 다시 적용하고 다시 읽는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await e.setEffort(a.id, 'low');
+  await settledTurn(e, a.id, 'low');
+  const got = effortEvents(e);
+  const refilled = waitFor(e, 'effort', (x: any) => x.effortNow === 'low');
+  await e.setModel(a.id, 'sonnet');
+  expect(got[0]).toEqual({ agentId: a.id, effort: 'low', effortNow: null });
+  await refilled;
+  expect(got).toEqual([
+    { agentId: a.id, effort: 'low', effortNow: null },
+    { agentId: a.id, effort: 'low', effortNow: 'low' },
+  ]);
+  const lines = controlLines();
+  const model = lines.lastIndexOf('set_model');
+  expect(model).toBeGreaterThanOrEqual(0);
+  expect(lines.slice(model + 1)).toEqual(['apply_flag_settings', 'get_settings']);
+  expect(controlRequests('apply_flag_settings').map((x) => x.request.settings.effortLevel)).toEqual(['low', 'low']);
+  expect(e.effortNow(a.id)).toBe('low');
+});
+
 test('effort: get_settings 답이 오기 전에 에이전트를 지우면 그 에이전트의 사건이 오지 않는다', async () => {
   const e = await start({ FAKE_SLOW_CONTROL_MS: '300' });
   const { a } = setup(e);
