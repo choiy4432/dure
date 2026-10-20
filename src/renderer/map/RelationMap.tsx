@@ -13,6 +13,8 @@ import { getStore, useDure } from '../state/store'
 import { edges as edgeViews, pairMessages, type EdgeView } from '../state/selectors'
 import { ago } from '../lib/words'
 import { useNow } from '../lib/useNow'
+import { MotionDiv, Presence, useLeaving } from '../lib/presence'
+import { MOTION } from '../lib/motion'
 import { AgentNode, type AgentFlowNode } from './AgentNode'
 import { HandoffEdge, MARKER_TONES, markerId, type HandoffFlowEdge } from './HandoffEdge'
 import { SummaryChips } from './SummaryChips'
@@ -233,7 +235,10 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
       </ReactFlow>
       <SummaryChips roomId={roomId} />
       <ZoomControls />
-      {pair && <PairPopover key={`${pair.a}>${pair.b}`} at={pair} bounds={wrap} onClose={closePair} />}
+      {/* 다른 떠 있는 목록처럼 — 닫으면(pair = null) 마지막 모습으로 남아 가라앉는다 */}
+      <Presence show={pair !== null}>
+        {pair && <PairPopover key={`${pair.a}>${pair.b}`} at={pair} bounds={wrap} onClose={closePair} />}
+      </Presence>
     </div>
   )
 }
@@ -241,13 +246,18 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
 const POP_W = 320
 const POP_MARGIN = 12
 
-/** 엣지를 누르면 뜨는 작은 창 — 두 에이전트 사이에 오간 메시지(양방향, 최신 먼저). 바깥 누르기·Esc 로 닫힌다 */
+/**
+ * 엣지를 누르면 뜨는 작은 창 — 두 에이전트 사이에 오간 메시지(양방향, 최신 먼저). 바깥 누르기·Esc 로 닫힌다.
+ * 떠 있는 목록처럼 떠오르고 가라앉는다(MOTION.pop, 기준점 = 누른 자리 쪽 왼쪽 위 — 창은 left·top 으로 놓인다).
+ */
 export function PairPopover({ at, bounds, onClose }: { at: PairAt; bounds: RefObject<HTMLDivElement | null>; onClose: () => void }) {
   const list = useDure(s => pairMessages(at.a, at.b, s.messages))
   const names = useDure(s => Object.fromEntries(s.agents.filter(x => x.id === at.a || x.id === at.b).map(x => [x.id, x.name])) as Record<AgentId, string>,
     (p, q) => p[at.a] === q[at.a] && p[at.b] === q[at.b])
   const now = useNow()
   const ref = useRef<HTMLDivElement>(null)
+  // 닫혀서 가라앉는 중 — 키·누르기를 더 듣지 않는다(Esc 가 초점을 라벨로 다시 끌어오거나, 새로 연 창을 닫지 않게)
+  const leaving = useLeaving()
   const [pos, setPos] = useState({ left: at.x + POP_MARGIN, top: at.y + POP_MARGIN })
   const name = (id: AgentId) => names[id] ?? '지워진 에이전트'
 
@@ -266,6 +276,7 @@ export function PairPopover({ at, bounds, onClose }: { at: PairAt; bounds: RefOb
   }, [at, bounds, list.length])
 
   useEffect(() => {
+    if (leaving) return
     // 열리면 창으로 포커스, Esc 로 닫으면 연 자리(라벨)로 돌려준다
     const opener = document.activeElement as HTMLElement | null
     ref.current?.focus()
@@ -283,10 +294,12 @@ export function PairPopover({ at, bounds, onClose }: { at: PairAt; bounds: RefOb
       document.removeEventListener('pointerdown', down, true)
       document.removeEventListener('keydown', key)
     }
-  }, [onClose])
+  }, [onClose, leaving])
 
   return (
-    <div
+    <MotionDiv
+      motion={MOTION.pop}
+      origin="top left"
       ref={ref}
       className="pm"
       role="dialog"
@@ -319,6 +332,6 @@ export function PairPopover({ at, bounds, onClose }: { at: PairAt; bounds: RefOb
           ))}
         </ul>
       )}
-    </div>
+    </MotionDiv>
   )
 }
