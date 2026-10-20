@@ -8,6 +8,8 @@ import type { ToolIcon } from '../lib/toolSummary'
 import { Markdown } from '../lib/Markdown'
 import { useFrameValue } from '../lib/useFrameValue'
 import { Clamp } from '../lib/Clamp'
+import { ExpandBox } from '../lib/ExpandBox'
+import { Presence } from '../lib/presence'
 import { localSummary } from '../lib/words'
 
 const ICONS: Record<ToolIcon, ComponentType<LucideProps>> = {
@@ -47,11 +49,11 @@ function LocalLine({ text, index }: { text: string; index?: number }) {
           <ChevronDown className="i" size={14} aria-hidden="true" />
         </button>
       </p>
-      {open && (
-        <pre className="ci-local" id={id}>
+      <Presence show={open}>
+        <ExpandBox as="pre" className="ci-local" id={id}>
           {text}
-        </pre>
-      )}
+        </ExpandBox>
+      </Presence>
     </div>
   )
 }
@@ -77,16 +79,16 @@ function Action({ a }: { a: ActionLine }) {
         {a.target && <span className="f trunc">{a.target}</span>}
         <span className="act-v">{a.verb}</span>
       </button>
-      {open && (
-        <div className="act-out">
+      <Presence show={open}>
+        <ExpandBox as="div" className="act-out">
           {a.output ? (
             <Clamp className="clamp-mono">
               <pre>{a.output}</pre>
             </Clamp>
           ) : <p className="act-none">보여 줄 내용이 없어요</p>}
           {a.truncated && <p className="act-cut">전체는 길어서 생략</p>}
-        </div>
-      )}
+        </ExpandBox>
+      </Presence>
     </li>
   )
 }

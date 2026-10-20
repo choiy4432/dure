@@ -3,6 +3,7 @@ import { ArrowRight, Check, ChevronDown, Clock, Ellipsis, Pin, Trash2 } from 'lu
 import type { RelayMessage } from '../../../engine/types'
 import { Markdown } from '../../lib/Markdown'
 import { Clamp } from '../../lib/Clamp'
+import { ExpandBox } from '../../lib/ExpandBox'
 import { moveMenuFocus, useDismiss } from '../../lib/popover'
 import { MotionDiv, Presence, useMotion } from '../../lib/presence'
 import { MOTION } from '../../lib/motion'
@@ -79,8 +80,8 @@ export function MessageCard({ message, fromName, toName, now, open, onOpenChange
         </span>
         {state !== 'delivered' && <MessageMenu onDismiss={() => setAsking(true)} />}
       </div>
-      {open && (
-        <>
+      <Presence show={open}>
+        <ExpandBox as="div" className="pin-open">
           <div className="pin-b">
             <Clamp className="clamp-md">
               <Markdown text={message.text} />
@@ -106,8 +107,8 @@ export function MessageCard({ message, fromName, toName, now, open, onOpenChange
               {error}
             </p>
           )}
-        </>
-      )}
+        </ExpandBox>
+      </Presence>
       <ConfirmDialog
         open={asking}
         title="이 메시지를 버릴까요?"

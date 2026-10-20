@@ -1,4 +1,7 @@
-import { useCallback, useId, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+import { animate, utils } from 'animejs'
+import { clearSize, growFrom, readSize } from './expand'
+import { MOTION_MS, reducedMotion } from './motion'
 
 interface Props {
   /** 접혔을 때 보이는 줄 수 */
@@ -18,7 +21,11 @@ export function Clamp({ lines = 3, className, dataLine, children }: Props) {
   const box = useRef<HTMLDivElement>(null)
   const id = useId()
   const [open, setOpen] = useState(false)
+  // 펼친 모습(lim 없음) — 접을 때는 높이가 줄어든 뒤에야 풀린다. 움직임 줄이기면 open 과 늘 같다
+  const [expanded, setExpanded] = useState(false)
   const [over, setOver] = useState(false)
+  const from = useRef<ReturnType<typeof readSize> | null>(null) // 누르는 순간의 크기
+  const moved = useRef(false)
 
   const measure = useCallback(() => {
     const el = box.current
@@ -27,20 +34,61 @@ export function Clamp({ lines = 3, className, dataLine, children }: Props) {
 
   // 펼친 동안엔 잴 수 없다(높이가 내용 그대로) — 접힌 상태에서만 잰다
   useLayoutEffect(() => {
-    if (open) return
+    if (expanded) return
     measure()
     const el = box.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(measure)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [open, measure, children])
+  }, [expanded, measure, children])
 
-  const folded = over && !open
+  // 열고 닫을 때 높이로 이어진다 — 펼칠 땐 lim 을 바로 빼고 접힌 높이 → 전체 높이, 접을 땐 접힌 높이까지 줄인 뒤 lim·clamped 를 붙인다
+  useLayoutEffect(() => {
+    if (!moved.current) return
+    moved.current = false
+    const el = box.current
+    const start = from.current
+    if (!el || !start || reducedMotion()) return
+    if (open) {
+      growFrom(el, start)
+      return
+    }
+    el.classList.add('lim')
+    const to = el.offsetHeight
+    el.classList.remove('lim')
+    utils.remove(el)
+    el.style.overflow = 'hidden'
+    animate(el, {
+      height: { from: `${start.height}px`, to: `${to}px` },
+      duration: MOTION_MS.expand,
+      ease: 'outCubic',
+      onComplete: () => {
+        clearSize(el)
+        setExpanded(false)
+      },
+    })
+  }, [open])
+  useEffect(() => {
+    const el = box.current
+    return () => {
+      if (el) utils.remove(el)
+    }
+  }, [])
+
+  const toggle = (next: boolean) => {
+    const el = box.current
+    from.current = el ? readSize(el) : null
+    moved.current = true
+    setOpen(next)
+    if (next || reducedMotion()) setExpanded(next)
+  }
+
+  const folded = over && !expanded
   const onBox = (e: MouseEvent) => {
     if (!folded) return
     if ((e.target as HTMLElement).closest('a, button')) return
-    setOpen(true)
+    toggle(true)
   }
 
   return (
@@ -49,14 +97,14 @@ export function Clamp({ lines = 3, className, dataLine, children }: Props) {
       <div
         ref={box}
         id={id}
-        className={`clamp-box${className ? ` ${className}` : ''}${open ? '' : ' lim'}${folded ? ' clamped' : ''}`}
+        className={`clamp-box${className ? ` ${className}` : ''}${expanded ? '' : ' lim'}${folded ? ' clamped' : ''}`}
         style={{ '--clamp-lines': lines } as CSSProperties}
         onClick={onBox}
       >
         {children}
       </div>
       {over && (
-        <button type="button" className="lk clamp-more" aria-expanded={open} aria-controls={id} onClick={() => setOpen(o => !o)}>
+        <button type="button" className="lk clamp-more" aria-expanded={open} aria-controls={id} onClick={() => toggle(!open)}>
           {open ? '접기' : '더 보기'}
         </button>
       )}

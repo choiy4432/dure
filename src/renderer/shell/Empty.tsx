@@ -1,4 +1,6 @@
 import { useId, useState } from 'react'
+import { Presence } from '../lib/presence'
+import { ExpandBox } from '../lib/ExpandBox'
 import { ChevronDown, Plus, RotateCw } from 'lucide-react'
 
 export type EmptyKind = 'claude' | 'room' | 'agent' | 'load'
@@ -54,11 +56,11 @@ function Detail({ text }: { text: string }) {
         자세히
         <ChevronDown className="i" size={14} aria-hidden="true" />
       </button>
-      {open && (
-        <p className="empty-x" id={id}>
+      <Presence show={open}>
+        <ExpandBox as="p" className="empty-x" id={id}>
           {text}
-        </p>
-      )}
+        </ExpandBox>
+      </Presence>
     </>
   )
 }

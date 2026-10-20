@@ -27,7 +27,7 @@ import { reducedMotion, type MotionSpec, type MotionStep } from './motion'
 /** 나가는 움직임이 끝났다는 알림을 기다리는 여유 — 엔진이 멈춰(창이 가려짐) 알림이 안 와도 가장 긴 나가기 + 이만큼 뒤엔 지운다 */
 const EXIT_GRACE_MS = 200
 
-interface PresenceApi {
+export interface PresenceApi {
   /** 둘러싼 Presence 가 나가는 중인가 */
   leaving: boolean
   /** 지금 붙는 자식이 들어와야 하는가 — Presence 가 처음 그릴 때 이미 있던 자식이면 아니다 */
@@ -39,6 +39,11 @@ interface PresenceApi {
 }
 
 const PresenceCtx = createContext<PresenceApi | null>(null)
+
+/** 둘러싼 Presence 의 장부 — 나가는 움직임을 직접 가진 훅(useExpand)이 쓴다. Presence 밖이면 null */
+export function usePresenceApi(): PresenceApi | null {
+  return useContext(PresenceCtx)
+}
 
 /** 둘러싼 Presence 가 나가는 중인가 — 닫히는 순간 할 일(초점 돌려주기 등)을 움직임이 끝나기 전에 할 때 쓴다 */
 export function useLeaving(): boolean {
@@ -236,7 +241,7 @@ export function playEnter(el: MotionTarget, step: MotionStep): void {
 }
 
 /** 나가는 동안은 누를 수도 초점이 갈 수도 없다 — 그 아래·옆을 누르면 바로 먹힌다 */
-function setInert(el: MotionTarget, on: boolean) {
+export function setInert(el: MotionTarget, on: boolean) {
   if (el instanceof HTMLElement) {
     el.inert = on
     el.toggleAttribute('inert', on)
