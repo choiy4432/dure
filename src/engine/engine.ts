@@ -710,6 +710,7 @@ function toDescription(p: any): AgentDescription {
       value: String(m?.value ?? ''),
       displayName: String(m?.displayName ?? ''),
       ...(typeof m?.description === 'string' ? { description: m.description } : {}),
+      ...(typeof m?.resolvedModel === 'string' ? { resolvedModel: m.resolvedModel } : {}),
       ...(m?.supportsEffort === true
         ? {
             supportsEffort: true,

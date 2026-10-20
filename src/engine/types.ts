@@ -131,6 +131,6 @@ export interface EngineEventMap {
 
 export interface AgentDescription {
   commands: { name: string; description: string; argumentHint: string }[];
-  models: { value: string; displayName: string; description?: string; supportsEffort?: boolean; effortLevels?: EffortLevel[] }[];
+  models: { value: string; displayName: string; description?: string; resolvedModel?: string; supportsEffort?: boolean; effortLevels?: EffortLevel[] }[];
   permissionMode: string;
 }

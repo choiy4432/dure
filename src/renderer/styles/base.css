@@ -3136,3 +3136,13 @@ code {
 .clamp-more {
   margin-top: 2px;
 }
+
+/* 모델 목록의 '버전 고정' 이름표 — .pop 의 padding 보다 뒤에 오도록 .pop 아래로 한정 */
+.pop .pop-group {
+  margin: 4px 0 0;
+  padding: 8px 10px 4px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}

@@ -263,6 +263,54 @@ describe('ModelPicker', () => {
     expect(screen.getByRole('menu', { name: '모델' })).toBeTruthy()
   })
 
+  const LIST: AgentDescription = {
+    commands: [],
+    permissionMode: 'default',
+    models: [
+      { value: 'default', displayName: 'Default (recommended)', resolvedModel: 'claude-opus-5-5' },
+      { value: 'opus', displayName: 'Opus 5.5', resolvedModel: 'claude-opus-5-5' },
+      { value: 'fable', displayName: 'Fable 5.1', resolvedModel: 'claude-fable-5-1' },
+      { value: 'sonnet', displayName: 'Sonnet 5.5', resolvedModel: 'claude-sonnet-5-5' },
+      { value: 'haiku', displayName: 'Haiku 5.5', resolvedModel: 'claude-haiku-5-5' },
+      { value: 'claude-opus-4-8', displayName: 'Opus 4.8', resolvedModel: 'claude-opus-4-8' },
+      { value: 'claude-haiku-4-5-20251001', displayName: 'Haiku 4.5', resolvedModel: 'claude-haiku-4-5-20251001' },
+    ],
+  }
+
+  it("버전 이름 — 늘 최신 별칭이 위, 예전 버전은 '버전 고정' 아래, ↓ 는 이름표를 건너뛴다, 칩은 버전 이름", async () => {
+    api.describe.mockResolvedValue(LIST)
+    snapshot.agents = [agent('w', { name: '웹 화면', model: 'opus' })]
+    await renderPanel()
+    expect(modelChip().textContent).toBe('Opus')
+    await openPicker()
+    expect(modelChip().textContent).toBe('Opus 5.5')
+    const menu = screen.getByRole('menu', { name: '모델' })
+    const items = within(menu).getAllByRole('menuitemradio')
+    expect(items.map(i => i.querySelector('.mi-t')?.textContent)).toEqual([
+      '기본 (추천)', 'Opus 5.5', 'Fable 5.1', 'Sonnet 5.5', 'Haiku 5.5', 'Opus 4.8', 'Haiku 4.5',
+    ])
+    expect(items[0].querySelector('.mi-d')?.textContent).toBe('Opus 5.5 · 평소 쓰기 좋은 모델')
+    // 이름표는 별칭과 고정 사이에 한 번
+    const all = Array.from(menu.querySelectorAll('.mi, .pop-group'))
+    expect(all[5].textContent).toBe('버전 고정')
+    expect(menu.querySelectorAll('.pop-group')).toHaveLength(1)
+    items[4].focus()
+    fireEvent.keyDown(items[4], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(items[5])
+    // 저장은 값 그대로
+    await act(async () => { fireEvent.click(items[5]) })
+    await settle()
+    expect(api.setModel).toHaveBeenCalledWith('w', 'claude-opus-4-8')
+  })
+
+  it('별칭만 있으면 이름표가 없다', async () => {
+    api.describe.mockResolvedValue({ ...LIST, models: LIST.models.slice(0, 5) })
+    await renderPanel()
+    await openPicker()
+    expect(document.querySelector('.pop-group')).toBeNull()
+    expect(screen.getAllByRole('menuitemradio')).toHaveLength(5)
+  })
+
   it('modelText — 값으로 한국어 이름·설명, 모르는 값은 Claude 이름만', async () => {
     const { modelText } = await import('../../src/renderer/lib/words')
     expect(modelText('default', 'Default (recommended)')).toEqual({ name: '기본 (추천)', description: '평소 쓰기 좋은 모델' })

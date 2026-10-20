@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ago, elapsed, fieldError, josa, lasting, localSummary, resetText, tokensText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
+import { ago, elapsed, fieldError, josa, lasting, localSummary, modelText, modelVersionName, resetText, tokensText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
 
 describe('fieldError — 엔진 오류를 칸 아래 안내로', () => {
   it('이름 겹침은 해요체로, 다음 할 일까지 — 받침 따라 이라는/라는, 모르면 (이)라는', () => {
@@ -116,5 +116,33 @@ describe('tokensText', () => {
   it('10만 이상은 반올림 정수', () => {
     expect(tokensText(340000)).toBe('34만')
     expect(tokensText(1000000)).toBe('100만')
+  })
+})
+
+describe('modelVersionName · modelText — 모델 이름에 버전', () => {
+  it('모델 id 에서 이름+버전', () => {
+    expect(modelVersionName('claude-opus-5-5')).toBe('Opus 5.5')
+    expect(modelVersionName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
+    expect(modelVersionName('claude-opus-5')).toBe('Opus 5')
+    expect(modelVersionName('claude-opus-5[1m]')).toBe('Opus 5 (긴 대화)')
+    expect(modelVersionName('claude-fable-5-1')).toBe('Fable 5.1')
+    expect(modelVersionName('gpt-4')).toBeNull()
+  })
+
+  it('default 는 기본 (추천) + 뒤의 모델 버전', () => {
+    expect(modelText('default', 'Default (recommended)', 'claude-opus-5-5')).toEqual({ name: '기본 (추천)', description: 'Opus 5.5 · 평소 쓰기 좋은 모델' })
+    expect(modelText('default')).toEqual({ name: '기본 (추천)', description: '평소 쓰기 좋은 모델' })
+  })
+
+  it('별칭은 버전이 붙은 이름 — 목록을 받기 전엔 계열 이름만, 옛 claude 도 같은 규칙', () => {
+    expect(modelText('opus', 'Opus 5.5', 'claude-opus-5-5').name).toBe('Opus 5.5')
+    expect(modelText('opus').name).toBe('Opus')
+    expect(modelText('opus', 'Opus', 'claude-opus-5').name).toBe('Opus 5')
+    expect(modelText('opus[1m]', 'Opus (1M context)', 'claude-opus-5[1m]').name).toBe('Opus 5 (긴 대화)')
+    expect(modelText('fable').description).toBe('가장 어렵고 오래 걸리는 일에 맞는 모델')
+  })
+
+  it('버전 고정 모델은 이름은 버전, 설명은 계열', () => {
+    expect(modelText('claude-opus-4-8', 'Opus 4.8', 'claude-opus-4-8')).toEqual({ name: 'Opus 4.8', description: '어려운 일에 가장 똑똑한 모델' })
   })
 })

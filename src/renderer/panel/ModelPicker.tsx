@@ -51,7 +51,11 @@ export function ModelPicker({ agentId, model, description, onLoad, onRetry, open
   const current = model ?? 'default'
   const models = description.state === 'ready' ? description.value.models : null
   // 칩 이름은 describe 없이도 — 목록을 받았으면 모르는 값은 Claude 가 준 이름으로
-  const label = modelText(current, models?.find(m => m.value === current)?.displayName).name
+  const found = models?.find(m => m.value === current)
+  const label = modelText(current, found?.displayName, found?.resolvedModel).name
+  // 늘 최신인 별칭이 위, 예전 버전(claude-…)은 '버전 고정' 아래 — 둘 다 서버 순서 그대로
+  const latest = models?.filter(m => !m.value.startsWith('claude-')) ?? []
+  const pinned = models?.filter(m => m.value.startsWith('claude-')) ?? []
 
   // 목록이 열리면(칩·/model 어느 쪽이든) 그때 처음 describe
   useEffect(() => {
@@ -118,8 +122,15 @@ export function ModelPicker({ agentId, model, description, onLoad, onRetry, open
           onKeyDown={onKey}
         >
           {models ? (
-            models.map(m => {
-              const t = modelText(m.value, m.displayName)
+            [...latest, null, ...pinned].map(m => {
+              if (m === null) {
+                return pinned.length > 0 ? (
+                  <div key="pinned" className="pop-group" role="presentation">
+                    버전 고정
+                  </div>
+                ) : null
+              }
+              const t = modelText(m.value, m.displayName, m.resolvedModel)
               return (
                 <button
                   key={m.value}

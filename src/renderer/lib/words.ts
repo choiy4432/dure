@@ -23,18 +23,45 @@ export function initial(name: string): string {
   return Array.from(name.trim())[0]?.toUpperCase() ?? '?'
 }
 
+const FAMILY_NAME = { opus: 'Opus', sonnet: 'Sonnet', haiku: 'Haiku', fable: 'Fable' } as const
+const FAMILY_DESC: Record<string, string> = {
+  opus: '어려운 일에 가장 똑똑한 모델',
+  sonnet: '빠르고 균형 잡힌 모델',
+  haiku: '가장 빠르고 가벼운 모델',
+  fable: '가장 어렵고 오래 걸리는 일에 맞는 모델',
+}
+const MODEL_ID = /^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(\[1m\])?$/
+
+/** 모델 id → 'Opus 5.5' · 'Haiku 4.5' · 'Opus 5 (긴 대화)'. id 가 아니면 null */
+export function modelVersionName(id: string): string | null {
+  const m = MODEL_ID.exec(id)
+  if (!m) return null
+  const family = FAMILY_NAME[m[1] as keyof typeof FAMILY_NAME]
+  return `${family} ${m[2]}${m[3] ? `.${m[3]}` : ''}${m[4] ? ' (긴 대화)' : ''}`
+}
+
+// 'Opus 5.5' 처럼 띄어 쓴 숫자 낱말이 있는 이름만 버전 이름으로 본다('Opus (1M context)' 는 아니다)
+const HAS_VERSION = /(?:^|\s)\d+(?:\.\d+)?(?:\s|$)/
+
 /**
- * 모델 이름·설명 — Claude 가 주는 이름·설명은 영어라 값(value)으로 한국어를 고른다.
- * 모르는 값은 Claude 가 준 이름(없으면 값 그대로)만, 설명은 없다(영어 설명은 보이지 않는다).
+ * 모델 이름·설명 — Claude 가 주는 설명은 영어라 값(value)으로 한국어를 고른다.
+ * 이름은 모델 id(resolvedModel) 에서 뽑은 버전 이름 > 버전이 든 Claude 이름 > 계열 이름 > Claude 이름·값.
  * describe 전에도 쓴다 — 패널 머리의 모델 칩은 agent.model 만으로 이름을 정한다.
  */
-export function modelText(value: string, displayName?: string): { name: string; description: string | null } {
-  const long = value.includes('[1m]') ? ' (긴 대화)' : ''
-  if (value === 'default') return { name: '기본 (추천)', description: '평소 쓰기 좋은 모델' }
-  if (value.startsWith('opus')) return { name: `Opus${long}`, description: '어려운 일에 가장 똑똑한 모델' }
-  if (value.startsWith('sonnet')) return { name: `Sonnet${long}`, description: '빠르고 균형 잡힌 모델' }
-  if (value.startsWith('haiku')) return { name: `Haiku${long}`, description: '가장 빠르고 가벼운 모델' }
-  return { name: displayName || value, description: null }
+export function modelText(value: string, displayName?: string, resolvedModel?: string): { name: string; description: string | null } {
+  const versioned = modelVersionName(resolvedModel ?? value)
+  if (value === 'default') {
+    return { name: '기본 (추천)', description: versioned ? `${versioned} · 평소 쓰기 좋은 모델` : '평소 쓰기 좋은 모델' }
+  }
+  const family = /^(?:claude-)?(opus|sonnet|haiku|fable)/.exec(value)?.[1] ?? /^claude-(opus|sonnet|haiku|fable)/.exec(resolvedModel ?? '')?.[1]
+  const description = family ? FAMILY_DESC[family] : null
+  if (versioned) return { name: versioned, description }
+  if (displayName && HAS_VERSION.test(displayName)) return { name: displayName, description }
+  if (family) {
+    const long = value.includes('[1m]') ? ' (긴 대화)' : ''
+    return { name: `${FAMILY_NAME[family as keyof typeof FAMILY_NAME]}${long}`, description }
+  }
+  return { name: displayName || value, description }
 }
 
 /** 엔진 오류를 화면에 그대로 — 엔진의 한국어 문구만 온다(스택은 오지 않는다) */

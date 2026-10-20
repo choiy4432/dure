@@ -191,9 +191,10 @@ async function control(msg) {
     await ok({
       commands: [{ name: 'compact', description: '대화 요약', argumentHint: '' }],
       models: [
-        { value: 'default', displayName: 'Default', supportsEffort: true, supportedEffortLevels: levels },
-        { value: 'sonnet', displayName: 'Sonnet', description: '빠름', resolvedModel: 'fake-sonnet', supportsEffort: true, supportedEffortLevels: levels },
-        { value: 'haiku', displayName: 'Haiku' },
+        { value: 'default', displayName: 'Default', resolvedModel: 'claude-sonnet-5-5', supportsEffort: true, supportedEffortLevels: levels },
+        { value: 'sonnet', displayName: 'Sonnet 5.5', description: '빠름', resolvedModel: 'claude-sonnet-5-5', supportsEffort: true, supportedEffortLevels: levels },
+        { value: 'haiku', displayName: 'Haiku 5.5', resolvedModel: 'claude-haiku-5-5' },
+        { value: 'claude-opus-4-8', displayName: 'Opus 4.8', resolvedModel: 'claude-opus-4-8' },
       ],
       current_permission_mode: permissionMode,
       account: { email: 'fake-user@example.com', subscriptionType: 'max' }, // 진짜처럼 — 엔진은 버려야 한다

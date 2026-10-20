@@ -638,9 +638,10 @@ test('describe → commands·models, account 없음', async () => {
   expect(d).toEqual({
     commands: [{ name: 'compact', description: '대화 요약', argumentHint: '' }],
     models: [
-      { value: 'default', displayName: 'Default', supportsEffort: true, effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
-      { value: 'sonnet', displayName: 'Sonnet', description: '빠름', supportsEffort: true, effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] }, // resolvedModel 같은 나머지 필드는 버린다
-      { value: 'haiku', displayName: 'Haiku' },
+      { value: 'default', displayName: 'Default', resolvedModel: 'claude-sonnet-5-5', supportsEffort: true, effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      { value: 'sonnet', displayName: 'Sonnet 5.5', description: '빠름', resolvedModel: 'claude-sonnet-5-5', supportsEffort: true, effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'] },
+      { value: 'haiku', displayName: 'Haiku 5.5', resolvedModel: 'claude-haiku-5-5' },
+      { value: 'claude-opus-4-8', displayName: 'Opus 4.8', resolvedModel: 'claude-opus-4-8' },
     ],
     permissionMode: 'default',
   });
