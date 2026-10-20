@@ -1,4 +1,4 @@
-import type { MouseEvent } from 'react'
+import { memo, type MouseEvent } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -59,8 +59,9 @@ const COMPONENTS: Components = {
  * 마크다운 글(GFM) — Claude 답·받은 메시지 본문.
  * `caret` 이면 마지막 글 끝에 깜빡이는 커서(흐르는 글).
  * 원시 HTML 은 요소로 그리지 않고 글자 그대로 둔다. 코드는 mono 글꼴(base.css 의 code).
+ * 글·커서가 같으면 다시 읽지 않는다(memo) — 흐르는 글은 델타마다 줄이 다시 그려져도 한 장에 한 번만 읽힌다.
  */
-export function Markdown({ text, caret = false }: { text: string; caret?: boolean }) {
+export const Markdown = memo(function Markdown({ text, caret = false }: { text: string; caret?: boolean }) {
   return (
     <div className="md">
       <ReactMarkdown remarkPlugins={PLUGINS} rehypePlugins={caret ? CARET_PLUGINS : undefined} components={COMPONENTS}>
@@ -68,4 +69,4 @@ export function Markdown({ text, caret = false }: { text: string; caret?: boolea
       </ReactMarkdown>
     </div>
   )
-}
+})

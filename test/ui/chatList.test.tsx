@@ -247,6 +247,37 @@ describe('ChatList — 흐르는 글의 마크다운', () => {
     const live = conv().querySelector('.ci-live') as HTMLElement
     expect(live).toHaveTextContent('조각0 조각1 조각2 조각3 조각4 조각5 조각6 조각7 조각8 조각9')
   })
+
+  it('한 장 안에 델타가 열 번 와도 마크다운은 그 장에 한 번만 읽는다 — 마지막 글까지', async () => {
+    // 마크다운 읽기(react-markdown 그리기) 횟수를 센다 — 진짜를 그대로 부른다
+    const parsed: string[] = []
+    vi.doMock('react-markdown', async () => {
+      const real = await vi.importActual<typeof import('react-markdown')>('react-markdown')
+      const Real = real.default
+      const Counted = (props: Parameters<typeof Real>[0]) => {
+        parsed.push(String(props.children))
+        return <Real {...props} />
+      }
+      return { ...real, default: Counted }
+    })
+    try {
+      await renderPanel()
+      await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '시작 ' } })
+      await frames()
+      parsed.length = 0
+      // 델타마다 따로 그린다(IPC 사건 하나 = 한 번 그리기) — 장(animation frame)이 오기 전
+      for (let i = 0; i < 10; i++) {
+        act(() => (handlers['agent-event'] ?? []).forEach(f => f({ agentId: 'w', event: { kind: 'text-delta', text: `조각${i} ` } })))
+      }
+      expect(parsed).toEqual([])
+      await frames()
+      const all = '시작 조각0 조각1 조각2 조각3 조각4 조각5 조각6 조각7 조각8 조각9 '
+      expect(parsed).toEqual([all])
+      expect(conv().querySelector('.ci-live')).toHaveTextContent(all.trim())
+    } finally {
+      vi.doUnmock('react-markdown')
+    }
+  })
 })
 
 describe('ChatList — 새 대화', () => {
