@@ -43,5 +43,8 @@
     "esbuild@0.28.2": true
   },
   "main": "out/main/index.js",
-  "productName": "Dure"
+  "productName": "Dure",
+  "dependencies": {
+    "animejs": "4.5.0"
+  }
 }

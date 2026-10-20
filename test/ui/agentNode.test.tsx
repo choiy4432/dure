@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, fireEvent, cleanup } from '@testing-library/react'
 import type { Decision, EngineEventMap, PendingRequest, RelayMessage } from '../../src/engine/types'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
+import { allowMotion } from './motion'
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
@@ -246,6 +247,7 @@ describe('AgentNode — 넘김 서명: 메시지가 도착하면 받는 노드 �
   // jsdom 엔 Web Animations 가 없다 — 부른 것만 센다
   let animate: ReturnType<typeof vi.fn>
   beforeEach(() => {
+    allowMotion() // 움직임 경로 시험 — setup.ts 기본값(움직임 줄이기)을 이 묶음에서만 끈다
     animate = vi.fn(() => ({ cancel: vi.fn() }))
     ;(HTMLElement.prototype as any).animate = animate
   })

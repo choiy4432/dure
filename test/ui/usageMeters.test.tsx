@@ -21,8 +21,9 @@ beforeEach(() => {
   narrow = false
   usage = null
   refreshUsage = vi.fn(async () => {})
+  // 좁은 창 질문은 narrow 로, 움직임 줄이기 질문은 늘 맞다고(setup.ts 기본값과 같게 — 이 시험은 움직이지 않는다)
   window.matchMedia = ((q: string) => ({
-    matches: narrow, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {},
+    matches: q === '(prefers-reduced-motion: reduce)' ? true : narrow, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {},
     onchange: null, dispatchEvent: () => false,
   })) as any
   ;(window as any).dure = {
