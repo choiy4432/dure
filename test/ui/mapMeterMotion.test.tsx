@@ -129,9 +129,24 @@ describe('사용량 막대', () => {
     const c = calls(fill)[0]
     expect(c).toBeTruthy()
     const p = c[1] as any
-    expect(p.width).toEqual(['30%', '60%'])
+    expect(p.width).toBe('60%') // 시작 값을 주지 않는다 — 지금 너비에서 이어 간다
     expect(p.duration).toBe(700)
     expect(p.ease).toBe('outQuint')
+    restore()
+  })
+
+  it('움직이는 중에 새 값이 오면 옛 끝 값으로 되돌아가지 않고 지금 너비에서 이어 간다', async () => {
+    allowMotion()
+    const restore = fastMotion(1)
+    const r = await mountUsage()
+    emit('usage', plan(30))
+    const fill = r.container.querySelector('.usg-bar > span') as HTMLElement
+    emit('usage', plan(60))
+    emit('usage', plan(90))
+    const all = calls(fill)
+    expect(all).toHaveLength(2)
+    for (const c of all) expect(Array.isArray((c[1] as any).width)).toBe(false)
+    expect((all[1][1] as any).width).toBe('90%')
     restore()
   })
 

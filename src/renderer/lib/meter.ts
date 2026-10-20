@@ -18,7 +18,8 @@ export function useMeterWidth(ref: RefObject<HTMLElement | null>, percent: numbe
       el.style.width = `${percent}%`
       return
     }
-    animate(el, { width: [`${was}%`, `${percent}%`], duration: ms, ease: 'outQuint' })
+    // 끝 값만 준다 — 움직이는 중에 새 값이 와도 지금 보이는 너비에서 이어 간다
+    animate(el, { width: `${percent}%`, duration: ms, ease: 'outQuint' })
   }, [ref, percent, ms])
   useLayoutEffect(() => () => void (ref.current && utils.remove(ref.current)), [ref])
 }
