@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import { UsageWatcher, USAGE_TIMING } from '../src/engine/usageWatcher';
+import { RESET_GRACE_MS, UsageWatcher, USAGE_TIMING } from '../src/engine/usageWatcher';
 import { toPlanUsage } from '../src/engine/usage';
 import type { ClaudeSession } from '../src/engine/claudeSession';
 import type { PlanUsage } from '../src/engine/types';
@@ -15,6 +15,15 @@ const RAW = {
 };
 const ANSWER_MS = 10;
 const USAGE_REQ = { subtype: 'get_usage', skip_behaviors: true };
+const MIN = 60_000;
+/** 5시간 창·1주 창의 초기화가 지금부터 ms 뒤인 답 — null 이면 그 창엔 초기화 시각이 없다 */
+const rawResets = (session: number | null, week: number | null) => {
+  const at = (ms: number | null) => (ms === null ? {} : { resets_at: new Date(Date.now() + ms).toISOString() });
+  return {
+    rate_limits_available: true,
+    rate_limits: { limits: [{ kind: 'session', percent: 100, ...at(session) }, { kind: 'weekly_all', percent: 34, ...at(week) }] },
+  };
+};
 
 /**
  * ClaudeSession 흉내 — 답은 ANSWER_MS 뒤, hang 이면 진짜처럼 timeoutMs 뒤 거부, stop() 은 남은 요청을 거부한다.
@@ -105,6 +114,7 @@ afterEach(() => {
 describe('usage: UsageWatcher', () => {
   test('시간 값은 정해진 그대로', () => {
     expect(USAGE_TIMING).toEqual({ startDelayMs: 2000, pollMs: 300_000, minAgeMs: 60_000, timeoutMs: 15_000 });
+    expect(RESET_GRACE_MS).toBe(5000);
   });
 
   test('start() 2000 ms 뒤 한 번 받는다 — 세션이 없으면 사용량 전용 프로세스를 띄워 묻고 답 뒤 끈다', async () => {
@@ -317,6 +327,80 @@ describe('usage: UsageWatcher', () => {
     await vi.advanceTimersByTimeAsync(ANSWER_MS);
     await again;
     expect(h.emitted).toHaveLength(2);
+    expect(h.probes).toHaveLength(1);
+  });
+});
+
+describe('usage: 초기화 시각이 지나면 다시 묻는다', () => {
+  test('답의 가장 이른 앞으로의 초기화 시각 + 5 초에 한 번 — 받은 답으로 다시 건다(하나만)', async () => {
+    const h = harness({ probe: () => fakeSession({ raw: rawResets(10 * MIN, 3 * 86_400_000) }) });
+    await Promise.all([h.w.refresh(), vi.advanceTimersByTimeAsync(ANSWER_MS)]); // 묻기는 ANSWER_MS 전에 시작
+    expect(h.emitted).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10 * MIN + RESET_GRACE_MS - ANSWER_MS - 1);
+    expect(h.probes).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.probes).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(ANSWER_MS);
+    expect(h.emitted).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  test('새 답이 오면 전에 건 것을 바꾼다 — 옛 시각엔 묻지 않는다', async () => {
+    let n = 0;
+    const h = harness({ probe: () => fakeSession({ raw: rawResets(++n === 1 ? 10 * MIN : 30 * MIN, null) }) });
+    await Promise.all([h.w.refresh(), vi.advanceTimersByTimeAsync(ANSWER_MS)]);
+    await vi.advanceTimersByTimeAsync(MIN);
+    await Promise.all([h.w.refresh(), vi.advanceTimersByTimeAsync(ANSWER_MS)]);
+    expect(h.probes).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(20 * MIN); // 첫 답의 10 분 + 5 초는 지났다
+    expect(h.probes).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(11 * MIN); // 둘째 답의 30 분 + 5 초가 지났다
+    expect(h.probes).toHaveLength(3);
+  });
+
+  test('초기화 시각이 없거나 이미 지났으면 걸지 않는다 · 모르는 모양(null)이면 전에 건 것도 지운다', async () => {
+    let n = 0;
+    const raws = [rawResets(10 * MIN, null), rawResets(-MIN, null), { rate_limits_available: false }];
+    const h = harness({ probe: () => fakeSession({ raw: raws[n++] }) });
+    await Promise.all([h.w.refresh(), vi.advanceTimersByTimeAsync(ANSWER_MS)]);
+    expect(vi.getTimerCount()).toBe(1);
+    await Promise.all([h.w.refresh(), vi.advanceTimersByTimeAsync(ANSWER_MS)]);
+    expect(vi.getTimerCount()).toBe(0);
+    await Promise.all([h.w.refresh(), vi.advanceTimersByTimeAsync(ANSWER_MS)]);
+    expect(h.emitted.at(-1)).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(h.probes).toHaveLength(3);
+  });
+
+  test('아주 먼 초기화 시각(60일)이어도 곧바로 묻지 않는다', async () => {
+    const h = harness({ probe: () => fakeSession({ raw: rawResets(60 * 86_400_000, null) }) });
+    await Promise.all([h.w.refresh(), vi.advanceTimersByTimeAsync(ANSWER_MS)]);
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(h.probes).toHaveLength(1);
+  });
+
+  test('묻는 중에 그 시각이 와도 요청은 하나 — 한 번에 하나만', async () => {
+    let n = 0;
+    const h = harness({ probe: () => fakeSession({ raw: rawResets(++n === 1 ? MIN : 10 * MIN, null) }) });
+    await Promise.all([h.w.refresh(), vi.advanceTimersByTimeAsync(ANSWER_MS)]);
+    await vi.advanceTimersByTimeAsync(MIN + RESET_GRACE_MS - ANSWER_MS - 5); // 걸어 둔 시각 5 ms 전
+    const p = h.w.refresh();
+    expect(h.probes).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(ANSWER_MS); // 그 사이 걸어 둔 시각이 온다
+    await p;
+    expect(h.probes).toHaveLength(2);
+    expect(h.emitted).toHaveLength(2);
+  });
+
+  test('stop() 은 걸어 둔 다시 묻기를 지운다', async () => {
+    const h = harness({ probe: () => fakeSession({ raw: rawResets(10 * MIN, null) }) });
+    await Promise.all([h.w.refresh(), vi.advanceTimersByTimeAsync(ANSWER_MS)]);
+    expect(vi.getTimerCount()).toBe(1);
+    await h.w.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(3_600_000);
     expect(h.probes).toHaveLength(1);
   });
 });

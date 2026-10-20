@@ -17,6 +17,11 @@ export interface UsageTiming {
 
 export const USAGE_TIMING: UsageTiming = { startDelayMs: 2000, pollMs: 300_000, minAgeMs: 60_000, timeoutMs: 15_000 };
 
+/** 창의 초기화 시각이 지나고 이만큼 뒤에 다시 묻는다(한가해도) — 지난 값이 '곧 초기화'로 남지 않게 */
+export const RESET_GRACE_MS = 5_000;
+/** setTimeout 이 받는 가장 긴 대기 — 넘기면 Node 는 곧바로(1 ms) 부른다 */
+const MAX_DELAY_MS = 2 ** 31 - 1;
+
 export interface UsageWatcherDeps {
   /** 떠 있는(idle·working) 에이전트 세션 아무거나 — 없으면 null */
   liveSession(): ClaudeSession | null;
@@ -37,6 +42,7 @@ export class UsageWatcher {
   private probes = new Set<ClaudeSession>();
   private startTimer: ReturnType<typeof setTimeout> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private resetTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
 
   constructor(private d: UsageWatcherDeps) {}
@@ -80,8 +86,10 @@ export class UsageWatcher {
     this.stopped = true;
     if (this.startTimer) clearTimeout(this.startTimer);
     if (this.pollTimer) clearInterval(this.pollTimer);
+    if (this.resetTimer) clearTimeout(this.resetTimer);
     this.startTimer = null;
     this.pollTimer = null;
+    this.resetTimer = null;
     // 끄는 중인 것도 다시 stop() — 같은 끝을 기다린다(ClaudeSession.stop 은 두 번 불러도 된다)
     await Promise.all([...this.probes].map((p) => p.stop().catch(() => undefined)));
   }
@@ -105,12 +113,25 @@ export class UsageWatcher {
       const at = this.d.now();
       this.value = toPlanUsage(raw, at);
       this.receivedAt = at;
+      this.armReset(this.value, at);
       this.d.emit(this.value);
     } catch {
       /* 실패·시간 초과·세션 종료 — 전 값 그대로, 다음 계기(차례 끝·주기·펼침)에 다시 묻는다 */
     } finally {
       if (probe) this.endProbe(probe); // 답을 받았든 못 받았든 바로 끈다
     }
+  }
+
+  /** 가장 이른 앞으로의 초기화 시각 + RESET_GRACE_MS 에 한 번 다시 묻는다 — 전에 건 것은 바꾼다(없으면 지운다) */
+  private armReset(u: PlanUsage | null, now: number): void {
+    if (this.resetTimer) clearTimeout(this.resetTimer);
+    this.resetTimer = null;
+    const next = Math.min(...(u?.windows ?? []).map((w) => (w.resetsAt !== null && w.resetsAt > now ? w.resetsAt : Infinity)));
+    if (!Number.isFinite(next)) return;
+    this.resetTimer = setTimeout(() => {
+      this.resetTimer = null;
+      void this.refresh(); // 묻는 중이면 그 약속에 붙는다 — 한 번에 하나만
+    }, Math.min(next + RESET_GRACE_MS - now, MAX_DELAY_MS));
   }
 
   /** 끄기를 기다리지 않는다 — 끄기가 멈춰도 다음 받기(inflight)를 막지 않게. 끝나면 놓는다 */
