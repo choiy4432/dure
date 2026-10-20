@@ -172,6 +172,21 @@ describe('EffortControl — 펼침', () => {
     expect(setEffort).toHaveBeenCalledWith('w', 'low')
   })
 
+  it('눈금을 누른 뒤에도 ← 로 이어서 움직인다 — 초점은 슬라이더에 남는다', () => {
+    vi.useFakeTimers()
+    mount({ effortNow: 'high' })
+    open()
+    expect(document.activeElement).toBe(slider())
+    const tick = screen.getByRole('button', { name: 'max' })
+    // 브라우저처럼 — 누르면(mousedown) 기본 동작으로 단추가 초점을 받는다, 막았으면 받지 않는다
+    if (fireEvent.mouseDown(tick)) tick.focus()
+    fireEvent.click(tick)
+    expect(slider().getAttribute('aria-valuetext')).toBe('max')
+    expect(document.activeElement).toBe(slider())
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' })
+    expect(slider().getAttribute('aria-valuetext')).toBe('xhigh')
+  })
+
   it('Esc 로 닫고 칩으로 돌아간다', () => {
     mount({ effortNow: 'high' })
     open()

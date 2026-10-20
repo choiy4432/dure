@@ -245,7 +245,12 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
                       tabIndex={-1}
                       className={`eff-tick${l === EFFORT_LEVELS[index] ? ' on' : ''}`}
                       aria-disabled={allowed(l) ? undefined : true}
-                      onClick={() => choose(l)}
+                      // 눌러도 초점은 슬라이더에 — 단추로 옮겨 가면 ←/→ 가 더는 움직이지 않는다
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => {
+                        choose(l)
+                        slider.current?.focus()
+                      }}
                     >
                       {l}
                     </button>
