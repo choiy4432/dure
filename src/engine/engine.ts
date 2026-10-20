@@ -13,8 +13,9 @@ import { Permissions } from './permissions';
 import { DENY } from '../shared/denyTexts';
 import { Router, AUTO_CHAIN_LIMIT } from './router';
 import { EFFORT_LEVELS, type EffortLevel } from './types';
+import { toContextUsage } from './usage';
 import type {
-  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, Decision, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, RelayMessage, Room, RoomId, StreamEvent, UserPart,
+  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, ContextUsage, Decision, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, RelayMessage, Room, RoomId, StreamEvent, UserPart,
 } from './types';
 
 export interface EngineOptions {
@@ -35,6 +36,7 @@ export interface EngineOptions {
 //  'history'     { agentId; item: HistoryItem }   (대화 기록에 한 항목이 더해질 때마다 — text-delta·init·rate-limit 은 기록하지 않는다)
 //  'held-input'  { agentId; count }   (보낼 차례를 기다리는 사람 입력 수가 바뀔 때마다)
 //  'effort'      { agentId; effort; effortNow }   (고른 값이 바뀌거나 Claude 에게 지금 값을 읽을 때마다)
+//  'context'     { agentId; value: ContextUsage | null }   (차례 끝에 대화 공간을 받았을 때 · 요약·새 대화 직후엔 null)
 //  'engine-error' { agentId: string | null; message: string }  (프로세스 이벤트 처리·듣는 쪽에서 난 오류 — 앱을 죽이지 않고 알린다)
 export interface Engine extends EventEmitter {
   /** autoStart: false 로 만들었을 때 대기 메시지 전달을 시작한다(여러 번 불러도 한 번만) */
@@ -98,6 +100,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private removing = new Set<AgentId>();
   private bypass = new Map<AgentId, boolean>(); // 마지막 init 의 권한 모드
   private effortNows = new Map<AgentId, EffortLevel>(); // Claude 에게 마지막으로 읽은 지금 effort
+  private compactedTurn = new WeakSet<ClaudeSession>(); // 이번 차례에 요약됨 — 그 차례의 result 뒤엔 값을 받지 않는다
   private started = false;
   private limit: number;
   private closed = false;
@@ -277,6 +280,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const ending = this.endSession(id);
     this.guard(id, () => this.record(id, { kind: 'boundary' }));
     this.store.updateAgent(id, { sessionId: crypto.randomUUID(), started: false });
+    this.guard(id, () => this.setContext(id, null));
     this.emitStatus(id);
     await ending;
     // 끝낸 세션이 못 읽었거나 기다리던 사람 입력은 새 대화로 보낸다 — 두면 사람이 다시 칠 때까지 멈춰 있고 메시지도 쌓인다
@@ -476,7 +480,7 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /** 저장된 effort 가 있으면 적용하고, 이어서 Claude 의 지금 값을 읽는다 — 실패·시간 초과는 정상 흐름이라 조용히 넘어간다 */
   private async syncEffort(id: AgentId, s: ClaudeSession): Promise<void> {
-    const live = () => this.sessions.get(id) === s && !this.removing.has(id) && !!this.store.agent(id);
+    const live = () => this.live(id, s);
     try {
       const want = this.store.agent(id)?.effort;
       if (want) await s.request({ subtype: 'apply_flag_settings', settings: { effortLevel: want } });
@@ -491,6 +495,29 @@ class EngineImpl extends EventEmitter implements Engine {
     }
   }
 
+  /** 차례 끝에 대화 공간을 받는다 — 실패·모르는 모양·그새 바뀐 세션이면 조용히 넘어간다 */
+  private async fetchContext(id: AgentId, s: ClaudeSession): Promise<void> {
+    try {
+      const raw = await s.request({ subtype: 'get_context_usage', detail: 'summary' });
+      if (!this.live(id, s)) return;
+      const value = toContextUsage(raw, Date.now());
+      if (value) this.guard(id, () => this.setContext(id, value));
+    } catch {
+      /* 요청 실패·세션 종료 — 링은 마지막 값 그대로 */
+    }
+  }
+
+  private setContext(id: AgentId, value: ContextUsage | null): void {
+    if (this.removing.has(id) || !this.store.agent(id)) return;
+    this.store.updateAgent(id, { lastContext: value });
+    this.emit('context', { agentId: id, value });
+  }
+
+  /** 늦게 온 답을 받아도 되는가 — 그 세션이 아직 그 에이전트의 세션이고 에이전트도 있다 */
+  private live(id: AgentId, s: ClaudeSession): boolean {
+    return this.sessions.get(id) === s && !this.removing.has(id) && !!this.store.agent(id);
+  }
+
   private emitEffort(id: AgentId): void {
     if (this.removing.has(id)) return;
     const a = this.store.agent(id);
@@ -500,6 +527,11 @@ class EngineImpl extends EventEmitter implements Engine {
 
   private onEvent(id: AgentId, ev: StreamEvent): void {
     if (ev.kind === 'control-response') return; // 내부 응답 — initialize 의 account 같은 것이 밖으로 새지 않게
+    if (ev.kind === 'compacted') {
+      const cur = this.sessions.get(id);
+      if (cur) this.compactedTurn.add(cur);
+      this.guard(id, () => this.setContext(id, null));
+    }
     if (ev.kind === 'init') {
       // 저장이 실패해도 init 은 알린다 — started 는 다음 차례의 init 때 다시 쓴다
       this.guard(id, () => {
@@ -523,6 +555,14 @@ class EngineImpl extends EventEmitter implements Engine {
     if (ev.kind === 'result') {
       // 끝난 차례엔 살아 있는 권한 질문이 있을 수 없다 — 남은 것(떠난 프로세스의 호출 등)은 정리해야 다음 입력이 나간다
       this.perms.cancelForAgent(id, TURN_ENDED);
+      const cur = this.sessions.get(id);
+      if (cur) {
+        if (this.compactedTurn.delete(cur)) {
+          /* 요약한 차례 — 값을 받지 않는다(옛 값이 되살아나지 않게) */
+        } else {
+          void this.fetchContext(id, cur);
+        }
+      }
       this.pump(id);
     }
   }

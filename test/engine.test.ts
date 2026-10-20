@@ -1200,3 +1200,73 @@ test('effort: get_settings 답이 오기 전에 에이전트를 지우면 그 �
   expect(got.filter((x) => x.agentId === a.id)).toEqual([]);
   expect(e.effortNow(a.id)).toBeNull();
 });
+
+// ── context ──
+const contextEvents = (e: Engine) => {
+  const got: { agentId: string; value: any }[] = [];
+  e.on('context', (v) => got.push(v));
+  return got;
+};
+const RING = { total: 12000, max: 200000, percent: 6, autoCompactAt: 167000 };
+
+test('context: 차례가 끝나면 대화 공간을 받아 사건 + 저장, 엔진을 다시 열어도 남는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const ev = waitFor(e, 'context', (x: any) => x.agentId === a.id && x.value);
+  await e.sendUser(a.id, text('echo 하나'));
+  const got = await ev;
+  expect(got.value).toMatchObject(RING);
+  expect(typeof got.value.at).toBe('number');
+  expect(agentOf(e, a.id).lastContext).toMatchObject(RING);
+  expect(controlLines()).toContain('get_context_usage');
+  await e.shutdown();
+  const e2 = await start();
+  expect(agentOf(e2, a.id).lastContext).toMatchObject(RING);
+});
+
+test('context: /compact 는 값을 비우고 그 차례 뒤엔 받지 않는다 — 다음 차례 뒤엔 다시 값', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const first = waitFor(e, 'context', (x: any) => x.value);
+  await e.sendUser(a.id, text('echo 하나'));
+  await first;
+  const got = contextEvents(e);
+  const before = controlLines().filter((c) => c === 'get_context_usage').length;
+  const cleared = waitFor(e, 'context', (x: any) => x.value === null);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('/compact'));
+  await cleared;
+  await done;
+  await new Promise((r) => setTimeout(r, 300));
+  expect(controlLines().filter((c) => c === 'get_context_usage').length).toBe(before);
+  expect(got.map((x) => x.value)).toEqual([null]);
+  expect(agentOf(e, a.id).lastContext).toBeNull();
+  const again = waitFor(e, 'context', (x: any) => x.value);
+  await e.sendUser(a.id, text('echo 둘'));
+  expect((await again).value).toMatchObject(RING);
+});
+
+test('context: 새 대화는 값을 비운다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const first = waitFor(e, 'context', (x: any) => x.value);
+  await e.sendUser(a.id, text('echo 하나'));
+  await first;
+  const cleared = waitFor(e, 'context', (x: any) => x.value === null);
+  await e.newConversation(a.id);
+  expect((await cleared).agentId).toBe(a.id);
+  expect(agentOf(e, a.id).lastContext).toBeNull();
+});
+
+test('context: 답이 늦을 때 새 대화를 하면 늦게 온 값이 되살아나지 않는다', async () => {
+  const e = await start({ FAKE_SLOW_CONTROL_MS: '300' });
+  const { a } = setup(e);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나'));
+  await done;
+  const got = contextEvents(e);
+  await e.newConversation(a.id);
+  await new Promise((r) => setTimeout(r, 700));
+  expect(got.filter((x) => x.value !== null)).toEqual([]);
+  expect(agentOf(e, a.id).lastContext).toBeNull();
+});
