@@ -356,7 +356,7 @@ code {
   background: var(--danger);
 }
 
-.usg-pop {
+.pop.usg-pop {
   width: 250px;
   min-width: 0;
   padding: 12px 14px;
