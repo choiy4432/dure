@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { render, act, cleanup, waitFor } from '@testing-library/react'
-import { StrictMode, useRef } from 'react'
+import { StrictMode, createRef, useRef } from 'react'
 import { engine } from 'animejs'
 import { MOTION, type MotionSpec } from '../../src/renderer/lib/motion'
 import { Presence, PresenceList, MotionDiv, useLeaving, useMotion } from '../../src/renderer/lib/presence'
@@ -289,5 +289,60 @@ describe('PresenceList', () => {
     expect(getByTestId('m')).toBe(m)
     expect(m.hasAttribute('inert')).toBe(false)
     expect(m.style.opacity).toBe('')
+  })
+})
+
+describe('MotionDiv — 넘겨받은 ref', () => {
+  it('여러 목록이 같은 ref 를 나눠 쓸 때 — 앞 목록이 다 나가 떨어져도 ref 는 지금 열린 목록을 가리킨다', async () => {
+    allowMotion()
+    // 방 목록처럼 — 줄마다 메뉴가 있고 ref 하나(roomMenu)를 같이 쓴다. A 를 열었다가 B 를 열면 A 는 나가는 동안 남는다
+    const shared = createRef<HTMLDivElement>()
+    const Menus = ({ open }: { open: 'a' | 'b' | null }) => (
+      <>
+        <Presence show={open === 'a'}>
+          <MotionDiv motion={MOTION.pop} ref={shared} data-testid="a" />
+        </Presence>
+        <Presence show={open === 'b'}>
+          <MotionDiv motion={MOTION.pop} ref={shared} data-testid="b" />
+        </Presence>
+      </>
+    )
+    const { rerender, getByTestId, queryByTestId } = render(<Menus open={null} />)
+    rerender(<Menus open="a" />)
+    expect(shared.current).toBe(getByTestId('a'))
+    rerender(<Menus open="b" />)
+    const b = getByTestId('b')
+    expect(getByTestId('a').inert).toBe(true) // A 는 아직 나가는 중
+    expect(shared.current).toBe(b)
+    fastMotion()
+    await waitFor(() => expect(queryByTestId('a')).toBeNull())
+    expect(shared.current).toBe(b)
+  })
+
+  it('ref 함수가 정리 함수를 돌려주면 떨어질 때 그 정리 함수를 부른다 — null 로 다시 부르지 않는다(React 19)', () => {
+    const got: (HTMLDivElement | null)[] = []
+    const cleaned: HTMLDivElement[] = []
+    const take = (el: HTMLDivElement | null) => {
+      got.push(el)
+      return () => {
+        if (el) cleaned.push(el)
+      }
+    }
+    const { getByTestId, unmount } = render(<MotionDiv motion={MOTION.pop} ref={take} data-testid="p" />)
+    const p = getByTestId('p')
+    unmount()
+    expect(got).toEqual([p])
+    expect(cleaned).toEqual([p])
+  })
+
+  it('정리 함수가 없는 ref 함수는 지금처럼 떨어질 때 null 로 불린다', () => {
+    const got: (HTMLDivElement | null)[] = []
+    const take = (el: HTMLDivElement | null) => {
+      got.push(el)
+    }
+    const { getByTestId, unmount } = render(<MotionDiv motion={MOTION.pop} ref={take} data-testid="p" />)
+    const p = getByTestId('p')
+    unmount()
+    expect(got).toEqual([p, null])
   })
 })

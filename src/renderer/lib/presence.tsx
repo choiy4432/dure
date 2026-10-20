@@ -346,16 +346,29 @@ export function useMotion(
   }, [leaving, ref, id])
 }
 
-/** useMotion 을 건 div — 떠 있는 목록·대화상자·카드의 뿌리에 쓴다 */
+/**
+ * useMotion 을 건 div — 떠 있는 목록·대화상자·카드의 뿌리에 쓴다.
+ * 넘겨받은 ref 는 붙을 때 이 요소로 채우고, 떨어질 때는 아직 이 요소를 가리킬 때만 비운다 — 나가는 것은 늦게 떨어지므로
+ * 같은 ref 를 나눠 쓰는 다음 목록(방 줄마다의 메뉴)이 그사이 붙었으면 그대로 둔다. ref 함수가 정리 함수를 돌려주면(React 19) 그것을 부른다.
+ */
 export const MotionDiv = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement> & { motion: MotionSpec; origin?: string }>(
   function MotionDiv({ motion, origin, ...rest }, ref) {
     const inner = useRef<HTMLDivElement | null>(null)
     useMotion(inner, motion, { origin })
     const setRef = useCallback(
       (el: HTMLDivElement | null) => {
+        if (!el) return // 정리 함수를 돌려주므로 React 19 는 null 로 부르지 않는다
         inner.current = el
-        if (typeof ref === 'function') ref(el)
+        let back: unknown
+        if (typeof ref === 'function') back = (ref as (el: HTMLDivElement | null) => unknown)(el)
         else if (ref) ref.current = el
+        return () => {
+          if (inner.current === el) inner.current = null
+          if (typeof ref === 'function') {
+            if (typeof back === 'function') back()
+            else ref(null)
+          } else if (ref && ref.current === el) ref.current = null
+        }
       },
       [ref],
     )

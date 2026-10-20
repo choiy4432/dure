@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react'
+import { render, screen, act, fireEvent, cleanup, within, waitFor } from '@testing-library/react'
+import { allowMotion, fastMotion } from './motion'
 import type { Room } from '../../src/engine/types'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 
@@ -260,6 +261,23 @@ describe('RoomSwitcher — 방마다 메뉴', () => {
     await act(async () => { fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: '지우기' })) })
     await settle()
     expect(within(screen.getByRole('alertdialog')).getByText('방을 찾을 수 없습니다: r2')).toBeTruthy()
+  })
+
+  it('움직임 — A 방 메뉴를 열었다가 B 방 메뉴를 열면, A 가 다 나간 뒤에도 B 메뉴 안을 스크롤해도 B 는 열린 채', async () => {
+    allowMotion()
+    await renderApp()
+    const list = openList()
+    openRoomMenu(list, '여름 캠페인')
+    const b = openRoomMenu(list, '가을 행사')
+    const restore = fastMotion()
+    // A 메뉴는 나가는 동안 남았다가 떨어진다
+    await waitFor(() => expect(document.querySelector('[role="menu"][aria-label="여름 캠페인 메뉴"]')).toBeNull(), { timeout: 1500 })
+    restore()
+    // 메뉴 안 스크롤은 닫지 않는다 — 방 메뉴 ref 가 B 를 가리켜야 '안'으로 안다
+    fireEvent.scroll(b)
+    expect(b.isConnected).toBe(true)
+    expect(b.hasAttribute('inert')).toBe(false)
+    expect(within(list).getByRole('button', { name: '가을 행사 메뉴' }).getAttribute('aria-expanded')).toBe('true')
   })
 
   it('방 메뉴는 Esc 로 닫히고 포커스는 … 버튼으로', async () => {
