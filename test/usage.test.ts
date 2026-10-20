@@ -9,9 +9,9 @@ const real = {
   rate_limits_available: true,
   rate_limits: {
     limits: [
-      { kind: 'session', utilization: 2, resets_at: R1 },
-      { kind: 'weekly_all', utilization: 5, resets_at: R2 },
-      { kind: 'weekly_scoped', scope: { model: { display_name: 'Fable' } }, utilization: 0, resets_at: R2 },
+      { kind: 'session', percent: 2, resets_at: R1 },
+      { kind: 'weekly_all', percent: 5, resets_at: R2 },
+      { kind: 'weekly_scoped', scope: { model: { display_name: 'Fable' } }, percent: 0, resets_at: R2 },
     ],
     five_hour: { utilization: 2, resets_at: R1 },
     seven_day: { utilization: 5, resets_at: R2 },
@@ -65,23 +65,54 @@ describe('toPlanUsage', () => {
       rate_limits_available: true,
       rate_limits: {
         limits: [
-          { kind: 'session', utilization: '12', resets_at: R1 },
-          { kind: 'mystery', utilization: 3 },
-          { kind: 'weekly_scoped', scope: { model: { display_name: '' } }, utilization: 3 },
-          { kind: 'weekly_all', utilization: -4, resets_at: 'garbage' },
+          { kind: 'session', percent: '12', resets_at: R1 },
+          { kind: 'mystery', percent: 3 },
+          { kind: 'weekly_scoped', scope: { model: { display_name: '' } }, percent: 3 },
+          { kind: 'weekly_all', percent: -4, resets_at: 'garbage' },
         ],
       },
     };
     expect(toPlanUsage(raw, AT)!.windows).toEqual([{ key: 'week', label: '1주', percent: 0, resetsAt: null }]);
   });
 
+  test('limits array with no valid cells → null even with legacy fields', () => {
+    const raw = {
+      rate_limits_available: true,
+      rate_limits: { limits: [{ kind: 'mystery', percent: 3 }], five_hour: { utilization: 9, resets_at: R1 } },
+    };
+    expect(toPlanUsage(raw, AT)).toBeNull();
+  });
+
+  test('limits as object falls through to legacy fields', () => {
+    const raw = {
+      rate_limits_available: true,
+      rate_limits: { limits: {}, five_hour: { utilization: 9, resets_at: R1 } },
+    };
+    expect(toPlanUsage(raw, AT)!.windows).toEqual([{ key: 'session', label: '5시간', percent: 9, resetsAt: Date.parse(R1) }]);
+  });
+
+  test('legacy model_scoped bad cells skipped', () => {
+    const raw = {
+      rate_limits_available: true,
+      rate_limits: {
+        model_scoped: [
+          { display_name: '', utilization: 5 },
+          { display_name: 'X', utilization: '5' },
+          null,
+          { display_name: 'Ok', utilization: 7 },
+        ],
+      },
+    };
+    expect(toPlanUsage(raw, AT)!.windows).toEqual([{ key: 'model:Ok', label: 'Ok', percent: 7, resetsAt: null }]);
+  });
+
   test('at most 4 windows', () => {
     const scoped = ['A', 'B', 'C', 'D', 'E'].map((n) => ({
-      kind: 'weekly_scoped', scope: { model: { display_name: n } }, utilization: 1, resets_at: R1,
+      kind: 'weekly_scoped', scope: { model: { display_name: n } }, percent: 1, resets_at: R1,
     }));
     const raw = {
       rate_limits_available: true,
-      rate_limits: { limits: [{ kind: 'session', utilization: 1 }, { kind: 'weekly_all', utilization: 1 }, ...scoped] },
+      rate_limits: { limits: [{ kind: 'session', percent: 1 }, { kind: 'weekly_all', percent: 1 }, ...scoped] },
     };
     const w = toPlanUsage(raw, AT)!.windows;
     expect(w).toHaveLength(4);

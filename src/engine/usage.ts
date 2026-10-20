@@ -14,8 +14,8 @@ function num(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
-function cell(key: UsageWindow['key'], label: string, src: Rec | null): UsageWindow | null {
-  const pct = num(src?.utilization);
+function cell(key: UsageWindow['key'], label: string, src: Rec | null, field: 'percent' | 'utilization'): UsageWindow | null {
+  const pct = num(src?.[field]);
   if (pct === null) return null;
   const at = typeof src?.resets_at === 'string' ? Date.parse(src.resets_at) : NaN;
   return { key, label, percent: Math.max(0, Math.round(pct)), resetsAt: Number.isFinite(at) ? at : null };
@@ -33,14 +33,14 @@ function fromLimits(limits: unknown[]): UsageWindow[] {
     const l = rec(item);
     if (!l) continue;
     if (l.kind === 'session') {
-      const w = cell('session', '5시간', l);
+      const w = cell('session', '5시간', l, 'percent');
       if (w) session.push(w);
     } else if (l.kind === 'weekly_all') {
-      const w = cell('week', '1주', l);
+      const w = cell('week', '1주', l, 'percent');
       if (w) week.push(w);
     } else if (l.kind === 'weekly_scoped') {
       const name = modelName(rec(rec(rec(l.scope)?.model))?.display_name);
-      const w = name ? cell(`model:${name}`, name, l) : null;
+      const w = name ? cell(`model:${name}`, name, l, 'percent') : null;
       if (w) models.push(w);
     }
   }
@@ -49,14 +49,14 @@ function fromLimits(limits: unknown[]): UsageWindow[] {
 
 function fromLegacy(rl: Rec): UsageWindow[] {
   const out: (UsageWindow | null)[] = [
-    cell('session', '5시간', rec(rl.five_hour)),
-    cell('week', '1주', rec(rl.seven_day)),
+    cell('session', '5시간', rec(rl.five_hour), 'utilization'),
+    cell('week', '1주', rec(rl.seven_day), 'utilization'),
   ];
   if (Array.isArray(rl.model_scoped)) {
     for (const item of rl.model_scoped) {
       const m = rec(item);
       const name = modelName(m?.display_name);
-      out.push(name ? cell(`model:${name}`, name, m) : null);
+      out.push(name ? cell(`model:${name}`, name, m, 'utilization') : null);
     }
   }
   return out.filter((w): w is UsageWindow => w !== null);
