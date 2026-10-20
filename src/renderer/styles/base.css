@@ -279,6 +279,130 @@ code {
   flex: 1;
 }
 
+/* 사용량 — 위 띠 막대(한 단추) + 펼침 */
+.usg-wrap {
+  flex: none;
+}
+
+.usg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--radius-ctl);
+}
+
+.usg-btn:hover,
+.usg-btn[aria-expanded="true"] {
+  background: var(--hover);
+}
+
+.usg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.usg-l {
+  color: var(--text-3);
+}
+
+.usg b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.usg-bar,
+.usg-bl {
+  display: block;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+}
+
+.usg-bar {
+  width: 34px;
+  height: 5px;
+}
+
+.usg-bar > span,
+.usg-bl > span {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--muted);
+}
+
+.usg.warn b,
+.usg-row.warn b {
+  color: var(--warn-text);
+}
+
+.usg.warn .usg-bar > span,
+.usg-row.warn .usg-bl > span {
+  background: var(--warn);
+}
+
+.usg.danger b,
+.usg-row.danger b {
+  color: var(--danger-text);
+}
+
+.usg.danger .usg-bar > span,
+.usg-row.danger .usg-bl > span {
+  background: var(--danger);
+}
+
+.usg-pop {
+  width: 250px;
+  min-width: 0;
+  padding: 12px 14px;
+  font-size: 12px;
+}
+
+.usg-h {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.usg-h span {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.usg-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  margin-bottom: 10px;
+}
+
+.usg-row b {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.usg-bl {
+  grid-column: 1 / -1;
+  height: 6px;
+}
+
+.usg-rs {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.usg-at {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* 관계도 바탕 — 점 모눈 16px */
 .cv {
   position: relative;

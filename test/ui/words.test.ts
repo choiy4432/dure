@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ago, elapsed, fieldError, josa, lasting, localSummary } from '../../src/renderer/lib/words'
+import { ago, elapsed, fieldError, josa, lasting, localSummary, resetText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
 
 describe('fieldError — 엔진 오류를 칸 아래 안내로', () => {
   it('이름 겹침은 해요체로, 다음 할 일까지 — 받침 따라 이라는/라는, 모르면 (이)라는', () => {
@@ -72,5 +72,34 @@ describe('localSummary — 아는 명령 출력은 한국어 한 줄로', () => 
   it('모르는 출력은 null — 원문 그대로 보인다', () => {
     expect(localSummary('Total cost: $0.12')).toBeNull()
     expect(localSummary('Error: Compacted failed')).toBeNull()
+  })
+})
+
+describe('사용량 말', () => {
+  const now = new Date(2026, 9, 20, 12, 0, 0).getTime()
+  const MIN = 60_000
+
+  it('resetText — 남은 시간 경계', () => {
+    expect(resetText(now + 30_000, now)).toBe('곧 초기화')
+    expect(resetText(now - 5_000, now)).toBe('곧 초기화')
+    expect(resetText(now + 10 * MIN, now)).toBe('10분 뒤 초기화')
+    expect(resetText(now + 130 * MIN, now)).toBe('2시간 10분 뒤 초기화')
+    expect(resetText(now + 180 * MIN, now)).toBe('3시간 뒤 초기화')
+  })
+
+  it('resetText — 하루 넘으면 로컬 날짜·요일·시각', () => {
+    const at = new Date(2026, 9, 26, 18, 59).getTime()
+    expect(resetText(at, now)).toBe('10월 26일(월) 18:59 초기화')
+    expect(resetText(new Date(2026, 10, 3, 7, 5).getTime(), now)).toBe('11월 3일(화) 07:05 초기화')
+  })
+
+  it('usageBarLabel · usageRowLabel', () => {
+    const w = (key: any, label: string) => ({ key, label, percent: 1, resetsAt: null })
+    expect(usageBarLabel(w('session', '현재 세션'))).toBe('5시간')
+    expect(usageBarLabel(w('week', '주간'))).toBe('1주')
+    expect(usageBarLabel(w('model:fable', 'Fable'))).toBe('Fable')
+    expect(usageRowLabel(w('session', 'x'))).toBe('5시간')
+    expect(usageRowLabel(w('week', 'x'))).toBe('1주 · 모든 모델')
+    expect(usageRowLabel(w('model:fable', 'Fable'))).toBe('1주 · Fable 전용')
   })
 })

@@ -1,5 +1,6 @@
 // 화면 문구 도우미 — 조사(이/가 …)와 '방금 · N분 전' 같은 시각 말
 
+import type { UsageWindow } from '../../engine/types'
 import type { DisplayStatus } from '../state/selectors'
 
 /** 표시 상태 낱말 — 관계도 카드 바닥과 패널 머리 알약이 같은 말을 쓴다 */
@@ -117,4 +118,34 @@ export function lasting(since: number, now: number): string {
   if (d < MIN) return '방금 시작'
   if (d < HOUR) return `${Math.floor(d / MIN)}분째`
   return `${Math.floor(d / HOUR)}시간째`
+}
+
+/** 위 띠 막대 라벨 — 5시간 · 1주 · 모델 이름 */
+export function usageBarLabel(w: UsageWindow): string {
+  if (w.key === 'session') return '5시간'
+  if (w.key === 'week') return '1주'
+  return w.label
+}
+
+/** 펼침 줄 라벨 — 5시간 · 1주 · 모든 모델 · 1주 · Fable 전용 */
+export function usageRowLabel(w: UsageWindow): string {
+  if (w.key === 'session') return '5시간'
+  if (w.key === 'week') return '1주 · 모든 모델'
+  return `1주 · ${w.label} 전용`
+}
+
+const two = (n: number) => String(n).padStart(2, '0')
+
+/** 초기화 시각 — 곧 · M분 뒤 · H시간 M분 뒤 · 하루 넘으면 M월 D일(요일) HH:mm */
+export function resetText(resetsAt: number, now: number): string {
+  const d = resetsAt - now
+  if (d < MIN) return '곧 초기화'
+  if (d < HOUR) return `${Math.floor(d / MIN)}분 뒤 초기화`
+  if (d < DAY) {
+    const h = Math.floor(d / HOUR)
+    const m = Math.floor((d % HOUR) / MIN)
+    return m === 0 ? `${h}시간 뒤 초기화` : `${h}시간 ${m}분 뒤 초기화`
+  }
+  const t = new Date(resetsAt)
+  return `${t.getMonth() + 1}월 ${t.getDate()}일(${'일월화수목금토'[t.getDay()]}) ${two(t.getHours())}:${two(t.getMinutes())} 초기화`
 }

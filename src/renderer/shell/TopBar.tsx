@@ -1,5 +1,6 @@
 import { Plus, Settings } from 'lucide-react'
 import { RoomSwitcher } from './RoomSwitcher'
+import { UsageMeters } from './UsageMeters'
 
 interface Props {
   /** 지금 방이 있는가 — 없으면 방 버튼을 숨기고 에이전트 추가를 막는다 */
@@ -22,6 +23,7 @@ export function TopBar({ hasRoom, settingsDisabled, onAddAgent, onSettings }: Pr
         </>
       )}
       <span className="top-sp" />
+      <UsageMeters />
       <button type="button" className="btn pri" onClick={onAddAgent} disabled={!hasRoom}>
         <Plus className="i" />
         에이전트 추가
