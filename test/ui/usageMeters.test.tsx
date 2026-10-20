@@ -111,6 +111,17 @@ describe('UsageMeters', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('100% 이상이면 펼침 줄에도 다 썼어요 — 위험 색, 막대와 같은 말', async () => {
+    usage = three(100)
+    await mount()
+    await act(async () => { fireEvent.click(screen.getByRole('button')) })
+    const dlg = screen.getByRole('dialog')
+    const row = within(dlg).getByText('1주 · Fable 전용').closest('.usg-row') as HTMLElement
+    expect(row.classList.contains('danger')).toBe(true)
+    expect(row.querySelector('b')!.textContent).toBe('다 썼어요')
+    expect(dlg.textContent).not.toContain('100%')
+  })
+
   it('초기화 시각이 지난 창은 새 값이 올 때까지 중립 — 100% 여도 위험 색·다 썼어요 없이, 펼침 줄은 초기화됨 · 새로 확인 중', async () => {
     usage = {
       at: Date.now() - 10 * 60_000,

@@ -71,7 +71,7 @@ export function UsageMeters() {
           {usage.windows.map(w => (
             <div key={w.key} className={`usg-row${level(w, now)}`}>
               <span>{usageRowLabel(w)}</span>
-              <b>{pct(w.percent)}%</b>
+              <b>{valueText(w, now)}</b>
               <span className="usg-bl">
                 <span style={fill(w.percent)} />
               </span>
