@@ -119,6 +119,8 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
   // 막대 색 — 토큰 변수에서 읽는다(없으면 색 움직임은 건너뛴다)
   const barsRef = useRef<HTMLSpanElement>(null)
   const prevFilled = useRef<number | null>(null)
+  // 움직이는 중(차례를 기다리는 것 포함)인 막대 → 그 막대의 마지막 움직임 표시 — 그 움직임이 끝날 때만 인라인 값을 지운다
+  const barRuns = useRef(new Map<HTMLElement, object>())
   useLayoutEffect(() => {
     const was = prevFilled.current
     prevFilled.current = filled
@@ -134,30 +136,47 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
     const on = css.getPropertyValue('--primary').trim()
     const off = css.getPropertyValue('--border-strong').trim()
     const items = Array.from(host.children) as HTMLElement[]
+    const runs = barRuns.current
     changed.forEach((i, order) => {
       const el = items[i]
       if (!el) return
-      // 앞 움직임이 아직 돌면 버리고 그 중간 값을 지운다 — 새 움직임은 깨끗한 막대에서 시작한다
+      const busy = runs.has(el)
+      // 앞 움직임은 버린다(인라인 값은 그대로) — 차례를 기다리던 앞 움직임은 새 움직임보다 늦게 시작해 anime 의 합성이 덮지 못한다
       utils.remove(el)
-      clearBar(el)
       const props: Record<string, unknown> = {}
       const to = up ? on : off
       const from = up ? off : on
-      if (to && from) props.backgroundColor = { from, to, duration: MOTION_MS.bar }
-      if (up) props.scaleY = { from: BAR_GROW_FROM, to: 1, duration: MOTION_MS.barGrow }
-      if (!Object.keys(props).length) return
+      // 움직이던(차례를 기다리던) 막대는 지금 보이는 인라인 값에서 이어 간다 — 시작 값을 정하면 그 값으로 튀었다가 간다
+      // (기다리던 막대는 꺼진 모습으로 그려져 있는데, 지우고 켜진 모습에서 다시 꺼지면 켜진 적 없는 막대가 번쩍였다)
+      if (to && from) props.backgroundColor = busy ? { to, duration: MOTION_MS.bar } : { from, to, duration: MOTION_MS.bar }
+      if (busy) {
+        if (up || el.style.transform) props.scaleY = { to: 1, duration: MOTION_MS.barGrow }
+      } else if (up) props.scaleY = { from: BAR_GROW_FROM, to: 1, duration: MOTION_MS.barGrow }
+      if (!Object.keys(props).length) {
+        runs.delete(el)
+        clearBar(el)
+        return
+      }
+      const run = {}
+      runs.set(el, run)
       animate(el, {
         ...props,
         delay: order * MOTION_MS.barStagger,
         ease: 'outQuint',
+        // 이 막대의 마지막 움직임이 끝날 때만 지운다 — on 클래스가 정본.
         // utils.cleanInlineStyles 는 쓰지 않는다 — 시작할 때 있던 인라인 값(앞 움직임의 중간 값)으로 되돌려 막대가 중간에 멈춰 보였다
-        onComplete: () => clearBar(el),
+        onComplete: () => {
+          if (runs.get(el) !== run) return
+          runs.delete(el)
+          clearBar(el)
+        },
       })
     })
   }, [filled])
   useLayoutEffect(
     () => () => {
       if (barsRef.current) utils.remove(Array.from(barsRef.current.children) as HTMLElement[])
+      barRuns.current.clear()
     },
     [],
   )

@@ -49,6 +49,8 @@ const bars = () => Array.from(chip().querySelectorAll<HTMLElement>('.eff-bars i'
 const knob = () => document.querySelector<HTMLElement>('.eff-knob')!
 const fill = () => document.querySelector<HTMLElement>('.eff-fill')!
 const barCalls = () => vi.mocked(animate).mock.calls.filter(c => bars().includes(c[0] as HTMLElement))
+/** 'rgb(10, 20, 30)' · 'rgba(10,20,30,1)' 의 빨강 값 — 켜짐(--primary)은 10, 꺼짐(--border-strong)은 200 */
+const red = (color: string) => Number(/rgba?\(\s*([\d.]+)/.exec(color)?.[1] ?? NaN)
 
 describe('effort 움직임', () => {
   it('펼침을 처음 열 때 손잡이·채움은 움직이지 않고 그 자리에 있다', () => {
@@ -129,6 +131,49 @@ describe('effort 움직임', () => {
       expect(b.style.backgroundColor).toBe('')
     }
     expect(bars().map(b => b.classList.contains('on'))).toEqual([true, false, false, false, false])
+  })
+
+  it('차례를 기다리는 막대가 있을 때 되돌리면 — 그 막대는 지금 모습에서 이어 가고, 켜진 적 없는 막대가 파랗게 번쩍이지 않는다', async () => {
+    allowMotion()
+    const { rerender } = render(ui('low'))
+    rerender(ui('max')) // 2~5번째가 0·35·70·105ms 차례로 켜진다 — 4·5번째는 아직 차례를 기다리며 꺼진 모습(회색 · 0.45)
+    const waiting = [bars()[3], bars()[4]]
+    const before = waiting.map(b => ({ bg: b.style.backgroundColor, tf: b.style.transform }))
+    for (const b of before) expect(red(b.bg)).toBeGreaterThan(150) // 아직 회색
+
+    rerender(ui('low')) // 차례가 오기 전에 되돌린다
+    // 되돌리는 순간 — 지금 모습 그대로(지우고 다시 그려 튀지 않는다)
+    expect(waiting.map(b => ({ bg: b.style.backgroundColor, tf: b.style.transform }))).toEqual(before)
+
+    // 끝날 때까지 프레임마다 — 켜진 적 없는 막대는 한 번도 파랗지 않다
+    const reds: number[] = []
+    const start = performance.now()
+    while (performance.now() - start < 600) {
+      await new Promise<void>(r => requestAnimationFrame(() => r()))
+      for (const b of waiting) if (b.style.backgroundColor) reds.push(red(b.style.backgroundColor))
+    }
+    expect(reds.length).toBeGreaterThan(0)
+    expect(Math.min(...reds)).toBeGreaterThan(150)
+    for (const b of bars()) {
+      expect(b.style.transform).toBe('')
+      expect(b.style.backgroundColor).toBe('')
+    }
+    expect(bars().map(b => b.classList.contains('on'))).toEqual([true, false, false, false, false])
+  })
+
+  it('움직이는 중인 막대를 되돌리면 지금 값에서 이어 간다 — 앞에서 정한 시작 값(from)으로 돌아가지 않는다', () => {
+    allowMotion()
+    const { rerender } = render(ui('low'))
+    rerender(ui('max'))
+    vi.mocked(animate).mockClear()
+    rerender(ui('low'))
+    const calls = barCalls()
+    expect(calls.map(c => bars().indexOf(c[0] as HTMLElement))).toEqual([4, 3, 2, 1])
+    for (const c of calls) {
+      const p = c[1] as any
+      expect(p.backgroundColor.from).toBeUndefined()
+      expect(p.backgroundColor.to).toBe('rgb(200, 200, 200)')
+    }
   })
 
   it('키를 빠르게 여러 번 → 손잡이는 마지막 단계에서 멈춘다', async () => {
