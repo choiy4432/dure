@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { APPROVE_TOOL, DURE_TOOLS, BLOCKED_TOOLS, SPAWN_ENV_EXTRA, buildArgs, buildMcpConfig } from '../src/engine/claudeArgs';
+import { APPROVE_TOOL, DURE_TOOLS, BLOCKED_TOOLS, SPAWN_ENV_EXTRA, buildArgs, buildMcpConfig, buildUsageArgs } from '../src/engine/claudeArgs';
 
 const base = { sessionId: 'S', resume: false, mcpConfigPath: 'M.json', promptPath: 'P.md', model: null, name: 'world' };
 
@@ -51,6 +51,18 @@ describe('buildArgs', () => {
   test('상수', () => {
     expect(BLOCKED_TOOLS).toEqual(['SendMessage', 'ListAgents']);
     expect(SPAWN_ENV_EXTRA).toEqual({ MCP_TOOL_TIMEOUT: '86400000' });
+  });
+});
+
+describe('buildUsageArgs — usage 전용 claude', () => {
+  test('정해진 인자 그대로 — MCP 서버 없이 띄우고 내장 넘김 도구는 막는다', () => {
+    const a = buildUsageArgs();
+    expect(a).toEqual([
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+      '--strict-mcp-config', '--disallowedTools', 'SendMessage', 'ListAgents',
+    ]);
+    expect(after(a, '--disallowedTools')).toEqual(['SendMessage', 'ListAgents']);
+    for (const f of ['--mcp-config', '--bare', '--effort', '--session-id', '--resume', '-n']) expect(a).not.toContain(f);
   });
 });
 

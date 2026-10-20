@@ -32,6 +32,18 @@ export function buildArgs(a: {
   ];
 }
 
+/**
+ * 사용량만 묻고 바로 끄는 claude — 입력을 보내지 않는다(토큰을 쓰지 않음).
+ * --strict-mcp-config 에 설정을 안 주면 MCP 서버를 하나도 띄우지 않는다 — 사용자의 MCP 서버를 깨우지 않게.
+ */
+export function buildUsageArgs(): string[] {
+  return [
+    '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+    '--strict-mcp-config',
+    '--disallowedTools', ...BLOCKED_TOOLS,
+  ];
+}
+
 export function buildMcpConfig(a: { port: number; token: string; agentId: string }): object {
   return {
     mcpServers: {

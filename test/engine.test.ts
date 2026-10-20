@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createEngine, type AgentStatus, type Engine, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
+import { createEngine, type AgentStatus, type Engine, type EngineOptions, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
 import { openMessageLog } from '../src/engine/messageLog';
 
 const FAKE = path.resolve('test/fakeClaude.mjs');
@@ -33,11 +33,13 @@ interface StatusEvent {
   errorText: string | null;
 }
 
-async function start(env: Record<string, string> = {}): Promise<Engine> {
+/** 사용량은 기본으로 끈다 — 사용량 전용 프로세스가 다른 테스트의 기록을 흐리지 않게(사용량 테스트만 켠다) */
+async function start(env: Record<string, string> = {}, usage: EngineOptions['usage'] = false): Promise<Engine> {
   const e = await createEngine({
     dataDir,
     claude: { command: process.execPath, argsPrefix: [FAKE] },
     env: { FAKE_CLAUDE_LOG: logFile, ...env },
+    usage,
   });
   engines.push(e);
   return e;
@@ -1035,6 +1037,7 @@ test('autoStart false → createEngine 직후엔 queued 가 안 가고 start() �
     claude: { command: process.execPath, argsPrefix: [FAKE] },
     env: { FAKE_CLAUDE_LOG: logFile },
     autoStart: false,
+    usage: false,
   });
   engines.push(e2);
   expect(e2.messages()[0].state).toBe('queued');
@@ -1269,4 +1272,95 @@ test('context: 답이 늦을 때 새 대화를 하면 늦게 온 값이 되살�
   await new Promise((r) => setTimeout(r, 700));
   expect(got.filter((x) => x.value !== null)).toEqual([]);
   expect(agentOf(e, a.id).lastContext).toBeNull();
+});
+
+// ── 사용량 ──
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function until(what: string, pred: () => boolean, ms = 4000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!pred()) {
+    if (Date.now() > end) throw new Error(`기다린 일이 일어나지 않음: ${what}`);
+    await sleep(20);
+  }
+}
+/** 사용량 전용 claude — 에이전트 실행엔 없는 --strict-mcp-config 로 뜬다 */
+const probeSpawns = () => spawns().filter((s) => s.argv.includes('--strict-mcp-config'));
+const PLAN = {
+  windows: [
+    { key: 'session', label: '5시간', percent: 12 },
+    { key: 'week', label: '1주', percent: 34 },
+    { key: 'model:Fable', label: 'Fable', percent: 81 },
+  ],
+};
+
+test('usage: 에이전트 없이 시작 → 사용량 전용 claude 하나에 물어 사건 · engine.usage() 같은 값 · 답 뒤 그 프로세스는 꺼진다', async () => {
+  const got: unknown[] = [];
+  const e = await start({}, { startDelayMs: 0 });
+  e.on('usage', (u) => got.push(u));
+  const u = await waitFor(e, 'usage');
+  expect(u).toMatchObject(PLAN);
+  expect(typeof u.at).toBe('number');
+  expect(e.usage()).toEqual(u);
+  expect(spawns()).toHaveLength(1);
+  const [probe] = probeSpawns();
+  expect(probe).toBeDefined();
+  expect(probe.argv.slice(probe.argv.indexOf('--disallowedTools') + 1)).toEqual(['SendMessage', 'ListAgents']);
+  expect(probe.argv).not.toContain('--mcp-config');
+  expect(probe.argv).not.toContain('-n');
+  expect(probe.mcpToolTimeout).toBe('86400000'); // 에이전트와 같은 환경
+  expect(controlRequests('get_usage').map((x) => x.request)).toEqual([{ subtype: 'get_usage', skip_behaviors: true }]);
+  expect(fs.existsSync(path.join(dataDir, 'usage-probe'))).toBe(true);
+  await until('사용량 전용 claude 종료', () => !isAlive(probe.pid));
+  expect(got).toHaveLength(1);
+});
+
+test('usage: 사용량 전용 claude 가 답을 안 하면 시간이 지나 끄고 사건 없음 · 다시 띄우지 않음 · shutdown 뒤 남은 프로세스 없음', async () => {
+  const got: unknown[] = [];
+  const e = await start({ FAKE_USAGE_HANG: '1' }, { startDelayMs: 0, timeoutMs: 300 });
+  e.on('usage', (u) => got.push(u));
+  await until('get_usage 요청', () => controlRequests('get_usage').length === 1);
+  const [probe] = probeSpawns();
+  await until('시간 초과 뒤 사용량 전용 claude 종료', () => !isAlive(probe.pid));
+  await sleep(300);
+  expect(got).toEqual([]);
+  expect(e.usage()).toBeNull();
+  expect(probeSpawns()).toHaveLength(1);
+  await e.shutdown();
+  expect(isAlive(probe.pid)).toBe(false);
+});
+
+test('usage: 답을 기다리던 사용량 전용 claude 는 shutdown 때 함께 꺼진다', async () => {
+  const e = await start({ FAKE_USAGE_HANG: '1' }, { startDelayMs: 0 });
+  await until('get_usage 요청', () => controlRequests('get_usage').length === 1);
+  const [probe] = probeSpawns();
+  expect(isAlive(probe.pid)).toBe(true);
+  await e.shutdown();
+  expect(isAlive(probe.pid)).toBe(false);
+});
+
+test('usage: 차례가 끝나면 살아 있는 에이전트 세션에 묻는다 — 사용량 전용 claude 는 안 띄우고, 1분 안의 refreshUsage 는 다시 묻지 않는다', async () => {
+  const e = await start({}, { startDelayMs: 60_000 });
+  const { a } = setup(e);
+  const got = waitFor(e, 'usage');
+  await e.sendUser(a.id, text('echo 하나'));
+  expect(await got).toMatchObject(PLAN);
+  expect(probeSpawns()).toEqual([]);
+  expect(spawnsOf('A')).toHaveLength(1);
+  expect(controlRequests('get_usage')).toHaveLength(1);
+  e.refreshUsage();
+  await sleep(300);
+  expect(controlRequests('get_usage')).toHaveLength(1);
+});
+
+test('usage: false 면 묻지 않는다 — usage() 는 null, refreshUsage 는 아무 일도 안 한다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  e.refreshUsage();
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나'));
+  await done;
+  await sleep(300);
+  expect(controlRequests('get_usage')).toEqual([]);
+  expect(probeSpawns()).toEqual([]);
+  expect(e.usage()).toBeNull();
 });

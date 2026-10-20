@@ -5,7 +5,7 @@ import path from 'node:path';
 import { openStore, renameRetrying, type Store } from './store';
 import { openMessageLog, type MessageLog } from './messageLog';
 import { openHistory, trimToolInput, type History } from './history';
-import { buildArgs, buildMcpConfig, SPAWN_ENV_EXTRA } from './claudeArgs';
+import { buildArgs, buildMcpConfig, buildUsageArgs, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
 import { ClaudeSession } from './claudeSession';
 import { startMcpServer, type McpServerHandle } from './mcpServer';
@@ -14,8 +14,9 @@ import { DENY } from '../shared/denyTexts';
 import { Router, AUTO_CHAIN_LIMIT } from './router';
 import { EFFORT_LEVELS, type EffortLevel } from './types';
 import { toContextUsage } from './usage';
+import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
 import type {
-  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, ContextUsage, Decision, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, RelayMessage, Room, RoomId, StreamEvent, UserPart,
+  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, ContextUsage, Decision, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, StreamEvent, UserPart,
 } from './types';
 
 export interface EngineOptions {
@@ -25,6 +26,8 @@ export interface EngineOptions {
   env?: NodeJS.ProcessEnv;
   /** 기본 true — false 면 대기 메시지 전달(flushAll)을 미루고 engine.start() 가 한다(리스너를 붙인 뒤 부르기 위함) */
   autoStart?: boolean;
+  /** 플랜 사용량 묻기 — 없으면 USAGE_TIMING, 일부만 주면 나머지는 USAGE_TIMING, false 면 끔 */
+  usage?: false | Partial<UsageTiming>;
 }
 
 // 이벤트:
@@ -37,6 +40,7 @@ export interface EngineOptions {
 //  'held-input'  { agentId; count }   (보낼 차례를 기다리는 사람 입력 수가 바뀔 때마다)
 //  'effort'      { agentId; effort; effortNow }   (고른 값이 바뀌거나 Claude 에게 지금 값을 읽을 때마다)
 //  'context'     { agentId; value: ContextUsage | null }   (차례 끝에 대화 공간을 받았을 때 · 요약·새 대화 직후엔 null)
+//  'usage'       PlanUsage | null   (플랜 사용량을 받을 때마다 — 모르는 모양·한도 없음이면 null)
 //  'engine-error' { agentId: string | null; message: string }  (프로세스 이벤트 처리·듣는 쪽에서 난 오류 — 앱을 죽이지 않고 알린다)
 export interface Engine extends EventEmitter {
   /** autoStart: false 로 만들었을 때 대기 메시지 전달을 시작한다(여러 번 불러도 한 번만) */
@@ -64,6 +68,10 @@ export interface Engine extends EventEmitter {
   /** 마지막으로 Claude 에게 읽은 지금 effort — 모르면 null */
   effortNow(id: AgentId): EffortLevel | null;
   describe(id: AgentId): Promise<AgentDescription>;
+  /** 마지막으로 받은 플랜 사용량 — 아직 없거나 모르는 모양·꺼짐이면 null */
+  usage(): PlanUsage | null;
+  /** 화면이 사용량을 볼 때 — 마지막 값이 1분보다 오래됐으면 다시 묻는다 */
+  refreshUsage(): void;
   history(id: AgentId, o?: { all?: boolean; limit?: number }): HistoryItem[];
   messages(f?: Parameters<MessageLog['list']>[0]): RelayMessage[];
   approveMessage(id: string): void;
@@ -108,10 +116,22 @@ class EngineImpl extends EventEmitter implements Engine {
   private perms: Permissions;
   private router: Router;
   private mcp!: McpServerHandle;
+  private watcher: UsageWatcher | null;
 
   constructor(private o: EngineOptions, private store: Store, private log: MessageLog, private hist: History) {
     super();
     this.limit = this.loadLimit(o.autoChainLimit ?? AUTO_CHAIN_LIMIT);
+    this.watcher =
+      o.usage === false
+        ? null
+        : new UsageWatcher({
+            liveSession: () => [...this.sessions.values()].find((s) => s.status === 'idle' || s.status === 'working') ?? null,
+            spawnProbe: () => this.spawnUsageProbe(),
+            anyWorking: () => [...this.sessions.values()].some((s) => s.status === 'working'),
+            now: () => Date.now(),
+            emit: (u) => this.guard(null, () => this.emit('usage', u)),
+            timing: { ...USAGE_TIMING, ...o.usage },
+          });
     this.perms = new Permissions(store);
     this.router = new Router({
       store,
@@ -157,6 +177,7 @@ class EngineImpl extends EventEmitter implements Engine {
     if (this.started || this.closed) return;
     this.started = true;
     this.router.flushAll();
+    this.watcher?.start();
   }
 
   // ── 설정 ──
@@ -341,12 +362,16 @@ class EngineImpl extends EventEmitter implements Engine {
   pendingRequests(agentId?: AgentId) { return this.perms.pending(agentId); }
   answerRequest(id: string, d: Decision) { this.perms.answer(id, d); }
 
+  // ── 사용량 ──
+  usage(): PlanUsage | null { return this.watcher?.current() ?? null; }
+  refreshUsage(): void { this.watcher?.requested(); }
+
   shutdown(): Promise<void> {
     this.closing ??= (async () => {
       this.closed = true;
       const ids = [...this.sessions.keys()];
       for (const r of this.perms.pending()) this.perms.cancelForAgent(r.agentId, EXITED);
-      await Promise.all(ids.map((id) => this.endSession(id)));
+      await Promise.all([this.stopWatcher(), ...ids.map((id) => this.endSession(id))]);
       await this.mcp.close();
     })();
     return this.closing;
@@ -413,6 +438,33 @@ class EngineImpl extends EventEmitter implements Engine {
     return q;
   }
 
+  /** 사용량 전용 claude — 데이터 폴더 안 빈 폴더에서, 에이전트와 같은 환경으로(start 는 UsageWatcher 가) */
+  private spawnUsageProbe(): ClaudeSession {
+    const cwd = path.join(this.o.dataDir, 'usage-probe');
+    fs.mkdirSync(cwd, { recursive: true });
+    return new ClaudeSession({
+      command: this.o.claude.command,
+      args: [...(this.o.claude.argsPrefix ?? []), ...buildUsageArgs()],
+      cwd,
+      env: this.spawnEnv(),
+    });
+  }
+
+  private spawnEnv(): NodeJS.ProcessEnv {
+    return { ...process.env, ...this.o.env, ...SPAWN_ENV_EXTRA };
+  }
+
+  /** 타이머를 끄고 떠 있는 사용량 전용 claude 를 끈다 — 상한 STOP_LIMIT_MS(세션 끝내기와 같은 까닭) */
+  private async stopWatcher(): Promise<void> {
+    if (!this.watcher) return;
+    let timer: NodeJS.Timeout | undefined;
+    const limit = new Promise<void>((r) => {
+      timer = setTimeout(r, STOP_LIMIT_MS);
+    });
+    await Promise.race([this.watcher.stop(), limit]);
+    clearTimeout(timer);
+  }
+
   /** 필요할 때 띄운다 — 띄울 때마다 MCP 설정·방 안내문을 새로 쓴다(포트·토큰·동료 목록 최신) */
   private ensure(id: AgentId): ClaudeSession {
     if (this.closed) throw new Error(CLOSED);
@@ -434,7 +486,7 @@ class EngineImpl extends EventEmitter implements Engine {
       command: this.o.claude.command,
       args: [...(this.o.claude.argsPrefix ?? []), ...args],
       cwd: agent.folder,
-      env: { ...process.env, ...this.o.env, ...SPAWN_ENV_EXTRA },
+      env: this.spawnEnv(),
     });
     // 세션 콜백 안에서 던지면 stdout 처리 중 잡히지 않은 예외가 되어 앱이 죽는다 — 모두 guard 로 감싼다
     s.on('event', (ev: StreamEvent) =>
@@ -555,6 +607,7 @@ class EngineImpl extends EventEmitter implements Engine {
     if (ev.kind === 'result') {
       // 끝난 차례엔 살아 있는 권한 질문이 있을 수 없다 — 남은 것(떠난 프로세스의 호출 등)은 정리해야 다음 입력이 나간다
       this.perms.cancelForAgent(id, TURN_ENDED);
+      this.guard(null, () => this.watcher?.turnEnded());
       const cur = this.sessions.get(id);
       if (cur) {
         if (this.compactedTurn.delete(cur)) {
