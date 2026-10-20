@@ -27,7 +27,7 @@ export interface MotionSpec {
 }
 
 export const MOTION: Record<'pop' | 'popUp' | 'backdrop' | 'dialog' | 'line' | 'node', MotionSpec> = {
-  /** 떠 있는 목록 .pop — 아래로 펼침(기준점 = 여는 버튼 쪽 위 모서리) */
+  /** 떠 있는 목록 .pop · 관계도 엣지 메시지 창 .pm — 아래로 펼침(기준점 = 여는 버튼·누른 자리 쪽 위 모서리) */
   pop: {
     enter: { ms: 220, ease: 'outQuint', opacity: 0, y: 8, scale: 0.96 },
     exit: { ms: 150, ease: 'outCubic', opacity: 0, y: -4, scale: 0.96 },
