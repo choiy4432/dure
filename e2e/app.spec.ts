@@ -79,6 +79,8 @@ interface Running {
 async function launch(w: Work): Promise<Running> {
   const app = await electron.launch({ args: [MAIN], env: appEnv(w), cwd: ROOT })
   const page = await app.firstWindow()
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true)
   let crashed = false
   const pageErrors: string[] = []
   page.on('crash', () => {
