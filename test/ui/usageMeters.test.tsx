@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, act, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react'
 import type { PlanUsage } from '../../src/engine/types'
 
 let usage: PlanUsage | null
@@ -110,4 +110,37 @@ describe('UsageMeters', () => {
     await act(async () => { fireEvent.pointerDown(document.body) })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
+
+  it('초기화 시각이 지난 창은 새 값이 올 때까지 중립 — 100% 여도 위험 색·다 썼어요 없이, 펼침 줄은 초기화됨 · 새로 확인 중', async () => {
+    usage = {
+      at: Date.now() - 10 * 60_000,
+      windows: [win('session', '현재 세션', 100, Date.now() - 60_000), win('week', '주간', 34, Date.now() + 3 * 86_400_000)],
+    }
+    await mount()
+    expect(screen.queryByText('다 썼어요')).toBeNull()
+    const bar = screen.getByRole('button').querySelector('.usg') as HTMLElement
+    expect(bar.textContent).toContain('5시간')
+    expect(bar.classList.contains('danger')).toBe(false)
+    expect(bar.classList.contains('warn')).toBe(false)
+    await act(async () => { fireEvent.click(screen.getByRole('button')) })
+    const dlg = screen.getByRole('dialog')
+    const row = within(dlg).getByText('5시간').closest('.usg-row') as HTMLElement
+    expect(row.classList.contains('danger')).toBe(false)
+    expect(row.classList.contains('warn')).toBe(false)
+    expect(row.textContent).toContain('초기화됨 · 새로 확인 중')
+    expect(row.textContent).not.toContain('다 썼어요')
+    expect(dlg.textContent).not.toContain('곧 초기화')
+  })
+
+  it('좁은 창에서 고르는 가장 높은 칸은 초기화가 지나지 않은 칸', async () => {
+    narrow = true
+    usage = {
+      at: Date.now(),
+      windows: [win('session', '현재 세션', 100, Date.now() - 60_000), win('week', '주간', 34, Date.now() + 3 * 86_400_000)],
+    }
+    await mount()
+    expect(screen.getByText('34%')).toBeTruthy()
+    expect(screen.queryByText('100%')).toBeNull()
+  })
 })
+

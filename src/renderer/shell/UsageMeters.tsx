@@ -6,9 +6,13 @@ import { useMedia } from '../lib/useMedia'
 import { useNow } from '../lib/useNow'
 import { ago, resetText, usageBarLabel, usageRowLabel } from '../lib/words'
 
-const level = (p: number) => (p >= 100 ? ' danger' : p >= 80 ? ' warn' : '')
 const pct = (p: number) => Math.round(p)
 const fill = (p: number): CSSProperties => ({ width: `${Math.max(0, Math.min(100, p))}%` })
+/** 초기화 시각이 지난 창 — 새 값을 받을 때까지(엔진이 곧 다시 묻는다) 옛 % 로 경고하지 않는다 */
+const passed = (w: UsageWindow, now: number) => w.resetsAt !== null && w.resetsAt <= now
+const level = (w: UsageWindow, now: number) => (passed(w, now) ? '' : w.percent >= 100 ? ' danger' : w.percent >= 80 ? ' warn' : '')
+/** 막대·펼침 줄의 값 — 100% 이상이면 '다 썼어요'(초기화가 지났으면 % 그대로) */
+const valueText = (w: UsageWindow, now: number) => (!passed(w, now) && w.percent >= 100 ? '다 썼어요' : `${pct(w.percent)}%`)
 
 /** 위 띠의 사용량 — 5시간 · 1주 · 모델 전용 막대 한 단추, 누르면 줄마다 초기화 시각 */
 export function UsageMeters() {
@@ -27,9 +31,9 @@ export function UsageMeters() {
 
   if (!usage || usage.windows.length === 0) return null
 
-  const bars: UsageWindow[] = narrow
-    ? [usage.windows.reduce((a, b) => (b.percent > a.percent ? b : a))]
-    : usage.windows
+  // 좁으면 가장 높은 칸 하나 — 초기화가 지난 칸은 낮게 친다
+  const rank = (w: UsageWindow) => (passed(w, now) ? -1 : w.percent)
+  const bars: UsageWindow[] = narrow ? [usage.windows.reduce((a, b) => (rank(b) > rank(a) ? b : a))] : usage.windows
 
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== 'Escape') return
@@ -50,12 +54,12 @@ export function UsageMeters() {
         onClick={() => setOpen(o => !o)}
       >
         {bars.map(w => (
-          <span key={w.key} className={`usg${level(w.percent)}`}>
+          <span key={w.key} className={`usg${level(w, now)}`}>
             <span className="usg-l">{usageBarLabel(w)}</span>
             <span className="usg-bar" aria-hidden="true">
               <span style={fill(w.percent)} />
             </span>
-            <b>{w.percent >= 100 ? '다 썼어요' : `${pct(w.percent)}%`}</b>
+            <b>{valueText(w, now)}</b>
           </span>
         ))}
       </button>
@@ -65,13 +69,15 @@ export function UsageMeters() {
             사용량 <span>· 내 계정</span>
           </h5>
           {usage.windows.map(w => (
-            <div key={w.key} className={`usg-row${level(w.percent)}`}>
+            <div key={w.key} className={`usg-row${level(w, now)}`}>
               <span>{usageRowLabel(w)}</span>
               <b>{pct(w.percent)}%</b>
               <span className="usg-bl">
                 <span style={fill(w.percent)} />
               </span>
-              {w.resetsAt !== null && <span className="usg-rs">{resetText(w.resetsAt, now)}</span>}
+              {w.resetsAt !== null && (
+                <span className="usg-rs">{passed(w, now) ? '초기화됨 · 새로 확인 중' : resetText(w.resetsAt, now)}</span>
+              )}
             </div>
           ))}
           <div className="usg-at">{ago(usage.at, now)} 기준</div>
