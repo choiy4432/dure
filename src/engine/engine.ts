@@ -28,6 +28,8 @@ export interface EngineOptions {
   autoStart?: boolean;
   /** 플랜 사용량 묻기 — 없으면 USAGE_TIMING, 일부만 주면 나머지는 USAGE_TIMING, false 면 끔 */
   usage?: false | Partial<UsageTiming>;
+  /** 엔진이 보낸 /effort 에 답(result)이 없을 때 다시 띄우기까지 — 기본 EFFORT_TIMEOUT_MS(시험은 짧게) */
+  effortTimeoutMs?: number;
 }
 
 // 이벤트:
@@ -103,6 +105,15 @@ const CLOSED = '두레 엔진이 종료되었습니다.';
 /** /effort 의 답(로컬 명령 — 모델을 부르지 않는다): "Set effort level to max (this session only): …" (probe9) */
 const EFFORT_SET = /Set effort level to (low|medium|high|xhigh|max)\b/;
 const EFFORT_BUSY = '/effort 차례가 끝나면 보낸다';
+/** /effort 답을 기다리는 한도 — 띄운 직후엔 CLI 시작·--resume 대화 읽기까지 기다리므로 넉넉히 */
+const EFFORT_TIMEOUT_MS = 30_000;
+const EFFORT_STUCK = 'effort 를 정하는 동안 Claude 가 답하지 않아 다시 띄웠어요 — 이번 실행엔 고른 effort 를 적용하지 못했어요.';
+
+/** 엔진이 써 넣은 /effort 한 줄 — 그 result 까지 */
+interface EffortTurn {
+  heard: EffortLevel | null; // 답 글에서 읽은 단계
+  timer: NodeJS.Timeout | null; // 답이 없으면 다시 띄운다
+}
 
 /** 프로세스에 써 넣었지만 아직 아무 이벤트도 안 온 줄 — 읽기 전에 죽으면 되살린다 */
 type InFlight = { kind: 'relay'; messageId: string } | { kind: 'human'; parts: UserPart[] };
@@ -121,7 +132,8 @@ class EngineImpl extends EventEmitter implements Engine {
   // effort 는 세션 명령 `/effort <단계>` 로 정한다 — 설정 층(apply_flag_settings)엔 max 가 없어 조용히 무시되고,
   // get_settings 는 세션 값을 모른다(probe9). 사람 입력처럼 한 줄씩 쓰지만 기록·사건·작업 중 표시는 남기지 않는다.
   private effortWant = new WeakMap<ClaudeSession, EffortLevel>(); // 보낼 /effort — 차례가 끝나면 기다리던 사람 입력보다 먼저(마지막 값 하나만)
-  private effortTurn = new WeakMap<ClaudeSession, { heard: EffortLevel | null }>(); // 써 넣은 /effort — 그 result 까지 이벤트를 삼킨다
+  private effortTurn = new WeakMap<ClaudeSession, EffortTurn>(); // 써 넣은 /effort — 그 result 까지 이벤트를 삼킨다
+  private effortBroken = new Set<AgentId>(); // /effort 가 막혀 다시 띄움 — 고르기·모델 바꾸기 전까지 /effort 없이 띄운다(메모리만)
   private compactedTurn = new WeakSet<ClaudeSession>(); // 이번 차례에 요약됨 — 그 차례의 result 뒤엔 값을 받지 않는다
   private started = false;
   private limit: number;
@@ -259,6 +271,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.held.delete(id); // 기다리던 사람 입력은 에이전트와 함께 버린다
       this.bypass.delete(id);
       this.effortNows.delete(id);
+      this.effortBroken.delete(id);
       this.modelNows.delete(id);
       if (had > 0) this.guard(id, () => this.emit('held-input', { agentId: id, count: 0 }));
     }
@@ -269,7 +282,8 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     if (this.perms.pending(id).length > 0) return 'awaiting';
     const s = this.sessions.get(id);
-    if (s) return s.status;
+    // 엔진이 보낸 /effort 차례 중에 사람 입력이 기다리면 작업 중 — 첫 입력이 멈춘 듯 보이지 않게(멈추기도 켜진다)
+    if (s) return s.status === 'idle' && this.effortTurn.has(s) && (this.held.get(id)?.length ?? 0) > 0 ? 'working' : s.status;
     return this.errors.has(id) ? 'error' : 'idle';
   }
 
@@ -304,6 +318,7 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     this.emitHeld(id);
     this.pump(id); // 차례 중·승인 대기면 그대로 두고, 그 차례의 result 에서 보낸다 — 두 줄을 동시에 보내지 않는다
+    this.emitStatus(id); // /effort 차례 중이면 기다리는 입력 때문에 작업 중
   }
 
   async interrupt(id: AgentId) {
@@ -311,6 +326,8 @@ class EngineImpl extends EventEmitter implements Engine {
     this.perms.cancelForAgent(id, STOPPED_BY_USER);
     const s = this.sessions.get(id);
     if (!s) return;
+    // 엔진이 보낸 /effort 차례 중(화면엔 기다리는 입력 때문에 작업 중) — 같은 프로세스에 이어 쓰지 않고 다시 띄운다(답 없음과 같은 길)
+    if (this.effortTurn.has(s)) return this.restartAfterEffort(id, s, 'interrupt');
     const wasWorking = s.status === 'working';
     await s.interrupt();
     if (wasWorking) this.guard(id, () => this.record(id, { kind: 'notice', text: STOPPED_NOTICE }));
@@ -337,6 +354,7 @@ class EngineImpl extends EventEmitter implements Engine {
   async setModel(id: AgentId, model: string | null) {
     this.need(id);
     this.store.updateAgent(id, { model });
+    this.effortBroken.delete(id); // 모델이 바뀌었다 — /effort 를 다시 해 본다
     this.guard(id, () => this.setModelNow(id, null)); // 다음 차례가 풀 모델은 다르다
     this.guard(id, () => this.forgetEffortNow(id)); // 모델이 바뀌면 지금 effort 도 다시 읽을 때까지 모른다
     const s = this.sessions.get(id);
@@ -358,6 +376,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     if (!(EFFORT_LEVELS as readonly unknown[]).includes(level)) throw new Error(EFFORT_UNKNOWN);
     this.store.updateAgent(id, { effort: level });
+    this.effortBroken.delete(id); // 새로 골랐다 — /effort 를 다시 해 본다
     // 전에 읽은 지금 값은 버린다 — 남겨 두면 화면이 새로 고른 값 대신 옛 값으로 돌아간다(/effort 의 답이 채운다)
     this.effortNows.delete(id);
     this.emitEffort(id);
@@ -442,7 +461,7 @@ class EngineImpl extends EventEmitter implements Engine {
     if (!s || s.status !== 'idle' || this.effortTurn.has(s) || this.perms.pending(id).length > 0) return;
     const level = this.effortWant.get(s);
     if (level) {
-      this.sendEffort(s, level);
+      this.sendEffort(id, s, level);
       return; // 그 차례의 result 에서 다시 pump
     }
     const next = this.held.get(id)?.shift();
@@ -510,8 +529,11 @@ class EngineImpl extends EventEmitter implements Engine {
     clearTimeout(timer);
   }
 
-  /** 필요할 때 띄운다 — 띄울 때마다 MCP 설정·방 안내문을 새로 쓴다(포트·토큰·동료 목록 최신) */
-  private ensure(id: AgentId): ClaudeSession {
+  /**
+   * 필요할 때 띄운다 — 띄울 때마다 MCP 설정·방 안내문을 새로 쓴다(포트·토큰·동료 목록 최신).
+   * quiet: 띄운 뒤 상태를 알리지 않는다(부른 쪽이 보내고 나서 알린다)
+   */
+  private ensure(id: AgentId, o: { quiet?: boolean } = {}): ClaudeSession {
     if (this.closed) throw new Error(CLOSED);
     const agent = this.need(id);
     const live = this.sessions.get(id);
@@ -552,6 +574,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.guard(id, () => {
         if (this.sessions.get(id) !== s) return; // 엔진이 끝낸 세션은 endSession 이 정리
         this.sessions.delete(id);
+        this.endEffortTurn(s); // /effort 차례 중이었으면 그 타이머도(다음에 띄울 때 다시 보낸다)
         this.guard(id, () => this.forgetEffortNow(id));
         if (!expected) {
           this.guard(id, () => this.restoreInFlight(id, s)); // 기록 실패여도 아래 정리는 한다
@@ -573,9 +596,10 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     this.errors.delete(id);
     this.sessions.set(id, s);
-    this.emitStatus(id);
-    // 막 띄운 세션은 한가하다 — 고른 effort 가 있으면 어떤 입력보다 먼저 /effort 를 쓴다(pump 는 부르지 않는다: router 가 deliver 중일 수 있다)
-    if (agent.effort) this.sendEffort(s, agent.effort);
+    if (!o.quiet) this.emitStatus(id);
+    // 막 띄운 세션은 한가하다 — 고른 effort 가 있으면 어떤 입력보다 먼저 /effort 를 쓴다(pump 는 부르지 않는다: router 가 deliver 중일 수 있다).
+    // 전에 /effort 가 막혀 다시 띄운 에이전트면 /effort 없이(고르기·모델 바꾸기 전까지)
+    if (agent.effort && !this.effortBroken.has(id)) this.sendEffort(id, s, agent.effort);
     else void this.readEffort(id, s); // 기다리지 않는다
     return s;
   }
@@ -591,15 +615,34 @@ class EngineImpl extends EventEmitter implements Engine {
     this.pump(id);
   }
 
-  /** /effort 를 쓴다 — 상태는 working 으로 바꾸지 않고, 기록하지 않는다(그 차례의 이벤트는 onEffortEvent 가 삼킨다) */
-  private sendEffort(s: ClaudeSession, level: EffortLevel): void {
+  /**
+   * /effort 를 쓴다 — 상태는 working 으로 바꾸지 않고, 기록하지 않는다(그 차례의 이벤트는 onEffortEvent 가 삼킨다).
+   * result 가 effortTimeoutMs 안에 안 오면 다시 띄운다(restartAfterEffort).
+   */
+  private sendEffort(id: AgentId, s: ClaudeSession, level: EffortLevel): void {
     this.effortWant.delete(s);
-    this.effortTurn.set(s, { heard: null });
+    const turn: EffortTurn = { heard: null, timer: null };
+    this.effortTurn.set(s, turn);
     try {
       s.send([{ type: 'text', text: `/effort ${level}` }], { quiet: true });
     } catch {
       this.effortTurn.delete(s); // 이미 끝난 세션 — 다음에 띄울 때 다시 보낸다
+      return;
     }
+    turn.timer = setTimeout(() => {
+      if (this.effortTurn.get(s) === turn) void this.restartAfterEffort(id, s, 'timeout');
+    }, this.o.effortTimeoutMs ?? EFFORT_TIMEOUT_MS);
+    turn.timer.unref?.();
+    this.emitStatus(id); // 기다리는 사람 입력이 있으면 작업 중
+  }
+
+  /** /effort 차례를 끝낸다(타이머 끔) — result · 세션 끝 · 다시 띄우기 */
+  private endEffortTurn(s: ClaudeSession): EffortTurn | undefined {
+    const turn = this.effortTurn.get(s);
+    if (!turn) return undefined;
+    if (turn.timer) clearTimeout(turn.timer);
+    this.effortTurn.delete(s);
+    return turn;
   }
 
   /** 엔진이 보낸 /effort 차례의 이벤트 — 기록·사건 없이 삼키고, 답에서 지금 effort 를 읽는다 */
@@ -610,7 +653,7 @@ class EngineImpl extends EventEmitter implements Engine {
     } else if (ev.kind === 'assistant') {
       turn.heard ??= effortSaid(ev.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
     } else if (ev.kind === 'result') {
-      this.effortTurn.delete(s);
+      this.endEffortTurn(s);
       const heard = turn.heard ?? effortSaid(ev.text);
       // 그새 다시 고른 값이 줄에 서 있으면 이 답은 옛 값 — 받지 않는다(화면이 옛 값으로 돌아갔다 오지 않게).
       // 모르는 답(effort 없는 모델·바뀐 문구)이면 지금 값은 비운 채 — 화면은 고른 값을 보인다
@@ -619,17 +662,42 @@ class EngineImpl extends EventEmitter implements Engine {
         this.emitEffort(id);
       }
       this.pump(id);
+      this.emitStatus(id);
     }
   }
 
   /**
-   * 고른 effort 가 없을 때 — 세션이 쓰는 값 = 내 Claude 설정(get_settings 의 effective). 실패·시간 초과는 조용히 넘어간다.
-   * 고른 effort 가 생긴 뒤에 온 답은 버린다 — 세션 값(/effort)을 모르는 설정 층이라 화면이 그 값으로 돌아간다.
+   * /effort 에 답이 없거나(timeout) 그 사이 사람이 멈췄다(interrupt). 같은 프로세스에 다음 줄을 이어 쓰면 늦게 온 /effort 답이
+   * 그 줄의 답처럼 보이고 그 차례를 일찍 끝낸다 — 대신 세션을 끝내고, /effort 없이 다시 띄워 기다리던 입력·메시지를 보낸다.
+   * /effort 는 고르기·모델 바꾸기 전까지 다시 보내지 않는다(effortBroken).
+   */
+  private async restartAfterEffort(id: AgentId, s: ClaudeSession, why: 'timeout' | 'interrupt'): Promise<void> {
+    try {
+      if (this.closed || !this.effortTurn.has(s) || !this.live(id, s)) return;
+      this.effortBroken.add(id);
+      if (why === 'timeout') this.guard(id, () => this.emit('engine-error', { agentId: id, message: EFFORT_STUCK }));
+      await this.endSession(id); // 기다리던 입력·queued 메시지는 그대로 — /effort 는 보낸 줄로 치지 않아 되살릴 것이 없다
+      if (this.closed || this.removing.has(id) || !this.store.agent(id)) return;
+      const waiting = (this.held.get(id)?.length ?? 0) > 0 || this.log.list({ to: id, states: ['queued'] }).length > 0;
+      // 그새 누가 띄웠으면 그 세션을 쓴다. 상태는 보내고 나서 한 번만 알린다(다시 띄우는 사이 대기로 깜박이지 않게)
+      if (!this.sessions.has(id) && waiting) this.ensure(id, { quiet: true });
+      this.pump(id);
+      this.emitStatus(id);
+    } catch (e) {
+      this.guard(id, () => this.emitStatus(id));
+      this.guard(id, () => this.emit('engine-error', { agentId: id, message: e instanceof Error ? e.message : String(e) }));
+    }
+  }
+
+  /**
+   * 세션이 쓰는 값 = 내 Claude 설정(get_settings 의 effective) — 고른 effort 가 없을 때, 또는 /effort 가 막혀 적용하지 못했을 때.
+   * 실패·시간 초과는 조용히 넘어간다. 그 밖에 고른 effort 가 있으면 답을 버린다 — 세션 값(/effort)을 모르는 설정 층이라
+   * 화면이 그 값으로 돌아간다.
    */
   private async readEffort(id: AgentId, s: ClaudeSession): Promise<void> {
     try {
       const res: any = await s.request({ subtype: 'get_settings' });
-      if (!this.live(id, s) || this.store.agent(id)?.effort) return;
+      if (!this.live(id, s) || (this.store.agent(id)?.effort && !this.effortBroken.has(id))) return;
       const now = res?.effective?.effortLevel;
       if (!(EFFORT_LEVELS as readonly unknown[]).includes(now)) return;
       this.effortNows.set(id, now);
@@ -758,6 +826,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private async endSession(id: AgentId): Promise<void> {
     const s = this.sessions.get(id);
     this.sessions.delete(id);
+    if (s) this.endEffortTurn(s); // /effort 차례 중이었으면 그 타이머도
     this.errors.delete(id);
     this.guard(id, () => this.forgetEffortNow(id)); // 끝난 세션의 지금 값은 다음 세션의 값이 아니다
     this.perms.cancelForAgent(id, EXITED);

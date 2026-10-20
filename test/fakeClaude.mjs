@@ -96,8 +96,10 @@ let sequence = 0;
 // 로컬 명령 /effort — 진짜(2.1.304, probe9)처럼 init · 안내 글 · result(비용 0). 모델을 부르지 않으니 끝난 차례로 세지 않고(context 그대로),
 // get_settings 의 값도 바꾸지 않는다(세션 effort 는 설정 층에 안 보인다). 손잡이:
 //   FAKE_EFFORT_REPLY=<글>       그 글로 답한다          FAKE_SLOW_EFFORT_MS=<ms>   그만큼 늦게 답한다
+//   FAKE_EFFORT_SILENT=1         읽기만 하고 끝내 답하지 않는다(막힌 /effort)
 async function effortCommand(arg) {
   log(JSON.stringify({ local: 'effort', arg, pid: process.pid }));
+  if (process.env.FAKE_EFFORT_SILENT === '1') return;
   await init();
   const slowEffort = Number(process.env.FAKE_SLOW_EFFORT_MS ?? 0);
   if (slowEffort) await sleep(slowEffort);

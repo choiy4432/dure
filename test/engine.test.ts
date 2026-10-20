@@ -34,12 +34,17 @@ interface StatusEvent {
 }
 
 /** 사용량은 기본으로 끈다 — 사용량 전용 프로세스가 다른 테스트의 기록을 흐리지 않게(사용량 테스트만 켠다) */
-async function start(env: Record<string, string> = {}, usage: EngineOptions['usage'] = false): Promise<Engine> {
+async function start(
+  env: Record<string, string> = {},
+  usage: EngineOptions['usage'] = false,
+  extra: Partial<EngineOptions> = {},
+): Promise<Engine> {
   const e = await createEngine({
     dataDir,
     claude: { command: process.execPath, argsPrefix: [FAKE] },
     env: { FAKE_CLAUDE_LOG: logFile, ...env },
     usage,
+    ...extra,
   });
   engines.push(e);
   return e;
@@ -1467,6 +1472,63 @@ test('effort: /effort 차례 중에 새 대화 — 새 세션이 다시 /effort,
   expect(e.history(b.id).filter((h) => h.kind === 'user')).toHaveLength(1);
   expect(JSON.stringify(e.history(b.id, { all: true }))).not.toContain('/effort');
   expect(e.effortNow(b.id)).toBe('xhigh');
+});
+
+test('effort: /effort 에 끝내 답이 없으면 — 시간이 지나 다시 띄우고(effort 없이) 기다리던 입력을 보낸다 · engine-error · 고르면 다시 해 본다', async () => {
+  const e = await start({ FAKE_EFFORT_SILENT: '1' }, false, { effortTimeoutMs: 300 });
+  const { b } = setup(e);
+  const errs: { agentId: string | null; message: string }[] = [];
+  e.on('engine-error', (x) => errs.push(x));
+  const statuses: string[] = [];
+  e.on('status', (x: StatusEvent) => x.agentId === b.id && statuses.push(x.status));
+  await e.setEffort(b.id, 'max');
+  const done = resultOf(e, b.id);
+  await e.sendUser(b.id, text('echo 하나'));
+  expect(e.status(b.id)).toBe('working'); // 첫 입력이 멈춘 듯 보이지 않게 — 멈추기도 켜진다
+  expect(await resultText(done)).toBe('받음: echo 하나');
+  expect(linesByProcess('B')).toEqual([['/effort max'], ['echo 하나']]);
+  expect(errs).toEqual([{ agentId: b.id, message: expect.stringContaining('effort') }]);
+  await until('내 설정(가짜 high)을 읽음', () => e.effortNow(b.id) === 'high'); // 적용 못 한 값 대신 실제로 쓰는 값
+  expect(statuses).toEqual(['working', 'idle']); // 다시 띄우는 사이에 대기로 깜박이지 않는다
+
+  await e.setEffort(b.id, 'low'); // 고르면 다시 /effort 를 해 본다
+  await until('/effort low 를 씀', () => linesByProcess('B')[1]?.includes('/effort low') ?? false);
+  await until('두 번째 시간 초과', () => errs.length === 2);
+  await sleep(200);
+  expect(spawnsOf('B')).toHaveLength(2); // 기다리는 입력·메시지가 없으면 다시 띄우지 않는다
+  expect(e.status(b.id)).toBe('idle');
+});
+
+test('effort: 막힌 /effort 를 다시 띄우면 줄에 선 넘김 메시지도 새 세션으로 간다', async () => {
+  const e = await start({ FAKE_EFFORT_SILENT: '1' }, false, { effortTimeoutMs: 300 });
+  const { a, b } = setup(e);
+  e.updateAgent(b.id, { auto: true });
+  await e.setEffort(b.id, 'max');
+  const bDone = resultOf(e, b.id);
+  await e.sendUser(a.id, text('SEND B: 안녕'));
+  expect(await resultText(bDone)).toBe(`받음: ${RELAY_HI}`);
+  expect(linesByProcess('B')).toEqual([['/effort max'], [RELAY_HI]]);
+  expect(e.messages()[0].state).toBe('delivered');
+});
+
+test('effort: /effort 차례 중 멈추기 — 같은 프로세스에 이어 쓰지 않고 다시 띄운다(effort 없이) · 모델을 바꾸면 다시 해 본다', async () => {
+  const e = await start({ FAKE_EFFORT_SILENT: '1' }, false, { effortTimeoutMs: 60_000 });
+  const { b } = setup(e);
+  const errs: unknown[] = [];
+  e.on('engine-error', (x) => errs.push(x));
+  await e.setEffort(b.id, 'max');
+  const done = resultOf(e, b.id);
+  await e.sendUser(b.id, text('echo 하나'));
+  await until('/effort 를 씀', () => effortLines().length === 1);
+  expect(e.status(b.id)).toBe('working');
+  await e.interrupt(b.id);
+  expect(await resultText(done)).toBe('받음: echo 하나');
+  expect(linesByProcess('B')).toEqual([['/effort max'], ['echo 하나']]);
+  expect(errs).toEqual([]); // 사람이 멈춘 것 — 오류가 아니다
+  expect(JSON.stringify(e.history(b.id))).not.toContain('멈췄어요');
+
+  await e.setModel(b.id, 'sonnet'); // 모델을 바꾸면 다시 /effort 를 해 본다
+  await until('/effort max 를 다시 씀', () => linesByProcess('B')[1]?.includes('/effort max') ?? false);
 });
 
 // ── context ──
