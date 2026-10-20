@@ -147,7 +147,10 @@ describe('AgentNode — 카드 내용', () => {
     expect(short.card.querySelector('.nr .trunc')!.classList.contains('floor')).toBe(false)
     const fsName: string = 'node:fs'
     const css: string = (await import(/* @vite-ignore */ fsName)).readFileSync('src/renderer/styles/base.css', 'utf8')
-    expect(css).toMatch(/\.nr \.trunc\.floor\s*\{[^}]*min-width:\s*6em/)
+    // 최소 폭은 바탕 크기(6em) + 줄 나눔(wrap)이 지킨다 — 글보다 넓어지지 않는다(모델·effort 가 역할 바로 뒤에, 실제 배치는 e2e 2단계)
+    expect(css).toMatch(/\.nr \.trunc\.floor\s*\{[^}]*flex:\s*1 1 6em/)
+    expect(css).toMatch(/\.nr \.trunc\.floor\s*\{[^}]*max-width:\s*max-content/)
+    expect(css).not.toMatch(/\.nr \.trunc\.floor\s*\{[^}]*min-width/)
     expect(css).toMatch(/\.nr\s*\{[^}]*flex-wrap:\s*wrap/)
   })
 

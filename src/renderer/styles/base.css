@@ -778,10 +778,11 @@ code {
   color: var(--muted);
 }
 
-/* 긴 역할은 모델·effort 에 밀려도 6em 아래로 줄지 않는다 — 모자라면 모델·effort 가 다음 줄로 */
+/* 긴 역할은 모델·effort 에 밀려도 6em 아래로 줄지 않는다 — 줄 나눔은 바탕 크기(6em)로 정하니 모자라면 모델·effort 가 다음 줄로.
+   글보다 넓어지지도 않는다 — 남는 자리를 차지하거나(늘어남) 글이 6em 보다 짧은데 6em 을 지키면 모델·effort 가 역할에서 떨어진다 */
 .nr .trunc.floor {
   flex: 1 1 6em;
-  min-width: 6em;
+  max-width: max-content;
 }
 
 /* 모델 · effort — 역할만 말줄임, 이쪽은 줄지 않는다 */

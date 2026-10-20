@@ -214,7 +214,35 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
         // 역할은 모델·effort 에 밀려 잘리지 않는다 — 말줄임 없이 다 보인다
         const clipped = await node(page, a.name).locator('.nr .trunc').evaluate((el) => el.scrollWidth > el.clientWidth)
         expect(clipped).toBe(false)
+        // 역할 칸은 글보다 넓어지지 않는다 — 모델·effort 가 역할 바로 뒤에 붙는다(오른쪽 끝으로 밀리지 않는다)
+        const role = await node(page, a.name).locator('.nr .trunc').evaluate((el) => {
+          const text = document.createRange()
+          text.selectNodeContents(el)
+          return { box: el.getBoundingClientRect().width, text: text.getBoundingClientRect().width }
+        })
+        expect(role.box - role.text).toBeLessThan(1)
       }
+      // 긴 역할은 6em 아래로 줄지 않는다 — 모자라면 모델·effort 가 다음 줄로(같은 카드에 긴 역할 줄을 잠깐 넣어 잰다)
+      const long = await node(page, PLAN.name).locator('.nr').evaluate((nr) => {
+        const probe = nr.cloneNode(true) as HTMLElement
+        const role = probe.querySelector('.trunc') as HTMLElement
+        const meta = probe.querySelector('.nr-meta') as HTMLElement
+        role.textContent = '기획서 · 문구 · 행사 페이지 카피 전부 · 보도자료 · 이벤트 안내'
+        role.className = 'trunc floor'
+        meta.textContent = ' · Opus 5 (긴 대화) · xhigh'
+        nr.after(probe)
+        const r = role.getBoundingClientRect()
+        const m = meta.getBoundingClientRect()
+        const out = {
+          role: r.width,
+          em6: 6 * parseFloat(getComputedStyle(role).fontSize),
+          metaInside: m.right <= probe.getBoundingClientRect().right + 0.5,
+        }
+        probe.remove()
+        return out
+      })
+      expect(long.role).toBeGreaterThanOrEqual(long.em6 - 0.5)
+      expect(long.metaInside).toBe(true)
       // 새로 만든 에이전트가 골라져 있다 — 자동 스위치는 꺼짐
       await expect(panel(page, WEB.name).getByRole('switch', { name: '자동' })).toHaveAttribute('aria-checked', 'false')
     })
