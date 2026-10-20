@@ -2921,6 +2921,7 @@ code {
   width: 4px;
   border-radius: var(--radius-xs);
   background: var(--border-strong);
+  transform-origin: 50% 100%;
 }
 
 .eff-bars i:nth-child(1) { height: 5px; }

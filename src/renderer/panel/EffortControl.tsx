@@ -3,7 +3,8 @@ import { EFFORT_LEVELS, type EffortLevel } from '../../engine/types'
 import { errorMessage } from '../lib/words'
 import { useDismiss } from '../lib/popover'
 import { MotionDiv, Presence } from '../lib/presence'
-import { MOTION } from '../lib/motion'
+import { animate, utils } from 'animejs'
+import { BAR_GROW_FROM, MOTION, MOTION_MS, reducedMotion } from '../lib/motion'
 import type { Described } from './ModelPicker'
 
 interface Props {
@@ -109,6 +110,74 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
   const filled = shown ? EFFORT_LEVELS.indexOf(shown) + 1 : 0
   const index = shown ? EFFORT_LEVELS.indexOf(shown) : 2
 
+  // 막대 색 — 토큰 변수에서 읽는다(없으면 색 움직임은 건너뛴다)
+  const barsRef = useRef<HTMLSpanElement>(null)
+  const prevFilled = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    const was = prevFilled.current
+    prevFilled.current = filled
+    const host = barsRef.current
+    if (was === null || was === filled || !host || reducedMotion()) return
+    const up = filled > was
+    const lo = Math.min(was, filled)
+    const hi = Math.max(was, filled)
+    const changed: number[] = []
+    for (let i = lo; i < hi; i++) changed.push(i)
+    if (!up) changed.reverse()
+    const css = getComputedStyle(document.documentElement)
+    const on = css.getPropertyValue('--primary').trim()
+    const off = css.getPropertyValue('--border-strong').trim()
+    const items = Array.from(host.children) as HTMLElement[]
+    changed.forEach((i, order) => {
+      const el = items[i]
+      if (!el) return
+      const props: Record<string, unknown> = {}
+      const to = up ? on : off
+      const from = up ? off : on
+      if (to && from) props.backgroundColor = { from, to, duration: MOTION_MS.bar }
+      if (up) props.scaleY = { from: BAR_GROW_FROM, to: 1, duration: MOTION_MS.barGrow }
+      if (!Object.keys(props).length) return
+      animate(el, {
+        ...props,
+        delay: order * MOTION_MS.barStagger,
+        ease: 'outQuint',
+        onComplete: self => {
+          utils.cleanInlineStyles(self)
+        },
+      })
+    })
+  }, [filled])
+  useLayoutEffect(
+    () => () => {
+      if (barsRef.current) utils.remove(Array.from(barsRef.current.children) as HTMLElement[])
+    },
+    [],
+  )
+
+  // 손잡이·채움 — 펼침을 처음 그릴 때는 그 자리에 놓고, 그 뒤 단계가 바뀌면 미끄러진다
+  const knobRef = useRef<HTMLSpanElement>(null)
+  const fillRef = useRef<HTMLSpanElement>(null)
+  const placed = useRef(false)
+  const pct = `${(index / (EFFORT_LEVELS.length - 1)) * 100}%`
+  const sliderOn = open && description.state === 'ready' && !unsupported
+  useLayoutEffect(() => {
+    const k = knobRef.current
+    const f = fillRef.current
+    if (!sliderOn || !k || !f) {
+      placed.current = false
+      return
+    }
+    if (!placed.current || reducedMotion()) {
+      utils.remove([k, f])
+      utils.set(k, { left: pct })
+      utils.set(f, { width: pct })
+    } else {
+      animate(k, { left: pct, duration: MOTION_MS.knob, ease: 'outQuint' })
+      animate(f, { width: pct, duration: MOTION_MS.knob, ease: 'outQuint' })
+    }
+    placed.current = true
+  }, [sliderOn, pct])
+
   const choose = (level: EffortLevel) => {
     if (!allowed(level) || level === shown) return
     setPending(level)
@@ -213,7 +282,7 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
         title={label}
         onClick={() => setOpen(o => !o)}
       >
-        <span className="eff-bars" aria-hidden="true">
+        <span className="eff-bars" aria-hidden="true" ref={barsRef}>
           {EFFORT_LEVELS.map((l, i) => (
             <i key={l} className={i < filled ? 'on' : undefined} />
           ))}
@@ -246,8 +315,8 @@ export function EffortControl({ agentId, effort, effortNow, model, description, 
                   aria-valuenow={index}
                   aria-valuetext={EFFORT_LEVELS[index]}
                 >
-                  <span className="eff-fill" style={{ width: `${(index / (EFFORT_LEVELS.length - 1)) * 100}%` }} />
-                  <span className="eff-knob" style={{ left: `${(index / (EFFORT_LEVELS.length - 1)) * 100}%` }} />
+                  <span className="eff-fill" ref={fillRef} />
+                  <span className="eff-knob" ref={knobRef} />
                 </div>
                 <div className="eff-ticks">
                   {EFFORT_LEVELS.map(l => (
