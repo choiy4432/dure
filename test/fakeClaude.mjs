@@ -93,7 +93,28 @@ let turnsDone = 0; // context = 12000 x 끝난 차례 수 (/compact 하면 0 으
 let current = null; // 진행 중인 차례 { ended }
 let sequence = 0;
 
+// 로컬 명령 /effort — 진짜(2.1.304, probe9)처럼 init · 안내 글 · result(비용 0). 모델을 부르지 않으니 끝난 차례로 세지 않고(context 그대로),
+// get_settings 의 값도 바꾸지 않는다(세션 effort 는 설정 층에 안 보인다). FAKE_EFFORT_REPLY 가 있으면 그 글로 답하고,
+// FAKE_SLOW_EFFORT_MS 만큼 늦게 답한다.
+async function effortCommand(arg) {
+  log(JSON.stringify({ local: 'effort', arg }));
+  await init();
+  const slowEffort = Number(process.env.FAKE_SLOW_EFFORT_MS ?? 0);
+  if (slowEffort) await sleep(slowEffort);
+  const said =
+    process.env.FAKE_EFFORT_REPLY ??
+    (EFFORTS.includes(arg)
+      ? `Set effort level to ${arg} (this session only): 가짜 설명`
+      : arg
+        ? `Invalid argument: ${arg}. Valid options are: low, medium, high, xhigh, max, auto, ultracode [on|off]`
+        : 'Usage: /effort <low|medium|high|xhigh|max|auto|ultracode [on|off]>');
+  await assistant([{ type: 'text', text: said }]);
+  await result(said, { total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+}
+
 async function turn(text) {
+  const effort = /^\/effort(?:\s+(\S+))?$/.exec(text.trim());
+  if (effort) return effortCommand(effort[1] ?? '');
   const tok = { ended: false };
   current = tok;
   const finish = async (t, extra) => {

@@ -331,7 +331,7 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await page.keyboard.press('Escape')
       await expect(web.locator('.ctx-pop')).toHaveCount(0)
 
-      // effort — 칩 high → 슬라이더 오른쪽 한 칸 → xhigh, Claude 로 apply_flag_settings 가 간다
+      // effort — 칩 high → 슬라이더 오른쪽 한 칸 → xhigh, Claude 로 세션 명령 /effort xhigh 가 간다(대화엔 안 보인다)
       const chip = web.locator('.eff-chip')
       await expect(chip).toContainText('high')
       await chip.click()
@@ -341,8 +341,10 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await expect(chip).toContainText('xhigh')
       await expect
         .poll(() => fs.readFileSync(w.log, 'utf8').split(/\r?\n/)
-        .filter((l) => l.includes('apply_flag_settings') && l.includes('xhigh')).length)
+        .filter((l) => l.includes('"/effort xhigh"')).length)
         .toBeGreaterThan(0)
+      await expect(web.locator('.me', { hasText: '/effort' })).toHaveCount(0)
+      await expect(chip).toHaveText('xhigh') // Claude 의 답(지금 값)이 와도 xhigh 그대로
       await page.keyboard.press('Escape')
       await expect(web.locator('.eff-pop')).toHaveCount(0)
     })

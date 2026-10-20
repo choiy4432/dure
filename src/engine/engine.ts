@@ -64,9 +64,12 @@ export interface Engine extends EventEmitter {
   interrupt(id: AgentId): Promise<void>;
   newConversation(id: AgentId): Promise<void>;
   setModel(id: AgentId, model: string | null): Promise<void>;
-  /** 저장하고, 세션이 살아 있으면 바로 적용한다(없으면 다음에 띄울 때) — Claude 를 켜지 않는다 */
+  /**
+   * 저장하고, 세션이 살아 있으면 세션 명령 `/effort <단계>` 로 적용한다 — 차례 중이면 그 차례가 끝난 뒤(기다리던 입력보다 먼저),
+   * 세션이 없으면 다음에 띄울 때 첫 줄로. Claude 를 켜지 않는다
+   */
   setEffort(id: AgentId, level: EffortLevel): Promise<void>;
-  /** 마지막으로 Claude 에게 읽은 지금 effort — 모르면 null */
+  /** 지금 세션이 쓰는 effort — /effort 의 답, 고른 값이 없으면 내 설정(get_settings) · 모르면 null */
   effortNow(id: AgentId): EffortLevel | null;
   /** 마지막 init 이 알려 준, 지금 실제로 쓰는 모델 id — 모르면 null */
   modelNow(id: AgentId): string | null;
@@ -97,6 +100,9 @@ const DURE_TOOL_PREFIX = 'mcp__dure__';
 const DURE_TOOL_DENIED = '두레 도구는 승인 대상이 아니에요.';
 const EFFORT_UNKNOWN = '알 수 없는 effort 예요.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
+/** /effort 의 답(로컬 명령 — 모델을 부르지 않는다): "Set effort level to max (this session only): …" (probe9) */
+const EFFORT_SET = /Set effort level to (low|medium|high|xhigh|max)\b/;
+const EFFORT_BUSY = '/effort 차례가 끝나면 보낸다';
 
 /** 프로세스에 써 넣었지만 아직 아무 이벤트도 안 온 줄 — 읽기 전에 죽으면 되살린다 */
 type InFlight = { kind: 'relay'; messageId: string } | { kind: 'human'; parts: UserPart[] };
@@ -112,6 +118,10 @@ class EngineImpl extends EventEmitter implements Engine {
   private bypass = new Map<AgentId, boolean>(); // 마지막 init 의 권한 모드
   private modelNows = new Map<AgentId, string>(); // 마지막 init 의 풀린 모델 id
   private effortNows = new Map<AgentId, EffortLevel>(); // Claude 에게 마지막으로 읽은 지금 effort
+  // effort 는 세션 명령 `/effort <단계>` 로 정한다 — 설정 층(apply_flag_settings)엔 max 가 없어 조용히 무시되고,
+  // get_settings 는 세션 값을 모른다(probe9). 사람 입력처럼 한 줄씩 쓰지만 기록·사건·작업 중 표시는 남기지 않는다.
+  private effortWant = new WeakMap<ClaudeSession, EffortLevel>(); // 보낼 /effort — 차례가 끝나면 기다리던 사람 입력보다 먼저(마지막 값 하나만)
+  private effortTurn = new WeakMap<ClaudeSession, { heard: EffortLevel | null }>(); // 써 넣은 /effort — 그 result 까지 이벤트를 삼킨다
   private compactedTurn = new WeakSet<ClaudeSession>(); // 이번 차례에 요약됨 — 그 차례의 result 뒤엔 값을 받지 않는다
   private started = false;
   private limit: number;
@@ -141,7 +151,12 @@ class EngineImpl extends EventEmitter implements Engine {
       store,
       log,
       limit: this.limit,
-      deliver: (id, text, messageId) => this.sendTo(id, this.ensure(id), [{ type: 'text', text }], { kind: 'relay', messageId }),
+      deliver: (id, text, messageId) => {
+        const s = this.ensure(id);
+        // 막 띄운 세션이 /effort 차례 중 — 던지면 queued 로 남고, 그 차례가 끝나면 pump → onIdle 이 꺼낸다(두 줄을 동시에 쓰지 않는다)
+        if (this.effortTurn.has(s)) throw new Error(EFFORT_BUSY);
+        this.sendTo(id, s, [{ type: 'text', text }], { kind: 'relay', messageId });
+      },
       isBusy: (id) => this.waiting(id) || (this.held.get(id)?.length ?? 0) > 0,
     });
     // 아래 알림은 프로세스 이벤트·MCP 요청 처리 중에도 불린다 — 듣는 쪽이 던져도 남은 일(상태·다음 입력)은 한다
@@ -327,7 +342,8 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     if (!s) return;
     await s.request({ subtype: 'set_model', model: model ?? 'default' });
-    if (this.live(id, s)) void this.syncEffort(id, s); // 고른 effort 를 새 모델에 다시 적용하고 지금 값을 다시 읽는다
+    // 세션 effort 가 새 모델로 이어지는지 모른다 — 고른 값이 있으면 다시 보낸다(해롭지 않다), 없으면 내 설정을 다시 읽는다
+    if (this.live(id, s)) this.applyEffort(id, s);
   }
 
   private setModelNow(id: AgentId, value: string | null) {
@@ -342,11 +358,11 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     if (!(EFFORT_LEVELS as readonly unknown[]).includes(level)) throw new Error(EFFORT_UNKNOWN);
     this.store.updateAgent(id, { effort: level });
-    // 전에 읽은 지금 값은 버린다 — 남겨 두면 화면이 새로 고른 값 대신 옛 값으로 돌아간다(다음 get_settings 가 채운다)
+    // 전에 읽은 지금 값은 버린다 — 남겨 두면 화면이 새로 고른 값 대신 옛 값으로 돌아간다(/effort 의 답이 채운다)
     this.effortNows.delete(id);
     this.emitEffort(id);
     const s = this.sessions.get(id);
-    if (s) void this.syncEffort(id, s);
+    if (s) this.applyEffort(id, s);
   }
 
   modelNow(id: AgentId): string | null {
@@ -414,15 +430,21 @@ class EngineImpl extends EventEmitter implements Engine {
     return a;
   }
 
-  /** 지금 차례 중이거나 사람 답을 기다리는 중 */
+  /** 지금 차례 중(엔진이 보낸 /effort 차례 포함)이거나 사람 답을 기다리는 중 */
   private waiting(id: AgentId): boolean {
-    return this.sessions.get(id)?.status === 'working' || this.perms.pending(id).length > 0;
+    const s = this.sessions.get(id);
+    return s?.status === 'working' || (!!s && this.effortTurn.has(s)) || this.perms.pending(id).length > 0;
   }
 
-  /** 한가하면 사람 입력부터, 없으면 다른 에이전트가 보낸 대기 메시지 */
+  /** 한가하면 줄에 선 /effort 부터, 다음은 사람 입력, 없으면 다른 에이전트가 보낸 대기 메시지 — 한 번에 한 줄 */
   private pump(id: AgentId): void {
     const s = this.sessions.get(id);
-    if (!s || s.status !== 'idle' || this.perms.pending(id).length > 0) return;
+    if (!s || s.status !== 'idle' || this.effortTurn.has(s) || this.perms.pending(id).length > 0) return;
+    const level = this.effortWant.get(s);
+    if (level) {
+      this.sendEffort(s, level);
+      return; // 그 차례의 result 에서 다시 pump
+    }
     const next = this.held.get(id)?.shift();
     if (next) {
       this.emitHeld(id);
@@ -516,7 +538,9 @@ class EngineImpl extends EventEmitter implements Engine {
       this.guard(id, () => {
         // 제어 응답이 아닌 이벤트가 오면 보낸 줄을 읽은 것 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
         if (ev.kind !== 'control-response') this.inFlight.delete(s);
-        if (this.sessions.get(id) === s) this.onEvent(id, ev);
+        if (this.sessions.get(id) !== s) return;
+        if (ev.kind !== 'control-response' && this.effortTurn.has(s)) this.onEffortEvent(id, s, ev);
+        else this.onEvent(id, ev);
       }),
     );
     s.on('status', () =>
@@ -550,28 +574,62 @@ class EngineImpl extends EventEmitter implements Engine {
     this.errors.delete(id);
     this.sessions.set(id, s);
     this.emitStatus(id);
-    void this.syncEffort(id, s); // 기다리지 않는다
+    // 막 띄운 세션은 한가하다 — 고른 effort 가 있으면 어떤 입력보다 먼저 /effort 를 쓴다(pump 는 부르지 않는다: router 가 deliver 중일 수 있다)
+    if (agent.effort) this.sendEffort(s, agent.effort);
+    else void this.readEffort(id, s); // 기다리지 않는다
     return s;
   }
 
-  /**
-   * 저장된 effort 가 있으면 적용하고, 이어서 Claude 의 지금 값을 읽는다 — 적용이 실패해도 읽기는 한다(지금 값이 비어 있지 않게).
-   * 실패·시간 초과는 정상 흐름이라 조용히 넘어간다.
-   */
-  private async syncEffort(id: AgentId, s: ClaudeSession): Promise<void> {
-    const live = () => this.live(id, s);
+  /** 고른 effort 를 살아 있는 세션에 — 있으면 /effort 를 줄 맨 앞에 세우고(한가하면 바로), 없으면 내 설정을 읽는다 */
+  private applyEffort(id: AgentId, s: ClaudeSession): void {
     const want = this.store.agent(id)?.effort;
-    if (want) {
-      try {
-        await s.request({ subtype: 'apply_flag_settings', settings: { effortLevel: want } });
-      } catch {
-        /* 못 바꿨다 — 그래도 지금 값은 읽는다 */
-      }
-      if (!live()) return;
+    if (!want) {
+      void this.readEffort(id, s);
+      return;
     }
+    this.effortWant.set(s, want); // 줄에 선 옛 값은 바뀐다
+    this.pump(id);
+  }
+
+  /** /effort 를 쓴다 — 상태는 working 으로 바꾸지 않고, 기록하지 않는다(그 차례의 이벤트는 onEffortEvent 가 삼킨다) */
+  private sendEffort(s: ClaudeSession, level: EffortLevel): void {
+    this.effortWant.delete(s);
+    this.effortTurn.set(s, { heard: null });
+    try {
+      s.send([{ type: 'text', text: `/effort ${level}` }], { quiet: true });
+    } catch {
+      this.effortTurn.delete(s); // 이미 끝난 세션 — 다음에 띄울 때 다시 보낸다
+    }
+  }
+
+  /** 엔진이 보낸 /effort 차례의 이벤트 — 기록·사건 없이 삼키고, 답에서 지금 effort 를 읽는다 */
+  private onEffortEvent(id: AgentId, s: ClaudeSession, ev: StreamEvent): void {
+    const turn = this.effortTurn.get(s)!;
+    if (ev.kind === 'init') {
+      this.noteInit(id, ev); // /effort 만 받은 세션도 저장된다 — started 를 남겨야 다음 실행이 --resume 한다(같은 --session-id 는 거절됨)
+    } else if (ev.kind === 'assistant') {
+      turn.heard ??= effortSaid(ev.blocks.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
+    } else if (ev.kind === 'result') {
+      this.effortTurn.delete(s);
+      const heard = turn.heard ?? effortSaid(ev.text);
+      // 그새 다시 고른 값이 줄에 서 있으면 이 답은 옛 값 — 받지 않는다(화면이 옛 값으로 돌아갔다 오지 않게).
+      // 모르는 답(effort 없는 모델·바뀐 문구)이면 지금 값은 비운 채 — 화면은 고른 값을 보인다
+      if (heard && !this.effortWant.has(s)) {
+        this.effortNows.set(id, heard);
+        this.emitEffort(id);
+      }
+      this.pump(id);
+    }
+  }
+
+  /**
+   * 고른 effort 가 없을 때 — 세션이 쓰는 값 = 내 Claude 설정(get_settings 의 effective). 실패·시간 초과는 조용히 넘어간다.
+   * 고른 effort 가 생긴 뒤에 온 답은 버린다 — 세션 값(/effort)을 모르는 설정 층이라 화면이 그 값으로 돌아간다.
+   */
+  private async readEffort(id: AgentId, s: ClaudeSession): Promise<void> {
     try {
       const res: any = await s.request({ subtype: 'get_settings' });
-      if (!live()) return;
+      if (!this.live(id, s) || this.store.agent(id)?.effort) return;
       const now = res?.effective?.effortLevel;
       if (!(EFFORT_LEVELS as readonly unknown[]).includes(now)) return;
       this.effortNows.set(id, now);
@@ -624,18 +682,7 @@ class EngineImpl extends EventEmitter implements Engine {
       if (cur) this.compactedTurn.add(cur);
       this.guard(id, () => this.setContext(id, null));
     }
-    if (ev.kind === 'init') {
-      // 저장이 실패해도 init 은 알린다 — started 는 다음 차례의 init 때 다시 쓴다
-      this.guard(id, () => {
-        if (this.store.agent(id)?.started === false) this.store.updateAgent(id, { started: true });
-      });
-      this.guard(id, () => {
-        const bypass = ev.permissionMode === 'bypassPermissions';
-        this.bypass.set(id, bypass);
-        this.emit('flags', { agentId: id, bypass });
-      });
-      this.guard(id, () => this.setModelNow(id, ev.model || null));
-    }
+    if (ev.kind === 'init') this.noteInit(id, ev);
     if (ev.kind === 'tool-result') {
       this.guard(id, () =>
         this.emit('agent-event', { agentId: id, event: ev, viaApproval: this.perms.wasAsked(id, ev.toolUseId) }),
@@ -659,6 +706,20 @@ class EngineImpl extends EventEmitter implements Engine {
       }
       this.pump(id);
     }
+  }
+
+  /** 차례의 init — 시작됨 · 권한 모드 · 풀린 모델 id(엔진이 보낸 /effort 차례에서도) */
+  private noteInit(id: AgentId, ev: Extract<StreamEvent, { kind: 'init' }>): void {
+    // 저장이 실패해도 init 은 알린다 — started 는 다음 차례의 init 때 다시 쓴다
+    this.guard(id, () => {
+      if (this.store.agent(id)?.started === false) this.store.updateAgent(id, { started: true });
+    });
+    this.guard(id, () => {
+      const bypass = ev.permissionMode === 'bypassPermissions';
+      this.bypass.set(id, bypass);
+      this.emit('flags', { agentId: id, bypass });
+    });
+    this.guard(id, () => this.setModelNow(id, ev.model || null));
   }
 
   private recordEvent(id: AgentId, ev: StreamEvent): void {
@@ -730,6 +791,12 @@ class EngineImpl extends EventEmitter implements Engine {
     this.shown.set(id, { status, errorText });
     this.emit('status', { agentId: id, status, errorText });
   }
+}
+
+/** /effort 답에서 정해진 단계 — 모르는 말이면 null */
+function effortSaid(text: string): EffortLevel | null {
+  const m = EFFORT_SET.exec(text);
+  return m ? (m[1] as EffortLevel) : null;
 }
 
 function toHistoryPart(p: UserPart): HistoryPart {

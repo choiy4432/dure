@@ -136,9 +136,10 @@ export class ClaudeSession extends EventEmitter {
     this.child?.stdin?.write(line);
   }
 
-  send(parts: UserPart[]): void {
+  /** quiet: 상태를 working 으로 바꾸지 않는다 — 모델을 부르지 않는 로컬 명령(/effort)을 엔진이 몰래 보낼 때 */
+  send(parts: UserPart[], o: { quiet?: boolean } = {}): void {
     if (!this.running) throw new Error('세션이 실행 중이 아닙니다');
-    this.setStatus('working');
+    if (!o.quiet) this.setStatus('working');
     this.write(encodeUser(parts));
   }
 

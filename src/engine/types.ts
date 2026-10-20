@@ -67,7 +67,6 @@ export type ControlRequest =
   | { subtype: 'initialize' }
   | { subtype: 'interrupt' }
   | { subtype: 'set_model'; model: string }
-  | { subtype: 'apply_flag_settings'; settings: { effortLevel: EffortLevel } }
   | { subtype: 'get_settings' }
   | { subtype: 'get_usage'; skip_behaviors: true }
   | { subtype: 'get_context_usage'; detail: 'summary' };

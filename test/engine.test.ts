@@ -1138,14 +1138,17 @@ test('approve 에 mcp__dure__ 도구 → 사람에게 안 묻고 바로 거절, 
 });
 
 // ── effort ──
+// effort 는 세션 명령 `/effort <단계>` 로 정한다(probe9) — 설정 층(apply_flag_settings)엔 max 가 없고, get_settings 는 세션 값을 모른다.
 const effortEvents = (e: Engine) => {
   const got: { agentId: string; effort: string | null; effortNow: string | null }[] = [];
   e.on('effort', (v) => got.push(v));
   return got;
 };
 const controlLines = () => readLog().filter((x) => typeof x.control === 'string').map((x) => x.control as string);
+/** 엔진이 써 넣은 /effort 줄 — 가짜 claude 가 받은 차례대로 */
+const effortLines = () => userTexts().filter((t) => t.startsWith('/effort'));
 
-test('effort: 안 고른 에이전트는 apply 없이 get_settings 만 — effortNow 를 읽어 온다', async () => {
+test('effort: 안 고른 에이전트는 /effort 없이 get_settings 만 — effortNow 는 내 설정(가짜 high)', async () => {
   const e = await start();
   const { a } = setup(e);
   const got = effortEvents(e);
@@ -1154,61 +1157,159 @@ test('effort: 안 고른 에이전트는 apply 없이 get_settings 만 — effor
   await e.sendUser(a.id, text('echo 하나'));
   expect(await ev).toEqual({ agentId: a.id, effort: null, effortNow: 'high' });
   await done;
-  expect(controlLines()).not.toContain('apply_flag_settings');
+  expect(effortLines()).toEqual([]);
   expect(controlLines()).toContain('get_settings');
+  expect(controlLines()).not.toContain('apply_flag_settings');
   expect(e.effortNow(a.id)).toBe('high');
   expect(got).toHaveLength(1);
 });
 
-test('effort: 세션 없이 고르면 저장 + 사건만, 띄운 직후 apply 가 get_settings 보다 먼저', async () => {
+test('effort: 세션 없이 고르면 저장 + 사건만 — 띄우면 /effort xhigh 가 첫 줄, 사람 입력보다 먼저, 기록엔 없다', async () => {
   const e = await start();
   const { a } = setup(e);
   const got = effortEvents(e);
-  await e.setEffort(a.id, 'low');
-  expect(agentOf(e, a.id).effort).toBe('low');
-  expect(got).toEqual([{ agentId: a.id, effort: 'low', effortNow: null }]);
+  await e.setEffort(a.id, 'xhigh');
+  expect(agentOf(e, a.id).effort).toBe('xhigh');
+  expect(got).toEqual([{ agentId: a.id, effort: 'xhigh', effortNow: null }]);
   expect(readLog()).toHaveLength(0);
 
-  const ev = waitFor(e, 'effort', (x: any) => x.effortNow === 'low');
+  const heard = waitFor(e, 'effort', (x: any) => x.effortNow === 'xhigh');
   const done = resultOf(e, a.id);
   await e.sendUser(a.id, text('echo 하나'));
-  expect(await ev).toEqual({ agentId: a.id, effort: 'low', effortNow: 'low' });
-  await done;
-  const lines = controlLines();
-  expect(lines.indexOf('apply_flag_settings')).toBeGreaterThanOrEqual(0);
-  expect(lines.indexOf('apply_flag_settings')).toBeLessThan(lines.indexOf('get_settings'));
-  expect(controlRequests('apply_flag_settings')[0].request.settings).toEqual({ effortLevel: 'low' });
-  expect(e.effortNow(a.id)).toBe('low');
+  expect(await heard).toEqual({ agentId: a.id, effort: 'xhigh', effortNow: 'xhigh' });
+  expect(await resultText(done)).toBe('받음: echo 하나');
+  expect(userTexts()).toEqual(['/effort xhigh', 'echo 하나']);
+  expect(controlLines()).not.toContain('apply_flag_settings');
+  expect(controlLines()).not.toContain('get_settings'); // 세션 effort 는 get_settings 에 안 보인다 — 묻지 않는다
+  expect(e.history(a.id).filter((h) => h.kind === 'user')).toHaveLength(1);
+  expect(JSON.stringify(e.history(a.id))).not.toContain('/effort');
+  expect(e.effortNow(a.id)).toBe('xhigh');
 });
 
-test('effort: 세션이 살아 있으면 바로 apply + get_settings', async () => {
+test('effort: /effort 만 보낸 세션도 시작된 것 — 다음 실행은 --resume(같은 --session-id 는 진짜 claude 가 거절한다)', async () => {
   const e = await start();
   const { a } = setup(e);
-  const first = waitFor(e, 'effort', (x: any) => x.effortNow === 'high');
-  const done = resultOf(e, a.id);
-  await e.sendUser(a.id, text('echo 하나'));
-  await done;
-  await first;
-  const ev = waitFor(e, 'effort', (x: any) => x.effortNow === 'max');
+  await e.setEffort(a.id, 'low');
+  const heard = waitFor(e, 'effort', (x: any) => x.effortNow === 'low');
+  await e.describe(a.id); // 세션만 켠다 — 사람 입력 없음
+  await heard;
+  expect(agentOf(e, a.id).started).toBe(true);
+  await e.shutdown();
+  const e2 = await start();
+  await e2.describe(a.id);
+  expect(flagValue(lastSpawnOf('A').argv, '--resume')).toBe(agentOf(e2, a.id).sessionId);
+});
+
+test('effort: 살아 있는 한가한 세션에 max → /effort max 한 줄 · effortNow max · 기록·agent-event·작업 중 없음', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const ctx = waitFor(e, 'context', (x: any) => x.agentId === a.id && x.value);
+  await settledTurn(e, a.id);
+  await ctx;
+  const contextAsks = controlLines().filter((c) => c === 'get_context_usage').length;
+  const seen: string[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === a.id && seen.push(`agent-event:${x.event.kind}`));
+  e.on('history', (x: { agentId: string; item: { kind: string } }) => x.agentId === a.id && seen.push(`history:${x.item.kind}`));
+  e.on('status', (x: StatusEvent) => x.agentId === a.id && seen.push(`status:${x.status}`));
+  const got = effortEvents(e);
+  const heard = waitFor(e, 'effort', (x: any) => x.effortNow === 'max');
   await e.setEffort(a.id, 'max');
-  expect(await ev).toEqual({ agentId: a.id, effort: 'max', effortNow: 'max' });
-  expect(controlRequests('apply_flag_settings').map((x) => x.request.settings.effortLevel)).toEqual(['max']);
+  expect(await heard).toEqual({ agentId: a.id, effort: 'max', effortNow: 'max' });
+  await sleep(200); // 늦게 오는 것이 없는지
+  expect(effortLines()).toEqual(['/effort max']);
+  expect(got).toEqual([
+    { agentId: a.id, effort: 'max', effortNow: null },
+    { agentId: a.id, effort: 'max', effortNow: 'max' },
+  ]);
+  expect(seen).toEqual([]);
+  expect(e.status(a.id)).toBe('idle');
+  expect(controlLines().filter((c) => c === 'get_context_usage').length).toBe(contextAsks);
+  expect(controlLines()).not.toContain('apply_flag_settings');
   expect(e.effortNow(a.id)).toBe('max');
 });
 
-test('effort: haiku 에 고르면 오류 없이 effortNow 는 가짜가 준 값 그대로', async () => {
+test('effort: 일하는 중에 고르면 그 차례의 result 뒤에, 기다리던 사람 입력보다 먼저 — 줄에 선 것은 마지막 값 하나만', async () => {
   const e = await start();
   const { a } = setup(e);
-  await e.setModel(a.id, 'haiku');
-  const done = resultOf(e, a.id);
-  await e.sendUser(a.id, text('echo 하나'));
+  await settledTurn(e, a.id);
+  await e.sendUser(a.id, text('SLOW'));
+  await e.setEffort(a.id, 'low');
+  await e.sendUser(a.id, text('echo 둘'));
+  await e.setEffort(a.id, 'medium'); // 줄에 선 low 를 바꾼다
+  await sleep(200);
+  expect(effortLines()).toEqual([]); // 차례 중엔 쓰지 않는다
+  expect(e.heldInput(a.id)).toBe(1); // /effort 는 사람 입력 수에 들지 않는다
+  const heard = waitFor(e, 'effort', (x: any) => x.effortNow === 'medium');
+  const done = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === a.id && x.event.kind === 'result' && x.event.text.includes('둘'));
+  await e.interrupt(a.id);
   await done;
+  await heard;
+  expect(userTexts()).toEqual(['echo 하나', 'SLOW', '/effort medium', 'echo 둘']);
+  expect(e.effortNow(a.id)).toBe('medium');
+});
+
+test('effort: 승인을 기다리는 중에 고르면 그 차례가 끝난 뒤에 쓴다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const req = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id);
+  await e.sendUser(a.id, text('ASK Write'));
+  const r = await req;
+  await e.setEffort(a.id, 'low');
+  await sleep(200);
+  expect(effortLines()).toEqual([]);
+  const heard = waitFor(e, 'effort', (x: any) => x.effortNow === 'low');
+  e.answerRequest(r.id, { type: 'allow' });
+  await heard;
+  expect(userTexts()).toEqual(['ASK Write', '/effort low']);
+});
+
+test('effort: /effort 답을 기다리는 사이 다시 고르면 옛 답으로 돌아갔다 오지 않는다', async () => {
+  const e = await start({ FAKE_SLOW_EFFORT_MS: '300' });
+  const { a } = setup(e);
+  await settledTurn(e, a.id);
+  const got = effortEvents(e);
+  await e.setEffort(a.id, 'low');
+  await until('/effort low 를 씀', () => effortLines().length === 1);
+  await e.setEffort(a.id, 'max');
+  await waitFor(e, 'effort', (x: any) => x.effortNow === 'max');
+  expect(effortLines()).toEqual(['/effort low', '/effort max']);
+  expect(got).toEqual([
+    { agentId: a.id, effort: 'low', effortNow: null },
+    { agentId: a.id, effort: 'max', effortNow: null },
+    { agentId: a.id, effort: 'max', effortNow: 'max' },
+  ]);
+});
+
+test('effort: 띄운 직후 get_settings 답이 오기 전에 고르면 늦게 온 기본값이 덮지 않는다', async () => {
+  const e = await start({ FAKE_SLOW_CONTROL_MS: '300' });
+  const { a } = setup(e);
+  const got = effortEvents(e);
+  await e.describe(a.id); // 세션만 켠다 — get_settings 는 300 ms 늦게
+  await e.setEffort(a.id, 'max');
+  await waitFor(e, 'effort', (x: any) => x.effortNow === 'max');
+  await until('get_settings 를 물음', () => controlLines().includes('get_settings'));
+  await sleep(500);
+  expect(got).toEqual([
+    { agentId: a.id, effort: 'max', effortNow: null },
+    { agentId: a.id, effort: 'max', effortNow: 'max' },
+  ]);
+  expect(e.effortNow(a.id)).toBe('max');
+});
+
+test('effort: 확인 문구가 다르면(모르는 말) effortNow 는 비운 채 — 오류 없음', async () => {
+  const e = await start({ FAKE_EFFORT_REPLY: 'Effort is not supported for this model' });
+  const { a } = setup(e);
+  await settledTurn(e, a.id);
   const errs: unknown[] = [];
   e.on('engine-error', (x) => errs.push(x));
-  const settled = waitFor(e, 'effort', (x: any) => x.effort === 'max' && x.effortNow === 'high');
+  const got = effortEvents(e);
   await e.setEffort(a.id, 'max');
-  expect(await settled).toEqual({ agentId: a.id, effort: 'max', effortNow: 'high' });
-  expect(e.effortNow(a.id)).toBe('high');
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 둘')); // /effort 차례가 끝나야 나간다
+  expect(await resultText(done)).toBe('받음: echo 둘');
+  expect(effortLines()).toEqual(['/effort max']);
+  expect(got).toEqual([{ agentId: a.id, effort: 'max', effortNow: null }]);
+  expect(e.effortNow(a.id)).toBeNull();
   expect(errs).toEqual([]);
 });
 
@@ -1242,7 +1343,7 @@ test('effort: 새 대화 뒤 고르면 옛 세션의 지금 값(high)이 따라�
   expect(e.effortNow(a.id)).toBeNull();
 });
 
-test('effort: 살아 있는 세션에 고르면 먼저 지금 값을 잊고(null) 다시 읽어 채운다', async () => {
+test('effort: 살아 있는 세션에 고르면 먼저 지금 값을 잊고(null) /effort 답으로 다시 채운다', async () => {
   const e = await start();
   const { a } = setup(e);
   await settledTurn(e, a.id);
@@ -1256,23 +1357,6 @@ test('effort: 살아 있는 세션에 고르면 먼저 지금 값을 잊고(null
   ]);
 });
 
-test('effort: apply 가 실패해도 get_settings 로 지금 값을 다시 읽는다', async () => {
-  const e = await start({ FAKE_APPLY_FAIL: '1' });
-  const { a } = setup(e);
-  await settledTurn(e, a.id);
-  const before = controlRequests('get_settings').length;
-  const got = effortEvents(e);
-  await e.setEffort(a.id, 'low');
-  await until('apply 실패 뒤 get_settings', () => controlRequests('get_settings').length === before + 1);
-  await until('다시 읽은 값의 사건', () => got.length === 2);
-  expect(controlRequests('apply_flag_settings')).toHaveLength(1);
-  expect(got).toEqual([
-    { agentId: a.id, effort: 'low', effortNow: null },
-    { agentId: a.id, effort: 'low', effortNow: 'high' },
-  ]);
-  expect(e.effortNow(a.id)).toBe('high');
-});
-
 test('effort: 세션이 예기치 않게 끝나면 지금 값을 잊는다', async () => {
   const e = await start();
   const { a } = setup(e);
@@ -1283,7 +1367,7 @@ test('effort: 세션이 예기치 않게 끝나면 지금 값을 잊는다', asy
   expect(e.effortNow(a.id)).toBeNull();
 });
 
-test('effort: 모델을 바꾸면 지금 값을 잊고, set_model 뒤 고른 값을 다시 적용하고 다시 읽는다', async () => {
+test('effort: 모델을 바꾸면 지금 값을 잊고, set_model 뒤 저장된 값을 /effort 로 다시 보낸다', async () => {
   const e = await start();
   const { a } = setup(e);
   await e.setEffort(a.id, 'low');
@@ -1297,11 +1381,13 @@ test('effort: 모델을 바꾸면 지금 값을 잊고, set_model 뒤 고른 값
     { agentId: a.id, effort: 'low', effortNow: null },
     { agentId: a.id, effort: 'low', effortNow: 'low' },
   ]);
-  const lines = controlLines();
-  const model = lines.lastIndexOf('set_model');
-  expect(model).toBeGreaterThanOrEqual(0);
-  expect(lines.slice(model + 1)).toEqual(['apply_flag_settings', 'get_settings']);
-  expect(controlRequests('apply_flag_settings').map((x) => x.request.settings.effortLevel)).toEqual(['low', 'low']);
+  expect(effortLines()).toEqual(['/effort low', '/effort low']);
+  const order = readLog().map((x) =>
+    x.type === 'control_request' ? `control:${x.request?.subtype}` : x.type === 'user' ? `user:${x.message.content[0]?.text}` : '',
+  );
+  expect(order.lastIndexOf('user:/effort low')).toBeGreaterThan(order.indexOf('control:set_model'));
+  expect(order.indexOf('control:set_model')).toBeGreaterThanOrEqual(0);
+  expect(controlLines()).not.toContain('apply_flag_settings');
   expect(e.effortNow(a.id)).toBe('low');
 });
 
