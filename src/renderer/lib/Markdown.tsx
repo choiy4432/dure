@@ -15,7 +15,7 @@ interface HNode {
 const CONTAINERS = new Set(['ul', 'ol', 'li', 'blockquote'])
 const TEXT_BLOCKS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
 
-/** 흐르는 글의 커서 — 마지막 글 덩어리(문단·제목·목록 항목) 끝에 붙인다. 코드 상자·표 뒤면 맨 끝에 */
+/** 흐르는 글의 커서 — 마지막 글 덩어리(문단·제목·목록 항목) 끝에 붙인다. 코드 상자는 그 안 마지막 줄 끝, 표 뒤면 맨 끝에 */
 function rehypeCaret() {
   const caret = (): HNode => ({ type: 'element', tagName: 'span', properties: { className: ['caret'], ariaHidden: 'true' }, children: [] })
   const lastReal = (n: HNode) => [...(n.children ?? [])].reverse().find(c => !(c.type === 'text' && !(c as { value?: string }).value?.trim()))
@@ -27,6 +27,20 @@ function rehypeCaret() {
       else if (last?.type === 'element' && last.tagName && TEXT_BLOCKS.has(last.tagName)) {
         last.children = [...(last.children ?? []), caret()]
         return
+      } else if (last?.type === 'element' && last.tagName === 'pre') {
+        // 쓰다 만 코드 상자 — 커서는 상자 안 마지막 줄 끝에(아래 새 문단이 아니다)
+        const code = last.children?.find(c => c.type === 'element' && c.tagName === 'code')
+        if (code) {
+          // 코드 글은 끝 줄바꿈으로 끝난다 — 커서는 그 앞(마지막 줄 끝)에 둔다
+          const kids = [...(code.children ?? [])]
+          const tail = kids[kids.length - 1] as (HNode & { value?: string }) | undefined
+          if (tail?.type === 'text' && tail.value?.endsWith('\n')) {
+            kids.splice(kids.length - 1, 1, { ...tail, value: tail.value.slice(0, -1) } as HNode, caret(), { ...tail, value: '\n' } as HNode)
+          } else kids.push(caret())
+          code.children = kids
+          return
+        }
+        break
       } else break
     }
     // li 안에 글이 바로 있는 경우(촘촘한 목록)는 li 끝, 그 밖(코드 상자·표·빈 글)은 맨 끝

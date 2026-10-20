@@ -240,6 +240,17 @@ describe('ChatList — 흐르는 글의 마크다운', () => {
     expect(live.querySelector('li:last-child .caret')).not.toBeNull()
   })
 
+  it('쓰다 만 코드 상자면 커서는 그 상자 마지막 줄 끝에 — 아래 새 문단이 아니다', async () => {
+    await renderPanel()
+    await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '```js\nconst a = 1' } })
+    await frames()
+    const live = conv().querySelector('.ci-live') as HTMLElement
+    expect(live.querySelector('pre code .caret')).not.toBeNull()
+    expect(live.querySelectorAll('.caret')).toHaveLength(1)
+    expect(live.querySelector('pre code .caret')!.previousSibling!.textContent).toBe('const a = 1')
+    expect(live.querySelector('pre')!.nextElementSibling).toBeNull()
+  })
+
   it('델타가 빠르게 열 번 와도 마지막까지 다 그린다', async () => {
     await renderPanel()
     for (let i = 0; i < 10; i++) await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: `조각${i} ` } })
