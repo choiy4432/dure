@@ -594,7 +594,7 @@ describe('ChatList — 서브에이전트 요약 줄', () => {
     expect(within(screen.getByRole('tabpanel')).getByRole('group', { name: /세 곳 조사해 줘/ })).toBeInTheDocument()
   })
 
-  it('키보드로 누르면 초점이 그 차례 묶음으로 간다 — 누른 줄이 대화와 함께 사라져도 body 로 떨어지지 않는다', async () => {
+  it('키보드로 누르면 초점이 그 차례 묶음으로 간다 — 누른 줄이 대화와 함께 숨어도 body 로 떨어지지 않는다', async () => {
     snapshot.agents[0] = agent('w', { name: '웹 화면', role: '화면 구현', subagentsRunning: ['A'] })
     history.mockResolvedValueOnce(THREE)
     await renderPanel()
@@ -602,7 +602,7 @@ describe('ChatList — 서브에이전트 요약 줄', () => {
     row.focus()
     expect(document.activeElement).toBe(row)
     fireEvent.click(row) // 버튼에서 Enter·Space 는 click 으로 온다(jsdom 은 키를 click 으로 바꾸지 않는다)
-    expect(row.isConnected).toBe(false)
+    expect(row.closest('[hidden]')).not.toBeNull() // 대화 목록은 그려 둔 채 숨는다(Chromium 은 숨은 줄의 초점을 푼다)
     const turn = within(screen.getByRole('tabpanel')).getByRole('group', { name: /세 곳 조사해 줘/ })
     expect(document.activeElement).toBe(turn)
     expect(turn).toHaveAttribute('tabindex', '-1') // 초점을 받을 수 있지만 Tab 순서에는 없다

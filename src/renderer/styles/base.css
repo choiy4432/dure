@@ -1587,6 +1587,11 @@ code {
   flex-direction: column;
 }
 
+/* 고르지 않은 탭의 칸 — 그려 둔 채 숨긴다(위 display 가 [hidden] 을 덮지 않게) */
+.pnl-view[hidden] {
+  display: none;
+}
+
 /* 받은 메시지 카드(시안 .pin) */
 .pin {
   margin: 16px 20px 0;

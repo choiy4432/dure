@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentId, HistoryItem } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { buildTranscript } from '../state/transcript'
@@ -10,6 +10,7 @@ import { WorkingRow } from './WorkingRow'
 import { enteringLines, type LineSnap } from './newLines'
 import { Presence, playEnter } from '../lib/presence'
 import { MOTION, reducedMotion } from '../lib/motion'
+import { ViewShown } from './PanelTabs'
 
 /** 처음에 그리는 줄 수 · '더 보기' 한 번에 늘리는 수 */
 const PAGE = 300
@@ -26,6 +27,7 @@ const NO_CHOICE: Record<string, boolean> = {}
  * 위 고정 카드에 펼쳐 보이는 '최근 전달된 메시지'와 같은 줄은 한 줄로 접는다(cardOpen = 패널이 들고 있는 카드 펼침).
  * 에이전트가 일하는 동안(표시 상태 '작업 중' — 승인 기다림은 승인 카드가 알린다) 맨 끝에 '작업 중…' 줄.
  * 서브에이전트가 돌면 부모 차례가 끝나도 작업 중이다(엔진) — 그 줄에 도는 수를 함께 적는다.
+ * 서브에이전트 탭으로 가면 숨을 뿐 그대로다(펼친 줄·불러온 이전 대화) — 다시 보이면 읽던 자리로(ViewShown).
  */
 export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   agentId: AgentId
@@ -59,21 +61,39 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   const box = useRef<HTMLElement>(null)
   const stick = useRef(true)
   const keep = useRef<number | null>(null) // '더 보기' 직전의 바닥까지 거리 — 위에 줄이 늘어도 보던 자리 그대로
+  // 탭을 바꾸면 이 목록은 그려 둔 채 숨는다(ViewShown). 숨은 스크롤 상자(display:none)는 Chromium 이 자리를 0 으로 되돌리므로
+  // 보이는 동안 마지막으로 읽은 자리(top)를 들고 있다가 다시 보이면 되돌린다. 숨은 동안엔 스크롤을 읽지도 쓰지도 않는다
+  const shown = useContext(ViewShown)
+  const visible = useRef(shown)
+  const top = useRef(0)
 
   const onScroll = () => {
     const el = box.current
-    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX
+    if (!el || !visible.current) return // 숨으며 0 으로 돌아간 자리는 읽던 자리가 아니다
+    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX
+    top.current = el.scrollTop
   }
+
+  // 다시 보였다 — 맨 아래에 붙어 있었으면 맨 아래(숨은 동안 온 줄까지), 아니면 읽던 자리로.
+  // 아래 효과들보다 먼저 둔다 — 같은 그리기에서 내가 보냄(pin)이 오면 그것이 이긴다
+  useLayoutEffect(() => {
+    if (visible.current === shown) return
+    visible.current = shown
+    const el = box.current
+    if (!shown || !el) return
+    el.scrollTop = stick.current ? el.scrollHeight : top.current
+  }, [shown])
 
   useLayoutEffect(() => {
     const el = box.current
-    if (!el) return
+    if (!el || !visible.current) return
     if (keep.current !== null) {
       el.scrollTop = el.scrollHeight - keep.current
       keep.current = null
     } else if (stick.current) {
       el.scrollTop = el.scrollHeight
     }
+    top.current = el.scrollTop // 옮긴 자리도 읽던 자리 — 스크롤 이벤트가 오기 전에 숨어도
   }, [lines, v.streaming, v.status, work.on])
 
   // 보는 동안 새로 온 줄만 아래에서 들어온다 — 처음 그린 것 · 더 보기 · 기록 다시 받기 · 흐르던 글이 줄이 된 것은 아니다
@@ -83,7 +103,8 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
     const enter = enteringLines(snap.current, cur)
     snap.current = cur
     const el = box.current
-    if (!enter || !el || reducedMotion()) return
+    // 숨은 동안 온 줄은 기억만 한다 — 다시 보일 때 한꺼번에 들어오지 않는다
+    if (!enter || !el || !visible.current || reducedMotion()) return
     for (let n = enter.from; n < enter.to; n++) {
       const node = el.querySelector<HTMLElement>(`[data-line="${n}"]`)
       if (node) playEnter(node, MOTION.line.enter)
@@ -94,21 +115,22 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
     }
   })
 
-  // 내가 보냈다 — 내 말이 보이게 맨 아래로, 뒤에 오는 줄(내 말·답)도 따라가게 다시 붙인다
+  // 내가 보냈다 — 내 말이 보이게 맨 아래로, 뒤에 오는 줄(내 말·답)도 따라가게 다시 붙인다(숨어 있으면 다시 보일 때 맨 아래로)
   useLayoutEffect(() => {
     const el = box.current
     if (!pin || !el) return
     stick.current = true
     keep.current = null
-    el.scrollTop = el.scrollHeight
+    if (visible.current) el.scrollTop = el.scrollHeight
   }, [pin])
 
-  // 칸이 줄어도(창 크기 · 위에 카드가 생김) 맨 아래에 붙어 있었으면 바닥을 지킨다 — 줄어드는 건 스크롤 이벤트가 안 온다
+  // 칸이 줄어도(창 크기 · 위에 카드가 생김) 맨 아래에 붙어 있었으면 바닥을 지킨다 — 줄어드는 건 스크롤 이벤트가 안 온다.
+  // 숨을 때(크기 0)는 건드리지 않는다
   useLayoutEffect(() => {
     const el = box.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
-      if (stick.current && keep.current === null) el.scrollTop = el.scrollHeight
+      if (visible.current && stick.current && keep.current === null) el.scrollTop = el.scrollHeight
     })
     ro.observe(el)
     return () => ro.disconnect()

@@ -114,7 +114,8 @@ function NodeView({ node }: { node: SubagentNode }) {
   return (
     <li>
       <div className={`sa-node ${tone}${open ? ' open' : ''}`}>
-        <button type="button" className="sa-head" aria-expanded={open} aria-controls={id} onClick={() => setOpen(o => !o)}>
+        {/* aria-controls 는 펼쳤을 때만 — 접혀 있으면 가리킬 상자가 없다 */}
+        <button type="button" className="sa-head" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(o => !o)}>
           <span className="sa-t">
             <Bot className="i" aria-hidden="true" />
             <span className="sa-n trunc">{node.description || '서브에이전트'}</span>{' '}
@@ -151,27 +152,39 @@ function holds(nodes: SubagentNode[], id: string): boolean {
  * 차례가 늘면 맨 아래에 붙어 있을 때만 따라 내려간다.
  * focus(대화의 요약 줄을 눌렀다)가 새로 오면 그 노드가 든 차례 묶음으로 스크롤하고 그 묶음이 다시 들어온다(새 줄과 같은 움직임).
  * 한 번 간 focus 는 seen 에 적어 — 대화로 갔다가 탭만 다시 열면 맨 아래로 간다.
+ * 대화 탭을 보는 동안엔 그려 둔 채 숨는다(active false) — 펼친 노드는 그대로, 스크롤·강조는 하지 않는다.
  */
-export function SubagentMap({ name, turns, focus, seen }: {
+export function SubagentMap({ name, turns, focus, seen, active }: {
   name: string
   turns: SubagentTurn[]
   focus: { key: string; n: number } | null
   seen: RefObject<number>
+  /** 서브에이전트 탭이 골라져 보이는가 */
+  active: boolean
 }) {
   const box = useRef<HTMLDivElement>(null)
   const groups = useRef(new Map<string, HTMLDivElement>())
   const stick = useRef(true)
+  const opened = useRef(false) // 지난 그리기에서 보였나 — 다시 보이면 처음 연 것처럼 맨 아래부터
   const base = useId()
 
   const onScroll = () => {
     const el = box.current
-    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX
+    if (el && active) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX
   }
 
   // 새 focus — 그 노드가 든 차례로(열 때든 열린 채든). 맨 아래에 붙지 않게 해 아래 효과가 끌어 내리지 않는다.
-  // 키보드 초점도 그 묶음으로 — 누른 요약 줄은 대화 목록과 함께 사라져 초점이 body 로 떨어진다(묶음 이름 = 차례 머리로 읽힌다).
-  // turns 는 그 순간의 것을 읽을 뿐 — 차례가 늘 때 다시 돌지 않는다
+  // 키보드 초점도 그 묶음으로 — 누른 요약 줄은 대화 목록과 함께 숨어 초점이 body 로 떨어진다(묶음 이름 = 차례 머리로 읽힌다).
+  // turns 는 그 순간의 것을 읽을 뿐 — 차례가 늘 때 다시 돌지 않는다. 숨어 있으면 아무것도 하지 않는다(보일 때 한다)
   useLayoutEffect(() => {
+    if (!active) {
+      opened.current = false
+      return
+    }
+    if (!opened.current) {
+      opened.current = true
+      stick.current = true
+    }
     if (!focus || focus.n <= seen.current) return
     seen.current = focus.n
     const turn = turns.find(t => holds(t.nodes, focus.key))
@@ -181,13 +194,13 @@ export function SubagentMap({ name, turns, focus, seen }: {
     group.scrollIntoView?.({ block: 'start' })
     group.focus({ preventScroll: true })
     if (!reducedMotion()) playEnter(group, MOTION.line.enter)
-  }, [focus?.n])
+  }, [focus?.n, active])
 
-  // 열 때(처음엔 붙어 있다) · 차례가 늘 때 — 맨 아래에 붙어 있으면 맨 아래로
+  // 열 때(처음엔 붙어 있다) · 차례가 늘 때 — 맨 아래에 붙어 있으면 맨 아래로(숨어 있으면 하지 않는다)
   useLayoutEffect(() => {
     const el = box.current
-    if (el && stick.current) el.scrollTop = el.scrollHeight
-  }, [turns])
+    if (active && el && stick.current) el.scrollTop = el.scrollHeight
+  }, [turns, active])
 
   return (
     <div className="conv-wrap">

@@ -1,22 +1,29 @@
-import { useRef, type KeyboardEvent, type ReactNode } from 'react'
+import { createContext, useRef, type KeyboardEvent, type ReactNode } from 'react'
 import type { PanelTab } from '../state/store'
 
 const ORDER: PanelTab[] = ['chat', 'subagents']
 
-/** 탭 버튼의 id — 패널(tabpanel)의 aria-labelledby 가 고른 탭을 가리킨다 */
+/**
+ * 탭 아래 칸이 지금 보이는가 — 탭을 바꾸면 고르지 않은 칸은 그려 둔 채 숨긴다(AgentPanel).
+ * 숨은 대화 목록은 스크롤을 건드리지 않고, 다시 보이면 읽던 자리로 돌아간다(ChatList). 탭이 없으면 늘 보인다
+ */
+export const ViewShown = createContext(true)
+
+/** 탭 버튼의 id — 그 탭의 칸(tabpanel)의 aria-labelledby 가 가리킨다 */
 export const tabId = (base: string, tab: PanelTab) => `${base}-${tab}`
+/** 탭마다 제 칸(tabpanel)의 id — 탭의 aria-controls 가 가리킨다. 두 칸을 함께 그려 두고 고르지 않은 칸은 숨긴다(AgentPanel) */
+export const panelId = (base: string, tab: PanelTab) => `${base}-${tab}-panel`
 
 /**
  * 패널 탭 [대화 | 서브에이전트 N](시안 2안) — 지금 대화에 서브에이전트가 하나라도 있었을 때만 그린다(AgentPanel).
- * 두 탭이 한 패널(panelId)의 내용을 바꾼다. 고른 탭만 Tab 키로 닿고(roving tabindex), ←/→·Home·End 로 옮기면 바로 고르고 초점도 옮긴다.
+ * 탭마다 제 칸(panelId)을 가리키고 고른 탭의 칸만 보인다. 고른 탭만 Tab 키로 닿고(roving tabindex), ←/→·Home·End 로 옮기면 바로 고르고 초점도 옮긴다.
  * N 은 안쪽 서브에이전트까지 센 수, 도는 것이 있으면 초록 점(작업 중 점).
  */
-export function PanelTabs({ tab, total, running, base, panelId, onChange }: {
+export function PanelTabs({ tab, total, running, base, onChange }: {
   tab: PanelTab
   total: number
   running: boolean
   base: string
-  panelId: string
   onChange: (tab: PanelTab) => void
 }) {
   const refs = useRef<Partial<Record<PanelTab, HTMLButtonElement | null>>>({})
@@ -43,7 +50,7 @@ export function PanelTabs({ tab, total, running, base, panelId, onChange }: {
       id={tabId(base, t)}
       className="ptab"
       aria-selected={tab === t}
-      aria-controls={panelId}
+      aria-controls={panelId(base, t)}
       tabIndex={tab === t ? 0 : -1}
       onClick={() => onChange(t)}
       onKeyDown={e => onKeyDown(e, t)}

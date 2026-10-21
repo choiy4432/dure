@@ -148,6 +148,17 @@ async function renderPanel(select = 'w') {
   return { ...r, store: getStore() }
 }
 
+const conv = () => screen.getByRole('region', { name: '대화' })
+/** jsdom 은 배치를 하지 않는다 — 스크롤 크기를 정해 준다 */
+function fakeScroll(el: HTMLElement, o: { scrollHeight: number; clientHeight: number }) {
+  Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => o.scrollHeight })
+  Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => o.clientHeight })
+}
+/** Chromium 은 display:none 이 된 스크롤 상자의 자리를 0 으로 되돌린다 — 그 흉내(스크롤 이벤트까지) */
+function resetWhileHidden(el: HTMLElement) {
+  el.scrollTop = 0
+  fireEvent.scroll(el)
+}
 const chatTab = () => screen.getByRole('tab', { name: '대화' })
 const subTab = () => screen.getByRole('tab', { name: /^서브에이전트/ })
 const node = (name: RegExp | string) => screen.getByRole('button', { name: typeof name === 'string' ? new RegExp(`^${name}`) : name })
@@ -188,21 +199,27 @@ describe('패널 탭', () => {
     expect(subTab()).toHaveAccessibleName('서브에이전트 3')
   })
 
-  it('탭은 roving tabindex · aria-controls 로 한 패널을 — ←/→·Home·End 로 오가며 초점도 옮긴다', async () => {
+  it('탭은 roving tabindex · aria-controls 로 제 칸을(고르지 않은 칸은 hidden) — ←/→·Home·End 로 오가며 초점도 옮긴다', async () => {
     await renderPanel()
     expect(chatTab()).toHaveAttribute('tabindex', '0')
     expect(subTab()).toHaveAttribute('tabindex', '-1')
     const panel = screen.getByRole('tabpanel')
     expect(chatTab()).toHaveAttribute('aria-controls', panel.id)
-    expect(subTab()).toHaveAttribute('aria-controls', panel.id)
     expect(panel).toHaveAttribute('aria-labelledby', chatTab().id)
+    const mapPanel = document.getElementById(subTab().getAttribute('aria-controls')!)!
+    expect(mapPanel).not.toBe(panel)
+    expect(mapPanel).toHaveAttribute('role', 'tabpanel')
+    expect(mapPanel).toHaveAttribute('aria-labelledby', subTab().id)
+    expect(mapPanel).toHaveAttribute('hidden')
+    expect(panel).not.toHaveAttribute('hidden')
 
     chatTab().focus()
     fireEvent.keyDown(chatTab(), { key: 'ArrowRight' })
     expect(subTab()).toHaveAttribute('aria-selected', 'true')
     expect(subTab()).toHaveFocus()
     expect(subTab()).toHaveAttribute('tabindex', '0')
-    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', subTab().id)
+    expect(screen.getByRole('tabpanel')).toBe(mapPanel)
+    expect(panel).toHaveAttribute('hidden')
     expect(screen.queryByRole('region', { name: '대화' })).toBeNull()
 
     fireEvent.keyDown(subTab(), { key: 'ArrowRight' }) // 끝에서 처음으로
@@ -234,6 +251,26 @@ describe('패널 탭', () => {
     expect(subTab()).toHaveAttribute('aria-selected', 'true')
   })
 
+  it('지도 탭에서 보내면 대화 탭으로 — 보낸 말이 보이고, 위로 올려 읽던 대화도 맨 아래로', async () => {
+    await renderPanel()
+    const el = conv()
+    const size = { scrollHeight: 1000, clientHeight: 400 }
+    fakeScroll(el, size)
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    openMap()
+    const box = screen.getByRole('textbox', { name: '기획에게 보낼 메시지' })
+    fireEvent.change(box, { target: { value: '이것도 해 줘' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await settle()
+    expect(chatTab()).toHaveAttribute('aria-selected', 'true')
+    expect(el.scrollTop).toBe(1000)
+    size.scrollHeight = 1200
+    emit('history', { agentId: 'w', item: human('이것도 해 줘', 50) })
+    expect(within(conv()).getByText('이것도 해 줘')).toBeInTheDocument()
+    expect(el.scrollTop).toBe(1200)
+  })
+
   it('새 대화로 서브에이전트가 0 이 되면 탭이 사라지고 대화로 — 다음 서브에이전트가 와도 대화 탭', async () => {
     const { store } = await renderPanel()
     openMap()
@@ -245,6 +282,111 @@ describe('패널 탭', () => {
     emit('history', { agentId: 'w', item: asst([use('N', '새 조사')], 101) })
     expect(subTab().textContent?.trim()).toBe('서브에이전트 1')
     expect(chatTab()).toHaveAttribute('aria-selected', 'true')
+  })
+})
+
+describe('탭을 바꿔도 대화 목록은 그대로(숨길 뿐)', () => {
+  // 부모가 한 일 줄이 하나 있는 대화 — 서브에이전트 A 와 함께
+  const WITH_ACT: HistoryItem[] = [
+    human('헤더도 봐 줘'),
+    asst([use('A', '조사'), read('pr', 'Header.tsx')], 2),
+    start('A', '조사', 3),
+    result('pr', 'export function Header() {}'),
+    end('A', 'completed', '조사 보고', 9),
+    turnEnd(10),
+  ]
+
+  it('펼친 하는 일 줄과 위로 올려 읽던 자리가 남는다 — 숨긴 동안 0 으로 돌아가도 다시 보이면 그 자리', async () => {
+    histories.w = WITH_ACT
+    snapshot.agents[0] = agent('w', { name: '기획' })
+    await renderPanel()
+    const el = conv()
+    const row = within(el).getByRole('button', { name: /Header\.tsx/ })
+    fireEvent.click(row)
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    const size = { scrollHeight: 1000, clientHeight: 400 }
+    fakeScroll(el, size)
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+
+    openMap()
+    expect(screen.queryByRole('region', { name: '대화' })).toBeNull() // 숨었다
+    resetWhileHidden(el)
+    size.scrollHeight = 1200
+    emit('history', { agentId: 'w', item: { t: 20, kind: 'notice', text: '새 알림' } }) // 숨은 동안 온 줄
+
+    fireEvent.click(chatTab())
+    expect(conv()).toBe(el) // 다시 붙인 것이 아니다
+    expect(within(el).getByRole('button', { name: /Header\.tsx/ })).toBe(row)
+    expect(row).toHaveAttribute('aria-expanded', 'true')
+    expect(within(el).getByText('export function Header() {}')).toBeInTheDocument()
+    expect(el.scrollTop).toBe(100)
+    // 맨 아래에 붙지 않은 채 — 새 줄이 와도 읽던 자리
+    size.scrollHeight = 1300
+    emit('history', { agentId: 'w', item: { t: 21, kind: 'notice', text: '또 알림' } })
+    expect(el.scrollTop).toBe(100)
+  })
+
+  it('맨 아래에 붙어 있었으면 숨은 동안 온 줄까지 맨 아래로 — 붙은 채 이어 간다', async () => {
+    histories.w = WITH_ACT
+    snapshot.agents[0] = agent('w', { name: '기획' })
+    await renderPanel()
+    const el = conv()
+    const size = { scrollHeight: 1000, clientHeight: 400 }
+    fakeScroll(el, size)
+    el.scrollTop = 600
+    fireEvent.scroll(el)
+
+    openMap()
+    resetWhileHidden(el)
+    size.scrollHeight = 1200
+    emit('history', { agentId: 'w', item: { t: 20, kind: 'notice', text: '새 알림' } })
+    expect(el.scrollTop).toBe(0) // 숨은 목록은 건드리지 않는다
+
+    fireEvent.click(chatTab())
+    expect(el.scrollTop).toBe(1200)
+    size.scrollHeight = 1300
+    emit('history', { agentId: 'w', item: { t: 21, kind: 'notice', text: '또 알림' } })
+    expect(el.scrollTop).toBe(1300)
+  })
+
+  it('불러온 이전 대화도 그대로 — 더 보기를 다시 누르지 않아도 된다', async () => {
+    histories.w = [...WITH_ACT, ...Array.from({ length: 400 }, (_, i): HistoryItem => ({ t: 100 + i, kind: 'notice', text: `알림 ${i}` }))]
+    snapshot.agents[0] = agent('w', { name: '기획' })
+    await renderPanel()
+    fireEvent.click(within(conv()).getByRole('button', { name: /^이전 대화 \d+개 더 보기$/ }))
+    expect(within(conv()).queryByRole('button', { name: /^이전 대화/ })).toBeNull()
+    expect(conv().querySelectorAll('.note')).toHaveLength(400)
+    openMap()
+    fireEvent.click(chatTab())
+    expect(within(conv()).queryByRole('button', { name: /^이전 대화/ })).toBeNull()
+    expect(conv().querySelectorAll('.note')).toHaveLength(400)
+  })
+
+  it('숨은 지도는 스크롤을 건드리지 않는다 — 열 때 맨 아래로', async () => {
+    const was = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => 640 })
+    try {
+      histories.w = TURNS
+      await renderPanel()
+      const map = document.querySelector('.sa-map') as HTMLElement
+      expect(map.closest('[hidden]')).not.toBeNull() // 그려 두고 숨긴다
+      expect(map.scrollTop).toBe(0)
+      emit('history', { agentId: 'w', item: asst([use('D', '넷')], 30) }) // 숨은 동안 차례가 는다
+      expect(map.scrollTop).toBe(0)
+      openMap()
+      expect(document.querySelector('.sa-map')).toBe(map)
+      expect(map.scrollTop).toBe(640)
+    } finally {
+      if (was) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', was)
+      else delete (HTMLElement.prototype as any).scrollHeight
+    }
+  })
+
+  it('숨긴 칸은 [hidden] 으로 감춘다 — .pnl-view 의 display 가 덮지 않게', async () => {
+    const fsName: string = 'node:fs'
+    const css: string = (await import(/* @vite-ignore */ fsName)).readFileSync('src/renderer/styles/base.css', 'utf8')
+    expect(css).toMatch(/\.pnl-view\[hidden\]\s*\{[^}]*display:\s*none/)
   })
 })
 
@@ -295,6 +437,7 @@ describe('서브에이전트 지도', () => {
     openMap()
     const a = node('A사 랜딩 문구 조사')
     expect(a).toHaveAttribute('aria-expanded', 'false')
+    expect(a).not.toHaveAttribute('aria-controls') // 접혀 있으면 가리킬 상자가 없다
     expect(screen.queryByText('보고')).toBeNull()
     fireEvent.click(a)
     expect(a).toHaveAttribute('aria-expanded', 'true')
@@ -319,9 +462,11 @@ describe('서브에이전트 지도', () => {
     expect(rows[1]).toBeDisabled() // 진행 중 — 펼칠 것이 없다
     expect(within(bBody).queryByText('보고')).toBeNull() // 아직 끝나지 않았다
 
+    const aBody = a.getAttribute('aria-controls')!
     fireEvent.click(a)
     expect(a).toHaveAttribute('aria-expanded', 'false')
-    expect(document.getElementById(a.getAttribute('aria-controls')!)).toBeNull()
+    expect(a).not.toHaveAttribute('aria-controls')
+    expect(document.getElementById(aBody)).toBeNull()
   })
 
   it('안쪽 서브에이전트는 띄운 노드 아래 들여 붙고, 펼치면 Claude 가 보내 주지 않는다는 한 줄', async () => {
@@ -384,10 +529,12 @@ describe('서브에이전트 지도', () => {
       expect(document.activeElement).toBe(auto)
 
       // 대화로 갔다가 탭만 다시 열면 맨 아래로 — 지난 focus 로 다시 스크롤하지도, 초점을 옮기지도 않는다
+      // (누른 탭이 초점을 받는다 — 브라우저처럼. 숨은 지도 묶음에 남은 초점은 Chromium 이면 풀린다)
+      chatTab().focus()
       fireEvent.click(chatTab())
       openMap()
       expect(seen).toHaveLength(2)
-      expect(document.activeElement).toBe(document.body)
+      expect(document.activeElement).toBe(chatTab())
       expect(document.querySelector('.sa-map')!.scrollTop).toBe(640)
     } finally {
       delete (HTMLElement.prototype as any).scrollIntoView
