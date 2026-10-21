@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -2417,4 +2417,38 @@ test('bypass: setBypass · setAllowBypass 는 boolean 이 아닌 값을 던진�
   await turn(e, a.id, 'echo 하나'); // 다음에 띄워도 켜지지 않는다
   expect(controlRequests('set_permission_mode')).toEqual([]);
   expect(e.flags(a.id).bypass).toBe(false);
+});
+
+test('설정: 허용을 켤 때 남은 켜짐을 먼저 지운 뒤 허용을 저장한다 — 지우다 실패하면 허용도 저장하지 않는다', async () => {
+  // 허용이 꺼진 채 bypassOn:true 가 남은 에이전트(손으로 고친 파일 등)
+  const seed = openStore(dataDir);
+  const r = seed.addRoom('방');
+  const x = seed.addAgent({ roomId: r.id, name: 'X', role: 'r', folder: folder('x') });
+  seed.updateAgent(x.id, { bypassOn: true });
+  const e = await start();
+  const write = fs.writeFileSync;
+  const spy = vi.spyOn(fs, 'writeFileSync').mockImplementation(((file: fs.PathOrFileDescriptor, ...rest: any[]) => {
+    if (String(file).includes('state.json')) throw new Error('디스크 오류');
+    return (write as any)(file, ...rest);
+  }) as typeof fs.writeFileSync);
+  try {
+    await expect(e.setAllowBypass(true)).rejects.toThrow('디스크 오류');
+  } finally {
+    spy.mockRestore();
+  }
+  // 허용이 저장됐으면 남은 켜짐과 함께 다음에 띄울 때 묻지 않음이 켜진다
+  expect(e.allowBypass()).toBe(false);
+  const saved = fs.existsSync(path.join(dataDir, 'settings.json')) ? JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8')) : {};
+  expect(saved.allowBypass).not.toBe(true);
+  await e.shutdown();
+  const e2 = await start();
+  expect(e2.allowBypass()).toBe(false);
+  await turn(e2, x.id, 'echo 하나');
+  expect(controlRequests('set_permission_mode')).toEqual([]);
+
+  // 다시 켜면 이번엔 지우고 허용
+  await e2.setAllowBypass(true);
+  expect(agentOf(e2, x.id).bypassOn).toBe(false);
+  expect(openStore(dataDir).agent(x.id)!.bypassOn).toBe(false);
+  expect(JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8')).allowBypass).toBe(true);
 });

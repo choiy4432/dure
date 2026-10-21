@@ -294,10 +294,11 @@ class EngineImpl extends EventEmitter implements Engine {
   async setAllowBypass(on: boolean): Promise<void> {
     if (typeof on !== 'boolean') throw new Error(BYPASS_VALUE_INVALID);
     const was = this.allow;
+    // 허용이 꺼진 채 남은 켜짐(손으로 고친 파일 등)은 끈 것으로 친다 — 켤 때 살아나지 않게 허용을 저장하기 전에 지운다
+    // (허용을 켜면 모두 꺼진 채 시작. 지우다 실패하면 허용도 저장하지 않는다 — 켜지 않은 에이전트가 켜진 채 남지 않게)
+    if (on && !was) for (const a of this.store.agents()) if (a.bypassOn) this.store.updateAgent(a.id, { bypassOn: false });
     this.writeSettings({ allowBypass: on });
     this.allow = on;
-    // 허용이 꺼진 채 남은 켜짐(손으로 고친 파일 등)은 끈 것으로 친다 — 켤 때 살아나지 않게 지운다(허용을 켜면 모두 꺼진 채 시작)
-    if (on && !was) for (const a of this.store.agents()) if (a.bypassOn) this.store.updateAgent(a.id, { bypassOn: false });
     // 켜져 있던 에이전트 + 스위치는 꺼졌지만 두레가 켠 bypass 가 남은 세션(끄기 실패·늦은 켜기)
     const targets = on ? [] : this.store.agents().filter((a) => a.bypassOn || this.leftover(a.id));
     for (const a of targets) if (a.bypassOn) this.store.updateAgent(a.id, { bypassOn: false });
