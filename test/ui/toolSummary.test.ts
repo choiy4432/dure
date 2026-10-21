@@ -22,6 +22,11 @@ describe('toolSummary', () => {
     expect(toolSummary('Agent', { description: '조사' }).verb).toBe('도우미에게 맡김')
     expect(toolSummary('AskUserQuestion', {})).toEqual({ verb: '물어봄', target: null, icon: 'question' })
   })
+  it('스킬은 이름까지 — 이름이 없으면(옛 기록) 도구 이름', () => {
+    expect(toolSummary('Skill', { skill: 'superpowers:brainstorming', args: '긴 인자' })).toEqual({ verb: '스킬 사용', target: 'superpowers:brainstorming', icon: 'other' })
+    expect(toolSummary('Skill', {})).toEqual({ verb: '사용', target: 'Skill', icon: 'other' })
+    expect(requestTitle('기획', 'Skill', { skill: 'pdf' })).toBe('기획이 스킬을 쓰려 해요')
+  })
   it('두레 도구', () => {
     expect(toolSummary('mcp__dure__send_message', { to: '기획', text: 'x' })).toEqual({ verb: '넘김', target: '기획 에게', icon: 'handoff' })
     expect(toolSummary('mcp__dure__list_agents', {})).toMatchObject({ verb: '동료 확인', target: null, icon: 'handoff' })

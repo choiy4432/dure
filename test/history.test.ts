@@ -70,6 +70,7 @@ test('trimToolInput: 화면이 읽는 칸만 · 글은 500자까지 · 경로는
     file_path: 'C:/w/a.ts',
   });
   expect(trimToolInput({ to: '웹 화면', text: '긴 본문'.repeat(1000) })).toEqual({ to: '웹 화면' });
+  expect(trimToolInput({ skill: 'superpowers:brainstorming', args: '긴 인자'.repeat(1000) })).toEqual({ skill: 'superpowers:brainstorming' });
   expect(trimToolInput({ command: 'npm run build', description: '빌드', timeout: 5000 })).toEqual({
     command: 'npm run build',
     description: '빌드',

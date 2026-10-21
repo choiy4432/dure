@@ -57,6 +57,11 @@ export function toolSummary(name: string, input: unknown): ToolSummary {
       return { verb: '동료 확인', target: null, icon: 'handoff' }
     case 'AskUserQuestion':
       return { verb: '물어봄', target: null, icon: 'question' }
+    case 'Skill': {
+      // 이름이 없는 옛 기록(엔진이 skill 칸을 남기기 전)은 아래 '그 밖' 과 같은 줄로
+      const skill = field(input, 'skill')
+      return skill ? { verb: '스킬 사용', target: skill, icon: 'other' } : { verb: '사용', target: name, icon: 'other' }
+    }
     default: {
       const m = /^mcp__.+?__(.+)$/.exec(name)
       return { verb: '사용', target: m ? m[1] : name, icon: 'other' }
@@ -77,6 +82,7 @@ const INTENT: Record<string, string> = {
   넘김: '일을 넘기려',
   '동료 확인': '동료를 확인하려',
   물어봄: '물어보려',
+  '스킬 사용': '스킬을 쓰려',
 }
 const INTENT_OTHER = '도구를 쓰려'
 
