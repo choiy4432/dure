@@ -1,5 +1,6 @@
 import type { AssistantBlock, HistoryItem } from '../../engine/types'
 import { DENY_TEXTS } from '../../shared/denyTexts'
+import { subagentStatus, userText } from './subagents'
 import { toolSummary, type ToolIcon } from '../lib/toolSummary'
 
 export interface ActionLine {
@@ -85,15 +86,10 @@ export function buildTranscript(
     else if (it.kind === 'subagent-end') ends.set(it.toolUseId, it)
   }
 
-  // 서브에이전트 하나의 상태 — 끝 기록이 우선, 없으면 도는 중인지, 시작 기록도 없는 옛 기록이면 부모가 받은 결과로.
-  // 시작 기록이 있으면 부모의 Agent 결과('Async agent launched…')는 Claude 내부 안내라 보지 않는다
+  // 요약 숫자 — 나무와 같은 상태 규칙(subagentStatus)에서 센다
   const stateOf = (id: string): 'running' | 'done' | 'bad' => {
-    const e = ends.get(id)
-    if (e) return e.status === 'completed' ? 'done' : 'bad'
-    if (running.has(id)) return 'running'
-    const r = starts.has(id) ? undefined : results.get(id)
-    if (r) return r.isError ? 'bad' : 'done'
-    return 'bad'
+    const st = subagentStatus(ends.get(id), running.has(id), starts.has(id), results.get(id))
+    return st === 'running' ? 'running' : st === 'done' ? 'done' : 'bad'
   }
 
   const all: ChatLine[] = []
@@ -149,10 +145,7 @@ export function buildTranscript(
         break
       case 'user': {
         flush()
-        const text = it.parts
-          .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
-          .map((p) => p.text)
-          .join('\n\n')
+        const text = userText(it)
         const images = it.parts.filter((p) => p.type === 'image').length
         const relay = it.source === 'relay' ? stripRelay(text) : null
         if (relay) all.push({ kind: 'relay', from: relay.from, text: relay.body, at: it.t, ...(it.messageId ? { messageId: it.messageId } : {}) })

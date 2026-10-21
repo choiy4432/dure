@@ -1295,8 +1295,11 @@ class EngineImpl extends EventEmitter implements Engine {
     } else {
       this.guard(id, () => this.emit('agent-event', { agentId: id, event: ev }));
     }
+    // 시작은 도는 목록을 먼저 고치고 기록한다(기록만 보이고 도는 목록에 없는 틈이 '끊김' 으로 보이지 않게),
+    // 끝은 기록을 먼저 남기고 목록에서 뺀다(목록에서 빠졌는데 끝 기록이 없는 틈이 없게)
+    if (ev.kind === 'task-started') this.guard(id, () => this.noteSubagent(id, ev));
     this.guard(id, () => this.recordEvent(id, ev));
-    if (ev.kind === 'task-started' || ev.kind === 'task-ended') this.guard(id, () => this.noteSubagent(id, ev));
+    if (ev.kind === 'task-ended') this.guard(id, () => this.noteSubagent(id, ev));
     // 세션은 result 를 내보내기 직전에 idle 이 된다 — 이 차례의 result 를 먼저 알린 뒤 다음 입력을 보낸다
     if (ev.kind === 'result') {
       // 끝난 차례엔 살아 있는 부모의 권한 질문이 있을 수 없다 — 남은 것(떠난 프로세스의 호출 등)은 정리해야 다음 입력이 나간다.

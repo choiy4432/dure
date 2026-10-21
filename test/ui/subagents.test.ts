@@ -138,3 +138,36 @@ describe('buildSubagentTree', () => {
     expect(total).toBe(1)
   })
 })
+
+describe('buildSubagentTree — 상태 규칙·깊은 노드', () => {
+  it('막 맡긴 것(시작·결과 없음, 도는 목록에도 없음)은 도는 중', () => {
+    const { turns, running } = buildSubagentTree([human('x'), asst([agent('A')])], new Set())
+    expect(turns[0].nodes[0].status).toBe('running')
+    expect(running).toBe(1)
+  })
+
+  it('시작 기록은 있는데 끝도 도는 흔적도 없으면 끊김', () => {
+    const { turns, running } = buildSubagentTree([human('x'), asst([agent('A')]), start('A')], new Set())
+    expect(turns[0].nodes[0].status).toBe('lost')
+    expect(running).toBe(0)
+  })
+
+  it('Agent tool_use 없이 시작 기록만 있는 깊이 3 노드도 parentTaskId 로 제자리에 붙는다', () => {
+    const { turns, total } = buildSubagentTree(
+      [
+        human('x'),
+        asst([agent('A')]),
+        start('A'),
+        asst([agent('B')], 4, 'A'),
+        start('B', 'task-A'),
+        start('C', 'task-B'),
+      ],
+      new Set(['A', 'B', 'C']),
+    )
+    const b = turns[0].nodes[0].children[0]
+    expect(b.id).toBe('B')
+    expect(b.children.map((c) => c.id)).toEqual(['C'])
+    expect(b.children[0]).toMatchObject({ hidden: true, status: 'running' })
+    expect(total).toBe(3)
+  })
+})

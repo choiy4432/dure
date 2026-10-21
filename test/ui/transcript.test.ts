@@ -227,3 +227,31 @@ describe('buildTranscript — 서브에이전트', () => {
     expect(subpart(lines)[0].counts).toEqual({ running: 1, done: 0, bad: 0 })
   })
 })
+
+describe('buildTranscript — 막 맡긴 것과 실제 흐름', () => {
+  const agent = (id: string) => ({ type: 'tool_use', id, name: 'Agent', input: { description: '조사', prompt: 'p' } })
+  const start = (id: string): HistoryItem => ({ t: 3, kind: 'subagent-start', toolUseId: id, taskId: `task-${id}`, description: id, subagentType: null, parentTaskId: null })
+  const parts = (lines: any[]) => lines.flatMap((l) => (l.kind === 'claude' ? l.parts : [])).filter((p: any) => p.type === 'subagents')
+
+  it('막 맡긴 것(시작·결과 없음, 도는 목록에도 아직 없음)은 도는 중', () => {
+    const { lines } = buildTranscript([human('hi'), asst([agent('A')])], undefined)
+    expect(parts(lines)[0].counts).toEqual({ running: 1, done: 0, bad: 0 })
+  })
+
+  it('시작 기록은 있는데 끝도 도는 흔적도 없으면 끊김(bad)', () => {
+    const { lines } = buildTranscript([human('hi'), asst([agent('A')]), start('A')], undefined)
+    expect(parts(lines)[0].counts).toEqual({ running: 0, done: 0, bad: 1 })
+  })
+
+  it('Agent 호출이 따로 온 줄들 사이에 결과·시작 기록이 끼어도 한 조각', () => {
+    const { lines } = buildTranscript(
+      [human('hi'), asst([agent('A')]), start('A'), asst([agent('B')], 4), start('B'), res('A', 'Async agent launched…'), asst([agent('C')], 5)],
+      undefined,
+      300,
+      new Set(['A', 'B']),
+    )
+    const p = parts(lines)
+    expect(p).toHaveLength(1)
+    expect(p[0]).toMatchObject({ key: 'A', ids: ['A', 'B', 'C'], counts: { running: 3, done: 0, bad: 0 } })
+  })
+})

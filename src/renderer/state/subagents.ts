@@ -45,12 +45,30 @@ interface Slot {
 
 const STATUS: Record<End['status'], SubagentStatus> = { completed: 'done', failed: 'failed', stopped: 'stopped' }
 
-function openerOf(item: HistoryItem | undefined): Opener {
-  if (item?.kind !== 'user') return { kind: 'auto', text: '', from: '' }
-  const text = item.parts
+/**
+ * 서브에이전트 하나의 상태 — 요약 숫자(대화)와 나무 칩이 같은 규칙을 쓴다.
+ * 끝 기록 > 도는 목록 > (시작·결과 둘 다 없으면 막 맡긴 것 = 도는 중) > 시작 기록 없는 옛 기록은 부모가 받은 결과로
+ * (안내 글은 쓰지 않는다) > 그 밖(시작은 있는데 끝도 도는 흔적도 없음) = 끊김
+ */
+export function subagentStatus(end: End | null | undefined, isRunning: boolean, hasStart: boolean, parentResult: ToolResult | undefined): SubagentStatus {
+  if (end) return STATUS[end.status]
+  if (isRunning) return 'running'
+  if (hasStart) return 'lost'
+  if (!parentResult) return 'running'
+  return parentResult.isError ? 'failed' : 'done'
+}
+
+/** 사람 말·받은 메시지의 글 조각을 한 글로 */
+export function userText(item: Extract<HistoryItem, { kind: 'user' }>): string {
+  return item.parts
     .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
     .map((p) => p.text)
     .join('\n\n')
+}
+
+function openerOf(item: HistoryItem | undefined): Opener {
+  if (item?.kind !== 'user') return { kind: 'auto', text: '', from: '' }
+  const text = userText(item)
   if (item.source === 'relay') {
     const r = stripRelay(text)
     return { kind: 'relay', text: r.body, from: r.from }
@@ -89,13 +107,7 @@ export function buildSubagentTree(
     const start = starts.get(id) ?? null
     const end = ends.get(id) ?? null
     const own = results.get(id)
-    let status: SubagentStatus
-    if (end) status = STATUS[end.status]
-    else if (running.has(id)) status = 'running'
-    else if (start) status = 'lost'
-    // 시작 기록이 없는 옛 기록 — 부모가 받은 결과로(안내 글은 쓰지 않는다)
-    else if (own) status = own.isError ? 'failed' : 'done'
-    else status = 'lost'
+    const status = subagentStatus(end, running.has(id), start != null, own)
     const inputDesc = input && typeof input === 'object' ? (input as Record<string, unknown>).description : null
     slots.set(id, {
       node: {
