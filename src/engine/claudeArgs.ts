@@ -7,6 +7,11 @@ export const SPAWN_ENV_EXTRA = { MCP_TOOL_TIMEOUT: '86400000' };
 // lifts it for the dure server only, so a human can take longer than 5 min to answer an
 // approval card (scripts/probe/probe5.mjs, docs/findings).
 export const DURE_SERVER_TIMEOUT_MS = 86_400_000;
+/**
+ * 띄운 뒤 set_permission_mode 로 bypassPermissions 를 켤 수 있게만 한다 — 이것만으로는 평소 모드로 시작한다(probe10).
+ * 처음부터 묻지 않는 --dangerously-skip-permissions 는 쓰지 않는다(사용자가 켠 에이전트만 bypass).
+ */
+export const ALLOW_BYPASS_FLAG = '--allow-dangerously-skip-permissions';
 
 export function buildArgs(a: {
   sessionId: string;
@@ -15,6 +20,8 @@ export function buildArgs(a: {
   promptPath: string;
   model: string | null;
   name: string;
+  /** 설정의 '묻지 않고 실행 허용' */
+  allowBypass: boolean;
 }): string[] {
   // --allowedTools / --disallowedTools are variadic: each must be followed by another flag.
   return [
@@ -24,6 +31,7 @@ export function buildArgs(a: {
     '--mcp-config', a.mcpConfigPath,
     '--permission-prompts', 'host',
     '--permission-prompt-tool', APPROVE_TOOL,
+    ...(a.allowBypass ? [ALLOW_BYPASS_FLAG] : []),
     '--allowedTools', ...DURE_TOOLS,
     '--disallowedTools', ...BLOCKED_TOOLS,
     '--append-system-prompt-file', a.promptPath,

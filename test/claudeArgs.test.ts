@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { APPROVE_TOOL, DURE_TOOLS, BLOCKED_TOOLS, SPAWN_ENV_EXTRA, buildArgs, buildMcpConfig, buildUsageArgs } from '../src/engine/claudeArgs';
 
-const base = { sessionId: 'S', resume: false, mcpConfigPath: 'M.json', promptPath: 'P.md', model: null, name: 'world' };
+const base = { sessionId: 'S', resume: false, mcpConfigPath: 'M.json', promptPath: 'P.md', model: null, name: 'world', allowBypass: false };
 
 function after(a: string[], flag: string): string[] {
   const i = a.indexOf(flag);
@@ -35,7 +35,7 @@ describe('buildArgs', () => {
     expect(after(a, '--model')).toEqual(['opus']);
   });
   test('가변 인자 플래그는 마지막이 아니고 바로 뒤에 플래그가 온다', () => {
-    for (const a of [buildArgs(base), buildArgs({ ...base, resume: true, model: 'opus' })]) {
+    for (const a of [buildArgs(base), buildArgs({ ...base, resume: true, model: 'opus' }), buildArgs({ ...base, allowBypass: true })]) {
       for (const f of ['--allowedTools', '--disallowedTools']) {
         const i = a.indexOf(f);
         const end = i + 1 + after(a, f).length;
@@ -43,6 +43,19 @@ describe('buildArgs', () => {
         expect(a[end].startsWith('--')).toBe(true);
       }
     }
+  });
+  test('buildArgs: allowBypass true 면 --allow-dangerously-skip-permissions, false 면 없음 · --dangerously-skip-permissions 는 어느 쪽에도 없다', () => {
+    const on = buildArgs({ ...base, allowBypass: true });
+    const off = buildArgs(base);
+    expect(on.filter((x) => x === '--allow-dangerously-skip-permissions')).toHaveLength(1);
+    expect(off).not.toContain('--allow-dangerously-skip-permissions');
+    for (const a of [on, off, buildArgs({ ...base, allowBypass: true, resume: true, model: 'opus' })]) {
+      expect(a).not.toContain('--dangerously-skip-permissions');
+      expect(a).not.toContain('--permission-mode'); // 묻지 않음은 띄운 뒤 set_permission_mode 로만 켠다
+      expect(after(a, '--disallowedTools')).toEqual(['SendMessage', 'ListAgents']);
+    }
+    // 옵션 하나를 더해도 나머지는 그대로
+    expect(on.filter((x) => x !== '--allow-dangerously-skip-permissions')).toEqual(off);
   });
   test('공백·한글 이름도 argv 한 항목', () => {
     const a = buildArgs({ ...base, name: '월드 담당' });

@@ -145,7 +145,7 @@ test('A 가 SEND 로 자동 켜진 B 에게 → B 가 [두레 메시지 — 보�
   expect(userTexts()).toContain(expected); // B 의 stdin 에 그대로
   expect(e.status(b.id)).toBe('idle');
   expect(e.messages()).toMatchObject([{ from: a.id, to: b.id, text: '화면 만들어 줘', state: 'delivered' }]);
-  expect(flags).toContainEqual({ agentId: a.id, bypass: false });
+  expect(flags).toContainEqual({ agentId: a.id, bypass: false, bySettings: false });
   expect(agentOf(e, a.id).started).toBe(true);
 });
 
@@ -733,7 +733,7 @@ test('FAKE_PERMISSION_MODE=bypassPermissions → flags bypass true', async () =>
   const flag = waitFor(e, 'flags');
   const done = resultOf(e, a.id);
   await e.sendUser(a.id, text('echo 하나'));
-  expect(await flag).toEqual({ agentId: a.id, bypass: true });
+  expect(await flag).toEqual({ agentId: a.id, bypass: true, bySettings: true }); // 두레가 켠 것이 아니다 — 내 Claude 설정
   await done;
   expect((await e.describe(a.id)).permissionMode).toBe('bypassPermissions');
 });
@@ -1102,12 +1102,12 @@ test('heldInput: 작업 중 sendUser 두 번 → 2, 차례가 끝나며 1 → 0,
 test('flags(): init 전엔 bypass false, FAKE_PERMISSION_MODE=bypassPermissions 이면 init 뒤 true', async () => {
   const e = await start({ FAKE_PERMISSION_MODE: 'bypassPermissions' });
   const { a, b } = setup(e);
-  expect(e.flags(a.id)).toEqual({ bypass: false });
+  expect(e.flags(a.id)).toEqual({ bypass: false, bySettings: false });
   const done = resultOf(e, a.id);
   await e.sendUser(a.id, text('echo 하나'));
   await done;
-  expect(e.flags(a.id)).toEqual({ bypass: true });
-  expect(e.flags(b.id)).toEqual({ bypass: false });
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: true });
+  expect(e.flags(b.id)).toEqual({ bypass: false, bySettings: false });
 });
 
 test('자동 전달 상한: 기본 3 · 저장돼 재시작 뒤에도 · 잘못된 값은 throw', async () => {
@@ -1819,4 +1819,304 @@ test('usage: false 면 묻지 않는다 — usage() 는 null, refreshUsage 는 �
   expect(controlRequests('get_usage')).toEqual([]);
   expect(probeSpawns()).toEqual([]);
   expect(e.usage()).toBeNull();
+});
+
+// ── 묻지 않음(bypass) ──
+// 허용(설정)이 켜져 있으면 --allow-dangerously-skip-permissions 로 띄우고, 사용자가 켠 에이전트만 set_permission_mode 로 켠다(probe10·11).
+const ALLOW_FLAG = '--allow-dangerously-skip-permissions';
+const NOT_ALLOWED = '설정에서 묻지 않고 실행을 허용해야 켤 수 있어요.';
+const ON_FAILED = "'묻지 않음'을 켜지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.";
+const ON_FAILED_NOTICE = "'묻지 않음'을 켜지 못해 평소처럼 승인을 물어요";
+interface FlagsEvent {
+  agentId: string;
+  bypass: boolean;
+  bySettings: boolean;
+}
+/** 그 이름(-n)으로 뜬 프로세스마다, 받은 set_permission_mode('mode:<모드>')와 사용자 줄 — 받은 차례대로 */
+const modeLines = (name: string): string[][] => {
+  const log = readLog();
+  const pids = log.filter((x) => Array.isArray(x.argv) && flagValue(x.argv, '-n') === name).map((x) => x.pid);
+  return pids.map((pid) =>
+    log
+      .filter((x) => x.pid === pid && (x.type === 'user' || (x.type === 'control_request' && x.request?.subtype === 'set_permission_mode')))
+      .map((x) =>
+        x.type === 'user'
+          ? x.message.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+          : `mode:${x.request.mode}`,
+      ),
+  );
+};
+const flagEvents = (e: Engine) => {
+  const got: FlagsEvent[] = [];
+  e.on('flags', (f: FlagsEvent) => got.push(f));
+  return got;
+};
+const noticesOf = (e: Engine, id: string) => e.history(id).flatMap((h) => (h.kind === 'notice' ? [h.text] : []));
+async function turn(e: Engine, id: string, t: string): Promise<void> {
+  const done = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === id && x.event.kind === 'result' && x.event.text.includes(t));
+  await e.sendUser(id, text(t));
+  await done;
+}
+
+test('bypass: 허용이 꺼져 있으면 옵션 없이 띄우고 set_permission_mode 를 보내지 않는다 · setBypass(true) 는 던진다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await expect(e.setBypass(a.id, true)).rejects.toThrow(NOT_ALLOWED);
+  expect(agentOf(e, a.id).bypassOn).toBe(false);
+  await turn(e, a.id, 'echo 하나');
+  await expect(e.setBypass(a.id, true)).rejects.toThrow(NOT_ALLOWED); // 세션이 있어도
+  await sleep(100);
+  expect(lastSpawnOf('A').argv).not.toContain(ALLOW_FLAG);
+  expect(lastSpawnOf('A').argv).not.toContain('--dangerously-skip-permissions');
+  expect(controlRequests('set_permission_mode')).toEqual([]);
+  expect(agentOf(e, a.id).bypassOn).toBe(false);
+  expect(e.flags(a.id)).toEqual({ bypass: false, bySettings: false });
+});
+
+test('bypass: 허용 + 스위치 켜짐이면 옵션을 붙여 띄우고, 사람 입력보다 먼저 set_permission_mode bypassPermissions — flags {bypass:true, bySettings:false}', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true); // 세션이 없으면 저장만
+  await e.setEffort(a.id, 'low'); // /effort 도 입력이다 — 그보다 먼저
+  expect(agentOf(e, a.id).bypassOn).toBe(true);
+  expect(spawns()).toEqual([]);
+  const on = waitFor<FlagsEvent>(e, 'flags', (f) => f.agentId === a.id && f.bypass);
+  await turn(e, a.id, 'echo 하나');
+  expect(await on).toEqual({ agentId: a.id, bypass: true, bySettings: false });
+  expect(lastSpawnOf('A').argv).toContain(ALLOW_FLAG);
+  expect(lastSpawnOf('A').argv).not.toContain('--dangerously-skip-permissions');
+  expect(lastSpawnOf('A').argv).not.toContain('--permission-mode');
+  // 로그 순서: set_permission_mode 가 첫 사용자 줄(/effort 포함)보다 앞
+  expect(modeLines('A')).toEqual([['mode:bypassPermissions', '/effort low', 'echo 하나']]);
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+  expect(e.flags(b.id)).toEqual({ bypass: false, bySettings: false });
+});
+
+test('bypass: 허용만 켜고 스위치는 꺼짐이면 옵션은 붙지만 평소 모드 — flags.bypass false', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await e.setAllowBypass(true);
+  const got = flagEvents(e);
+  await turn(e, a.id, 'echo 하나');
+  expect(lastSpawnOf('A').argv).toContain(ALLOW_FLAG);
+  expect(controlRequests('set_permission_mode')).toEqual([]);
+  expect(e.flags(a.id)).toEqual({ bypass: false, bySettings: false });
+  expect(got.filter((f) => f.agentId === a.id && f.bypass)).toEqual([]);
+});
+
+test('bypass: 쉬는 에이전트를 켜면 다음 차례를 기다리지 않고 flags.bypass true(응답의 mode)', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await e.setAllowBypass(true);
+  await turn(e, a.id, 'echo 하나'); // 옵션으로 떠 있고 쉰다
+  const got = flagEvents(e);
+  await e.setBypass(a.id, true);
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false }); // 다음 init 을 기다리지 않는다
+  expect(got.at(-1)).toEqual({ agentId: a.id, bypass: true, bySettings: false });
+  expect(spawnsOf('A')).toHaveLength(1); // 다시 띄우지 않는다
+  expect(modeLines('A')).toEqual([['echo 하나', 'mode:bypassPermissions']]);
+  expect(e.status(a.id)).toBe('idle');
+  await turn(e, a.id, 'echo 둘'); // 다음 차례의 init 도 같은 모드
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+  expect(spawnsOf('A')).toHaveLength(1);
+});
+
+test('bypass: 옵션 없이 떠 있던 세션에서 켜면 다시 띄워(--resume) 켜지고, 일하는 중이면 그 차례 뒤에 — 기다리던 입력은 새 세션으로', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  await turn(e, a.id, 'echo 하나'); // 허용 전에 띄운 세션 — 옵션 없음
+  await e.sendUser(b.id, text('SLOW')); // B 는 일하는 중
+  await e.setAllowBypass(true);
+
+  // 쉬는 A — 바로 끝내고 옵션을 붙여 다시 띄운다(대화 그대로)
+  await e.setBypass(a.id, true);
+  expect(spawnsOf('A')).toHaveLength(2);
+  expect(lastSpawnOf('A').argv).toContain(ALLOW_FLAG);
+  expect(flagValue(lastSpawnOf('A').argv, '--resume')).toBe(agentOf(e, a.id).sessionId);
+  expect(modeLines('A')).toEqual([['echo 하나'], ['mode:bypassPermissions']]);
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+  expect(e.status(a.id)).toBe('idle');
+
+  // 일하는 B — 그 차례가 끝난 뒤에. 그새 넣은 입력은 새 세션이 받는다
+  await e.setBypass(b.id, true);
+  await e.sendUser(b.id, text('echo 둘'));
+  await sleep(200);
+  expect(spawnsOf('B')).toHaveLength(1);
+  expect(e.heldInput(b.id)).toBe(1);
+  const on = waitFor<FlagsEvent>(e, 'flags', (f) => f.agentId === b.id && f.bypass);
+  const done = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === b.id && x.event.kind === 'result' && x.event.text.includes('둘'));
+  await e.interrupt(b.id);
+  expect(await resultText(done)).toBe('받음: echo 둘');
+  expect(await on).toEqual({ agentId: b.id, bypass: true, bySettings: false });
+  expect(spawnsOf('B')).toHaveLength(2);
+  expect(flagValue(lastSpawnOf('B').argv, '--resume')).toBe(agentOf(e, b.id).sessionId);
+  expect(modeLines('B')).toEqual([['SLOW'], ['mode:bypassPermissions', 'echo 둘']]);
+  expect(e.heldInput(b.id)).toBe(0);
+  expect(controlRequests('set_permission_mode').map((x) => x.pid)).toEqual([lastSpawnOf('A').pid, lastSpawnOf('B').pid]); // 옵션 없는 세션엔 보내지 않는다
+});
+
+test('bypass: 끄면 get_settings 의 기본 모드로 — 기본 모드가 bypass(FAKE_PERMISSION_MODE)면 flags {bypass:true, bySettings:true}', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true);
+  await turn(e, a.id, 'echo 하나');
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+  await e.setBypass(a.id, false);
+  expect(agentOf(e, a.id).bypassOn).toBe(false);
+  expect(e.flags(a.id)).toEqual({ bypass: false, bySettings: false });
+  expect(modeLines('A')).toEqual([['mode:bypassPermissions', 'echo 하나', 'mode:default']]);
+  expect(spawnsOf('A')).toHaveLength(1);
+  await e.shutdown();
+
+  // 내 Claude 설정의 기본 모드가 bypassPermissions — 두레 스위치를 꺼도 내 설정을 따른다
+  const e2 = await start({ FAKE_PERMISSION_MODE: 'bypassPermissions' });
+  await e2.setBypass(a.id, true);
+  await turn(e2, a.id, 'echo 둘');
+  expect(e2.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+  await e2.setBypass(a.id, false);
+  expect(modeLines('A').at(-1)).toEqual(['mode:bypassPermissions', 'echo 둘', 'mode:bypassPermissions']);
+  expect(e2.flags(a.id)).toEqual({ bypass: true, bySettings: true });
+});
+
+test('bypass: 허용을 끄면 켜져 있던 세션은 바로 평소 모드 · 떠 있던 승인 카드는 그대로 · 다시 띄우지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true);
+  const on = waitFor<FlagsEvent>(e, 'flags', (f) => f.agentId === a.id && f.bypass);
+  const req = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id);
+  await e.sendUser(a.id, text('ASK Write'));
+  await on;
+  const r = await req;
+
+  await e.setAllowBypass(false);
+  expect(e.flags(a.id)).toEqual({ bypass: false, bySettings: false });
+  expect(agentOf(e, a.id).bypassOn).toBe(false);
+  expect(e.pendingRequests(a.id).map((x) => x.id)).toEqual([r.id]); // 승인 카드는 그대로
+  expect(e.status(a.id)).toBe('awaiting');
+  expect(spawnsOf('A')).toHaveLength(1);
+  expect(modeLines('A')).toEqual([['mode:bypassPermissions', 'ASK Write', 'mode:default']]);
+
+  const done = resultOf(e, a.id);
+  e.answerRequest(r.id, { type: 'allow' });
+  expect(await resultText(done)).toBe('ok');
+  expect(spawnsOf('A')).toHaveLength(1);
+
+  // 다음에 띄울 때는 옵션 없이
+  await e.newConversation(a.id);
+  await turn(e, a.id, 'echo 하나');
+  expect(lastSpawnOf('A').argv).not.toContain(ALLOW_FLAG);
+  expect(modeLines('A').at(-1)).toEqual(['echo 하나']);
+  expect(e.flags(a.id)).toEqual({ bypass: false, bySettings: false });
+});
+
+test('bypass: 오류 뒤·새 대화·effort 다시 띄우기에도 켠 에이전트만 다시 켜진다', async () => {
+  const e = await start({ FAKE_EFFORT_SILENT: '1' }, false, { effortTimeoutMs: EFFORT_WAIT });
+  const { a, b } = setup(e);
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true);
+
+  // 오류 뒤
+  const crashed = waitFor<StatusEvent>(e, 'status', (s) => s.agentId === a.id && s.status === 'error');
+  await e.sendUser(a.id, text('CRASH'));
+  await crashed;
+  await turn(e, a.id, 'echo 하나');
+  await turn(e, b.id, 'echo 하나');
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+
+  // 새 대화
+  await e.newConversation(a.id);
+  await turn(e, a.id, 'echo 둘');
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+
+  // effort 의 다시 띄우기(/effort 에 답이 없음)
+  await e.setEffort(a.id, 'max');
+  const done = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === a.id && x.event.kind === 'result' && x.event.text.includes('셋'), EFFORT_WAIT * 8);
+  await e.sendUser(a.id, text('echo 셋'));
+  await done;
+  await until('켜짐', () => e.flags(a.id).bypass);
+
+  expect(modeLines('A')).toEqual([
+    ['mode:bypassPermissions', 'CRASH'],
+    ['mode:bypassPermissions', 'echo 하나'],
+    ['mode:bypassPermissions', 'echo 둘', '/effort max'],
+    ['mode:bypassPermissions', 'echo 셋'],
+  ]);
+  for (const s of spawnsOf('A')) expect(s.argv).toContain(ALLOW_FLAG);
+  expect(modeLines('B')).toEqual([['echo 하나']]); // 켜지 않은 에이전트는 평소 모드
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+  expect(e.flags(b.id)).toEqual({ bypass: false, bySettings: false });
+}, 20_000);
+
+test('bypass: 앱을 다시 켜도(같은 dataDir 의 새 엔진) 켠 에이전트만 켜진다 · 허용이 꺼진 채 bypassOn:true 가 남아 있으면 끈 것으로 친다', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true);
+  await e.shutdown();
+
+  const e2 = await start();
+  expect(agentOf(e2, a.id).bypassOn).toBe(true);
+  expect(agentOf(e2, b.id).bypassOn).toBe(false);
+  await turn(e2, a.id, 'echo 하나');
+  await turn(e2, b.id, 'echo 하나');
+  expect(modeLines('A')).toEqual([['mode:bypassPermissions', 'echo 하나']]);
+  expect(modeLines('B')).toEqual([['echo 하나']]);
+  expect(e2.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+  expect(e2.flags(b.id)).toEqual({ bypass: false, bySettings: false });
+  await e2.shutdown();
+
+  // 손으로 고친 파일 — 허용은 꺼졌는데 에이전트 저장값은 켜짐
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ allowBypass: false }));
+  const e3 = await start();
+  expect(e3.allowBypass()).toBe(false);
+  expect(agentOf(e3, a.id).bypassOn).toBe(true);
+  await turn(e3, a.id, 'echo 둘');
+  expect(lastSpawnOf('A').argv).not.toContain(ALLOW_FLAG);
+  expect(modeLines('A').at(-1)).toEqual(['echo 둘']);
+  expect(e3.flags(a.id)).toEqual({ bypass: false, bySettings: false });
+  // 그 뒤 허용을 켜도 남아 있던 켜짐은 살아나지 않는다 — 허용을 켠 순간 모두 꺼진 채
+  await e3.setAllowBypass(true);
+  expect(agentOf(e3, a.id).bypassOn).toBe(false);
+  await e3.newConversation(a.id);
+  await turn(e3, a.id, 'echo 셋');
+  expect(lastSpawnOf('A').argv).toContain(ALLOW_FLAG);
+  expect(modeLines('A').at(-1)).toEqual(['echo 셋']);
+  expect(e3.flags(a.id)).toEqual({ bypass: false, bySettings: false });
+});
+
+test('bypass: set_permission_mode 실패(FAKE_SET_MODE_FAIL) · 응답 없음(FAKE_SET_MODE_SILENT)이면 bypassOn 은 false 로 되돌아가고 engine-error + 대화에 안내 한 줄', async () => {
+  // 오류 응답 — 살아 있는 세션에서 켜기
+  const e = await start({ FAKE_SET_MODE_FAIL: '1' });
+  const { a } = setup(e);
+  await e.setAllowBypass(true);
+  await turn(e, a.id, 'echo 하나');
+  const errs: { agentId: string | null; message: string }[] = [];
+  e.on('engine-error', (x) => errs.push(x));
+  const got = flagEvents(e);
+  await e.setBypass(a.id, true);
+  expect(controlRequests('set_permission_mode')).toHaveLength(1);
+  expect(agentOf(e, a.id).bypassOn).toBe(false);
+  expect(openStore(dataDir).agent(a.id)!.bypassOn).toBe(false);
+  expect(e.flags(a.id)).toEqual({ bypass: false, bySettings: false });
+  expect(got.at(-1)).toEqual({ agentId: a.id, bypass: false, bySettings: false }); // 마지막 실제 모드
+  expect(errs).toEqual([{ agentId: a.id, message: ON_FAILED }]);
+  expect(noticesOf(e, a.id)).toEqual([ON_FAILED_NOTICE]);
+  await e.shutdown();
+
+  // 응답 없음 — 띄울 때 켜기
+  const e2 = await start({ FAKE_SET_MODE_SILENT: '1' }, false, { bypassTimeoutMs: 300 });
+  const errs2: { agentId: string | null; message: string }[] = [];
+  e2.on('engine-error', (x) => errs2.push(x));
+  await e2.setBypass(a.id, true);
+  const failed = waitFor(e2, 'engine-error', () => true, 3000);
+  await turn(e2, a.id, 'echo 둘'); // 사람 입력은 막히지 않는다
+  await failed;
+  expect(agentOf(e2, a.id).bypassOn).toBe(false);
+  expect(openStore(dataDir).agent(a.id)!.bypassOn).toBe(false);
+  expect(e2.flags(a.id)).toEqual({ bypass: false, bySettings: false });
+  expect(errs2).toEqual([{ agentId: a.id, message: ON_FAILED }]);
+  expect(noticesOf(e2, a.id)).toEqual([ON_FAILED_NOTICE, ON_FAILED_NOTICE]);
 });

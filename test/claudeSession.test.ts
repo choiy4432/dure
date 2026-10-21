@@ -30,6 +30,7 @@ function make(env: Record<string, string> = {}, cwd = dir): ClaudeSession {
     promptPath: path.join(dir, 'prompt.md'),
     model: null,
     name: 'a',
+    allowBypass: false,
   });
   const s = new ClaudeSession({ command: process.execPath, args: [FAKE, ...args], cwd, env: { ...process.env, ...env } });
   sessions.push(s);

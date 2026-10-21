@@ -30,6 +30,8 @@ export interface EngineOptions {
   usage?: false | Partial<UsageTiming>;
   /** 엔진이 보낸 /effort 에 답(result)이 없을 때 다시 띄우기까지 — 기본 EFFORT_TIMEOUT_MS(시험은 짧게) */
   effortTimeoutMs?: number;
+  /** 엔진이 보낸 set_permission_mode(와 그 앞의 get_settings)에 답이 없을 때 실패로 치기까지 — 기본 BYPASS_TIMEOUT_MS(시험은 짧게) */
+  bypassTimeoutMs?: number;
   /** 세션 하나를 끌 때 기다리는 상한(ms) — 없으면 STOP_LIMIT_MS. 시험용 */
   stopLimitMs?: number;
 }
@@ -39,7 +41,9 @@ export interface EngineOptions {
 //  'status'      { agentId; status: AgentStatus; errorText: string | null }
 //  'message'     RelayMessage     'held' { roomId }
 //  'request'     PendingRequest   'request-resolved' { id; agentId }
-//  'flags'       { agentId; bypass: boolean }   (init.permissionMode === 'bypassPermissions')
+//  'flags'       { agentId; bypass; bySettings }   (bypass = 실제 모드 — init.permissionMode · set_permission_mode 응답의 mode 가 'bypassPermissions'.
+//                bySettings = 두레 스위치(허용 + bypassOn)가 아닌 내 Claude 설정 때문. init · 응답 · 스위치 · 허용이 바뀔 때마다,
+//                그리고 옵션으로 뜬 세션이 bypass 인 채 끝날 때 — 다음 세션의 모드는 그 세션이 다시 알린다)
 //  'history'     { agentId; item: HistoryItem }   (대화 기록에 한 항목이 더해질 때마다 — text-delta·init·rate-limit 은 기록하지 않는다)
 //  'held-input'  { agentId; count }   (보낼 차례를 기다리는 사람 입력 수가 바뀔 때마다)
 //  'effort'      { agentId; effort; effortNow }   (고른 값이 바뀌거나 Claude 에게 지금 값을 읽을 때마다)
@@ -60,12 +64,22 @@ export interface Engine extends EventEmitter {
   removeAgent(id: AgentId): Promise<void>;
   status(id: AgentId): AgentStatus;
   heldInput(id: AgentId): number;
-  flags(id: AgentId): { bypass: boolean };
+  /** bypass = Claude 가 알려 준 실제 모드 · bySettings = 그 bypass 가 두레 스위치가 아니라 내 Claude 설정 때문 */
+  flags(id: AgentId): { bypass: boolean; bySettings: boolean };
   setAutoChainLimit(n: number): void;
   autoChainLimit(): number;
   allowBypass(): boolean;
-  /** 저장 + (끄면) 모든 에이전트 bypassOn=false 저장 */
+  /**
+   * 저장 + (끄면) 모든 에이전트 bypassOn=false 저장 — 켜져 있던 에이전트의 살아 있는 세션은 내 Claude 설정의 기본 모드로
+   * 돌린다(다시 띄우지 않는다). 다음에 띄울 때는 옵션 없이
+   */
   setAllowBypass(on: boolean): Promise<void>;
+  /**
+   * 에이전트의 '묻지 않음' — 저장하고 살아 있는 세션에 적용한다. 허용이 꺼져 있으면 켜기는 던진다.
+   * 켜기: 옵션으로 떠 있으면 바로 set_permission_mode, 옵션 없이 떠 있으면 쉬는 때 --resume 으로 다시 띄운다(일하는 중이면 그 차례 뒤).
+   * 끄기: 내 Claude 설정의 기본 모드로. 실패는 던지지 않는다 — engine-error · 대화 안내 한 줄 · flags(실제 모드)로 알린다
+   */
+  setBypass(id: AgentId, on: boolean): Promise<void>;
   errorText(id: AgentId): string | null;
   sendUser(id: AgentId, parts: UserPart[]): Promise<void>;
   interrupt(id: AgentId): Promise<void>;
@@ -116,6 +130,16 @@ const EFFORT_TIMEOUT_MS = 30_000;
 const EFFORT_STUCK = 'effort 를 정하는 동안 Claude 가 답하지 않아 다시 띄웠어요 — 이번 실행엔 고른 effort 를 적용하지 못했어요.';
 /** 위 일을 사람에게 — 그 에이전트 대화에 안내 한 줄 */
 const EFFORT_STUCK_NOTICE = 'effort 를 적용하지 못해 기본값으로 이어 가요';
+const BYPASS_MODE = 'bypassPermissions';
+/** get_settings 에서 내 기본 모드를 못 읽으면 */
+const DEFAULT_MODE = 'default';
+/** set_permission_mode 답을 기다리는 한도 — 로컬 제어 요청이라 보통 바로 온다(probe10) */
+const BYPASS_TIMEOUT_MS = 15_000;
+const BYPASS_NOT_ALLOWED = '설정에서 묻지 않고 실행을 허용해야 켤 수 있어요.';
+const BYPASS_ON_FAILED = "'묻지 않음'을 켜지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.";
+const BYPASS_ON_FAILED_NOTICE = "'묻지 않음'을 켜지 못해 평소처럼 승인을 물어요";
+const BYPASS_OFF_FAILED = "'묻지 않음'을 끄지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.";
+const BYPASS_OFF_FAILED_NOTICE = "'묻지 않음'을 끄지 못했어요 — 새 대화를 열면 다시 승인을 물어요";
 
 /** 엔진이 써 넣은 /effort 한 줄 — 그 result 까지 */
 interface EffortTurn {
@@ -134,7 +158,12 @@ class EngineImpl extends EventEmitter implements Engine {
   private described = new WeakMap<ClaudeSession, Promise<AgentDescription>>();
   private inFlight = new WeakMap<ClaudeSession, InFlight>();
   private removing = new Set<AgentId>();
-  private bypass = new Map<AgentId, boolean>(); // 마지막 init 의 권한 모드
+  private bypass = new Map<AgentId, boolean>(); // 실제 권한 모드 — 마지막 init · set_permission_mode 응답
+  // 묻지 않음: 허용이면 --allow-dangerously-skip-permissions 로 띄우고(그것만으론 평소 모드), 켠 에이전트만 set_permission_mode 로 켠다(probe10·11)
+  private optioned = new WeakSet<ClaudeSession>(); // 그 옵션으로 뜬 세션 — 실행 중에 bypass 로 바꿀 수 있다
+  private restartWant = new WeakSet<ClaudeSession>(); // 옵션 없이 떠서 켜려면 다시 띄워야 함 — 쉬는 때(pump) --resume 으로
+  private modeApplying = new WeakMap<ClaudeSession, Promise<void>>(); // 띄울 때 보낸 set_permission_mode — 다시 띄운 쪽이 기다린다
+  private modeSeq = new Map<AgentId, number>(); // 모드 바꾸기 차례 번호 — 그새 다시 바뀌었으면 옛 요청의 실패는 되돌리지 않는다
   private modelNows = new Map<AgentId, string>(); // 마지막 init 의 풀린 모델 id
   private effortNows = new Map<AgentId, EffortLevel>(); // Claude 에게 마지막으로 읽은 지금 effort
   // effort 는 세션 명령 `/effort <단계>` 로 정한다 — 설정 층(apply_flag_settings)엔 max 가 없어 조용히 무시되고,
@@ -253,9 +282,16 @@ class EngineImpl extends EventEmitter implements Engine {
   allowBypass(): boolean { return this.allow; }
 
   async setAllowBypass(on: boolean): Promise<void> {
+    const was = this.allow;
     this.writeSettings({ allowBypass: on });
     this.allow = on;
-    if (!on) for (const a of this.store.agents()) if (a.bypassOn) this.store.updateAgent(a.id, { bypassOn: false });
+    // 허용이 꺼진 채 남은 켜짐(손으로 고친 파일 등)은 끈 것으로 친다 — 켤 때 살아나지 않게 지운다(허용을 켜면 모두 꺼진 채 시작)
+    if (on && !was) for (const a of this.store.agents()) if (a.bypassOn) this.store.updateAgent(a.id, { bypassOn: false });
+    const wereOn = on ? [] : this.store.agents().filter((a) => a.bypassOn);
+    for (const a of wereOn) this.store.updateAgent(a.id, { bypassOn: false });
+    for (const a of this.store.agents()) this.emitFlags(a.id); // bySettings 가 허용에 따라 바뀐다
+    // 켜져 있던 에이전트는 내 기본 모드로 — 옵션으로 떠 있는 세션도 다시 띄우지 않는다(옵션만으론 bypass 가 아니다)
+    await Promise.all(wereOn.map((a) => this.applyBypass(a.id, false)));
   }
 
   autoChainLimit(): number { return this.limit; }
@@ -301,6 +337,7 @@ class EngineImpl extends EventEmitter implements Engine {
       const had = this.held.get(id)?.length ?? 0;
       this.held.delete(id); // 기다리던 사람 입력은 에이전트와 함께 버린다
       this.bypass.delete(id);
+      this.modeSeq.delete(id);
       this.effortNows.delete(id);
       this.effortBroken.delete(id);
       this.modelNows.delete(id);
@@ -323,9 +360,14 @@ class EngineImpl extends EventEmitter implements Engine {
     return this.held.get(id)?.length ?? 0;
   }
 
-  flags(id: AgentId): { bypass: boolean } {
-    this.need(id);
-    return { bypass: this.bypass.get(id) ?? false };
+  flags(id: AgentId): { bypass: boolean; bySettings: boolean } {
+    return this.flagsOf(this.need(id));
+  }
+
+  private flagsOf(a: Agent): { bypass: boolean; bySettings: boolean } {
+    const bypass = this.bypass.get(a.id) ?? false;
+    // 허용이 꺼진 채 남은 bypassOn 은 끈 것으로 친다 — 그 bypass 는 두레가 켠 것이 아니다
+    return { bypass, bySettings: bypass && !(this.allow && a.bypassOn) };
   }
 
   errorText(id: AgentId): string | null {
@@ -419,6 +461,14 @@ class EngineImpl extends EventEmitter implements Engine {
     if (s) this.applyEffort(id, s);
   }
 
+  async setBypass(id: AgentId, on: boolean) {
+    this.need(id);
+    if (on && !this.allow) throw new Error(BYPASS_NOT_ALLOWED);
+    this.store.updateAgent(id, { bypassOn: on });
+    this.emitFlags(id);
+    await this.applyBypass(id, on);
+  }
+
   modelNow(id: AgentId): string | null {
     return this.modelNows.get(id) ?? null;
   }
@@ -493,10 +543,22 @@ class EngineImpl extends EventEmitter implements Engine {
     return s?.status === 'working' || (!!s && this.effortTurn.has(s)) || this.perms.pending(id).length > 0;
   }
 
-  /** 한가하면 줄에 선 /effort 부터, 다음은 사람 입력, 없으면 다른 에이전트가 보낸 대기 메시지 — 한 번에 한 줄 */
+  /** 쉬는 중 — 차례 중도 아니고(엔진이 보낸 /effort 차례 포함), 사람 답을 기다리지도 않는다 */
+  private resting(id: AgentId, s: ClaudeSession): boolean {
+    return s.status === 'idle' && !this.effortTurn.has(s) && this.perms.pending(id).length === 0;
+  }
+
+  /**
+   * 한가하면 — 묻지 않음을 켜려고 다시 띄울 세션이면 그것부터(기다리던 입력은 새 세션이 받는다), 다음은 줄에 선 /effort,
+   * 다음은 사람 입력, 없으면 다른 에이전트가 보낸 대기 메시지 — 한 번에 한 줄
+   */
   private pump(id: AgentId): void {
     const s = this.sessions.get(id);
-    if (!s || s.status !== 'idle' || this.effortTurn.has(s) || this.perms.pending(id).length > 0) return;
+    if (!s || !this.resting(id, s)) return;
+    if (this.restartWant.has(s)) {
+      void this.restartForBypass(id, s);
+      return; // 다시 띄운 세션에서 다시 pump
+    }
     const level = this.effortWant.get(s);
     if (level) {
       this.sendEffort(id, s, level);
@@ -584,8 +646,10 @@ class EngineImpl extends EventEmitter implements Engine {
     fs.writeFileSync(mcpConfigPath, JSON.stringify(buildMcpConfig({ port: this.mcp.port, token: this.mcp.token, agentId: id })));
     const peers = this.store.agents(agent.roomId).filter((a) => a.id !== id);
     fs.writeFileSync(promptPath, buildRoomPrompt(agent, peers));
+    const allow = this.allow;
     const args = buildArgs({
       sessionId: agent.sessionId, resume: agent.started, mcpConfigPath, promptPath, model: agent.model, name: agent.name,
+      allowBypass: allow,
     });
     const s = new ClaudeSession({
       command: this.o.claude.command,
@@ -614,6 +678,7 @@ class EngineImpl extends EventEmitter implements Engine {
         this.sessions.delete(id);
         this.endEffortTurn(s); // /effort 차례 중이었으면 그 타이머도(다음에 띄울 때 다시 보낸다)
         this.guard(id, () => this.forgetEffortNow(id));
+        this.guard(id, () => this.forgetMode(id, s));
         if (!expected) {
           this.guard(id, () => this.restoreInFlight(id, s)); // 기록 실패여도 아래 정리는 한다
           const why = s.errorText ?? EXITED;
@@ -634,7 +699,10 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     this.errors.delete(id);
     this.sessions.set(id, s);
+    if (allow) this.optioned.add(s);
     if (!o.quiet) this.emitStatus(id);
+    // 사용자가 켠 에이전트만(허용 + 스위치) — 어떤 입력(/effort 포함)보다 먼저 제어 요청을 쓴다. 오류 뒤·새 대화·다시 띄우기가 모두 여기를 지난다
+    if (allow && agent.bypassOn) this.modeApplying.set(s, this.sendMode(id, s, BYPASS_MODE, true, this.nextModeSeq(id)));
     // 막 띄운 세션은 한가하다 — 고른 effort 가 있으면 어떤 입력보다 먼저 /effort 를 쓴다(pump 는 부르지 않는다: router 가 deliver 중일 수 있다).
     // 전에 /effort 가 막혀 다시 띄운 에이전트면 /effort 없이(고르기·모델 바꾸기 전까지)
     if (agent.effort && !this.effortBroken.has(id)) this.sendEffort(id, s, agent.effort);
@@ -755,6 +823,127 @@ class EngineImpl extends EventEmitter implements Engine {
     }
   }
 
+  // ── 묻지 않음(bypass) ──
+  private bypassTimeout(): number {
+    return this.o.bypassTimeoutMs ?? BYPASS_TIMEOUT_MS;
+  }
+
+  private nextModeSeq(id: AgentId): number {
+    const n = (this.modeSeq.get(id) ?? 0) + 1;
+    this.modeSeq.set(id, n);
+    return n;
+  }
+
+  /**
+   * 스위치 값을 살아 있는 세션에 — 세션이 없으면 할 일이 없다(다음에 띄울 때 ensure 가 한다). 던지지 않는다.
+   * 켜기: 옵션으로 떴으면 바로 set_permission_mode. 아니면(허용 전에 띄운 세션 — bypass_not_launched 로 거절된다) 다시 띄운다:
+   *   쉬는 중이면 지금, 아니면 그 차례가 끝난 뒤 pump 가.
+   * 끄기: 다시 띄우기를 거두고, 옵션으로 떴으면 내 Claude 설정의 기본 모드로. 옵션 없이 뜬 세션은 두레가 모드를 바꾼 적이 없어 보낼 것이 없다.
+   * 이미 떠 있는 승인 카드는 그대로 둔다 — 사람이 답하면 평소처럼(probe11: 바꾼 뒤의 도구 호출부터 새 모드)
+   */
+  private async applyBypass(id: AgentId, on: boolean): Promise<void> {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    const seq = this.nextModeSeq(id);
+    if (on) {
+      if (this.optioned.has(s)) return this.sendMode(id, s, BYPASS_MODE, true, seq);
+      this.restartWant.add(s);
+      if (this.resting(id, s)) await this.restartForBypass(id, s);
+      return;
+    }
+    this.restartWant.delete(s);
+    if (!this.optioned.has(s)) return;
+    const mode = await this.defaultMode(s);
+    if (!this.live(id, s) || this.modeSeq.get(id) !== seq) return; // 그새 세션이 끝났거나 다시 바뀌었다
+    return this.sendMode(id, s, mode, false, seq);
+  }
+
+  /** 내 Claude 설정의 기본 모드(get_settings 의 effective.permissions.defaultMode) — 못 읽으면 'default' */
+  private async defaultMode(s: ClaudeSession): Promise<string> {
+    try {
+      const res: any = await s.request({ subtype: 'get_settings' }, this.bypassTimeout());
+      const m = res?.effective?.permissions?.defaultMode;
+      return typeof m === 'string' && m !== '' ? m : DEFAULT_MODE;
+    } catch {
+      return DEFAULT_MODE;
+    }
+  }
+
+  /**
+   * set_permission_mode 를 쓴다 — 제어 요청이라 부르는 순간 줄에 들어간다(띄울 때 어떤 입력보다 먼저 쓰려고 ensure 가 바로 부른다).
+   * 답의 mode 가 실제 모드다(manual → default, probe10) — 쉬는 세션도 다음 차례를 기다리지 않고 flags 로 알린다.
+   * 실패(오류 응답·bypassTimeoutMs 안에 답 없음)는 modeFailed — 그 세션이 이미 끝났거나 그새 다시 바꿨으면 조용히 넘어간다. 던지지 않는다
+   */
+  private sendMode(id: AgentId, s: ClaudeSession, mode: string, on: boolean, seq: number): Promise<void> {
+    return s.request({ subtype: 'set_permission_mode', mode }, this.bypassTimeout()).then(
+      (res: any) => {
+        if (!this.live(id, s)) return;
+        const now = typeof res?.mode === 'string' ? res.mode : mode; // 답에 mode 가 없으면 받아들인 요청의 모드
+        this.guard(id, () => this.setModeNow(id, now === BYPASS_MODE));
+      },
+      () => {
+        if (!this.live(id, s) || this.modeSeq.get(id) !== seq) return;
+        this.modeFailed(id, on);
+      },
+    );
+  }
+
+  /** 모드를 바꾸지 못했다 — 켜기였으면 스위치를 되돌리고(다음 실행에 몰래 켜지지 않게) 오류 한 줄 · 대화에 안내 한 줄 · 실제 모드 그대로 */
+  private modeFailed(id: AgentId, on: boolean): void {
+    if (on) {
+      this.guard(id, () => {
+        if (this.store.agent(id)?.bypassOn) this.store.updateAgent(id, { bypassOn: false });
+      });
+    }
+    this.guard(id, () => this.emit('engine-error', { agentId: id, message: on ? BYPASS_ON_FAILED : BYPASS_OFF_FAILED }));
+    this.guard(id, () => this.record(id, { kind: 'notice', text: on ? BYPASS_ON_FAILED_NOTICE : BYPASS_OFF_FAILED_NOTICE }));
+    this.emitFlags(id);
+  }
+
+  /**
+   * 옵션 없이 떠 있던 세션에서 묻지 않음을 켰다 — 세션을 끝내고 옵션을 붙여 다시 띄운다(--resume 이라 대화 그대로).
+   * 띄울 때 ensure 가 set_permission_mode 를 보낸다. 기다리던 입력·메시지는 새 세션으로(effort 의 다시 띄우기와 같은 규칙).
+   * 기다리는 것이 없어도 띄운다 — 화면의 스위치는 실제 모드를 보이니 켜졌다는 답을 받아야 한다. 던지지 않는다
+   */
+  private async restartForBypass(id: AgentId, s: ClaudeSession): Promise<void> {
+    try {
+      if (this.closed || !this.restartWant.delete(s) || !this.live(id, s)) return;
+      await this.endSession(id);
+      if (this.closed || this.removing.has(id) || !this.store.agent(id)) return;
+      // 그새 누가 띄웠으면(넘김 메시지 등) 그 세션을 쓴다. 상태는 보내고 나서 한 번만 알린다
+      if (!this.sessions.has(id)) this.ensure(id, { quiet: true });
+      const next = this.sessions.get(id);
+      this.pump(id);
+      this.emitStatus(id);
+      if (next) await this.modeApplying.get(next);
+    } catch (e) {
+      this.guard(id, () => this.emitStatus(id));
+      this.guard(id, () => this.emit('engine-error', { agentId: id, message: e instanceof Error ? e.message : String(e) }));
+    }
+  }
+
+  private setModeNow(id: AgentId, bypass: boolean): void {
+    this.bypass.set(id, bypass);
+    this.emitFlags(id);
+  }
+
+  /**
+   * 옵션으로 뜬 세션이 bypass 인 채 끝났다 — 두레가 켰을 수 있는 모드라 다음 세션의 모드가 아니다(다음 세션이 다시 알린다).
+   * 남겨 두면 그새 스위치를 끈 에이전트가 '내 설정 때문'(bySettings)으로 잠겨 보인다. 옵션 없이 뜬 세션의 모드는 내 설정 그대로라 둔다
+   */
+  private forgetMode(id: AgentId, s: ClaudeSession): void {
+    if (!this.optioned.has(s) || !this.bypass.get(id)) return;
+    this.bypass.delete(id);
+    if (!this.closed) this.emitFlags(id);
+  }
+
+  private emitFlags(id: AgentId): void {
+    if (this.removing.has(id)) return;
+    const a = this.store.agent(id);
+    if (!a) return;
+    this.guard(id, () => this.emit('flags', { agentId: id, ...this.flagsOf(a) }));
+  }
+
   /** 차례 끝에 대화 공간을 받는다 — 실패·모르는 모양·그새 바뀐 세션이면 조용히 넘어간다 */
   private async fetchContext(id: AgentId, s: ClaudeSession): Promise<void> {
     try {
@@ -830,11 +1019,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.guard(id, () => {
       if (this.store.agent(id)?.started === false) this.store.updateAgent(id, { started: true });
     });
-    this.guard(id, () => {
-      const bypass = ev.permissionMode === 'bypassPermissions';
-      this.bypass.set(id, bypass);
-      this.emit('flags', { agentId: id, bypass });
-    });
+    this.guard(id, () => this.setModeNow(id, ev.permissionMode === BYPASS_MODE));
     this.guard(id, () => this.setModelNow(id, ev.model || null));
   }
 
@@ -877,6 +1062,7 @@ class EngineImpl extends EventEmitter implements Engine {
     if (s) this.endEffortTurn(s); // /effort 차례 중이었으면 그 타이머도
     this.errors.delete(id);
     this.guard(id, () => this.forgetEffortNow(id)); // 끝난 세션의 지금 값은 다음 세션의 값이 아니다
+    if (s) this.guard(id, () => this.forgetMode(id, s)); // 권한 모드도 — 옵션으로 뜬 세션이면
     this.perms.cancelForAgent(id, EXITED);
     if (!s) return;
     let timer: NodeJS.Timeout | undefined;

@@ -70,6 +70,7 @@ export type ControlRequest =
   | { subtype: 'interrupt' }
   | { subtype: 'set_model'; model: string }
   | { subtype: 'get_settings' }
+  | { subtype: 'set_permission_mode'; mode: string }
   | { subtype: 'get_usage'; skip_behaviors: true }
   | { subtype: 'get_context_usage'; detail: 'summary' };
 export type AssistantBlock = { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown };
@@ -121,7 +122,8 @@ export interface EngineEventMap {
   held: { roomId: RoomId };
   request: PendingRequest;
   'request-resolved': { id: string; agentId: AgentId };
-  flags: { agentId: AgentId; bypass: boolean };
+  /** bypass = Claude 가 알려 준 실제 모드 · bySettings = 두레 스위치가 아니라 내 Claude 설정 때문에 bypass */
+  flags: { agentId: AgentId; bypass: boolean; bySettings: boolean };
   'engine-error': { agentId: string | null; message: string };
   history: { agentId: AgentId; item: HistoryItem };
   'held-input': { agentId: AgentId; count: number };
