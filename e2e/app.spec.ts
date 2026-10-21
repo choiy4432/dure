@@ -252,6 +252,16 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       expect(long.metaInside).toBe(true)
       // 새로 만든 에이전트가 골라져 있다 — 자동 스위치는 꺼짐
       await expect(panel(page, WEB.name).getByRole('switch', { name: '자동' })).toHaveAttribute('aria-checked', 'false')
+
+      // 누르는 동안 손이 2px 흔들려도 한 번에 열린다(예전엔 1px 만 움직여도 클릭이 끌기로 버려져 두 번 눌러야 했다)
+      const box = (await node(page, PLAN.name).boundingBox())!
+      await page.mouse.move(box.x + 60, box.y + 60)
+      await page.mouse.down()
+      await page.mouse.move(box.x + 62, box.y + 60, { steps: 2 })
+      await page.mouse.up()
+      await expect(panel(page, PLAN.name)).toBeVisible()
+      // 흔들림만으로는 카드가 끌려 자리가 바뀌지 않는다
+      expect((await node(page, PLAN.name).boundingBox())!.x).toBeCloseTo(box.x, 0)
     })
 
     await test.step('3. 기획 → 웹 화면 넘김: 확인 대기 → 일 시키기 → 전달됨', async () => {

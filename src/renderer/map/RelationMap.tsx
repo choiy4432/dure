@@ -26,6 +26,11 @@ const edgeTypes: EdgeTypes = { handoff: HandoffEdge }
 
 /** 같은 두 카드를 반대로 잇는 선이 비키는 거리 */
 const PAIR_SHIFT = 12
+/**
+ * 누르는 동안 이만큼(px)까지 손이 흔들려도 클릭이고, 끌기는 이보다 더 움직여야 시작한다.
+ * React Flow 기본은 클릭 0px·끌기 1px 이라, 1px 만 흔들려도 클릭이 버려져 카드를 두 번 눌러야 열렸다(그 흔들림으로 자리도 저장됐다).
+ */
+const CLICK_SLOP_PX = 5
 
 const ARIA = {
   'node.a11yDescription.default': 'Enter 나 스페이스를 누르면 오른쪽 패널에 열려요. 끌어서 자리를 옮길 수 있어요.',
@@ -213,6 +218,8 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={(_e, node) => getStore().selectAgent(node.id)}
+        nodeClickDistance={CLICK_SLOP_PX}
+        nodeDragThreshold={CLICK_SLOP_PX}
         onNodeDragStop={onNodeDragStop}
         onEdgeClick={(e, edge) => openPair(edge.source, edge.target, e)}
         onMoveStart={closePair}
