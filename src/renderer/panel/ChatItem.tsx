@@ -1,10 +1,12 @@
 import { memo, useId, useState, type ComponentType } from 'react'
 import {
-  ChevronDown, ChevronRight, File, Globe, Image as ImageIcon, MessageCircleQuestion, Pencil, Search, Send, ShieldCheck, SquareTerminal,
-  Wrench, type LucideProps,
+  ArrowRight, Bot, ChevronDown, ChevronRight, File, Globe, Image as ImageIcon, MessageCircleQuestion, Pencil, Search, Send, ShieldCheck,
+  SquareTerminal, Wrench, type LucideProps,
 } from 'lucide-react'
+import type { AgentId } from '../../engine/types'
 import type { ActionLine, ChatLine, ClaudePart } from '../state/transcript'
 import type { ToolIcon } from '../lib/toolSummary'
+import { getStore } from '../state/store'
 import { Markdown } from '../lib/Markdown'
 import { useFrameValue } from '../lib/useFrameValue'
 import { Clamp } from '../lib/Clamp'
@@ -94,6 +96,53 @@ export function Action({ a }: { a: ActionLine }) {
   )
 }
 
+type SubagentsPart = Extract<ClaudePart, { type: 'subagents' }>
+
+/** 요약 줄의 상태별 개수 — 점 색(.dot)과 읽는 말. 차례는 늘 도는 중 · 끝 · 실패(멈춤·끊김도 빨강 묶음) */
+const COUNT_GROUPS = [
+  { key: 'running', dot: 'g', word: '도는 중' },
+  { key: 'done', dot: 's', word: '끝' },
+  { key: 'bad', dot: 'r', word: '실패' },
+] as const
+
+/**
+ * 서브에이전트 요약 한 줄(시안 2안) — 한 답 안에서 이어 맡긴 서브에이전트를 하는 일 상자 한 줄로.
+ * Bot · '서브에이전트 N개에게 맡김'(하나면 설명 + '서브에이전트에게 맡김') · 상태별 개수(0 인 묶음은 뺀다) · 화살표.
+ * 누르면 서브에이전트 탭으로 가 이 줄의 차례 묶음을 보인다(key = 첫 Agent 의 tool_use id).
+ */
+function SubagentsRow({ part, agentId }: { part: SubagentsPart; agentId?: AgentId }) {
+  const one = part.ids.length === 1
+  const counts = COUNT_GROUPS.filter(g => part.counts[g.key] > 0)
+  return (
+    <li>
+      <button
+        type="button"
+        className="act sa-sum"
+        disabled={!agentId}
+        title={(one && part.description) || undefined}
+        onClick={() => agentId && getStore().showSubagents(agentId, part.key)}
+      >
+        <Bot className="i" aria-hidden="true" />{' '}
+        {one && part.description && (
+          <>
+            <span className="sa-sum-d trunc">{part.description}</span>{' '}
+          </>
+        )}
+        <span className="act-v">{one ? '서브에이전트에게 맡김' : `서브에이전트 ${part.ids.length}개에게 맡김`}</span>{' '}
+        <span className="sa-sum-n" role="img" aria-label={counts.map(g => `${g.word} ${part.counts[g.key]}`).join(', ')}>
+          {counts.map(g => (
+            <span key={g.key}>
+              <i className={`dot ${g.dot}`} aria-hidden="true" />
+              {part.counts[g.key]}
+            </span>
+          ))}
+        </span>
+        <ArrowRight className="i sa-sum-go" aria-hidden="true" />
+      </button>
+    </li>
+  )
+}
+
 /** 흐르는 글 — 마크다운으로, 한 장에 한 번만 다시 읽는다 */
 function LiveLine({ text }: { text: string }) {
   const shown = useFrameValue(text)
@@ -111,10 +160,12 @@ interface Props {
   folded?: boolean
   /** 줄 번호(앞에 숨긴 줄 포함) — 뿌리 요소의 data-line. 새 줄이 들어올 때 ChatList 가 집는다 */
   index?: number
+  /** 이 대화의 에이전트 — 서브에이전트 요약 줄을 누르면 그 에이전트의 서브에이전트 탭으로 간다 */
+  agentId?: AgentId
 }
 
-/** 대화 한 줄 — 사람 말풍선 · 전달된 메시지 · Claude 블록(+ 하는 일) · 알림 · 명령 출력 · 흐르는 글 */
-function ChatItemView({ line, folded = false, index }: Props) {
+/** 대화 한 줄 — 사람 말풍선 · 전달된 메시지 · Claude 블록(+ 하는 일 · 서브에이전트 요약) · 알림 · 명령 출력 · 흐르는 글 */
+function ChatItemView({ line, folded = false, index, agentId }: Props) {
   switch (line.kind) {
     case 'me':
       return (
@@ -168,7 +219,11 @@ function ChatItemView({ line, folded = false, index }: Props) {
           {line.parts.map((p, i) =>
             p.type === 'text' ? (
               <Markdown key={i} text={p.text} />
-            ) : p.type === 'subagents' ? null /* 요약 줄은 Task 7 이 그린다 */ : (
+            ) : p.type === 'subagents' ? (
+              <ul key={i} className="acts">
+                <SubagentsRow part={p} agentId={agentId} />
+              </ul>
+            ) : (
               <ul key={i} className="acts">
                 {p.actions.map(a => (
                   <Action key={a.id} a={a} />
@@ -191,19 +246,20 @@ const sameAction = (a: ActionLine, b: ActionLine) =>
   a.id === b.id && a.verb === b.verb && a.target === b.target && a.icon === b.icon && a.allowed === b.allowed &&
   a.denied === b.denied && a.output === b.output && a.pending === b.pending && a.truncated === b.truncated
 
-/** 같은 종류의 조각 둘이 같은가 — 글은 내용, 하는 일은 개수, 서브에이전트 요약은 key·id·개수 */
+/** 같은 종류의 조각 둘이 같은가 — 글은 내용, 하는 일은 개수, 서브에이전트 요약은 key·id·설명·개수 */
 function samePart(p: ClaudePart, q: ClaudePart): boolean {
   if (p.type === 'text') return q.type === 'text' && p.text === q.text
   if (p.type === 'acts') return q.type === 'acts' && p.actions.length === q.actions.length
   return (
     q.type === 'subagents' && p.key === q.key && p.ids.length === q.ids.length && p.ids.every((id, i) => id === q.ids[i]) &&
+    p.description === q.description &&
     p.counts.running === q.counts.running && p.counts.done === q.counts.done && p.counts.bad === q.counts.bad
   )
 }
 
 /** 기록이 하나 늘 때마다 줄 객체는 새로 만들어진다 — 내용이 같으면 다시 그리지 않는다(마크다운을 다시 읽지 않게) */
 function sameLine(prev: Props, next: Props): boolean {
-  if (!!prev.folded !== !!next.folded || prev.index !== next.index) return false
+  if (!!prev.folded !== !!next.folded || prev.index !== next.index || prev.agentId !== next.agentId) return false
   const a = prev.line
   const b = next.line
   if (a === b) return true

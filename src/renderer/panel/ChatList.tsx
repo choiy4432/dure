@@ -16,6 +16,7 @@ const PAGE = 300
 /** 바닥에서 이만큼 안이면 '맨 아래에 붙어 있다' */
 const STICK_PX = 24
 const NONE: HistoryItem[] = []
+const NO_IDS: string[] = []
 const NO_CHOICE: Record<string, boolean> = {}
 
 /**
@@ -24,6 +25,7 @@ const NO_CHOICE: Record<string, boolean> = {}
  * pin 이 오르면(내가 보냄) 위로 올려 읽던 중이어도 맨 아래에 다시 붙는다.
  * 위 고정 카드에 펼쳐 보이는 '최근 전달된 메시지'와 같은 줄은 한 줄로 접는다(cardOpen = 패널이 들고 있는 카드 펼침).
  * 에이전트가 일하는 동안(표시 상태 '작업 중' — 승인 기다림은 승인 카드가 알린다) 맨 끝에 '작업 중…' 줄.
+ * 서브에이전트가 돌면 부모 차례가 끝나도 작업 중이다(엔진) — 그 줄에 도는 수를 함께 적는다.
  */
 export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   agentId: AgentId
@@ -39,6 +41,9 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
     const a = s.agents.find(x => x.id === agentId)
     return { on: !!a && displayStatus(a, s.requests) === 'working', since: s.statusSince[agentId] }
   })
+  // 도는 서브에이전트(부모의 Agent tool_use id) — 내용이 같으면 같은 배열(useDure 의 얕은 비교)이라 아래 Set·줄을 다시 만들지 않는다
+  const running = useDure(s => s.agents.find(x => x.id === agentId)?.subagentsRunning ?? NO_IDS)
+  const runningSet = useMemo(() => new Set(running), [running])
   const [limit, setLimit] = useState(PAGE)
   const latest = useDure(s => {
     const m = latestDelivered(agentId, s.messages)
@@ -47,8 +52,9 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   const now = useNow()
   const pinned = latest && pinOpen({ ...latest, state: 'delivered' }, cardOpen, now) ? latest.id : null
 
-  // 흐르는 글은 따로 — 글자가 올 때마다 기록 전체를 다시 줄로 바꾸지 않는다(줄 객체가 그대로라 다시 그리지도 않는다)
-  const { lines, hiddenBefore } = useMemo(() => buildTranscript(v.items, undefined, limit), [v.items, limit])
+  // 흐르는 글은 따로 — 글자가 올 때마다 기록 전체를 다시 줄로 바꾸지 않는다(줄 객체가 그대로라 다시 그리지도 않는다).
+  // 도는 목록을 넘겨야 요약 줄의 '도는 중'이 맞다(끝 기록이 없는데 돌지도 않으면 끊김)
+  const { lines, hiddenBefore } = useMemo(() => buildTranscript(v.items, undefined, limit, runningSet), [v.items, limit, runningSet])
 
   const box = useRef<HTMLElement>(null)
   const stick = useRef(true)
@@ -134,11 +140,17 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
         )}
         {lines.map((line, i) => (
           // 줄 번호(앞에 숨긴 줄 포함)는 새 줄이 붙어도 그대로 — 펼친 하는 일이 닫히지 않는다
-          <ChatItem key={hiddenBefore + i} index={hiddenBefore + i} line={line} folded={line.kind === 'relay' && !!line.messageId && line.messageId === pinned} />
+          <ChatItem
+            key={hiddenBefore + i}
+            index={hiddenBefore + i}
+            line={line}
+            agentId={agentId}
+            folded={line.kind === 'relay' && !!line.messageId && line.messageId === pinned}
+          />
         ))}
         {v.streaming && <ChatItem line={{ kind: 'streaming', text: v.streaming }} />}
         <Presence show={work.on}>
-          <WorkingRow since={work.since} />
+          <WorkingRow since={work.since} subagents={running.length} />
         </Presence>
       </section>
     </div>

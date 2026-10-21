@@ -268,6 +268,15 @@ describe('권한 카드', () => {
     expect(card('디자인이 명령을 실행하려 해요').querySelector('code')!.textContent).toBe('npm run build')
   })
 
+  it('서브에이전트가 물은 것이면 제목이 "디자인의 서브에이전트가 파일을 고치려 해요" — 관계도 카드의 승인 칸과 같다', async () => {
+    snapshot.requests = [request({ fromSubagent: true })]
+    await renderPanel('d', 'd')
+    const c = card('디자인의 서브에이전트가 파일을 고치려 해요')
+    expect(c.querySelector('.ask-t')!.textContent).toBe('디자인의 서브에이전트가 파일을 고치려 해요')
+    expect(c.querySelector('code')!.textContent).toBe('src/styles/tokens.css') // 대상은 지금 그대로
+    expect(document.querySelector('.nd .ap-t')!.textContent).toBe('디자인의 서브에이전트가 파일을 고치려 해요')
+  })
+
   it('대상은 mono(폴더 기준 경로), 자세히는 입력 JSON 을 접어 둔다', async () => {
     snapshot.requests = [request()]
     await renderPanel('d')

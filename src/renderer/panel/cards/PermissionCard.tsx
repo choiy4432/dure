@@ -26,13 +26,14 @@ interface Props {
   now: number
 }
 
-/** 권한 카드 — 관계도 카드의 앰버 칸과 같은 제목·대상, 자세히(입력 접힘) · [허용] [거절] · 항상 허용 */
+/** 권한 카드 — 관계도 카드의 앰버 칸과 같은 제목(서브에이전트가 물은 것이면 그렇다고)·대상, 자세히(입력 접힘) · [허용] [거절] · 항상 허용 */
 export function PermissionCard({ request, agent, now }: Props) {
   const { busy, error, call } = useCall()
   const root = useRef<HTMLElement>(null)
   useMotion(root, MOTION.line)
   const [more, setMore] = useState(false)
-  const title = requestTitle(agent.name, request.toolName, request.input)
+  // 서브에이전트가 물은 것이면 '디자인의 서브에이전트가 …' — 관계도 카드의 승인 칸과 같은 제목
+  const title = requestTitle(agent.name, request.toolName, request.input, request.fromSubagent)
   const target = requestTarget(request.toolName, request.input, agent.folder)
   // 성공하면 엔진이 요청을 지워 카드가 사라진다 — 그동안 버튼은 막아 둔다
   const answer = (d: Decision) => call(() => window.dure.answerRequest(request.id, d), 'hold')

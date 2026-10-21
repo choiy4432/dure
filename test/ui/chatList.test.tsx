@@ -521,6 +521,78 @@ describe('ChatList — 작업 중 줄(Claude Code 의 작업 중 표시처럼)',
     await emit('status', { agentId: 'p', status: 'working', errorText: null })
     expect(working()).toBeNull()
   })
+
+  it('도는 서브에이전트가 있으면 "작업 중…" 뒤에 "서브에이전트 2개가 일하고 있어요" — 다 끝나면 빠진다', async () => {
+    await renderPanel()
+    await emit('status', { agentId: 'w', status: 'working', errorText: null })
+    expect(working()).not.toHaveTextContent('서브에이전트')
+    await emit('subagents', { agentId: 'w', running: ['A', 'B'] })
+    const sub = within(working() as HTMLElement).getByText('서브에이전트 2개가 일하고 있어요')
+    expect(working()!.querySelector('.wk-t')!.nextElementSibling).toBe(sub)
+    await emit('subagents', { agentId: 'w', running: ['B'] })
+    expect(working()).toHaveTextContent('서브에이전트 1개가 일하고 있어요')
+    await emit('subagents', { agentId: 'w', running: [] })
+    expect(working()).toHaveTextContent('작업 중…')
+    expect(working()).not.toHaveTextContent('서브에이전트')
+  })
+
+  it('부모 차례가 끝났어도 서브에이전트 때문에 작업 중이면 줄이 보인다', async () => {
+    snapshot.agents[0] = agent('w', { name: '웹 화면', role: '화면 구현', status: 'working', subagentsRunning: ['A'] })
+    history.mockResolvedValueOnce([
+      { t: 1, kind: 'user', source: 'human', parts: [{ type: 'text', text: '조사해 줘' }] },
+      { t: 2, kind: 'assistant', blocks: [{ type: 'tool_use', id: 'A', name: 'Agent', input: { description: '조사', prompt: 'p' } }] },
+      { t: 3, kind: 'subagent-start', toolUseId: 'A', taskId: 'task-A', description: '조사', subagentType: null, parentTaskId: null },
+      { t: 4, kind: 'result', ok: true, subtype: 'success' },
+    ] satisfies HistoryItem[])
+    await renderPanel()
+    expect(conv().lastElementChild).toBe(working())
+    expect(working()).toHaveTextContent('작업 중…')
+    expect(working()).toHaveTextContent('서브에이전트 1개가 일하고 있어요')
+  })
+})
+
+describe('ChatList — 서브에이전트 요약 줄', () => {
+  // 한 차례에 셋 — A 도는 중 · B 끝 · C 실패. Claude 내부 안내(Agent 결과)는 어디에도 안 보인다
+  const THREE: HistoryItem[] = [
+    { t: 1, kind: 'user', source: 'human', parts: [{ type: 'text', text: '세 곳 조사해 줘' }] },
+    {
+      t: 2, kind: 'assistant', blocks: [
+        { type: 'text', text: '나눠서 맡길게요' },
+        { type: 'tool_use', id: 'A', name: 'Agent', input: { description: 'A사 조사', prompt: 'p' } },
+        { type: 'tool_use', id: 'B', name: 'Agent', input: { description: 'B사 조사', prompt: 'p' } },
+        { type: 'tool_use', id: 'C', name: 'Agent', input: { description: 'C사 조사', prompt: 'p' } },
+      ],
+    },
+    ...(['A', 'B', 'C'] as const).flatMap((id): HistoryItem[] => [
+      { t: 3, kind: 'subagent-start', toolUseId: id, taskId: `task-${id}`, description: `${id}사 조사`, subagentType: null, parentTaskId: null },
+      { t: 4, kind: 'tool-result', toolUseId: id, isError: false, text: 'Async agent launched successfully.', viaApproval: false },
+    ]),
+    { t: 5, kind: 'subagent-end', toolUseId: 'B', taskId: 'task-B', status: 'completed', summary: 'B 보고', toolUses: 2, durationMs: 1000 },
+    { t: 6, kind: 'subagent-end', toolUseId: 'C', taskId: 'task-C', status: 'failed', summary: '못 열었어요', toolUses: 1, durationMs: 1000 },
+  ]
+  const counts = () => within(conv()).getByRole('button', { name: /서브에이전트 3개에게 맡김/ }).querySelector('[role="img"]')
+
+  it('도는 것은 에이전트의 도는 목록으로 센다 — 끝나면 그 줄이 다시 그려진다', async () => {
+    snapshot.agents[0] = agent('w', { name: '웹 화면', role: '화면 구현', subagentsRunning: ['A'] })
+    history.mockResolvedValueOnce(THREE)
+    await renderPanel()
+    expect(counts()).toHaveAccessibleName('도는 중 1, 끝 1, 실패 1')
+    expect(conv()).not.toHaveTextContent('Async agent launched')
+    expect(within(conv()).queryByRole('button', { name: /A사 조사/ })).toBeNull() // 하나씩 줄이 생기지 않는다
+    await emit('history', { agentId: 'w', item: { t: 7, kind: 'subagent-end', toolUseId: 'A', taskId: 'task-A', status: 'completed', summary: 'A 보고', toolUses: 3, durationMs: 1000 } })
+    await emit('subagents', { agentId: 'w', running: [] })
+    expect(counts()).toHaveAccessibleName('끝 2, 실패 1')
+  })
+
+  it('누르면 서브에이전트 탭으로 가 그 요약의 차례를 보인다(showSubagents(에이전트, 첫 Agent id))', async () => {
+    snapshot.agents[0] = agent('w', { name: '웹 화면', role: '화면 구현', subagentsRunning: ['A'] })
+    history.mockResolvedValueOnce(THREE)
+    const { store } = await renderPanel()
+    fireEvent.click(within(conv()).getByRole('button', { name: /서브에이전트 3개에게 맡김/ }))
+    expect(screen.getByRole('tab', { name: /^서브에이전트/ })).toHaveAttribute('aria-selected', 'true')
+    expect(store.getState().subagentFocus).toMatchObject({ agentId: 'w', key: 'A' })
+    expect(within(screen.getByRole('tabpanel')).getByRole('group', { name: /세 곳 조사해 줘/ })).toBeInTheDocument()
+  })
 })
 
 describe('ChatList — 명령 출력', () => {

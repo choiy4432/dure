@@ -76,7 +76,11 @@ function useCardView(agentId: AgentId) {
 type CardView = NonNullable<ReturnType<typeof useCardView>>
 
 function activityLine(v: CardView): string {
-  if (v.status === 'working') return v.streaming.trim() ? clip(v.streaming, ACTIVITY_MAX) : STATUS_LINE.working
+  if (v.status === 'working' && v.streaming.trim()) return clip(v.streaming, ACTIVITY_MAX)
+  // 흐르는 글이 없고 서브에이전트가 돈다 — 부모 차례가 끝나 서브에이전트만 돌 때도 이 줄
+  const subagents = v.agent.subagentsRunning.length
+  if (subagents > 0) return `서브에이전트 ${subagents}개가 일하는 중`
+  if (v.status === 'working') return STATUS_LINE.working
   if (v.unread > 0 && v.sender && v.status !== 'error') return `${v.sender}${josa(v.sender, '이/가')} 보낸 메시지 확인 전`
   if (v.last) return clip(v.last.text, ACTIVITY_MAX)
   return STATUS_LINE[v.status]
@@ -106,7 +110,7 @@ function Approval({ agent, request }: { agent: AgentView; request: PendingReques
   const target = requestTarget(request.toolName, request.input, agent.folder)
   return (
     <div className="ap nodrag" onClick={stop}>
-      <b className="ap-t">{requestTitle(agent.name, request.toolName, request.input)}</b>
+      <b className="ap-t">{requestTitle(agent.name, request.toolName, request.input, request.fromSubagent)}</b>
       {target && (
         <code className="trunc" title={target}>
           {target}

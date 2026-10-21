@@ -82,6 +82,14 @@ describe('AgentNode — 승인 기다림', () => {
     expect((screen.getByRole('button', { name: '허용' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
+  it('서브에이전트가 물은 것이면 제목이 "디자인의 서브에이전트가 파일을 고치려 해요"', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', status: 'awaiting' })]
+    snapshot.requests = [request({ toolName: 'Edit', input: { file_path: 'C:\\w\\src\\a.css', old_string: 'a', new_string: 'b' }, fromSubagent: true })]
+    const { card } = await renderCard()
+    expect(card.querySelector('.ap-t')!.textContent).toBe('디자인의 서브에이전트가 파일을 고치려 해요')
+    expect(screen.getByText('src/a.css').tagName).toBe('CODE') // 대상은 지금 그대로
+  })
+
   it('질문이면 "질문이 있어요 · 패널에서 답하기" 링크만 — 누르면 그 에이전트를 고른다', async () => {
     snapshot.requests = [request({ toolName: 'AskUserQuestion', input: { questions: [] }, kind: 'question' })]
     const { store, card } = await renderCard()
@@ -234,6 +242,24 @@ describe('AgentNode — 카드 내용', () => {
     expect(card.classList.contains('sel')).toBe(false)
     act(() => store.selectAgent('d'))
     expect(card.classList.contains('sel')).toBe(true)
+  })
+
+  it('흐르는 글이 없고 서브에이전트가 돌면 한 줄 "서브에이전트 2개가 일하는 중" — 수가 바뀌면 따라, 흐르는 글이 오면 그 글', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', status: 'working', subagentsRunning: ['A', 'B'] })]
+    const { card } = await renderCard()
+    const line = () => card.querySelector('.na')!.textContent
+    expect(line()).toBe('서브에이전트 2개가 일하는 중')
+    emit('subagents', { agentId: 'd', running: ['B'] })
+    expect(line()).toBe('서브에이전트 1개가 일하는 중')
+    emit('agent-event', { agentId: 'd', event: { kind: 'text-delta', text: '결과를 모아 정리하는 중이에요' } })
+    expect(line()).toBe('결과를 모아 정리하는 중이에요')
+  })
+
+  it('서브에이전트가 다 끝나면 지금처럼 — 작업 중이면 "일하는 중…"', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', status: 'working', subagentsRunning: ['A'] })]
+    const { card } = await renderCard()
+    emit('subagents', { agentId: 'd', running: [] })
+    expect(card.querySelector('.na')!.textContent).toBe('일하는 중…')
   })
 
   it('작업 중인데 언제부터인지 모르면(켤 때 이미 작업 중) 시각을 쓰지 않는다', async () => {

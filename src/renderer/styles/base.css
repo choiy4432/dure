@@ -2313,6 +2313,37 @@ code {
   margin-top: 6px;
 }
 
+/* 서브에이전트 요약 한 줄(시안 2안) — 하는 일 줄 모양 그대로: Bot · 설명(본문 글꼴, 하나일 때) · 동사 · 오른쪽 끝에 상태별 개수와 화살표 */
+.sa-sum-d {
+  color: var(--text);
+}
+
+/* 상태별 개수 — 6px 점(도는 중 초록 · 끝 회색 · 실패 빨강) + 수, 0 인 묶음은 그리지 않는다 */
+.sa-sum-n {
+  flex: none;
+  display: inline-flex;
+  gap: 10px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sa-sum-n > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sa-sum-n .dot {
+  width: 6px;
+  height: 6px;
+}
+
+.sa-sum-go {
+  color: var(--muted);
+}
+
 /* 알림 — 가운데 작은 회색 */
 .note {
   align-self: center;
