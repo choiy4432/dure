@@ -2065,13 +2065,11 @@ code {
   white-space: nowrap;
 }
 
-/* 다른 에이전트가 넘긴 메시지 — 왼쪽, 테두리 말풍선 */
+/* 다른 에이전트가 넘긴 메시지 — 전체 너비 카드(Claude 답·하는 일 목록과 같은 너비, 테두리·바탕으로 받은 일임을 보인다) */
 .ci-relay {
-  align-self: flex-start;
-  max-width: 88%;
   padding: 10px 14px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-node) var(--radius-node) var(--radius-node) var(--radius-xs);
+  border-radius: var(--radius-box);
   background: var(--subtle);
 }
 
