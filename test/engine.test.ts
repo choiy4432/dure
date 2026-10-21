@@ -1536,6 +1536,20 @@ test('effort: 다시 띄우려고 옛 claude 를 끄는 중에 shutdown 해도 �
   expect(isAlive(pid)).toBe(false);
 }, 20_000);
 
+test('effort: 끄는 상한이 먼저 지나도(느린 강제 종료) shutdown 은 남은 claude 를 끄고 나간다 — 떠도는 프로세스 없음', async () => {
+  // 상한(1초)을 점잖게 기다리는 시간(3초)보다 짧게 — 바쁜 PC 에서 taskkill 이 늦어 상한이 먼저 끝나는 경우를 늘 만든다
+  const e = await start({ FAKE_EFFORT_SILENT: '1', FAKE_IGNORE_STDIN_END: '1' }, false, { effortTimeoutMs: EFFORT_WAIT, stopLimitMs: 1000 });
+  const { b } = setup(e);
+  await e.setEffort(b.id, 'max');
+  const stuck = waitFor(e, 'engine-error', () => true, EFFORT_WAIT * 6);
+  await e.sendUser(b.id, text('echo 하나'));
+  await until('/effort 를 읽음', () => effortLines().length === 1);
+  await stuck;
+  const { pid } = lastSpawnOf('B');
+  await e.shutdown();
+  expect(isAlive(pid)).toBe(false);
+}, 20_000);
+
 test('effort: /effort 차례 중 멈추기 — 같은 프로세스에 이어 쓰지 않고 다시 띄워 /effort 부터 다시, 고른 effort 는 그대로', async () => {
   const e = await start({ FAKE_SLOW_EFFORT_MS: '600' }); // 멀쩡하지만 느린 시작('보냈다, 아차, 멈춤')
   const { b } = setup(e);

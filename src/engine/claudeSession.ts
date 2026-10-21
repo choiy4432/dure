@@ -179,4 +179,20 @@ export class ClaudeSession extends EventEmitter {
     }
     this.setStatus('stopped');
   }
+
+  /**
+   * 앱을 닫는데 stop() 이 상한 안에 못 끝났다(바쁜 PC 에서 taskkill 이 늦음) — 직접 끝내고 waitMs 까지만 기다린다.
+   * 손자 프로세스는 stop() 이 시작한 taskkill /T 가 계속 정리한다.
+   */
+  async forceKill(waitMs: number): Promise<void> {
+    if (!this.child || !this.running) return;
+    try {
+      this.child.kill();
+    } catch {
+      /* 이미 끝남 */
+    }
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([this.exited, new Promise<void>((r) => (timer = setTimeout(r, waitMs)))]);
+    clearTimeout(timer);
+  }
 }

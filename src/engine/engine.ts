@@ -30,6 +30,8 @@ export interface EngineOptions {
   usage?: false | Partial<UsageTiming>;
   /** 엔진이 보낸 /effort 에 답(result)이 없을 때 다시 띄우기까지 — 기본 EFFORT_TIMEOUT_MS(시험은 짧게) */
   effortTimeoutMs?: number;
+  /** 세션 하나를 끌 때 기다리는 상한(ms) — 없으면 STOP_LIMIT_MS. 시험용 */
+  stopLimitMs?: number;
 }
 
 // 이벤트:
@@ -91,6 +93,7 @@ export interface Engine extends EventEmitter {
 }
 
 const STOP_LIMIT_MS = 5000; // ClaudeSession.stop() 의 kill 뒤 대기는 끝이 없다 — 엔진이 따로 끊는다
+const FORCE_KILL_WAIT_MS = 1000; // shutdown 마지막에 직접 끈 claude 가 꺼지기를 기다리는 상한
 const EXITED: string = DENY.claudeExited;
 const STOPPED_BY_USER: string = DENY.userStopped;
 const TURN_ENDED: string = DENY.turnEnded;
@@ -142,6 +145,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private closed = false;
   private closing: Promise<void> | null = null;
   private stopping = new Set<Promise<void>>(); // 끄는 중인 세션(상한 STOP_LIMIT_MS) — 맵에서 빠졌어도 shutdown 이 기다린다
+  private unstopped = new Set<ClaudeSession>(); // stop() 이 아직 안 끝난 세션 — 상한이 먼저 지나도 shutdown 이 마지막에 직접 끈다
   private perms: Permissions;
   private router: Router;
   private mcp!: McpServerHandle;
@@ -438,6 +442,8 @@ class EngineImpl extends EventEmitter implements Engine {
       for (const r of this.perms.pending()) this.perms.cancelForAgent(r.agentId, EXITED);
       // 맵에서 이미 빠진 채 끄는 중인 세션(다시 띄우기·새 대화)도 기다린다 — 각각 STOP_LIMIT_MS 상한
       await Promise.all([this.stopWatcher(), ...ids.map((id) => this.endSession(id)), ...this.stopping]);
+      // 상한이 먼저 지나 아직 살아 있는 claude(바쁜 PC 에서 taskkill 이 늦음) — 앱이 닫힌 뒤 떠돌지 않게 직접 끈다
+      await Promise.all([...this.unstopped].map((s) => s.forceKill(FORCE_KILL_WAIT_MS)));
       await this.mcp.close();
     })();
     return this.closing;
@@ -851,9 +857,11 @@ class EngineImpl extends EventEmitter implements Engine {
     if (!s) return;
     let timer: NodeJS.Timeout | undefined;
     const limit = new Promise<void>((r) => {
-      timer = setTimeout(r, STOP_LIMIT_MS);
+      timer = setTimeout(r, this.o.stopLimitMs ?? STOP_LIMIT_MS);
     });
-    const stopped = Promise.race([s.stop().catch(() => undefined), limit]).then(() => clearTimeout(timer));
+    this.unstopped.add(s);
+    const stop = s.stop().catch(() => undefined).finally(() => this.unstopped.delete(s));
+    const stopped = Promise.race([stop, limit]).then(() => clearTimeout(timer));
     this.stopping.add(stopped);
     try {
       await stopped;
