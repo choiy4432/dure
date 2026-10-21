@@ -122,8 +122,11 @@ export interface EngineEventMap {
   held: { roomId: RoomId };
   request: PendingRequest;
   'request-resolved': { id: string; agentId: AgentId };
-  /** bypass = Claude 가 알려 준 실제 모드 · bySettings = 두레 스위치가 아니라 내 Claude 설정 때문에 bypass */
-  flags: { agentId: AgentId; bypass: boolean; bySettings: boolean };
+  /**
+   * bypass = Claude 가 알려 준 실제 모드(세션이 없으면 다음에 띄울 때의 모드) · bySettings = 두레 스위치가 아니라 내 Claude 설정 때문에 bypass ·
+   * pending = 옵션 없이 뜬 세션을 켜려고 그 차례 뒤의 다시 띄우기를 기다리는 중(실제 모드는 아직 그대로)
+   */
+  flags: { agentId: AgentId; bypass: boolean; bySettings: boolean; pending: boolean };
   'engine-error': { agentId: string | null; message: string };
   history: { agentId: AgentId; item: HistoryItem };
   'held-input': { agentId: AgentId; count: number };
