@@ -39,6 +39,11 @@ export interface EngineOptions {
   stopLimitMs?: number;
   /** 승인·두레 도구를 부른 tool_use id 를 이 세션 스트림에서 아직 못 봤을 때 기다리는 한도(ms) — 없으면 SEEN_WAIT_MS. 시험은 짧게 */
   seenWaitMs?: number;
+  /**
+   * 뒤에서 돈 서브에이전트가 끝난 뒤 Claude 가 스스로 여는 차례(보고 전달)를 쉬는 동안 기다리는 시간(ms) — 없으면 AUTO_TURN_GRACE_MS.
+   * 그동안 다시 띄우기·/effort 를 미루고 화면은 작업 중. 시험은 짧게
+   */
+  autoTurnGraceMs?: number;
 }
 
 // 이벤트:
@@ -70,7 +75,10 @@ export interface Engine extends EventEmitter {
   addAgent(i: { roomId: RoomId; name: string; role: string; folder: string }): Agent;
   updateAgent(id: AgentId, p: Pick<AgentPatch, 'name' | 'role' | 'auto' | 'pos' | 'color' | 'bypassNoticeClosed'>): Agent;
   removeAgent(id: AgentId): Promise<void>;
-  /** 승인 대기 · 오류가 앞선다. 세션이 쉬어도(부모 차례가 끝나도) 서브에이전트가 돌면 working */
+  /**
+   * 승인 대기 · 오류가 앞선다. 세션이 쉬어도(부모 차례가 끝나도) 서브에이전트가 돌면 working — 끝난 뒤 Claude 가 스스로 열 차례를
+   * 기다리는 동안(autoTurnGraceMs)도
+   */
   status(id: AgentId): AgentStatus;
   heldInput(id: AgentId): number;
   /** 도는 서브에이전트 — 부모의 Agent tool_use id, 시작 순. 살아 있는 세션이 없으면 빈 목록 */
@@ -91,7 +99,7 @@ export interface Engine extends EventEmitter {
   /**
    * 에이전트의 '묻지 않음' — 저장하고 살아 있는 세션에 적용한다. 허용이 꺼져 있으면 켜기는 던진다.
    * 켜기: 옵션으로 떠 있으면 바로 set_permission_mode, 옵션 없이 떠 있으면 쉴 때 --resume 으로 다시 띄운다(일하는·승인 기다리는 중이면
-   * 그 차례 뒤 — 그동안 flags.pending · 대화 안내 한 줄, 끄면 거둔다).
+   * 그 차례 뒤, 서브에이전트가 돌면 그 일이 끝난 뒤 — 그동안 flags.pending · 대화 안내 한 줄, 끄면 거둔다).
    * 끄기: 내 Claude 설정의 기본 모드로. 실패는 던지지 않는다 — engine-error · 대화 안내 한 줄 · flags(실제 모드)로 알린다
    */
   setBypass(id: AgentId, on: boolean): Promise<void>;
@@ -102,7 +110,7 @@ export interface Engine extends EventEmitter {
   setModel(id: AgentId, model: string | null): Promise<void>;
   /**
    * 저장하고, 세션이 살아 있으면 세션 명령 `/effort <단계>` 로 적용한다 — 차례 중이면 그 차례가 끝난 뒤(기다리던 입력보다 먼저),
-   * 세션이 없으면 다음에 띄울 때 첫 줄로. Claude 를 켜지 않는다
+   * 서브에이전트가 돌면 그 일이 끝난 뒤(그사이 입력은 먼저 간다), 세션이 없으면 다음에 띄울 때 첫 줄로. Claude 를 켜지 않는다
    */
   setEffort(id: AgentId, level: EffortLevel): Promise<void>;
   /** 지금 세션이 쓰는 effort — /effort 의 답, 고른 값이 없으면 내 설정(get_settings) · 모르면 null */
@@ -138,6 +146,8 @@ const DURE_TOOL_DENIED = '두레 도구는 승인 대상이 아니에요.';
 const SUBAGENT_DURE_TOOL: string = DENY.subagentDureTool;
 /** 부른 tool_use id 를 스트림에서 못 봤을 때 기다리는 한도 — 그 줄은 보통 부르기보다 먼저 온다(probe13·14) */
 const SEEN_WAIT_MS = 2000;
+/** 끝 알림 뒤 스스로 시작한 차례는 곧바로 온다(probe13) — 멈추기로 끝났으면 오지 않으니(probe14 C) 짧게만 기다린다 */
+const AUTO_TURN_GRACE_MS = 1500;
 const EFFORT_UNKNOWN = '알 수 없는 effort 예요.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
 /** /effort 의 답(로컬 명령 — 모델을 부르지 않는다): "Set effort level to max (this session only): …" (probe9) */
@@ -173,6 +183,18 @@ interface EffortTurn {
 
 /** 프로세스에 써 넣었지만 아직 아무 이벤트도 안 온 줄 — 읽기 전에 죽으면 되살린다 */
 type InFlight = { kind: 'relay'; messageId: string } | { kind: 'human'; parts: UserPart[] };
+
+/** 도는 서브에이전트 — background: 부모가 도는 중에 그 Agent 의 결과(Async agent launched)를 받았다. 끝나면 Claude 가 스스로 차례를 연다(probe13) */
+interface RunningSubagent {
+  toolUseId: string; // 부모의 Agent tool_use id
+  background: boolean;
+}
+
+/** 뒤에서 돈 서브에이전트가 끝나 Claude 가 스스로 열 차례를 기다리는 중 — left: 아직 안 온 차례 수, timer: 쉬는 동안 도는 기다림 */
+interface AutoTurnWait {
+  left: number;
+  timer: NodeJS.Timeout | null;
+}
 
 /**
  * 한 세션 스트림에서 본 하는 일 — tool_use id → 서브에이전트 줄이면 부모의 Agent tool_use id, 부모 줄이면 null.
@@ -245,8 +267,10 @@ class EngineImpl extends EventEmitter implements Engine {
   private effortTurn = new WeakMap<ClaudeSession, EffortTurn>(); // 써 넣은 /effort — 그 result 까지 이벤트를 삼킨다
   private effortBroken = new Set<AgentId>(); // /effort 가 막혀 다시 띄움 — 고르기·모델 바꾸기 전까지 /effort 없이 띄운다(메모리만)
   private compactedTurn = new WeakSet<ClaudeSession>(); // 이번 차례에 요약됨 — 그 차례의 result 뒤엔 값을 받지 않는다
-  // 도는 서브에이전트 — task_id → 부모의 Agent tool_use id(넣은 순서 = 시작 순). 끝 알림·세션 끝에 빠진다(메모리만, 빈 목록은 지운다)
-  private subagents = new Map<AgentId, Map<string, string>>();
+  // 도는 서브에이전트 — task_id → 부모의 Agent tool_use id 등(넣은 순서 = 시작 순). 끝 알림·세션 끝에 빠진다(메모리만, 빈 목록은 지운다)
+  private subagents = new Map<AgentId, Map<string, RunningSubagent>>();
+  // 뒤에서 돈 서브에이전트가 끝나 Claude 가 스스로 열 차례를 기다린다 — 그동안 다시 띄우기·/effort 를 미루고 화면은 작업 중(세션 끝에 지운다)
+  private autoTurns = new Map<AgentId, AutoTurnWait>();
   private seen = new WeakMap<ClaudeSession, SeenToolUses>(); // 그 세션 스트림에서 본 하는 일 — 승인·두레 도구를 부른 쪽을 가른다(세션이 끝나면 비운다)
   private started = false;
   private limit: number;
@@ -435,8 +459,8 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     if (!s) return this.errors.has(id) ? 'error' : 'idle';
     if (s.status !== 'idle') return s.status;
-    // 부모 차례는 끝났어도 서브에이전트가 돌면 작업 중(끝나면 Claude 가 스스로 차례를 연다)
-    if (this.subagents.has(id)) return 'working';
+    // 부모 차례는 끝났어도 서브에이전트가 돌면 작업 중 — 끝난 뒤 Claude 가 스스로 열 차례를 기다리는 동안도(대기로 깜박이지 않게)
+    if (this.subagents.has(id) || this.autoTurns.has(id)) return 'working';
     // 엔진이 보낸 /effort 차례 중에 사람 입력이 기다리면 작업 중 — 첫 입력이 멈춘 듯 보이지 않게(멈추기도 켜진다)
     return this.effortTurn.has(s) && (this.held.get(id)?.length ?? 0) > 0 ? 'working' : 'idle';
   }
@@ -448,7 +472,7 @@ class EngineImpl extends EventEmitter implements Engine {
 
   subagentsRunning(id: AgentId): string[] {
     this.need(id);
-    return [...(this.subagents.get(id)?.values() ?? [])];
+    return [...(this.subagents.get(id)?.values() ?? [])].map((sub) => sub.toolUseId);
   }
 
   flags(id: AgentId): { bypass: boolean; bySettings: boolean; pending: boolean } {
@@ -520,7 +544,8 @@ class EngineImpl extends EventEmitter implements Engine {
       if ((this.held.get(id)?.length ?? 0) > 0) return this.restartAfterEffort(id, s, 'interrupt');
       return;
     }
-    const wasWorking = s.status === 'working';
+    // 부모 차례와 도는 서브에이전트 모두(spec §4.6) — 서브에이전트만 돌아도 interrupt 하나로 멈춘다(끝 알림 stopped, probe14 C)
+    const wasWorking = s.status === 'working' || this.subagents.has(id);
     await s.interrupt();
     if (wasWorking) this.guard(id, () => this.record(id, { kind: 'notice', text: STOPPED_NOTICE }));
   }
@@ -689,30 +714,50 @@ class EngineImpl extends EventEmitter implements Engine {
     return (r) => !!r.fromSubagent && this.subagents.has(id);
   }
 
-  /** 지금 차례 중(엔진이 보낸 /effort 차례 포함)이거나 사람 답을 기다리는 중 */
+  /**
+   * 지금 차례 중(엔진이 보낸 /effort 차례 포함)이거나 부모가 사람 답을 기다리는 중, 또는 다시 띄우기를 기다리는 중(켜지 않은 세션에
+   * 보내지 않게 — 서브에이전트가 돌면 쉬는 채로 미뤄진다). 서브에이전트가 물은 승인은 막지 않는다 — 부모 차례가 끝났으면 받은 메시지는 간다
+   */
   private waiting(id: AgentId): boolean {
     const s = this.sessions.get(id);
-    return s?.status === 'working' || (!!s && this.effortTurn.has(s)) || this.perms.pending(id).length > 0;
+    return s?.status === 'working' || (!!s && (this.effortTurn.has(s) || this.restartWant.has(s))) || this.parentAsking(id);
   }
 
-  /** 쉬는 중 — 차례 중도 아니고(엔진이 보낸 /effort 차례 포함), 사람 답을 기다리지도 않는다 */
+  /** 쉬는 중 — 차례 중도 아니고(엔진이 보낸 /effort 차례 포함), 부모가 사람 답을 기다리지도 않는다(서브에이전트가 물은 것은 세지 않는다) */
   private resting(id: AgentId, s: ClaudeSession): boolean {
-    return s.status === 'idle' && !this.effortTurn.has(s) && this.perms.pending(id).length === 0;
+    return s.status === 'idle' && !this.effortTurn.has(s) && !this.parentAsking(id);
+  }
+
+  /** 부모가 물은 승인·질문이 떠 있다 — 서브에이전트가 물은 것(fromSubagent)은 부모 차례와 상관없이 남는다(spec §4.4) */
+  private parentAsking(id: AgentId): boolean {
+    return this.perms.pending(id).some((r) => !r.fromSubagent);
+  }
+
+  /**
+   * 서브에이전트 일이 다 끝났다 — 도는 것도, 끝난 뒤 Claude 가 스스로 열 차례를 기다리는 것도 없다. 다시 띄우기·/effort 는 이때만
+   * (다시 띄우면 서브에이전트가 죽고, /effort 차례는 사건을 삼켜 그 사이 온 끝 알림·스스로 시작한 차례가 사라진다 — spec §4.3)
+   */
+  private subagentsSettled(id: AgentId): boolean {
+    return !this.subagents.has(id) && !this.autoTurns.has(id);
   }
 
   /**
    * 한가하면 — 권한 모드 때문에 다시 띄울 세션이면(묻지 않음을 켜려고, 또는 끄기에 실패해 남은 bypass 를 걷으려고) 그것부터
-   * (기다리던 입력은 새 세션이 받는다), 다음은 줄에 선 /effort, 다음은 사람 입력, 없으면 다른 에이전트가 보낸 대기 메시지 — 한 번에 한 줄
+   * (기다리던 입력은 새 세션이 받는다), 다음은 줄에 선 /effort, 다음은 사람 입력, 없으면 다른 에이전트가 보낸 대기 메시지 — 한 번에 한 줄.
+   * 다시 띄우기·/effort 는 서브에이전트 일이 다 끝날 때까지 줄에 둔다 — 다시 띄우기를 기다리는 동안은 입력도 보내지 않고,
+   * /effort 만 미뤄지면 사람 입력·받은 메시지는 그대로 간다
    */
   private pump(id: AgentId): void {
     const s = this.sessions.get(id);
     if (!s || !this.resting(id, s)) return;
+    this.armAutoTurn(id);
+    const settled = this.subagentsSettled(id);
     if (this.restartWant.has(s)) {
-      void this.restartForMode(id, s);
-      return; // 다시 띄운 세션에서 다시 pump
+      if (settled) void this.restartForMode(id, s);
+      return; // 다시 띄운 세션에서 다시 pump · 미뤘으면 서브에이전트 일이 끝난 뒤 다시 pump
     }
     const level = this.effortWant.get(s);
-    if (level) {
+    if (level && settled) {
       this.sendEffort(id, s, level);
       return; // 그 차례의 result 에서 다시 pump
     }
@@ -814,12 +859,16 @@ class EngineImpl extends EventEmitter implements Engine {
     s.on('event', (ev: StreamEvent) =>
       this.guard(id, () => {
         // 부모의 줄이 오면 보낸 줄을 읽은 것 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
-        if (readsInput(ev)) this.inFlight.delete(s);
+        const answered = readsInput(ev) && this.inFlight.delete(s);
         if (this.sessions.get(id) !== s) return;
         // 본 하는 일 — 승인·두레 도구를 부른 쪽을 가르는 근거(/effort 차례 중에 온 줄도)
         if (ev.kind === 'assistant') this.seen.get(s)?.note(ev);
         if (ev.kind !== 'control-response' && this.effortTurn.has(s)) this.onEffortEvent(id, s, ev);
-        else this.onEvent(id, ev);
+        else {
+          // 보낸 줄 없이 온 init — Claude 가 스스로 연 차례. 서브에이전트가 끝난 뒤 기다리던 것이면 하나 지운다(그 result 가 pump 한다)
+          if (ev.kind === 'init' && !answered) this.autoTurnStarted(id);
+          this.onEvent(id, ev);
+        }
       }),
     );
     s.on('status', () =>
@@ -1028,7 +1077,7 @@ class EngineImpl extends EventEmitter implements Engine {
   /**
    * 스위치 값을 살아 있는 세션에 — 세션이 없으면 할 일이 없다(다음에 띄울 때 ensure 가 한다). 던지지 않는다.
    * 켜기: 옵션으로 떴으면 바로 set_permission_mode. 아니면(허용 전에 띄운 세션 — bypass_not_launched 로 거절된다) 다시 띄운다:
-   *   쉬는 중이면 지금, 아니면 그 차례가 끝난 뒤 pump 가.
+   *   쉬는 중이면 지금, 아니면 그 차례가(서브에이전트가 돌면 그 일까지) 끝난 뒤 pump 가.
    * 끄기: 미뤄 둔 다시 띄우기를 거두고, 옵션으로 떴으면 내 Claude 설정의 기본 모드로. 옵션 없이 뜬 세션은 두레가 모드를 바꾼 적이 없어 보낼 것이 없다.
    * 이미 떠 있는 승인 카드는 그대로 둔다 — 사람이 답하면 평소처럼(probe11: 바꾼 뒤의 도구 호출부터 새 모드)
    */
@@ -1038,22 +1087,25 @@ class EngineImpl extends EventEmitter implements Engine {
     const seq = this.nextModeSeq(id);
     if (on) {
       if (this.optioned.has(s)) {
-        this.restartWant.delete(s); // 끄기 실패로 미뤄 둔 다시 띄우기 — 다시 켜니 필요 없다
-        return this.sendMode(id, s, BYPASS_MODE, { on: true, seq });
+        const deferred = this.restartWant.delete(s); // 끄기 실패로 미뤄 둔 다시 띄우기 — 다시 켜니 필요 없다
+        await this.sendMode(id, s, BYPASS_MODE, { on: true, seq });
+        if (deferred) this.pump(id); // 미뤄 둔 다시 띄우기가 막던 입력(아래와 같다)
+        return;
       }
       const queued = this.restartWant.has(s);
       this.restartWant.add(s);
-      if (this.resting(id, s)) return this.restartForMode(id, s);
+      if (this.resting(id, s) && this.subagentsSettled(id)) return this.restartForMode(id, s);
       if (queued) return; // 이미 그 차례 뒤로 미뤄 뒀다 — 안내는 한 번
-      // 일하는·승인 기다리는 중 — 그 차례가 끝나면 pump 가 다시 띄운다. 그동안 스위치는 바뀌는 중(flags.pending), 대화에 안내 한 줄.
+      // 일하는·승인 기다리는 중이거나 서브에이전트가 돈다 — 그 차례·서브에이전트 일이 끝나면 pump 가 다시 띄운다. 그동안 스위치는 바뀌는 중(flags.pending), 대화에 안내 한 줄.
       // 다시 띄우면(세션이 끝나며 flags) 풀리고, 끄거나 허용을 끄면 아래에서 거둔다(그때의 flags 가 풀린 값을 알린다)
       this.emitFlags(id);
       this.guard(id, () => this.record(id, { kind: 'notice', text: BYPASS_RESTART_QUEUED_NOTICE }));
       return;
     }
-    this.restartWant.delete(s);
-    if (!this.optioned.has(s)) return;
-    return this.settleOff(id, s, seq);
+    const deferred = this.restartWant.delete(s);
+    if (this.optioned.has(s)) await this.settleOff(id, s, seq);
+    // 서브에이전트가 돌아 쉬는 채로 미뤄 둔 다시 띄우기가 입력·받은 메시지를 막고 있었다 — 거뒀으니 보낸다(차례 중이면 그 result 가)
+    if (deferred) this.pump(id);
   }
 
   /** 내 Claude 설정의 기본 모드 — 못 읽으면 그 세션에 기억한 값, 그것도 없으면 'default' */
@@ -1128,7 +1180,7 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     this.emitFlags(id);
     this.restartWant.add(s);
-    if (this.resting(id, s)) await this.restartForMode(id, s);
+    if (this.resting(id, s) && this.subagentsSettled(id)) await this.restartForMode(id, s);
   }
 
   /**
@@ -1235,6 +1287,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.guard(id, () => this.setContext(id, null));
     }
     if (ev.kind === 'init') this.noteInit(id, ev);
+    if (ev.kind === 'tool-result' && !ev.parent) this.noteLaunched(id, ev.toolUseId);
     if (ev.kind === 'tool-result') {
       this.guard(id, () =>
         this.emit('agent-event', { agentId: id, event: ev, viaApproval: this.perms.wasAsked(id, ev.toolUseId) }),
@@ -1280,21 +1333,76 @@ class EngineImpl extends EventEmitter implements Engine {
   /** 서브에이전트 시작·끝 — 도는 목록을 고치고 알린다(세션이 쉬어도 도는 동안은 작업 중) */
   private noteSubagent(id: AgentId, ev: Extract<StreamEvent, { kind: 'task-started' | 'task-ended' }>): void {
     if (ev.kind === 'task-started') {
-      const running = this.subagents.get(id) ?? new Map<string, string>();
-      if (running.get(ev.taskId) === ev.toolUseId) return; // 이미 아는 시작 — 목록이 그대로다
-      running.set(ev.taskId, ev.toolUseId);
+      const running = this.subagents.get(id) ?? new Map<string, RunningSubagent>();
+      if (running.get(ev.taskId)?.toolUseId === ev.toolUseId) return; // 이미 아는 시작 — 목록이 그대로다
+      running.set(ev.taskId, { toolUseId: ev.toolUseId, background: false });
       this.subagents.set(id, running);
     } else {
       const running = this.subagents.get(id);
-      if (!running?.delete(ev.taskId)) return;
+      const ended = running?.get(ev.taskId);
+      if (!running || !ended) return;
+      running.delete(ev.taskId);
       if (running.size === 0) this.subagents.delete(id);
+      // 뒤에서 돈 것 — Claude 가 보고를 전하려고 스스로 차례를 연다(probe13, 부모 차례 중이면 그 뒤에 — probe14 B).
+      // 그 차례를 기다린다(작업 중 그대로 · 다시 띄우기·/effort 는 미룬다). 앞에서 돈 것의 보고는 부모 차례 안에서 이어진다
+      if (ended.background) this.expectAutoTurn(id);
     }
     this.emitSubagents(id);
     this.emitStatus(id);
   }
 
-  /** 세션이 끝났다 — 그 세션이 돌리던 서브에이전트도 끝났다. 끝 기록은 남기지 않는다(화면은 끝 기록 없는 서브에이전트를 끊김으로 본다) */
+  /** 부모가 받은 하는 일 결과 — 아직 도는 서브에이전트의 Agent 면 뒤에서 도는 것이다(Async agent launched, probe13) */
+  private noteLaunched(id: AgentId, toolUseId: string): void {
+    for (const sub of this.subagents.get(id)?.values() ?? []) if (sub.toolUseId === toolUseId) sub.background = true;
+  }
+
+  /** 뒤에서 돈 서브에이전트가 끝났다 — Claude 가 스스로 열 차례 하나를 기다린다(쉬면 기다림을 잰다) */
+  private expectAutoTurn(id: AgentId): void {
+    const wait = this.autoTurns.get(id) ?? { left: 0, timer: null };
+    wait.left++;
+    this.autoTurns.set(id, wait);
+    this.armAutoTurn(id);
+  }
+
+  /**
+   * 기다리는 차례가 있고, 서브에이전트가 다 끝났고, 세션이 쉬면 기다림(autoTurnGraceMs)을 잰다 — 이미 재고 있으면 그대로.
+   * 다 지나도 차례가 안 오면(멈추기로 끝났다 — probe14 C) 기다림을 접고 미뤄 둔 다시 띄우기·/effort 를 꺼낸다. 그때 차례 중이면
+   * 그 result 의 pump 가 다시 잰다
+   */
+  private armAutoTurn(id: AgentId): void {
+    const wait = this.autoTurns.get(id);
+    const s = this.sessions.get(id);
+    if (!wait || wait.timer || !s || this.subagents.has(id) || !this.resting(id, s)) return;
+    const over = () => {
+      if (this.autoTurns.get(id) !== wait) return; // 그새 차례가 왔거나 세션이 끝났다
+      wait.timer = null;
+      const cur = this.sessions.get(id);
+      if (!cur || this.subagents.has(id) || !this.resting(id, cur)) return; // 차례 중·승인 대기·새 서브에이전트 — 끝나면 다시 잰다
+      this.autoTurns.delete(id);
+      this.guard(id, () => this.pump(id));
+      this.emitStatus(id); // 보내고 나서 — 곧바로 다시 일하면 대기로 깜박이지 않게
+    };
+    wait.timer = setTimeout(() => this.guard(id, over), this.o.autoTurnGraceMs ?? AUTO_TURN_GRACE_MS);
+    wait.timer.unref?.();
+  }
+
+  /** Claude 가 스스로 차례를 열었다 — 기다리던 것 하나가 왔다. 더 남았으면 그 차례가 끝난 뒤 다시 잰다 */
+  private autoTurnStarted(id: AgentId): void {
+    const wait = this.autoTurns.get(id);
+    if (!wait) return;
+    if (wait.timer) clearTimeout(wait.timer);
+    wait.timer = null;
+    if (--wait.left <= 0) this.autoTurns.delete(id);
+  }
+
+  /**
+   * 세션이 끝났다 — 그 세션이 돌리던 서브에이전트도 끝났고, 스스로 열 차례도 오지 않는다. 끝 기록은 남기지 않는다
+   * (화면은 끝 기록 없는 서브에이전트를 끊김으로 본다)
+   */
   private forgetSubagents(id: AgentId): void {
+    const wait = this.autoTurns.get(id);
+    if (wait?.timer) clearTimeout(wait.timer);
+    this.autoTurns.delete(id);
     if (this.subagents.delete(id)) this.emitSubagents(id);
   }
 

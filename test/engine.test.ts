@@ -2661,13 +2661,13 @@ test('subagent: SUB — 부모 차례가 끝나도 도는 동안 작업 중 · �
   expect(runs).toEqual([{ agentId: a.id, running: [tool] }, { agentId: a.id, running: [] }]);
   expect(e.subagentsRunning(a.id)).toEqual([]);
   expect(e.status(a.id)).toBe('idle');
-  // 입력 없이 온 차례(init) 동안은 작업 중 — 끝 기록 뒤에 working, 그 차례가 끝나며 idle
+  // 끝난 뒤 Claude 가 스스로 여는 차례를 기다리는 동안도 작업 중 — 대기로 깜박이지 않고, 그 차례의 글 뒤에 한 번 idle
   const end = timeline.indexOf('item:subagent-end');
   expect(end).toBeGreaterThan(0);
   const after = timeline.slice(end);
-  expect(after.indexOf('status:working')).toBeGreaterThan(0);
-  expect(after.indexOf('status:working')).toBeLessThan(after.indexOf('item:assistant')); // 그 차례의 글보다 먼저
-  expect(after.filter((x) => x.startsWith('status:')).at(-1)).toBe('status:idle');
+  expect(after.filter((x) => x.startsWith('status:'))).toEqual(['status:idle']);
+  expect(after.indexOf('status:idle')).toBeGreaterThan(after.indexOf('item:assistant'));
+  expect(timeline.filter((x) => x.startsWith('status:'))).toEqual(['status:working', 'status:idle']);
 });
 
 test('subagent: 기록 — 서브에이전트 줄엔 parent(= Agent 하는 일 id), 시작·끝 기록 하나씩 · 부모 줄엔 parent 가 없다', async () => {
@@ -3015,4 +3015,206 @@ test('subagent: SUBNEST — 안쪽 서브에이전트의 승인은 스트림에 
   expect(h.filter((x) => x.kind === 'subagent-end').map((x) => (x as { status: string }).status)).toEqual(['completed', 'completed']);
   expect(e.subagentsRunning(a.id)).toEqual([]);
   expect(e.status(a.id)).toBe('idle');
+});
+
+// ── 서브에이전트 멈추기 · 다시 띄우기·/effort 미루기(spec §4.3·§4.6) ──
+// 서브에이전트가 도는 동안, 그리고 끝난 뒤 Claude 가 스스로 여는 차례를 기다리는 동안(autoTurnGraceMs)은 다시 띄우지 않고 /effort 도 보내지 않는다.
+// 사람 입력·받은 메시지는 막지 않는다(다시 띄우기를 기다리는 동안만 빼고)
+const isText = (h: HistoryItem, t: string) =>
+  h.kind === 'assistant' && !h.parent && h.blocks.some((b) => b.type === 'text' && b.text === t);
+type EffortEvent = { agentId: string; effortNow: string | null };
+
+test('subagent: 서브에이전트만 돌 때 멈추기 — interrupt 가 가고 끝 기록 stopped · 멈췄어요 · 스스로 시작한 차례가 없으면 기다림 뒤 대기', async () => {
+  const gate = path.join(dir, 'gate'); // 만들지 않는다 — 서브에이전트는 끝나지 않는다
+  const e = await start({ FAKE_SUB_GATE: gate }, false, { autoTurnGraceMs: 300 });
+  const { a } = setup(e);
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 조사'));
+  await launched;
+  const tool = agentToolId(e, a.id);
+  expect(e.status(a.id)).toBe('working');
+  const statuses: AgentStatus[] = [];
+  e.on('status', (s: StatusEvent) => s.agentId === a.id && statuses.push(s.status));
+  const runs: SubagentsEvent[] = [];
+  e.on('subagents', (x: SubagentsEvent) => runs.push(x));
+  const idle = waitFor<StatusEvent>(e, 'status', (s) => s.agentId === a.id && s.status === 'idle');
+
+  const t0 = Date.now();
+  await e.interrupt(a.id);
+  expect(controlRequests('interrupt')).toHaveLength(1);
+  expect(runs).toEqual([{ agentId: a.id, running: [] }]);
+  expect(e.status(a.id)).toBe('working'); // 스스로 시작한 차례를 잠깐 기다린다 — 대기로 깜박이지 않게
+  await idle;
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(250);
+  expect(statuses).toEqual(['idle']);
+  const h = e.history(a.id);
+  expect(h.find((x) => x.kind === 'subagent-end')).toMatchObject({ toolUseId: tool, status: 'stopped' });
+  expect(noticesOf(e, a.id)).toEqual(['멈췄어요']);
+  expect(h.slice(-2).map((x) => x.kind)).toEqual(['subagent-end', 'notice']);
+});
+
+test('subagent: 서브에이전트가 도는 동안 고른 effort 는 보내지 않는다 — 끝나고 스스로 시작한 차례가 끝난 뒤에 /effort', async () => {
+  const gate = path.join(dir, 'gate');
+  const e = await start({ FAKE_SUB_GATE: gate });
+  const { a } = setup(e);
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 조사'));
+  await launched;
+  await e.setEffort(a.id, 'low');
+  await sleep(200);
+  // /effort 차례는 사건을 삼킨다 — 그 사이 끝 알림이 오면 작업 중에 갇히고, 스스로 시작한 차례가 오면 대화가 사라진다
+  expect(effortLines()).toEqual([]);
+  expect(e.status(a.id)).toBe('working');
+
+  const order: string[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === a.id && x.event.kind === 'result' && order.push(`result:${x.event.text}`));
+  e.on('effort', (x: EffortEvent) => x.agentId === a.id && x.effortNow && order.push(`effort:${x.effortNow}`));
+  const heard = waitFor<EffortEvent>(e, 'effort', (x) => x.agentId === a.id && x.effortNow === 'low');
+  fs.writeFileSync(gate, '');
+  await heard;
+  expect(order).toEqual(['result:전달: 보고: 조사', 'effort:low']);
+  expect(userTexts()).toEqual(['SUB 조사', '/effort low']);
+  expect(e.history(a.id).filter((x) => isText(x, '전달: 보고: 조사'))).toHaveLength(1); // 스스로 시작한 차례는 기록된다
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('subagent: 부모 차례 중에 서브에이전트가 끝나면 — 그 차례 뒤 Claude 가 스스로 여는 차례까지 /effort 를 미룬다(probe14 B)', async () => {
+  const gate = path.join(dir, 'gate');
+  const e = await start({ FAKE_SUB_GATE: gate });
+  const { a } = setup(e);
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 조사'));
+  await launched;
+  const req = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id);
+  await e.sendUser(a.id, text('ASK Write')); // 부모 차례 — 승인을 기다리는 동안 서브에이전트가 끝난다
+  const r = await req;
+  await e.setEffort(a.id, 'low');
+  const ended = waitFor<SubagentsEvent>(e, 'subagents', (x) => x.agentId === a.id && x.running.length === 0);
+  fs.writeFileSync(gate, '');
+  await ended;
+
+  const order: string[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === a.id && x.event.kind === 'result' && order.push(`result:${x.event.text}`));
+  e.on('effort', (x: EffortEvent) => x.agentId === a.id && x.effortNow && order.push(`effort:${x.effortNow}`));
+  const heard = waitFor<EffortEvent>(e, 'effort', (x) => x.agentId === a.id && x.effortNow === 'low');
+  e.answerRequest(r.id, { type: 'allow' });
+  await heard;
+  expect(order).toEqual(['result:ok', 'result:전달: 보고: 조사', 'effort:low']);
+  expect(userTexts()).toEqual(['SUB 조사', 'ASK Write', '/effort low']);
+  expect(e.history(a.id).filter((x) => isText(x, '전달: 보고: 조사'))).toHaveLength(1);
+});
+
+test('subagent: 다시 띄워야 하는 세션도 서브에이전트가 도는 동안엔 그대로 — 입력도 기다리고, 멈추기로 끝나면 기다림 뒤 다시 띄운다', async () => {
+  const gate = path.join(dir, 'gate'); // 만들지 않는다
+  const e = await start({ FAKE_SUB_GATE: gate }, false, { autoTurnGraceMs: 50 });
+  const { a } = setup(e);
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 조사')); // 허용 전에 띄운 세션 — 옵션 없음
+  await launched;
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true); // 부모 차례는 끝났지만 서브에이전트가 돈다 — 다시 띄우기를 미룬다
+  expect(e.flags(a.id)).toEqual({ bypass: false, bySettings: false, pending: true });
+  expect(noticesOf(e, a.id)).toEqual([RESTART_QUEUED]);
+  await e.sendUser(a.id, text('echo 둘')); // 켜지 않은 세션엔 보내지 않는다 — 다시 띄운 세션이 받는다
+  await sleep(300);
+  expect(spawnsOf('A')).toHaveLength(1);
+  expect(e.heldInput(a.id)).toBe(1);
+  expect(e.subagentsRunning(a.id)).toHaveLength(1);
+  expect(e.status(a.id)).toBe('working');
+
+  const on = waitFor<FlagsEvent>(e, 'flags', (f) => f.agentId === a.id && f.bypass);
+  const done = resultTextIs(e, a.id, '받음: echo 둘');
+  await e.interrupt(a.id); // 멈춘 서브에이전트 뒤엔 스스로 시작한 차례가 오지 않는다(probe14 C) — 기다림(50 ms) 뒤 다시 띄운다
+  await done;
+  expect(await on).toEqual({ agentId: a.id, bypass: true, bySettings: false, pending: false });
+  expect(spawnsOf('A')).toHaveLength(2);
+  expect(lastSpawnOf('A').argv).toContain(ALLOW_FLAG);
+  expect(flagValue(lastSpawnOf('A').argv, '--resume')).toBe(agentOf(e, a.id).sessionId);
+  expect(modeLines('A')).toEqual([['SUB 조사'], ['mode:bypassPermissions', 'echo 둘']]);
+  expect(noticesOf(e, a.id)).toEqual([RESTART_QUEUED, '멈췄어요']);
+  expect(e.heldInput(a.id)).toBe(0);
+});
+
+test('subagent: 서브에이전트 때문에 미룬 다시 띄우기를 거두면 기다리던 입력은 바로 간다 — 서브에이전트가 아직 돌아도', async () => {
+  const gate = path.join(dir, 'gate'); // 만들지 않는다
+  const e = await start({ FAKE_SUB_GATE: gate });
+  const { a } = setup(e);
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 조사')); // 허용 전에 띄운 세션 — 옵션 없음
+  await launched;
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true); // 미룬다
+  await e.sendUser(a.id, text('echo 둘'));
+  await sleep(200);
+  expect(e.heldInput(a.id)).toBe(1);
+
+  const reply = resultTextIs(e, a.id, '받음: echo 둘');
+  await e.setBypass(a.id, false); // 거둔다
+  await reply;
+  expect(e.heldInput(a.id)).toBe(0);
+  expect(spawnsOf('A')).toHaveLength(1);
+  expect(e.flags(a.id)).toEqual({ bypass: false, bySettings: false, pending: false });
+  expect(e.subagentsRunning(a.id)).toHaveLength(1);
+  expect(e.status(a.id)).toBe('working');
+});
+
+test('subagent: 서브에이전트의 승인이 떠 있어도 사람 입력·받은 메시지는 바로 간다 — 상태는 승인 대기, 카드는 남는다', async () => {
+  const e = await start({ FAKE_SUB_MS: '50' });
+  const { a, b } = setup(e);
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  const req = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id);
+  await e.sendUser(a.id, text('SUBASK Write'));
+  await launched; // 부모 차례는 끝났다
+  const r = await req;
+  expect(r.fromSubagent).toBe(true);
+  expect(e.status(a.id)).toBe('awaiting');
+
+  const reply = resultTextIs(e, a.id, '받음: echo 끼어듦');
+  await e.sendUser(a.id, text('echo 끼어듦'));
+  expect(e.heldInput(a.id)).toBe(0); // 줄에 세우지 않았다
+  await reply;
+  expect(e.pendingRequests(a.id)).toEqual([r]); // 그 차례가 끝나도 서브에이전트 카드는 남는다
+  expect(e.status(a.id)).toBe('awaiting');
+
+  const pending = waitFor<RelayMessage>(e, 'message', (m) => m.to === a.id && m.state === 'pending');
+  await e.sendUser(b.id, text('SEND A: 확인해 줘'));
+  const m = await pending;
+  const got = resultTextIs(e, a.id, '받음: [두레 메시지 — 보낸 쪽: B(웹 화면)]\n확인해 줘');
+  e.approveMessage(m.id); // 서브에이전트 카드가 떠 있어도 바쁘지 않다 — 바로 전달
+  await got;
+  expect(e.messages().find((x) => x.id === m.id)?.state).toBe('delivered');
+  expect(e.pendingRequests(a.id)).toEqual([r]);
+
+  const relayed = resultTextIs(e, a.id, '전달: 보고: Write');
+  e.answerRequest(r.id, { type: 'allow' });
+  await relayed;
+  expect(userTexts().filter((t) => !t.startsWith('SEND'))).toEqual([
+    'SUBASK Write', 'echo 끼어듦', '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n확인해 줘',
+  ]);
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('subagent: 새 대화 — 스스로 시작할 차례를 기다리는 중이어도 바로 대기, 새 세션은 그 기다림을 이어받지 않는다', async () => {
+  const gate = path.join(dir, 'gate');
+  const mute = path.join(dir, 'mute');
+  const e = await start({ FAKE_SUB_GATE: gate, FAKE_MUTE_FILE: mute }, false, { autoTurnGraceMs: 300 });
+  const { a } = setup(e);
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 조사'));
+  await launched;
+  fs.writeFileSync(mute, ''); // 가짜가 스스로 시작한 차례를 미룬다
+  const ended = waitFor<SubagentsEvent>(e, 'subagents', (x) => x.agentId === a.id && x.running.length === 0);
+  fs.writeFileSync(gate, '');
+  await ended;
+  expect(e.status(a.id)).toBe('working'); // 스스로 시작할 차례를 기다린다
+  const statuses: AgentStatus[] = [];
+  e.on('status', (s: StatusEvent) => s.agentId === a.id && statuses.push(s.status));
+
+  await e.newConversation(a.id);
+  expect(e.status(a.id)).toBe('idle');
+  await e.describe(a.id); // 새 세션을 띄운다(입력 없음)
+  expect(spawnsOf('A')).toHaveLength(2);
+  expect(e.status(a.id)).toBe('idle');
+  await sleep(500); // 옛 기다림 타이머가 남아 있었다면 이 사이에 울린다
+  expect(statuses).toEqual(['idle']);
 });
