@@ -2259,7 +2259,7 @@ test('bypass: bySettings 는 get_settings 의 내 기본 모드가 bypass 일 �
   expect(e2.flags(x.id)).toEqual({ bypass: true, bySettings: true });
   await e2.setBypass(x.id, true);
   expect(e2.flags(x.id)).toEqual({ bypass: true, bySettings: true });
-  expect(e2.flags(a.id)).toEqual({ bypass: false, bySettings: false }); // 아직 안 띄움
+  expect(e2.flags(a.id)).toEqual({ bypass: true, bySettings: false }); // 아직 안 띄움 — 다음에 띄울 때의 모드(허용 + 스위치 켜짐)
 });
 
 test('bypass: 켜고 바로 끄면 옛 켜기의 실패(답 없음)는 무시한다 — 되돌리기·오류·덧붙인 끄기 없음', async () => {
@@ -2348,4 +2348,44 @@ test('bypass: 다시 띄우는 도중에 끄거나 허용을 끄면 새 세션�
   expect(controlRequests('set_permission_mode')).toEqual([]);
   expect(e.flags(a.id)).toEqual({ bypass: false, bySettings: false });
   expect(e.flags(b.id)).toEqual({ bypass: false, bySettings: false });
+});
+
+// 살아 있는 세션이 없으면 flags 는 다음에 띄울 때의 모드 — 저장된 켜짐이 꺼짐으로 보여 스위치가 갇히지 않게
+test('bypass: 세션 없는 에이전트의 flags 는 다음 모드(허용 && bypassOn) — 켜기·끄기마다 flags 사건', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await e.setAllowBypass(true);
+  const got = flagEvents(e);
+  await e.setBypass(a.id, true);
+  expect(spawns()).toEqual([]);
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+  expect(got).toContainEqual({ agentId: a.id, bypass: true, bySettings: false });
+  await e.setBypass(a.id, false);
+  expect(e.flags(a.id)).toEqual({ bypass: false, bySettings: false });
+  expect(got[got.length - 1]).toEqual({ agentId: a.id, bypass: false, bySettings: false });
+});
+
+test('bypass: 앱을 다시 켜도 허용 + bypassOn 이면 띄우기 전부터 flags.bypass true · 허용을 끄면 false', async () => {
+  const e1 = await start();
+  const { a } = setup(e1);
+  await e1.setAllowBypass(true);
+  await e1.setBypass(a.id, true);
+  const e2 = await start();
+  expect(e2.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+  expect(spawns()).toEqual([]);
+  await e2.setAllowBypass(false);
+  expect(e2.flags(a.id)).toEqual({ bypass: false, bySettings: false });
+});
+
+test('bypass: bypass 로 돌던 세션이 끝나도 flags 는 다음 모드(false 로 떨어지지 않는다)', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true);
+  await turn(e, a.id, 'echo 하나');
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+  const got = flagEvents(e);
+  await e.newConversation(a.id); // 보내지 않고 새 대화 — 세션이 끝난다
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false });
+  expect(got.every((f) => f.agentId !== a.id || f.bypass)).toBe(true);
 });

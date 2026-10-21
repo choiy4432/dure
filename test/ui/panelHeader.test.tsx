@@ -509,6 +509,15 @@ describe('PanelHeader — 묻지 않음 스위치', () => {
     expect(api.setBypass).toHaveBeenCalledWith('w', false)
   })
 
+  it('세션 없이 bypassOn 이 저장된 에이전트(예측 bypass:true)는 켜진 스위치 · 누르면 setBypass(id,false)', async () => {
+    snapshot.allowBypass = true
+    snapshot.agents = [agent('w', { name: '웹 화면', started: false, bypassOn: true, bypass: true })]
+    await renderPanel()
+    expect(sw().getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(sw())
+    expect(api.setBypass).toHaveBeenCalledWith('w', false)
+  })
+
   it('setBypass 가 실패하면 패널 오류 줄에 엔진 문구', async () => {
     snapshot.allowBypass = true
     api.setBypass.mockRejectedValueOnce(new Error('먼저 설정에서 허용을 켜 주세요.'))

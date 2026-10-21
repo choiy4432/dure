@@ -374,6 +374,9 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   private flagsOf(a: Agent): { bypass: boolean; bySettings: boolean } {
+    // 살아 있는 세션이 없으면 다음에 띄울 때의 모드를 알린다 — ensure() 가 첫 입력 전에 적용하니 사실과 같다
+    // (세션 없이는 읽은 모드가 없어서, 저장된 켜짐이 꺼짐으로 보여 스위치가 갇히던 것)
+    if (!this.sessions.has(a.id)) return { bypass: this.allow && a.bypassOn, bySettings: false };
     const bypass = this.bypass.get(a.id) ?? false;
     // 원인 = 그 세션이 읽은 내 Claude 설정의 기본 모드(get_settings — 세션이 bypass 여도 내 설정 값 그대로, probe12).
     // 두레가 켠 채 남은 bypass 는 내 설정 탓이 아니라 잠그지 않는다(다시 끌 수 있게).
@@ -1019,9 +1022,8 @@ class EngineImpl extends EventEmitter implements Engine {
    * 남겨 두면 그새 스위치를 끈 에이전트가 '내 설정 때문'(bySettings)으로 잠겨 보인다. 옵션 없이 뜬 세션의 모드는 내 설정 그대로라 둔다
    */
   private forgetMode(id: AgentId, s: ClaudeSession): void {
-    if (!this.optioned.has(s) || !this.bypass.get(id)) return;
-    this.bypass.delete(id);
-    if (!this.closed) this.emitFlags(id);
+    if (this.optioned.has(s) && this.bypass.get(id)) this.bypass.delete(id);
+    if (!this.closed) this.emitFlags(id); // 세션이 없어졌으니 알리는 값은 다음에 띄울 때의 모드
   }
 
   private emitFlags(id: AgentId): void {
