@@ -26,9 +26,11 @@ const mute = knob === `${myName}:mute`;
 
 const sessionId = flag('--resume') ?? flag('--session-id') ?? 'fake-session';
 let model = flag('--model') ?? 'claude-opus-5-5'; // --model 이 없으면 기본 모델이 풀린 id 를 알린다
-// 내 Claude 설정의 기본 모드(get_settings 의 effective.permissions.defaultMode) — 세션은 이 모드로 시작한다
+// 내 Claude 설정의 기본 모드(get_settings 의 effective.permissions.defaultMode) — 세션은 이 모드로 시작한다.
+// 진짜(probe12)처럼 세션 모드를 바꿔도 get_settings 의 이 값은 그대로다
 const defaultMode = process.env.FAKE_PERMISSION_MODE || 'default';
-let permissionMode = defaultMode; // set_permission_mode 가 바꾸고, 다음 init 이 알린다
+// FAKE_START_MODE=<모드> — 내 설정과 다른 모드로 시작한다(엔진 모르게 늦게 적용된 켜기 흉내)
+let permissionMode = process.env.FAKE_START_MODE || defaultMode; // set_permission_mode 가 바꾸고, 다음 init 이 알린다
 // 진짜(probe10)처럼 이 옵션으로 띄워야 실행 중에 bypassPermissions 로 바꿀 수 있다
 const allowBypass = argv.includes('--allow-dangerously-skip-permissions');
 let mcp = null;
@@ -214,6 +216,28 @@ const usageNow = () => {
   };
 };
 
+// set_permission_mode 손잡이 — '1' 이면 모든 요청, 모드 이름이면 그 모드만, '<모드>:once' 면 그 모드의 첫 요청만
+const onceUsed = new Set();
+function knobHits(name, mode) {
+  const v = process.env[name];
+  if (!v) return false;
+  if (v === '1') return true;
+  const [m, once] = v.split(':');
+  if (m !== mode) return false;
+  if (once !== 'once') return true;
+  if (onceUsed.has(name)) return false;
+  onceUsed.add(name);
+  return true;
+}
+let lateUsed = false;
+let modeBusy = null; // 아직 끝나지 않은 늦은 set_permission_mode — 뒤의 요청은 그 뒤에
+function queueMode(p) {
+  modeBusy = p;
+  void p.then(() => {
+    if (modeBusy === p) modeBusy = null;
+  });
+}
+
 async function control(msg) {
   const rid = msg.request_id;
   const sub = msg.request?.subtype;
@@ -239,21 +263,35 @@ async function control(msg) {
     await ok();
   } else if (sub === 'set_permission_mode') {
     // 진짜(probe10)처럼: 옵션 없이 띄웠으면 bypass 는 거절 · manual 은 default 로 · 응답은 실제 모드 {mode} · 다음 init 에 싣는다.
-    // 손잡이: FAKE_SET_MODE_FAIL=1 오류 응답 · FAKE_SET_MODE_SILENT=1 끝내 답하지 않음(둘 다 모드는 그대로)
-    // 모드는 기다리지 않고(await 전에) 바꾼다 — 바로 뒤에 온 사용자 줄의 init 이 새 모드를 알리게
-    if (process.env.FAKE_SET_MODE_SILENT === '1') return;
+    // 손잡이(값 = '1' 이면 모든 요청, 모드 이름이면 그 모드만, '<모드>:once' 면 그 모드의 첫 요청만):
+    //   FAKE_SET_MODE_FAIL      오류 응답(모드는 그대로)
+    //   FAKE_SET_MODE_SILENT    끝내 답하지 않음(모드는 그대로)
+    //   FAKE_SET_MODE_LATE_MS=<ms>  첫 bypassPermissions 요청을 그만큼 늦게 적용하고 답한다(엔진의 한도를 넘겨 늦게 적용되는 켜기).
+    //                               그 뒤의 set_permission_mode 는 진짜처럼 차례대로 — 늦은 요청이 끝난 뒤에 처리된다
+    // 늦은 요청이 없으면 모드는 기다리지 않고(await 전에) 바꾼다 — 바로 뒤에 온 사용자 줄의 init 이 새 모드를 알리게
+    const mode = msg.request.mode;
+    if (knobHits('FAKE_SET_MODE_SILENT', mode)) return;
     const fail = (error, extra = {}) =>
       emit({ type: 'control_response', response: { subtype: 'error', request_id: rid, error, ...extra } });
-    if (process.env.FAKE_SET_MODE_FAIL === '1') return fail('set_permission_mode failed');
-    const mode = msg.request.mode;
-    if (mode === 'bypassPermissions' && !allowBypass) {
-      return fail(
-        'Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions',
-        { error_code: 'bypass_not_launched' },
-      );
+    if (knobHits('FAKE_SET_MODE_FAIL', mode)) return fail('set_permission_mode failed');
+    const apply = () => {
+      if (mode === 'bypassPermissions' && !allowBypass) {
+        return fail(
+          'Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions',
+          { error_code: 'bypass_not_launched' },
+        );
+      }
+      permissionMode = mode === 'manual' ? 'default' : mode;
+      return ok({ mode: permissionMode });
+    };
+    const late = Number(process.env.FAKE_SET_MODE_LATE_MS ?? 0);
+    if (late && mode === 'bypassPermissions' && !lateUsed) {
+      lateUsed = true;
+      queueMode(sleep(late).then(apply));
+      return;
     }
-    permissionMode = mode === 'manual' ? 'default' : mode;
-    await ok({ mode: permissionMode });
+    if (modeBusy) queueMode(modeBusy.then(apply));
+    else await apply();
   } else if (sub === 'get_settings') {
     if (slow) await sleep(slow);
     await ok({ effective: { effortLevel: effortNow, permissions: { defaultMode } }, sources: {}, applied: {} });

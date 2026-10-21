@@ -30,7 +30,10 @@ export interface EngineOptions {
   usage?: false | Partial<UsageTiming>;
   /** 엔진이 보낸 /effort 에 답(result)이 없을 때 다시 띄우기까지 — 기본 EFFORT_TIMEOUT_MS(시험은 짧게) */
   effortTimeoutMs?: number;
-  /** 엔진이 보낸 set_permission_mode(와 그 앞의 get_settings)에 답이 없을 때 실패로 치기까지 — 기본 BYPASS_TIMEOUT_MS(시험은 짧게) */
+  /**
+   * 엔진이 보낸 set_permission_mode(와 끄기 앞의 get_settings)에 답이 없을 때 실패로 치기까지 — 기본 BYPASS_TIMEOUT_MS,
+   * 띄울 때 보낸 것은 BYPASS_SPAWN_TIMEOUT_MS. 주면 둘 다 이 값(시험은 짧게)
+   */
   bypassTimeoutMs?: number;
   /** 세션 하나를 끌 때 기다리는 상한(ms) — 없으면 STOP_LIMIT_MS. 시험용 */
   stopLimitMs?: number;
@@ -42,7 +45,8 @@ export interface EngineOptions {
 //  'message'     RelayMessage     'held' { roomId }
 //  'request'     PendingRequest   'request-resolved' { id; agentId }
 //  'flags'       { agentId; bypass; bySettings }   (bypass = 실제 모드 — init.permissionMode · set_permission_mode 응답의 mode 가 'bypassPermissions'.
-//                bySettings = 두레 스위치(허용 + bypassOn)가 아닌 내 Claude 설정 때문. init · 응답 · 스위치 · 허용이 바뀔 때마다,
+//                bySettings = 내 Claude 설정 때문 — 그 세션의 get_settings 기본 모드가 bypassPermissions(probe12: 세션 모드와 따로),
+//                못 읽었으면 두레 스위치(허용 + bypassOn)가 아닌 것. init · 응답 · 스위치 · 허용 · 내 설정을 읽을 때마다,
 //                그리고 옵션으로 뜬 세션이 bypass 인 채 끝날 때 — 다음 세션의 모드는 그 세션이 다시 알린다)
 //  'history'     { agentId; item: HistoryItem }   (대화 기록에 한 항목이 더해질 때마다 — text-delta·init·rate-limit 은 기록하지 않는다)
 //  'held-input'  { agentId; count }   (보낼 차례를 기다리는 사람 입력 수가 바뀔 때마다)
@@ -135,11 +139,13 @@ const BYPASS_MODE = 'bypassPermissions';
 const DEFAULT_MODE = 'default';
 /** set_permission_mode 답을 기다리는 한도 — 로컬 제어 요청이라 보통 바로 온다(probe10) */
 const BYPASS_TIMEOUT_MS = 15_000;
+/** 띄울 때 보낸 set_permission_mode — CLI 시작·--resume 대화 읽기 뒤에야 답하니 /effort 와 같은 만큼 기다린다 */
+const BYPASS_SPAWN_TIMEOUT_MS = EFFORT_TIMEOUT_MS;
 const BYPASS_NOT_ALLOWED = '설정에서 묻지 않고 실행을 허용해야 켤 수 있어요.';
 const BYPASS_ON_FAILED = "'묻지 않음'을 켜지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.";
 const BYPASS_ON_FAILED_NOTICE = "'묻지 않음'을 켜지 못해 평소처럼 승인을 물어요";
 const BYPASS_OFF_FAILED = "'묻지 않음'을 끄지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.";
-const BYPASS_OFF_FAILED_NOTICE = "'묻지 않음'을 끄지 못했어요 — 새 대화를 열면 다시 승인을 물어요";
+const BYPASS_OFF_FAILED_NOTICE = "'묻지 않음'을 끄지 못해 쉬는 때 다시 띄워 평소처럼 승인을 물어요";
 
 /** 엔진이 써 넣은 /effort 한 줄 — 그 result 까지 */
 interface EffortTurn {
@@ -164,6 +170,8 @@ class EngineImpl extends EventEmitter implements Engine {
   private restartWant = new WeakSet<ClaudeSession>(); // 옵션 없이 떠서 켜려면 다시 띄워야 함 — 쉬는 때(pump) --resume 으로
   private modeApplying = new WeakMap<ClaudeSession, Promise<void>>(); // 띄울 때 보낸 set_permission_mode — 다시 띄운 쪽이 기다린다
   private modeSeq = new Map<AgentId, number>(); // 모드 바꾸기 차례 번호 — 그새 다시 바뀌었으면 옛 요청의 실패는 되돌리지 않는다
+  private settingsDefaults = new WeakMap<ClaudeSession, string>(); // 그 세션이 읽은 내 기본 권한 모드(get_settings) — bySettings 의 근거
+  private offsInFlight = new WeakMap<ClaudeSession, number>(); // 진행 중인 끄기(settleOff) 수 — init 이 bypass 여도 겹쳐 끄지 않는다
   private modelNows = new Map<AgentId, string>(); // 마지막 init 의 풀린 모델 id
   private effortNows = new Map<AgentId, EffortLevel>(); // Claude 에게 마지막으로 읽은 지금 effort
   // effort 는 세션 명령 `/effort <단계>` 로 정한다 — 설정 층(apply_flag_settings)엔 max 가 없어 조용히 무시되고,
@@ -287,11 +295,12 @@ class EngineImpl extends EventEmitter implements Engine {
     this.allow = on;
     // 허용이 꺼진 채 남은 켜짐(손으로 고친 파일 등)은 끈 것으로 친다 — 켤 때 살아나지 않게 지운다(허용을 켜면 모두 꺼진 채 시작)
     if (on && !was) for (const a of this.store.agents()) if (a.bypassOn) this.store.updateAgent(a.id, { bypassOn: false });
-    const wereOn = on ? [] : this.store.agents().filter((a) => a.bypassOn);
-    for (const a of wereOn) this.store.updateAgent(a.id, { bypassOn: false });
+    // 켜져 있던 에이전트 + 스위치는 꺼졌지만 두레가 켠 bypass 가 남은 세션(끄기 실패·늦은 켜기)
+    const targets = on ? [] : this.store.agents().filter((a) => a.bypassOn || this.leftover(a.id));
+    for (const a of targets) if (a.bypassOn) this.store.updateAgent(a.id, { bypassOn: false });
     for (const a of this.store.agents()) this.emitFlags(a.id); // bySettings 가 허용에 따라 바뀐다
-    // 켜져 있던 에이전트는 내 기본 모드로 — 옵션으로 떠 있는 세션도 다시 띄우지 않는다(옵션만으론 bypass 가 아니다)
-    await Promise.all(wereOn.map((a) => this.applyBypass(a.id, false)));
+    // 내 기본 모드로 — 옵션으로 떠 있는 세션도 다시 띄우지 않는다(옵션만으론 bypass 가 아니다)
+    await Promise.all(targets.map((a) => this.applyBypass(a.id, false)));
   }
 
   autoChainLimit(): number { return this.limit; }
@@ -366,8 +375,12 @@ class EngineImpl extends EventEmitter implements Engine {
 
   private flagsOf(a: Agent): { bypass: boolean; bySettings: boolean } {
     const bypass = this.bypass.get(a.id) ?? false;
-    // 허용이 꺼진 채 남은 bypassOn 은 끈 것으로 친다 — 그 bypass 는 두레가 켠 것이 아니다
-    return { bypass, bySettings: bypass && !(this.allow && a.bypassOn) };
+    // 원인 = 그 세션이 읽은 내 Claude 설정의 기본 모드(get_settings — 세션이 bypass 여도 내 설정 값 그대로, probe12).
+    // 두레가 켠 채 남은 bypass 는 내 설정 탓이 아니라 잠그지 않는다(다시 끌 수 있게).
+    // 아직 못 읽었거나 읽지 못하면 두레 스위치로 가른다 — 허용이 꺼진 채 남은 bypassOn 은 끈 것으로 친다
+    const s = this.sessions.get(a.id);
+    const settings = s ? this.settingsDefaults.get(s) : undefined;
+    return { bypass, bySettings: bypass && (settings !== undefined ? settings === BYPASS_MODE : !(this.allow && a.bypassOn)) };
   }
 
   errorText(id: AgentId): string | null {
@@ -556,7 +569,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     if (!s || !this.resting(id, s)) return;
     if (this.restartWant.has(s)) {
-      void this.restartForBypass(id, s);
+      void this.restartForMode(id, s);
       return; // 다시 띄운 세션에서 다시 pump
     }
     const level = this.effortWant.get(s);
@@ -700,13 +713,19 @@ class EngineImpl extends EventEmitter implements Engine {
     this.errors.delete(id);
     this.sessions.set(id, s);
     if (allow) this.optioned.add(s);
+    // 사용자가 켠 에이전트만(허용 + 스위치) — 어떤 입력(/effort 포함)보다, 상태 알림보다도 먼저 제어 요청을 쓴다(듣는 쪽이 바로 보내도 뒤에 선다).
+    // 오류 뒤·새 대화·다시 띄우기가 모두 여기를 지난다. 띄운 직후엔 CLI 시작·--resume 대화 읽기 뒤에야 답하니 /effort 만큼 기다린다
+    if (allow && agent.bypassOn) {
+      const timeoutMs = this.o.bypassTimeoutMs ?? BYPASS_SPAWN_TIMEOUT_MS;
+      this.modeApplying.set(s, this.sendMode(id, s, BYPASS_MODE, { on: true, seq: this.nextModeSeq(id), timeoutMs }));
+    }
     if (!o.quiet) this.emitStatus(id);
-    // 사용자가 켠 에이전트만(허용 + 스위치) — 어떤 입력(/effort 포함)보다 먼저 제어 요청을 쓴다. 오류 뒤·새 대화·다시 띄우기가 모두 여기를 지난다
-    if (allow && agent.bypassOn) this.modeApplying.set(s, this.sendMode(id, s, BYPASS_MODE, true, this.nextModeSeq(id)));
     // 막 띄운 세션은 한가하다 — 고른 effort 가 있으면 어떤 입력보다 먼저 /effort 를 쓴다(pump 는 부르지 않는다: router 가 deliver 중일 수 있다).
     // 전에 /effort 가 막혀 다시 띄운 에이전트면 /effort 없이(고르기·모델 바꾸기 전까지)
-    if (agent.effort && !this.effortBroken.has(id)) this.sendEffort(id, s, agent.effort);
-    else void this.readEffort(id, s); // 기다리지 않는다
+    const effortSent = !!agent.effort && !this.effortBroken.has(id);
+    if (agent.effort && effortSent) this.sendEffort(id, s, agent.effort);
+    // 내 설정 읽기(기다리지 않는다) — 고른 effort 가 없으면 지금 effort 를, 허용이면 내 기본 권한 모드를(bySettings 의 근거)
+    if (!effortSent || allow) void this.readClaudeSettings(id, s);
     return s;
   }
 
@@ -714,7 +733,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private applyEffort(id: AgentId, s: ClaudeSession): void {
     const want = this.store.agent(id)?.effort;
     if (!want) {
-      void this.readEffort(id, s);
+      void this.readClaudeSettings(id, s);
       return;
     }
     this.effortWant.set(s, want); // 줄에 선 옛 값은 바뀐다
@@ -806,14 +825,16 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /**
-   * 세션이 쓰는 값 = 내 Claude 설정(get_settings 의 effective) — 고른 effort 가 없을 때, 또는 /effort 가 막혀 적용하지 못했을 때.
-   * 실패·시간 초과는 조용히 넘어간다. 그 밖에 고른 effort 가 있으면 답을 버린다 — 세션 값(/effort)을 모르는 설정 층이라
-   * 화면이 그 값으로 돌아간다.
+   * get_settings 를 읽는다 — 내 기본 권한 모드는 그 세션에 기억하고(bySettings 의 근거), effort 는 고른 값이 없을 때(또는 /effort 가
+   * 막혀 적용하지 못했을 때)만 지금 값으로 받는다. 실패·시간 초과는 조용히 넘어간다. 고른 effort 가 있으면 effort 답은 버린다 —
+   * 세션 값(/effort)을 모르는 설정 층이라 화면이 그 값으로 돌아간다.
    */
-  private async readEffort(id: AgentId, s: ClaudeSession): Promise<void> {
+  private async readClaudeSettings(id: AgentId, s: ClaudeSession): Promise<void> {
     try {
       const res: any = await s.request({ subtype: 'get_settings' });
-      if (!this.live(id, s) || (this.store.agent(id)?.effort && !this.effortBroken.has(id))) return;
+      if (!this.live(id, s)) return;
+      this.noteSettingsDefault(id, s, res);
+      if (this.store.agent(id)?.effort && !this.effortBroken.has(id)) return;
       const now = res?.effective?.effortLevel;
       if (!(EFFORT_LEVELS as readonly unknown[]).includes(now)) return;
       this.effortNows.set(id, now);
@@ -835,10 +856,29 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /**
+   * get_settings 답의 내 기본 권한 모드(effective.permissions.defaultMode)를 그 세션에 기억한다 — 세션이 bypass 로 바뀌어도
+   * 내 설정 값 그대로라(probe12) '내 설정 때문'을 가르는 근거다. 원인 표시가 바뀔 수 있으면 flags
+   */
+  private noteSettingsDefault(id: AgentId, s: ClaudeSession, res: any): string | undefined {
+    const m = res?.effective?.permissions?.defaultMode;
+    if (typeof m !== 'string' || m === '') return undefined;
+    const before = this.settingsDefaults.get(s);
+    this.settingsDefaults.set(s, m);
+    if (before !== m && this.live(id, s) && this.bypass.get(id)) this.emitFlags(id);
+    return m;
+  }
+
+  /** 두레가 켠 채 남은 bypass — 옵션으로 뜬 세션이 bypass 인데 내 설정의 기본 모드는 bypass 가 아니다(끄기 실패·늦은 켜기) */
+  private leftover(id: AgentId): boolean {
+    const s = this.sessions.get(id);
+    return !!s && this.optioned.has(s) && this.bypass.get(id) === true && this.settingsDefaults.get(s) !== BYPASS_MODE;
+  }
+
+  /**
    * 스위치 값을 살아 있는 세션에 — 세션이 없으면 할 일이 없다(다음에 띄울 때 ensure 가 한다). 던지지 않는다.
    * 켜기: 옵션으로 떴으면 바로 set_permission_mode. 아니면(허용 전에 띄운 세션 — bypass_not_launched 로 거절된다) 다시 띄운다:
    *   쉬는 중이면 지금, 아니면 그 차례가 끝난 뒤 pump 가.
-   * 끄기: 다시 띄우기를 거두고, 옵션으로 떴으면 내 Claude 설정의 기본 모드로. 옵션 없이 뜬 세션은 두레가 모드를 바꾼 적이 없어 보낼 것이 없다.
+   * 끄기: 미뤄 둔 다시 띄우기를 거두고, 옵션으로 떴으면 내 Claude 설정의 기본 모드로. 옵션 없이 뜬 세션은 두레가 모드를 바꾼 적이 없어 보낼 것이 없다.
    * 이미 떠 있는 승인 카드는 그대로 둔다 — 사람이 답하면 평소처럼(probe11: 바꾼 뒤의 도구 호출부터 새 모드)
    */
   private async applyBypass(id: AgentId, on: boolean): Promise<void> {
@@ -846,66 +886,113 @@ class EngineImpl extends EventEmitter implements Engine {
     if (!s) return;
     const seq = this.nextModeSeq(id);
     if (on) {
-      if (this.optioned.has(s)) return this.sendMode(id, s, BYPASS_MODE, true, seq);
+      if (this.optioned.has(s)) {
+        this.restartWant.delete(s); // 끄기 실패로 미뤄 둔 다시 띄우기 — 다시 켜니 필요 없다
+        return this.sendMode(id, s, BYPASS_MODE, { on: true, seq });
+      }
       this.restartWant.add(s);
-      if (this.resting(id, s)) await this.restartForBypass(id, s);
+      if (this.resting(id, s)) await this.restartForMode(id, s);
       return;
     }
     this.restartWant.delete(s);
     if (!this.optioned.has(s)) return;
-    const mode = await this.defaultMode(s);
-    if (!this.live(id, s) || this.modeSeq.get(id) !== seq) return; // 그새 세션이 끝났거나 다시 바뀌었다
-    return this.sendMode(id, s, mode, false, seq);
+    return this.settleOff(id, s, seq);
   }
 
-  /** 내 Claude 설정의 기본 모드(get_settings 의 effective.permissions.defaultMode) — 못 읽으면 'default' */
-  private async defaultMode(s: ClaudeSession): Promise<string> {
+  /** 내 Claude 설정의 기본 모드 — 못 읽으면 그 세션에 기억한 값, 그것도 없으면 'default' */
+  private async defaultMode(id: AgentId, s: ClaudeSession): Promise<string> {
     try {
       const res: any = await s.request({ subtype: 'get_settings' }, this.bypassTimeout());
-      const m = res?.effective?.permissions?.defaultMode;
-      return typeof m === 'string' && m !== '' ? m : DEFAULT_MODE;
+      return this.noteSettingsDefault(id, s, res) ?? this.settingsDefaults.get(s) ?? DEFAULT_MODE;
     } catch {
-      return DEFAULT_MODE;
+      return this.settingsDefaults.get(s) ?? DEFAULT_MODE;
+    }
+  }
+
+  /**
+   * 옵션으로 뜬 세션을 내 Claude 설정의 기본 모드로 — get_settings 로 읽고 set_permission_mode. 그새 끝났거나 다시 바뀌었으면 그만둔다.
+   * quiet: 엔진이 바로잡는 끄기(켜기 실패 뒤 · 스위치가 꺼졌는데 bypass) — 내 설정이 bypass 면 바로잡을 것이 없고,
+   * 실패해도 알리지 않고 다시 띄우기만 걸어 둔다. 던지지 않는다
+   */
+  private async settleOff(id: AgentId, s: ClaudeSession, seq: number, quiet = false): Promise<void> {
+    this.offsInFlight.set(s, (this.offsInFlight.get(s) ?? 0) + 1);
+    try {
+      const mode = await this.defaultMode(id, s);
+      if (!this.live(id, s) || this.modeSeq.get(id) !== seq) return; // 그새 세션이 끝났거나 다시 바뀌었다
+      if (quiet && mode === BYPASS_MODE) return;
+      await this.sendMode(id, s, mode, { on: false, seq, quiet });
+    } finally {
+      this.offsInFlight.set(s, (this.offsInFlight.get(s) ?? 1) - 1);
     }
   }
 
   /**
    * set_permission_mode 를 쓴다 — 제어 요청이라 부르는 순간 줄에 들어간다(띄울 때 어떤 입력보다 먼저 쓰려고 ensure 가 바로 부른다).
    * 답의 mode 가 실제 모드다(manual → default, probe10) — 쉬는 세션도 다음 차례를 기다리지 않고 flags 로 알린다.
-   * 실패(오류 응답·bypassTimeoutMs 안에 답 없음)는 modeFailed — 그 세션이 이미 끝났거나 그새 다시 바꿨으면 조용히 넘어간다. 던지지 않는다
+   * 실패(오류 응답·한도 안에 답 없음)는 modeFailed — 그 세션이 이미 끝났거나 그새 다시 바꿨으면 조용히 넘어간다
+   * (그 뒤에 보낸 요청이 claude 에서도 뒤에 처리되어 이긴다). 던지지 않는다
    */
-  private sendMode(id: AgentId, s: ClaudeSession, mode: string, on: boolean, seq: number): Promise<void> {
-    return s.request({ subtype: 'set_permission_mode', mode }, this.bypassTimeout()).then(
+  private sendMode(
+    id: AgentId, s: ClaudeSession, mode: string, o: { on: boolean; seq: number; quiet?: boolean; timeoutMs?: number },
+  ): Promise<void> {
+    return s.request({ subtype: 'set_permission_mode', mode }, o.timeoutMs ?? this.bypassTimeout()).then(
       (res: any) => {
         if (!this.live(id, s)) return;
         const now = typeof res?.mode === 'string' ? res.mode : mode; // 답에 mode 가 없으면 받아들인 요청의 모드
         this.guard(id, () => this.setModeNow(id, now === BYPASS_MODE));
       },
       () => {
-        if (!this.live(id, s) || this.modeSeq.get(id) !== seq) return;
-        this.modeFailed(id, on);
+        if (!this.live(id, s) || this.modeSeq.get(id) !== o.seq) return;
+        return this.modeFailed(id, s, o.on, o.quiet ?? false);
       },
     );
   }
 
-  /** 모드를 바꾸지 못했다 — 켜기였으면 스위치를 되돌리고(다음 실행에 몰래 켜지지 않게) 오류 한 줄 · 대화에 안내 한 줄 · 실제 모드 그대로 */
-  private modeFailed(id: AgentId, on: boolean): void {
+  /**
+   * 모드를 바꾸지 못했다(오류 응답·답 없음). flags 는 마지막 실제 모드 그대로.
+   * 켜기: 스위치를 되돌리고(다음 실행에 몰래 켜지지 않게) 오류 한 줄 · 대화 안내 한 줄. 답 없이 지난 요청은 아직 claude 의 줄에 있어
+   *   늦게 적용될 수 있다 — 끄기(내 기본 모드)를 이어 보내 덮는다(제어 요청은 차례대로 처리된다).
+   * 끄기: 두레가 켠 bypass 가 남았다 — 쉬는 때 다시 띄운다(--resume 이라 대화 그대로, 차례는 끊지 않는다. 스위치가 꺼져 있어 새 세션엔
+   *   bypass 를 보내지 않는다). quiet 면 알리지 않는다(엔진이 바로잡던 끄기).
+   */
+  private async modeFailed(id: AgentId, s: ClaudeSession, on: boolean, quiet: boolean): Promise<void> {
     if (on) {
       this.guard(id, () => {
         if (this.store.agent(id)?.bypassOn) this.store.updateAgent(id, { bypassOn: false });
       });
+      this.guard(id, () => this.emit('engine-error', { agentId: id, message: BYPASS_ON_FAILED }));
+      this.guard(id, () => this.record(id, { kind: 'notice', text: BYPASS_ON_FAILED_NOTICE }));
+      this.emitFlags(id);
+      return this.settleOff(id, s, this.nextModeSeq(id), true);
     }
-    this.guard(id, () => this.emit('engine-error', { agentId: id, message: on ? BYPASS_ON_FAILED : BYPASS_OFF_FAILED }));
-    this.guard(id, () => this.record(id, { kind: 'notice', text: on ? BYPASS_ON_FAILED_NOTICE : BYPASS_OFF_FAILED_NOTICE }));
+    if (!quiet) {
+      this.guard(id, () => this.emit('engine-error', { agentId: id, message: BYPASS_OFF_FAILED }));
+      this.guard(id, () => this.record(id, { kind: 'notice', text: BYPASS_OFF_FAILED_NOTICE }));
+    }
     this.emitFlags(id);
+    this.restartWant.add(s);
+    if (this.resting(id, s)) await this.restartForMode(id, s);
   }
 
   /**
-   * 옵션 없이 떠 있던 세션에서 묻지 않음을 켰다 — 세션을 끝내고 옵션을 붙여 다시 띄운다(--resume 이라 대화 그대로).
-   * 띄울 때 ensure 가 set_permission_mode 를 보낸다. 기다리던 입력·메시지는 새 세션으로(effort 의 다시 띄우기와 같은 규칙).
-   * 기다리는 것이 없어도 띄운다 — 화면의 스위치는 실제 모드를 보이니 켜졌다는 답을 받아야 한다. 던지지 않는다
+   * 옵션으로 뜬 세션이 bypass 로 알렸는데(init) 스위치는 꺼져 있다 — 늦게 적용된 켜기 같은 것. 내 설정의 기본 모드가 bypass 가
+   * 아니면 조용히 끈다(이미 끄는 중이면 그대로). 던지지 않는다
    */
-  private async restartForBypass(id: AgentId, s: ClaudeSession): Promise<void> {
+  private reconcile(id: AgentId): Promise<void> | undefined {
+    const s = this.sessions.get(id);
+    const a = this.store.agent(id);
+    if (!s || !a || !this.optioned.has(s) || (this.allow && a.bypassOn)) return undefined;
+    if ((this.offsInFlight.get(s) ?? 0) > 0 || this.settingsDefaults.get(s) === BYPASS_MODE) return undefined;
+    return this.settleOff(id, s, this.nextModeSeq(id), true);
+  }
+
+  /**
+   * 권한 모드 때문에 세션을 다시 띄운다(--resume 이라 대화 그대로) — 옵션 없이 떠 있던 세션에서 켤 때(옵션을 붙여, 띄울 때 ensure 가
+   * set_permission_mode 를 보낸다), 또는 끄기에 실패해 두레가 켠 bypass 가 남았을 때(스위치가 꺼져 있어 새 세션엔 보내지 않는다).
+   * 기다리던 입력·메시지는 새 세션으로(effort 의 다시 띄우기와 같은 규칙). 기다리는 것이 없어도 띄운다 — 화면의 스위치는 실제 모드를
+   * 보이니 새 세션의 답을 받아야 한다. 던지지 않는다
+   */
+  private async restartForMode(id: AgentId, s: ClaudeSession): Promise<void> {
     try {
       if (this.closed || !this.restartWant.delete(s) || !this.live(id, s)) return;
       await this.endSession(id);
@@ -1019,7 +1106,12 @@ class EngineImpl extends EventEmitter implements Engine {
     this.guard(id, () => {
       if (this.store.agent(id)?.started === false) this.store.updateAgent(id, { started: true });
     });
-    this.guard(id, () => this.setModeNow(id, ev.permissionMode === BYPASS_MODE));
+    this.guard(id, () => {
+      const bypass = ev.permissionMode === BYPASS_MODE;
+      this.setModeNow(id, bypass);
+      // 스위치가 꺼졌는데 옵션으로 뜬 세션이 bypass — 늦게 적용된 켜기 같은 것. 내 설정 때문이 아니면 끈다
+      if (bypass) void this.reconcile(id);
+    });
     this.guard(id, () => this.setModelNow(id, ev.model || null));
   }
 
