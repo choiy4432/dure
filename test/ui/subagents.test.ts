@@ -110,6 +110,40 @@ describe('buildSubagentTree', () => {
     expect(open.turns[0].nodes[0].toolUses).toBe(2)
   })
 
+  it('마지막 글이 보고와 같으면 걸음에서 빠진다 — 보고로 한 번만(앞뒤 공백은 무시)', () => {
+    const { turns } = buildSubagentTree(
+      [human('x'), asst([agent('A')]), start('A'), asst([read('r1')], 4, 'A'), asst([{ type: 'text', text: '다 봤어요\n' }], 5, 'A'), end('A', 'completed', ' 다 봤어요')],
+      new Set(),
+    )
+    const n = turns[0].nodes[0]
+    expect(n.steps.map((s) => s.type)).toEqual(['act'])
+    expect(n.report).toBe(' 다 봤어요')
+  })
+
+  it('보고가 2000자로 잘렸으면 그 앞부분으로 시작하는 마지막 글도 빠진다', () => {
+    const long = '가'.repeat(2500)
+    const { turns } = buildSubagentTree(
+      [human('x'), asst([agent('A')]), start('A'), asst([{ type: 'text', text: long }], 5, 'A'), end('A', 'completed', long.slice(0, 2000))],
+      new Set(),
+    )
+    expect(turns[0].nodes[0].steps).toEqual([])
+  })
+
+  it('마지막 글이 보고와 다르면 · 같은 글이 마지막이 아니면 · 보고가 없으면 그대로', () => {
+    const differ = buildSubagentTree(
+      [human('x'), asst([agent('A')]), start('A'), asst([{ type: 'text', text: '중간 글' }], 5, 'A'), end('A', 'completed', '보고 글')],
+      new Set(),
+    )
+    expect(differ.turns[0].nodes[0].steps).toEqual([{ type: 'text', text: '중간 글' }])
+    const notLast = buildSubagentTree(
+      [human('x'), asst([agent('A')]), start('A'), asst([{ type: 'text', text: '보고 글' }, read('r1')], 5, 'A'), end('A', 'completed', '보고 글')],
+      new Set(),
+    )
+    expect(notLast.turns[0].nodes[0].steps.map((s) => s.type)).toEqual(['text', 'act'])
+    const noReport = buildSubagentTree([human('x'), asst([agent('A')]), start('A'), asst([{ type: 'text', text: '글' }], 5, 'A')], new Set(['A']))
+    expect(noReport.turns[0].nodes[0].steps).toEqual([{ type: 'text', text: '글' }])
+  })
+
   it('멈춘 뒤에 도착한 parent 결과는 걸음에 붙고 상태는 그대로', () => {
     const { turns } = buildSubagentTree(
       [human('x'), asst([agent('A')]), start('A'), asst([read('r1')], 4, 'A'), end('A', 'stopped'), result('r1', '늦은 결과', false, 'A')],
@@ -150,6 +184,23 @@ describe('buildSubagentTree — 상태 규칙·깊은 노드', () => {
     const { turns, running } = buildSubagentTree([human('x'), asst([agent('A')]), start('A')], new Set())
     expect(turns[0].nodes[0].status).toBe('lost')
     expect(running).toBe(0)
+  })
+
+  it('시작·결과 없이 막 맡긴 것 뒤로 차례 끝·사람 말·알림·새 대화 경계가 오면 끊김 — 도는 중에 갇히지 않는다', () => {
+    const notice: HistoryItem = { t: 6, kind: 'notice', text: '멈췄어요' }
+    for (const after of [turnEnd, human('다음 부탁', 6), notice]) {
+      const { turns, running } = buildSubagentTree([human('x'), asst([agent('A')]), after], new Set())
+      expect(turns[0].nodes[0].status).toBe('lost')
+      expect(running).toBe(0)
+    }
+    // 경계 뒤는 버리므로 — 경계 앞 막 맡긴 것은 나무에 없다(대화 요약도 같다)
+    expect(buildSubagentTree([human('x'), asst([agent('A')]), { t: 6, kind: 'boundary' }], new Set()).total).toBe(0)
+  })
+
+  it('막 맡긴 것 뒤로 같은 차례의 글·결과만 오면 여전히 도는 중 · running 에 있으면 차례가 끝나도 도는 중', () => {
+    const items = [human('x'), asst([agent('A'), agent('B')]), asst([{ type: 'text', text: '맡겼어요' }], 3), result('B')]
+    expect(buildSubagentTree(items, new Set()).turns[0].nodes.map((n) => n.status)).toEqual(['running', 'done'])
+    expect(buildSubagentTree([human('x'), asst([agent('A')]), turnEnd], new Set(['A'])).turns[0].nodes[0].status).toBe('running')
   })
 
   it('Agent tool_use 없이 시작 기록만 있는 깊이 3 노드도 parentTaskId 로 제자리에 붙는다', () => {

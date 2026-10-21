@@ -281,6 +281,17 @@ describe('buildTranscript — 막 맡긴 것과 실제 흐름', () => {
     expect(parts(lines)[0].counts).toEqual({ running: 0, done: 0, bad: 1 })
   })
 
+  it('막 맡긴 것 뒤로 차례 끝·사람 말·알림이 오면 끊김(bad) — 나무와 같은 규칙, 같은 차례의 글 뒤면 도는 중', () => {
+    const end: HistoryItem = { t: 6, kind: 'result', ok: false, subtype: 'error_during_execution' }
+    const notice: HistoryItem = { t: 6, kind: 'notice', text: '멈췄어요' }
+    for (const after of [end, human('다음'), notice]) {
+      const { lines } = buildTranscript([human('hi'), asst([agent('A')]), after], undefined)
+      expect(parts(lines)[0].counts).toEqual({ running: 0, done: 0, bad: 1 })
+    }
+    const { lines } = buildTranscript([human('hi'), asst([agent('A')]), asst([{ type: 'text', text: '맡겼어요' }], 3)], undefined)
+    expect(parts(lines)[0].counts).toEqual({ running: 1, done: 0, bad: 0 })
+  })
+
   it('Agent 호출이 따로 온 줄들 사이에 결과·시작 기록이 끼어도 한 조각', () => {
     const { lines } = buildTranscript(
       [human('hi'), asst([agent('A')]), start('A'), asst([agent('B')], 4), start('B'), res('A', 'Async agent launched…'), asst([agent('C')], 5)],

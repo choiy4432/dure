@@ -1,6 +1,6 @@
 import type { AssistantBlock, DiffHunk, HistoryItem } from '../../engine/types'
 import { DENY_TEXTS } from '../../shared/denyTexts'
-import { subagentStatus, userText } from './subagents'
+import { closedLaunches, subagentStatus, userText } from './subagents'
 import { toolSummary, type ToolIcon } from '../lib/toolSummary'
 
 export interface ActionLine {
@@ -93,9 +93,10 @@ export function buildTranscript(
     else if (it.kind === 'subagent-end') ends.set(it.toolUseId, it)
   }
 
-  // 요약 숫자 — 나무와 같은 상태 규칙(subagentStatus)에서 센다
+  // 요약 숫자 — 나무와 같은 상태 규칙(subagentStatus · closedLaunches)에서 센다
+  const closed = closedLaunches(items)
   const stateOf = (id: string): 'running' | 'done' | 'bad' => {
-    const st = subagentStatus(ends.get(id), running.has(id), starts.has(id), results.get(id))
+    const st = subagentStatus(ends.get(id), running.has(id), starts.has(id), results.get(id), closed.has(id))
     return st === 'running' ? 'running' : st === 'done' ? 'done' : 'bad'
   }
 
