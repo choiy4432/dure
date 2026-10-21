@@ -13,10 +13,18 @@
 //                       (init → 글 "전달: 보고: <설명>" → result — 진행 중인 차례가 있으면 그 뒤에, probe14 B)
 //   SUBFG <설명>        같은 서브에이전트를 차례 안에서(is_backgrounded:false, probe14 A) — 끝 알림 뒤 부모 tool_result
 //                       "[Subagent hand-back] …" → 글 "정리: 보고: <설명>" → result. 스스로 시작한 차례는 없다
+//   SUBASK <도구>       SUB 와 같되(설명 = <도구>) 서브에이전트가 Read 대신 <도구> tool_use(parent 붙음)를 내고 MCP approve(그 id)로 묻는다 →
+//                       답대로 tool_result(허용 "ok" · 거절은 is_error) → 보고 · 끝 알림 · 스스로 시작한 차례
+//   SUBSEND <이름>: <글> SUB 와 같되(설명 = "<이름>: <글>") 서브에이전트가 mcp__dure__send_message tool_use(parent 붙음) 뒤 MCP send_message 를
+//                       부르고 받은 글을 tool_result 로(MCP 결과가 오류면 is_error) → 보고 · 끝 알림 · 스스로 시작한 차례
+//   SUBNEST <도구>      SUB 와 같되(설명 = <도구>) 서브에이전트가 Agent tool_use(parent 붙음)로 안쪽 서브에이전트를 띄운다 — 안쪽 task_started
+//                       (parent_task_id = 바깥 task, spawn_depth:2). 안쪽은 스트림에 줄을 내지 않고(probe14 A) 새 id 로 MCP approve 를 부른다 →
+//                       안쪽 끝 알림 → 바깥 보고 · 끝 알림 · 스스로 시작한 차례
 //   BGTASK <명령>       서브에이전트가 아닌 일(백그라운드 명령) — Bash tool_use(run_in_background) → task_started(task_<n>,
 //                       task_type:'local_bash' — 파서가 버린다) → tool_result → task_notification(completed — 같은 모양, 엔진엔 모르는 끝으로 온다)
 //                       → 글 "BG DONE" → result. 끝 알림까지 차례 안에서(시험이 result 로 기다릴 수 있게)
 //   그 밖               글 "받음: <글>"
+// MCP tools/call 은 진짜(probe14 A)처럼 params._meta = { 'claudecode/toolUseId': <그 부르기의 tool_use id> } 를 싣는다.
 // 서브에이전트 손잡이:
 //   FAKE_SUB_GATE=<파일>   서브에이전트가 그 파일이 생길 때까지 일을 시작하지 않는다(20ms 간격)
 //   FAKE_SUB_MS=<ms>       FAKE_SUB_GATE 가 없으면 그만큼 뒤에 시작한다(기본 150)
@@ -112,10 +120,20 @@ async function rpc(method, params, id, sid) {
   }
   return { sid: res.headers.get('mcp-session-id') ?? sid, json: body.trim() ? JSON.parse(body) : null };
 }
-async function callTool(name, args) {
+/** 두레 MCP 도구를 부른다 — toolUseId = 그 부르기의 tool_use id(_meta 에 싣는다). 답은 결과 글과 오류 표시 */
+async function callTool(name, args, toolUseId) {
   const a = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'fake', version: '0' } }, 1);
-  const r = await rpc('tools/call', { name, arguments: args }, 2, a.sid);
-  return r.json?.result?.content?.[0]?.text ?? '';
+  const r = await rpc('tools/call', { name, arguments: args, _meta: { 'claudecode/toolUseId': toolUseId } }, 2, a.sid);
+  const res = r.json?.result;
+  return { text: res?.content?.[0]?.text ?? '', isError: res?.isError === true };
+}
+/** approve 의 답 — 못 읽으면 거절로({}) */
+function verdictOf(text) {
+  try {
+    return JSON.parse(text) ?? {};
+  } catch {
+    return {};
+  }
 }
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -124,8 +142,8 @@ let turnsDone = 0; // context = 12000 x 끝난 차례 수 (/compact 하면 0 으
 let current = null; // 진행 중인 차례 { ended }
 let sequence = 0;
 
-// ── 서브에이전트(위 SUB·SUBFG) ──
-const tasks = new Set(); // 도는 서브에이전트 { taskId, toolUseId, description, background, killed, startedAt, tools }
+// ── 서브에이전트(위 SUB·SUBFG·SUBASK·SUBSEND·SUBNEST) ──
+const tasks = new Set(); // 도는 서브에이전트 { taskId, toolUseId, description, background, killed, startedAt, tools } — 안쪽 서브에이전트도
 const subGate = process.env.FAKE_SUB_GATE;
 const subMs = Number(process.env.FAKE_SUB_MS ?? 150);
 const muteFile = process.env.FAKE_MUTE_FILE;
@@ -134,7 +152,83 @@ const usageOf = (task) => ({ total_tokens: 1000 + 100 * task.tools, tool_uses: t
 const backgroundTasks = () => [...tasks].filter((t) => t.background).map((t) => ({ task_id: t.taskId, description: t.description }));
 // 서브에이전트 줄 — parent_tool_use_id = 부모의 Agent tool_use id
 const taskAssistant = (task, content) => assistant(content, { parent_tool_use_id: task.toolUseId });
-const taskToolResult = (task, id, text) => toolResult(id, text, false, { parent_tool_use_id: task.toolUseId });
+const taskToolResult = (task, id, text, isError = false) => toolResult(id, text, isError, { parent_tool_use_id: task.toolUseId });
+/** 서브에이전트가 도구를 하나 썼다 — task_progress(진짜는 도구마다, 엔진은 버린다) */
+async function taskProgress(task, description, toolName) {
+  task.tools++;
+  await system('task_progress', {
+    task_id: task.taskId, tool_use_id: task.toolUseId, description, usage: usageOf(task), last_tool_name: toolName,
+  });
+}
+/** 서브에이전트의 두레 MCP 부르기 — MCP 서버가 없거나 부르기가 실패하면 오류 결과로 */
+async function taskCall(name, args, toolUseId) {
+  if (!mcp) return { text: 'dure MCP 서버가 설정에 없습니다', isError: true };
+  try {
+    return await callTool(name, args, toolUseId);
+  } catch (e) {
+    return { text: `MCP 호출 실패: ${e.message}`, isError: true };
+  }
+}
+
+// 서브에이전트의 일(runTask 의 work) — 끝까지 했으면 true, 그새 멈췄으면 false
+/** SUB·SUBFG — Read 한 번 */
+async function readNote(task) {
+  const id = `toolu_${++sequence}`;
+  await taskAssistant(task, [{ type: 'tool_use', id, name: 'Read', input: { file_path: 'note.txt' } }]);
+  await taskProgress(task, 'Reading note.txt', 'Read');
+  if (task.killed) return false;
+  await taskToolResult(task, id, 'note.txt 내용');
+  return true;
+}
+/** SUBASK — <도구> 를 MCP approve 로 묻고 답대로 */
+const askTool = (tool) => async (task) => {
+  const id = `toolu_${++sequence}`;
+  const input = { x: 1 };
+  await taskAssistant(task, [{ type: 'tool_use', id, name: tool, input }]);
+  await taskProgress(task, `Using ${tool}`, tool);
+  const reply = await taskCall('approve', { tool_name: tool, input, tool_use_id: id }, id);
+  if (task.killed) return false;
+  const verdict = reply.isError ? {} : verdictOf(reply.text);
+  if (verdict.behavior === 'allow') await taskToolResult(task, id, 'ok');
+  else await taskToolResult(task, id, verdict.message ?? (reply.text || 'denied'), true);
+  return true;
+};
+/** SUBSEND — 두레 도구 send_message 를 부르고 받은 글을 그대로(MCP 결과가 오류면 is_error) */
+const sendTool = (arg) => async (task) => {
+  const [, to, text] = /^([^:]+): ([\s\S]*)$/.exec(arg) ?? [arg, arg, ''];
+  const id = `toolu_${++sequence}`;
+  await taskAssistant(task, [{ type: 'tool_use', id, name: 'mcp__dure__send_message', input: { to, text } }]);
+  await taskProgress(task, `Sending to ${to}`, 'mcp__dure__send_message');
+  const reply = await taskCall('send_message', { to, text }, id);
+  if (task.killed) return false;
+  await taskToolResult(task, id, reply.text, reply.isError);
+  return true;
+};
+/** SUBNEST — Agent 로 안쪽 서브에이전트를 띄운다(probe14 A): 안쪽은 시작·끝 알림만 내고, 스트림에 없는 새 id 로 approve 를 부른다 */
+const nestTask = (tool) => async (task) => {
+  const n = ++sequence;
+  const description = `${tool} 맡김`;
+  const prompt = `${description} 해 줘`;
+  const inner = { taskId: `task_${n}`, toolUseId: `toolu_${n}`, description, background: false, killed: false, startedAt: Date.now(), tools: 0 };
+  await taskAssistant(task, [{ type: 'tool_use', id: inner.toolUseId, name: 'Agent', input: { description, subagent_type: 'general-purpose', prompt } }]);
+  await taskProgress(task, `Delegating ${tool}`, 'Agent');
+  tasks.add(inner);
+  await system('task_started', {
+    task_id: inner.taskId, tool_use_id: inner.toolUseId, description, subagent_type: 'general-purpose',
+    is_backgrounded: false, spawn_depth: 2, parent_task_id: task.taskId, task_type: 'local_agent', prompt,
+  });
+  const askId = `toolu_${++sequence}`; // 안쪽의 하는 일 — 스트림에 내지 않는다
+  inner.tools++;
+  await taskCall('approve', { tool_name: tool, input: { x: 1 }, tool_use_id: askId }, askId);
+  if (inner.killed || task.killed) return false;
+  tasks.delete(inner);
+  await system('task_updated', { task_id: inner.taskId, patch: { status: 'completed', end_time: Date.now() } });
+  await system('task_notification', {
+    task_id: inner.taskId, tool_use_id: inner.toolUseId, status: 'completed', summary: `보고: ${description}`,
+    output_file: `${inner.taskId}.output`, usage: usageOf(inner),
+  });
+  return true;
+};
 
 /** 부모가 Agent 로 서브에이전트를 띄운다 — Agent tool_use · task_started(probe13) */
 async function launchTask(description, background) {
@@ -162,17 +256,10 @@ async function taskWait(task) {
   return !task.killed;
 }
 
-/** 서브에이전트의 일 — Read 한 번 · 보고 · 끝 알림. 끝까지 가면 보고, 멈췄으면 null */
-async function runTask(task) {
+/** 서브에이전트의 일 — work(기본 Read 한 번) · 보고 · 끝 알림. 끝까지 가면 보고, 멈췄으면 null */
+async function runTask(task, work = readNote) {
   if (!(await taskWait(task))) return null;
-  const readId = `toolu_${++sequence}`;
-  await taskAssistant(task, [{ type: 'tool_use', id: readId, name: 'Read', input: { file_path: 'note.txt' } }]);
-  task.tools++;
-  await system('task_progress', {
-    task_id: task.taskId, tool_use_id: task.toolUseId, description: 'Reading note.txt', usage: usageOf(task), last_tool_name: 'Read',
-  });
-  if (task.killed) return null;
-  await taskToolResult(task, readId, 'note.txt 내용');
+  if (!(await work(task))) return null;
   const report = `보고: ${task.description}`;
   await taskAssistant(task, [{ type: 'text', text: report }]);
   if (task.killed) return null;
@@ -271,10 +358,12 @@ async function turn(text) {
     process.stderr.write('fake crash\n');
     process.exit(3);
   }
-  const subCmd = /^SUB(FG)? ([\s\S]+)$/.exec(text);
+  const subCmd = /^SUB(FG|ASK|SEND|NEST)? ([\s\S]+)$/.exec(text);
   if (subCmd) {
-    const background = !subCmd[1];
-    const task = await launchTask(subCmd[2], background);
+    const [, kind, arg] = subCmd;
+    const background = kind !== 'FG';
+    const work = kind === 'ASK' ? askTool(arg) : kind === 'SEND' ? sendTool(arg) : kind === 'NEST' ? nestTask(arg) : readNote;
+    const task = await launchTask(arg, background);
     if (background) {
       // 진짜(probe13)의 내부 안내 — 화면에 보이면 안 되는 글
       await toolResult(
@@ -285,10 +374,10 @@ async function turn(text) {
       );
       await assistant([{ type: 'text', text: 'LAUNCHED' }]);
       await finish('LAUNCHED');
-      void runTask(task).then((report) => report && selfTurn(report));
+      void runTask(task, work).then((report) => report && selfTurn(report));
       return;
     }
-    const report = await runTask(task);
+    const report = await runTask(task, work);
     if (!report || tok.ended) return; // 멈춤 — interrupt 가 이 차례를 끝냈다
     await toolResult(task.toolUseId, `[Subagent hand-back] The text below is the final report of a subagent you launched.\n\n${report}`);
     const said = `정리: ${report}`;
@@ -328,8 +417,8 @@ async function turn(text) {
     let reply;
     try {
       reply = send
-        ? await callTool('send_message', args)
-        : await callTool('approve', { tool_name: ask[1], input: { x: 1 }, tool_use_id: id });
+        ? (await callTool('send_message', args, id)).text
+        : (await callTool('approve', { tool_name: ask[1], input: { x: 1 }, tool_use_id: id }, id)).text;
     } catch (e) {
       return fail(`MCP 호출 실패: ${e.message}`);
     }
@@ -339,12 +428,7 @@ async function turn(text) {
       await finish(reply);
       return;
     }
-    let verdict = {};
-    try {
-      verdict = JSON.parse(reply);
-    } catch {
-      /* deny 로 취급 */
-    }
+    const verdict = verdictOf(reply);
     if (verdict.behavior === 'allow') {
       await toolResult(id, 'ok');
       await finish('ok');

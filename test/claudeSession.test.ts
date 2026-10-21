@@ -224,21 +224,28 @@ test('SEND/ASK: 가짜가 MCP 서버에 JSON-RPC 로 호출한다', async () => 
   );
   const s = make();
   s.start();
+  const blocks: any[] = [];
+  s.on('event', (e) => e.kind === 'assistant' && blocks.push(...e.blocks));
   let done = waitFor<any>(s, 'event', (e) => e.kind === 'result');
   s.send(text('SEND 두리: 안녕'));
   expect((await done).text).toBe('delivered');
   done = waitFor<any>(s, 'event', (e) => e.kind === 'result');
-  const blocks: any[] = [];
-  s.on('event', (e) => e.kind === 'assistant' && blocks.push(...e.blocks));
   s.send(text('ASK Bash'));
   expect((await done).denials[0].toolName).toBe('Bash');
-  const askBlock = blocks.find((b) => b.type === 'tool_use');
+  const [sendBlock, askBlock] = blocks.filter((b) => b.type === 'tool_use');
+  expect(sendBlock.name).toBe('mcp__dure__send_message');
   expect(askBlock.name).toBe('Bash');
+  // 진짜(probe14 A)처럼 부르기마다 _meta 에 그 하는 일의 tool_use id
   const tc = calls.filter((c) => c.m.method === 'tools/call');
-  expect(tc[0].m.params).toEqual({ name: 'send_message', arguments: { to: '두리', text: '안녕' } });
+  expect(tc[0].m.params).toEqual({
+    name: 'send_message',
+    arguments: { to: '두리', text: '안녕' },
+    _meta: { 'claudecode/toolUseId': sendBlock.id },
+  });
   expect(tc[1].m.params).toEqual({
     name: 'approve',
     arguments: { tool_name: 'Bash', input: { x: 1 }, tool_use_id: askBlock.id },
+    _meta: { 'claudecode/toolUseId': askBlock.id },
   });
   expect(tc[0].auth).toBe('Bearer tok');
   expect(tc[0].agent).toBe('a1');

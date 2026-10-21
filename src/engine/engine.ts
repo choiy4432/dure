@@ -37,6 +37,8 @@ export interface EngineOptions {
   bypassTimeoutMs?: number;
   /** 세션 하나를 끌 때 기다리는 상한(ms) — 없으면 STOP_LIMIT_MS. 시험용 */
   stopLimitMs?: number;
+  /** 승인·두레 도구를 부른 tool_use id 를 이 세션 스트림에서 아직 못 봤을 때 기다리는 한도(ms) — 없으면 SEEN_WAIT_MS. 시험은 짧게 */
+  seenWaitMs?: number;
 }
 
 // 이벤트:
@@ -133,6 +135,9 @@ const NO_AGENT = '에이전트를 찾을 수 없습니다.';
 const LIMIT_INVALID = '상한은 1 이상이어야 해요.';
 const DURE_TOOL_PREFIX = 'mcp__dure__';
 const DURE_TOOL_DENIED = '두레 도구는 승인 대상이 아니에요.';
+const SUBAGENT_DURE_TOOL: string = DENY.subagentDureTool;
+/** 부른 tool_use id 를 스트림에서 못 봤을 때 기다리는 한도 — 그 줄은 보통 부르기보다 먼저 온다(probe13·14) */
+const SEEN_WAIT_MS = 2000;
 const EFFORT_UNKNOWN = '알 수 없는 effort 예요.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
 /** /effort 의 답(로컬 명령 — 모델을 부르지 않는다): "Set effort level to max (this session only): …" (probe9) */
@@ -169,6 +174,50 @@ interface EffortTurn {
 /** 프로세스에 써 넣었지만 아직 아무 이벤트도 안 온 줄 — 읽기 전에 죽으면 되살린다 */
 type InFlight = { kind: 'relay'; messageId: string } | { kind: 'human'; parts: UserPart[] };
 
+/**
+ * 한 세션 스트림에서 본 하는 일 — tool_use id → 서브에이전트 줄이면 부모의 Agent tool_use id, 부모 줄이면 null.
+ * 승인·두레 도구를 부른 쪽을 가른다(spec §4.4). 못 본 id 를 기다리는 쪽은 그 id 가 오거나 세션이 끝나면 깬다
+ */
+class SeenToolUses {
+  private ids = new Map<string, string | null>();
+  private waiters = new Map<string, Set<() => void>>();
+
+  note(ev: Extract<StreamEvent, { kind: 'assistant' }>): void {
+    for (const b of ev.blocks) {
+      if (b.type !== 'tool_use' || typeof b.id !== 'string') continue;
+      this.ids.set(b.id, ev.parent ?? null);
+      const waiting = this.waiters.get(b.id);
+      if (waiting) for (const wake of [...waiting]) wake();
+    }
+  }
+
+  /** 본 id 면 바로, 못 본 id 면 그 id 가 올 때까지(최대 ms) 기다렸다 다시 본다 — 끝내 못 보면 undefined */
+  async lookup(id: string, ms: number): Promise<string | null | undefined> {
+    if (!this.ids.has(id)) {
+      await new Promise<void>((resolve) => {
+        const set = this.waiters.get(id) ?? new Set<() => void>();
+        this.waiters.set(id, set);
+        const wake = () => {
+          clearTimeout(timer);
+          set.delete(wake);
+          if (set.size === 0 && this.waiters.get(id) === set) this.waiters.delete(id);
+          resolve();
+        };
+        const timer = setTimeout(wake, ms);
+        timer.unref?.();
+        set.add(wake);
+      });
+    }
+    return this.ids.get(id);
+  }
+
+  /** 세션이 끝났다 — 본 것을 비우고 기다리던 쪽을 모두 깨운다(못 본 id 로 끝난다). 끝난 뒤엔 엔진이 이 객체를 다시 쓰지 않는다 */
+  close(): void {
+    this.ids.clear();
+    for (const set of [...this.waiters.values()]) for (const wake of [...set]) wake();
+  }
+}
+
 class EngineImpl extends EventEmitter implements Engine {
   private sessions = new Map<AgentId, ClaudeSession>();
   private held = new Map<AgentId, UserPart[][]>(); // 일하는 중에 사람이 넣은 입력 — 끝나면 순서대로
@@ -198,6 +247,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private compactedTurn = new WeakSet<ClaudeSession>(); // 이번 차례에 요약됨 — 그 차례의 result 뒤엔 값을 받지 않는다
   // 도는 서브에이전트 — task_id → 부모의 Agent tool_use id(넣은 순서 = 시작 순). 끝 알림·세션 끝에 빠진다(메모리만, 빈 목록은 지운다)
   private subagents = new Map<AgentId, Map<string, string>>();
+  private seen = new WeakMap<ClaudeSession, SeenToolUses>(); // 그 세션 스트림에서 본 하는 일 — 승인·두레 도구를 부른 쪽을 가른다(세션이 끝나면 비운다)
   private started = false;
   private limit: number;
   private allow: boolean;
@@ -256,16 +306,18 @@ class EngineImpl extends EventEmitter implements Engine {
 
   async init(): Promise<void> {
     this.mcp = await startMcpServer({
-      listAgents: (agentId) => {
-        const me = this.caller(agentId);
+      listAgents: async (agentId, toolUseId) => {
+        const me = await this.dureCaller(agentId, toolUseId);
         const peers = this.store.agents(me.roomId).filter((a) => a.id !== me.id);
         return JSON.stringify(peers.map((a) => ({ name: a.name, role: a.role, status: this.status(a.id) })));
       },
-      sendMessage: (agentId, to, text) => this.router.send(this.caller(agentId).id, to, text),
-      approve: (agentId, args, signal) => {
-        if (String(args.tool_name).startsWith(DURE_TOOL_PREFIX)) return Promise.resolve({ behavior: 'deny', message: DURE_TOOL_DENIED });
-        if (this.closed || this.removing.has(agentId)) return Promise.resolve({ behavior: 'deny', message: EXITED });
-        return this.perms.request(agentId, args, signal); // 부른 프로세스가 끊기면 카드도 사라진다
+      sendMessage: async (agentId, to, text, toolUseId) => this.router.send((await this.dureCaller(agentId, toolUseId)).id, to, text),
+      approve: async (agentId, args, signal) => {
+        if (String(args.tool_name).startsWith(DURE_TOOL_PREFIX)) return { behavior: 'deny', message: DURE_TOOL_DENIED };
+        if (this.closed || this.removing.has(agentId)) return { behavior: 'deny', message: EXITED };
+        const fromSubagent = (await this.origin(agentId, args.tool_use_id)) === 'subagent';
+        if (this.closed || this.removing.has(agentId)) return { behavior: 'deny', message: EXITED }; // 기다리는 사이 끝났다
+        return this.perms.request(agentId, args, signal, { fromSubagent }); // 부른 프로세스가 끊기면 카드도 사라진다
       },
     });
     if (this.o.autoStart !== false) this.start();
@@ -601,6 +653,42 @@ class EngineImpl extends EventEmitter implements Engine {
     return a;
   }
 
+  /**
+   * 두레 도구를 부른 에이전트 — 서브에이전트가 불렀으면 실행하지 않고 던진다(도구 오류로 Claude 에게 돌아간다, spec §4.7).
+   * 다른 에이전트와 말하는 건 에이전트 자신뿐 — 서브에이전트는 부모에게 보고한다
+   */
+  private async dureCaller(agentId: AgentId, toolUseId: string | undefined): Promise<Agent> {
+    this.caller(agentId); // 모르는 에이전트면 기다리지 않고
+    if ((await this.origin(agentId, toolUseId)) === 'subagent') throw new Error(SUBAGENT_DURE_TOOL);
+    return this.caller(agentId); // 기다리는 사이 지워졌을 수 있다
+  }
+
+  /**
+   * 승인·두레 도구를 부른 쪽(spec §4.4) — tool_use id 가 없으면 부모(지금처럼). 이 세션 스트림에서 본 id 면 그 줄에 parent 가 있었는지.
+   * 못 본 id 는 seenWaitMs 동안 기다렸다 다시 보고, 끝내 못 보면 서브에이전트: 부모와 바로 아래 서브에이전트의 줄은 부르기보다 먼저 오고
+   * (probe13·14), 끝내 안 오는 건 안쪽 서브에이전트의 줄뿐이다(probe14 A). 그래서 보통 부모의 부르기는 기다리지 않는다.
+   * 살아 있는 세션이 없으면 가를 스트림이 없다 — 부모(지금처럼 세션 끝 정리를 따른다)
+   */
+  private async origin(id: AgentId, toolUseId: string | undefined): Promise<'parent' | 'subagent'> {
+    if (!toolUseId) return 'parent';
+    const s = this.sessions.get(id);
+    const seen = s && this.seen.get(s);
+    if (!seen) return 'parent';
+    const parent = await seen.lookup(toolUseId, this.o.seenWaitMs ?? SEEN_WAIT_MS);
+    return parent === null ? 'parent' : 'subagent';
+  }
+
+  /** 세션이 끝났다 — 본 하는 일을 비우고 기다리던 부르기를 깨운다 */
+  private forgetSeen(s: ClaudeSession): void {
+    this.seen.get(s)?.close();
+    this.seen.delete(s);
+  }
+
+  /** 차례가 끝나도 남길 승인 — 도는 서브에이전트가 물은 것(spec §4.4). 도는 것이 없으면 서브에이전트 것도 지금처럼 거절 */
+  private keepSubagentAsks(id: AgentId): (r: PendingRequest) => boolean {
+    return (r) => !!r.fromSubagent && this.subagents.has(id);
+  }
+
   /** 지금 차례 중(엔진이 보낸 /effort 차례 포함)이거나 사람 답을 기다리는 중 */
   private waiting(id: AgentId): boolean {
     const s = this.sessions.get(id);
@@ -721,12 +809,15 @@ class EngineImpl extends EventEmitter implements Engine {
       cwd: agent.folder,
       env: this.spawnEnv(),
     });
+    this.seen.set(s, new SeenToolUses());
     // 세션 콜백 안에서 던지면 stdout 처리 중 잡히지 않은 예외가 되어 앱이 죽는다 — 모두 guard 로 감싼다
     s.on('event', (ev: StreamEvent) =>
       this.guard(id, () => {
         // 부모의 줄이 오면 보낸 줄을 읽은 것 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
         if (readsInput(ev)) this.inFlight.delete(s);
         if (this.sessions.get(id) !== s) return;
+        // 본 하는 일 — 승인·두레 도구를 부른 쪽을 가르는 근거(/effort 차례 중에 온 줄도)
+        if (ev.kind === 'assistant') this.seen.get(s)?.note(ev);
         if (ev.kind !== 'control-response' && this.effortTurn.has(s)) this.onEffortEvent(id, s, ev);
         else this.onEvent(id, ev);
       }),
@@ -741,6 +832,7 @@ class EngineImpl extends EventEmitter implements Engine {
         if (this.sessions.get(id) !== s) return; // 엔진이 끝낸 세션은 endSession 이 정리
         this.sessions.delete(id);
         this.endEffortTurn(s); // /effort 차례 중이었으면 그 타이머도(다음에 띄울 때 다시 보낸다)
+        this.forgetSeen(s);
         this.guard(id, () => this.forgetEffortNow(id));
         this.guard(id, () => this.forgetMode(id));
         this.guard(id, () => this.forgetSubagents(id));
@@ -846,7 +938,7 @@ class EngineImpl extends EventEmitter implements Engine {
         this.effortNows.set(id, heard);
         this.emitEffort(id);
       }
-      this.perms.cancelForAgent(id, TURN_ENDED); // 끝난 차례에 남은 승인 질문(떠난 프로세스의 호출 등) — 평소 result 와 같게
+      this.perms.cancelForAgent(id, TURN_ENDED, this.keepSubagentAsks(id)); // 끝난 차례에 남은 승인 질문(떠난 프로세스의 호출 등) — 평소 result 와 같게
       this.pump(id);
       this.emitStatus(id);
     }
@@ -1154,8 +1246,9 @@ class EngineImpl extends EventEmitter implements Engine {
     if (ev.kind === 'task-started' || ev.kind === 'task-ended') this.guard(id, () => this.noteSubagent(id, ev));
     // 세션은 result 를 내보내기 직전에 idle 이 된다 — 이 차례의 result 를 먼저 알린 뒤 다음 입력을 보낸다
     if (ev.kind === 'result') {
-      // 끝난 차례엔 살아 있는 권한 질문이 있을 수 없다 — 남은 것(떠난 프로세스의 호출 등)은 정리해야 다음 입력이 나간다
-      this.perms.cancelForAgent(id, TURN_ENDED);
+      // 끝난 차례엔 살아 있는 부모의 권한 질문이 있을 수 없다 — 남은 것(떠난 프로세스의 호출 등)은 정리해야 다음 입력이 나간다.
+      // 도는 서브에이전트가 물은 것은 남긴다 — 부모 차례가 끝나도 서브에이전트는 그 답을 기다린다(spec §4.4)
+      this.perms.cancelForAgent(id, TURN_ENDED, this.keepSubagentAsks(id));
       this.guard(null, () => this.watcher?.turnEnded());
       const cur = this.sessions.get(id);
       if (cur) {
@@ -1268,6 +1361,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     this.sessions.delete(id);
     if (s) this.endEffortTurn(s); // /effort 차례 중이었으면 그 타이머도
+    if (s) this.forgetSeen(s);
     this.errors.delete(id);
     this.guard(id, () => this.forgetEffortNow(id)); // 끝난 세션의 지금 값은 다음 세션의 값이 아니다
     if (s) this.guard(id, () => this.forgetMode(id)); // 알리는 권한 모드도 — 이제 다음에 띄울 때의 모드

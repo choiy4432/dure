@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createEngine, type AgentStatus, type Engine, type EngineOptions, type HistoryItem, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
 import { openMessageLog } from '../src/engine/messageLog';
 import { openStore } from '../src/engine/store';
+import { DENY } from '../src/shared/denyTexts';
 
 const FAKE = path.resolve('test/fakeClaude.mjs');
 let dir: string;
@@ -105,17 +106,38 @@ const userTexts = (): string[] =>
     .map((x) => x.message.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n'));
 const controlRequests = (subtype: string) =>
   readLog().filter((x) => x.type === 'control_request' && x.request?.subtype === subtype);
-/** 에이전트의 MCP 설정으로 approve 를 직접 부른다 — 지금 차례와 상관없는(끊기거나 남은) 호출 흉내. 답은 SSE data 줄 */
-async function approveDirect(agentId: string, toolName: string, signal?: AbortSignal): Promise<unknown> {
+/**
+ * 에이전트의 MCP 설정으로 approve 를 직접 부른다 — 지금 차례와 상관없는(끊기거나 남은) 호출 흉내. 답은 SSE data 줄.
+ * toolUseId 를 주면 진짜처럼 인자 tool_use_id 와 _meta 에 싣는다(probe14 A)
+ */
+async function approveDirect(agentId: string, toolName: string, signal?: AbortSignal, toolUseId?: string): Promise<unknown> {
   const cfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'run', agentId, 'mcp.json'), 'utf8')).mcpServers.dure;
+  const args = { tool_name: toolName, input: {}, ...(toolUseId ? { tool_use_id: toolUseId } : {}) };
   const res = await fetch(cfg.url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...cfg.headers },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'approve', arguments: { tool_name: toolName, input: {} } } }),
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'approve', arguments: args, ...(toolUseId ? { _meta: { 'claudecode/toolUseId': toolUseId } } : {}) },
+    }),
     signal,
   });
   const data = (await res.text()).split('\n').find((l) => l.startsWith('data: '));
   return JSON.parse(JSON.parse(data!.slice('data: '.length)).result.content[0].text);
+}
+/** 두레 도구(list_agents·send_message)를 직접 부른다 — toolUseId 를 주면 _meta 에. 답은 JSON 결과의 글·오류 표시 */
+async function toolDirect(agentId: string, name: string, args: unknown, toolUseId?: string): Promise<{ text: string; isError: boolean }> {
+  const cfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'run', agentId, 'mcp.json'), 'utf8')).mcpServers.dure;
+  const res = await fetch(cfg.url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...cfg.headers },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name, arguments: args, ...(toolUseId ? { _meta: { 'claudecode/toolUseId': toolUseId } } : {}) },
+    }),
+  });
+  const { result } = (await res.json()) as { result: { content: { text: string }[]; isError?: boolean } };
+  return { text: result.content[0].text, isError: result.isError === true };
 }
 const isAlive = (pid: number) => {
   try {
@@ -2841,4 +2863,156 @@ test('subagent: 서브에이전트 줄·시작·끝은 보낸 줄을 읽었다�
   await e.sendUser(a.id, text('echo 다음'));
   await second;
   expect(userTexts()).toEqual(['SUB 조사', 'echo 못 읽음', 'echo 못 읽음', 'echo 다음']);
+});
+
+// ── 서브에이전트 승인 · 두레 도구(spec §4.4·§4.7) ──
+// 가짜 claude 의 SUBASK(서브에이전트가 묻는다)·SUBSEND(서브에이전트가 두레 도구)·SUBNEST(안쪽 서브에이전트가 스트림에 없던 id 로 묻는다)
+/** 기록에 실린 하는 일 id — 스트림에서 본 tool_use */
+const streamToolIds = (e: Engine, id: string): string[] =>
+  e.history(id).flatMap((h) => (h.kind === 'assistant' ? h.blocks.flatMap((b) => (b.type === 'tool_use' ? [b.id] : [])) : []));
+
+test('subagent: SUBASK — 서브에이전트가 물은 승인은 fromSubagent · 허용하면 서브에이전트가 끝까지 간다', async () => {
+  const e = await start({ FAKE_SUB_MS: '50' });
+  const { a } = setup(e);
+  const req = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id);
+  await e.sendUser(a.id, text('SUBASK Write'));
+  const r = await req;
+  const tool = agentToolId(e, a.id);
+  expect(r).toMatchObject({ agentId: a.id, toolName: 'Write', kind: 'permission', fromSubagent: true });
+  expect(e.pendingRequests(a.id)).toEqual([r]);
+  expect(e.status(a.id)).toBe('awaiting');
+
+  const relayed = resultTextIs(e, a.id, '전달: 보고: Write');
+  e.answerRequest(r.id, { type: 'allow' });
+  await relayed;
+  const h = e.history(a.id);
+  expect(h.filter(hasParent).find((x) => x.kind === 'tool-result')).toMatchObject({
+    kind: 'tool-result', toolUseId: r.toolUseId, isError: false, text: 'ok', viaApproval: true, parent: tool,
+  });
+  expect(h.find((x) => x.kind === 'subagent-end')).toMatchObject({ toolUseId: tool, status: 'completed', summary: '보고: Write' });
+  expect(e.subagentsRunning(a.id)).toEqual([]);
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('subagent: 부모 차례가 끝날 때 — 부모 승인은 차례가 끝났습니다로 거절되고, 도는 서브에이전트가 물은 승인은 남는다', async () => {
+  const gate = path.join(dir, 'gate');
+  const e = await start({ FAKE_SUB_GATE: gate });
+  const { a } = setup(e);
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUBASK Write'));
+  await launched;
+  const tool = agentToolId(e, a.id);
+  // 서브에이전트가 도는 중에 부모 차례 — 부모의 승인이 떠 있다
+  const liveReq = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id);
+  await e.sendUser(a.id, text('ASK Write'));
+  const live = await liveReq;
+  // 서브에이전트도 묻는다
+  const subReq = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id && r.id !== live.id);
+  fs.writeFileSync(gate, '');
+  const sub = await subReq;
+  // 이 차례와 상관없는 부모 것 호출(tool_use id 없음 — 떠난 프로세스가 남긴 것처럼)
+  const strayReq = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id && r.id !== live.id && r.id !== sub.id);
+  const leftover = approveDirect(a.id, 'Edit');
+  const stray = await strayReq;
+  expect(live).not.toHaveProperty('fromSubagent');
+  expect(sub).toMatchObject({ toolName: 'Write', fromSubagent: true });
+  expect(stray).not.toHaveProperty('fromSubagent');
+  expect(e.pendingRequests(a.id)).toHaveLength(3);
+
+  const done = resultTextIs(e, a.id, 'ok');
+  e.answerRequest(live.id, { type: 'allow' });
+  await done;
+  expect(await leftover).toEqual({ behavior: 'deny', message: DENY.turnEnded });
+  expect(e.pendingRequests(a.id)).toEqual([sub]); // 서브에이전트 카드는 남는다
+  expect(e.status(a.id)).toBe('awaiting');
+  expect(e.subagentsRunning(a.id)).toEqual([tool]);
+
+  const relayed = resultTextIs(e, a.id, '전달: 보고: Write');
+  e.answerRequest(sub.id, { type: 'allow' });
+  await relayed; // 서브에이전트는 끝까지 갔다
+  expect(e.pendingRequests()).toEqual([]);
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('subagent: 도는 서브에이전트가 없으면 서브에이전트 것으로 친 승인도 차례가 끝날 때 거절 — 못 본 id 는 잠깐 기다린 뒤 서브에이전트', async () => {
+  const e = await start({}, false, { seenWaitMs: 100 });
+  const { a } = setup(e);
+  const liveReq = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id);
+  await e.sendUser(a.id, text('ASK Write'));
+  const live = await liveReq;
+  const strayReq = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id && r.id !== live.id);
+  const t0 = Date.now();
+  const leftover = approveDirect(a.id, 'Edit', undefined, 'toolu_nowhere'); // 스트림에 없던 id
+  const stray = await strayReq;
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(90); // 기다린 뒤에야 카드
+  expect(stray).toMatchObject({ toolName: 'Edit', toolUseId: 'toolu_nowhere', fromSubagent: true });
+  expect(live).not.toHaveProperty('fromSubagent'); // 스트림에서 본 부모의 id
+
+  const done = resultTextIs(e, a.id, 'ok');
+  e.answerRequest(live.id, { type: 'allow' });
+  await done;
+  expect(await leftover).toEqual({ behavior: 'deny', message: DENY.turnEnded });
+  expect(e.pendingRequests()).toEqual([]);
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('subagent: SUBSEND — 서브에이전트의 send_message 는 실행하지 않고 오류로 · 부모의 SEND 는 카드 없이 지금처럼(기다림이 길어도 바로)', async () => {
+  const e = await start({ FAKE_SUB_MS: '50' }, false, { seenWaitMs: 30_000 }); // 부모·서브에이전트 모두 스트림에서 본 id — 기다리면 시간 초과
+  const { room, a } = setup(e);
+  const d = e.addAgent({ roomId: room.id, name: '디자인', role: '디자인', folder: folder('d') });
+  const requests: PendingRequest[] = [];
+  e.on('request', (r: PendingRequest) => requests.push(r));
+
+  const relayed = resultTextIs(e, a.id, '전달: 보고: 디자인: 안녕');
+  await e.sendUser(a.id, text('SUBSEND 디자인: 안녕'));
+  await relayed;
+  const tool = agentToolId(e, a.id);
+  expect(e.messages()).toEqual([]); // 넘기지 않았다
+  const sub = e.history(a.id).filter(hasParent);
+  expect(sub.find((x) => x.kind === 'assistant' && x.blocks.some((b) => b.type === 'tool_use' && b.name === 'mcp__dure__send_message'))).toBeDefined();
+  expect(sub.find((x) => x.kind === 'tool-result')).toMatchObject({
+    kind: 'tool-result', isError: true, text: DENY.subagentDureTool, viaApproval: false, parent: tool,
+  });
+
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('SEND 디자인: 안녕'));
+  expect(await resultText(done)).toBe('디자인 에게 보냈습니다. 사람이 확인하면 전달됩니다.');
+  expect(e.messages()).toMatchObject([{ from: a.id, to: d.id, text: '안녕', state: 'pending' }]);
+  expect(requests).toEqual([]); // 어느 쪽도 카드가 없다
+});
+
+test('subagent: 서브에이전트(못 본 id)의 list_agents·send_message 도 거절 — id 없이 부르면 부모 것으로 실행', async () => {
+  const e = await start({}, false, { seenWaitMs: 100 });
+  const { a } = setup(e);
+  const first = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나')); // 세션을 띄운다
+  await first;
+  expect(await toolDirect(a.id, 'list_agents', {}, 'toolu_inner')).toEqual({ text: DENY.subagentDureTool, isError: true });
+  expect(await toolDirect(a.id, 'send_message', { to: 'B', text: '몰래' }, 'toolu_inner2')).toEqual({ text: DENY.subagentDureTool, isError: true });
+  expect(e.messages()).toEqual([]);
+  const mine = await toolDirect(a.id, 'list_agents', {});
+  expect(mine.isError).toBe(false);
+  expect(JSON.parse(mine.text).map((x: { name: string }) => x.name)).toEqual(['B']);
+});
+
+test('subagent: SUBNEST — 안쪽 서브에이전트의 승인은 스트림에 없던 id 라도 fromSubagent · 안쪽은 바깥 아래(parentTaskId)', async () => {
+  const e = await start({ FAKE_SUB_MS: '50' }, false, { seenWaitMs: 100 });
+  const { a } = setup(e);
+  const req = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id);
+  await e.sendUser(a.id, text('SUBNEST Write'));
+  const r = await req;
+  expect(r).toMatchObject({ agentId: a.id, toolName: 'Write', kind: 'permission', fromSubagent: true, toolUseId: expect.any(String) });
+  expect(streamToolIds(e, a.id)).not.toContain(r.toolUseId); // 안쪽 서브에이전트의 줄은 오지 않는다(probe14 A)
+
+  const relayed = resultTextIs(e, a.id, '전달: 보고: Write');
+  e.answerRequest(r.id, { type: 'allow' });
+  await relayed;
+  const h = e.history(a.id);
+  const starts = h.filter((x) => x.kind === 'subagent-start');
+  expect(starts).toHaveLength(2);
+  expect(starts[0]).toMatchObject({ toolUseId: agentToolId(e, a.id), parentTaskId: null });
+  expect(starts[1]).toMatchObject({ parentTaskId: (starts[0] as { taskId: string }).taskId });
+  expect(h.filter((x) => x.kind === 'subagent-end').map((x) => (x as { status: string }).status)).toEqual(['completed', 'completed']);
+  expect(e.subagentsRunning(a.id)).toEqual([]);
+  expect(e.status(a.id)).toBe('idle');
 });

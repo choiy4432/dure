@@ -6,8 +6,9 @@ import type { AgentId } from './types';
 export type ApproveResult = { behavior: 'allow'; updatedInput: unknown } | { behavior: 'deny'; message: string };
 
 export interface McpHandlers {
-  listAgents(agentId: AgentId): string | Promise<string>;
-  sendMessage(agentId: AgentId, to: string, text: string): string | Promise<string>;
+  /** toolUseId: 부른 하는 일의 tool_use id — tools/call 의 params._meta['claudecode/toolUseId'](probe14 A), 없으면 undefined */
+  listAgents(agentId: AgentId, toolUseId?: string): string | Promise<string>;
+  sendMessage(agentId: AgentId, to: string, text: string, toolUseId?: string): string | Promise<string>;
   /** signal: 부른 쪽(HTTP 연결)이 답을 받기 전에 끊기면 abort */
   approve(
     agentId: AgentId,
@@ -56,12 +57,15 @@ const textResult = (text: string, isError = false) => ({ content: [{ type: 'text
 async function callTool(h: McpHandlers, agentId: AgentId, params: any, signal: AbortSignal): Promise<ReturnType<typeof textResult>> {
   const name = params?.name;
   const a = params?.arguments ?? {};
+  const meta = params?._meta;
+  const metaId = meta && typeof meta === 'object' ? meta['claudecode/toolUseId'] : undefined;
+  const toolUseId = typeof metaId === 'string' ? metaId : undefined; // 부른 하는 일 — 서브에이전트인지 엔진이 가른다
   const bad = () => textResult('잘못된 인자입니다', true);
   try {
-    if (name === 'list_agents') return textResult(await h.listAgents(agentId));
+    if (name === 'list_agents') return textResult(await h.listAgents(agentId, toolUseId));
     if (name === 'send_message') {
       if (typeof a.to !== 'string' || typeof a.text !== 'string') return bad();
-      return textResult(await h.sendMessage(agentId, a.to, a.text));
+      return textResult(await h.sendMessage(agentId, a.to, a.text, toolUseId));
     }
     if (name === 'approve') {
       if (typeof a.tool_name !== 'string') return bad();

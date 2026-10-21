@@ -123,6 +123,39 @@ test('cancelForAgent → 그 에이전트 대기만 deny(message), 다른 에이
   expect((await p2).behavior).toBe('allow');
 });
 
+test('fromSubagent: 서브에이전트가 물은 요청엔 fromSubagent true — 아니면 칸이 없다', async () => {
+  const p1 = perms.request(a1, { tool_name: 'Write', input: {}, tool_use_id: 's1' }, undefined, { fromSubagent: true });
+  const p2 = perms.request(a1, { tool_name: 'Edit', input: {}, tool_use_id: 'p1' }, undefined, { fromSubagent: false });
+  const p3 = perms.request(a1, { tool_name: 'Bash', input: {} });
+  const [sub, parent, plain] = perms.pending(a1);
+  expect(sub).toMatchObject({ toolName: 'Write', fromSubagent: true });
+  expect(parent).not.toHaveProperty('fromSubagent');
+  expect(plain).not.toHaveProperty('fromSubagent');
+  for (const r of perms.pending(a1)) perms.answer(r.id, { type: 'deny' });
+  await Promise.all([p1, p2, p3]);
+});
+
+test('cancelForAgent keep — keep 이 true 인 요청은 남기고 나머지만 deny', async () => {
+  const resolved: unknown[] = [];
+  const pSub = perms.request(a1, { tool_name: 'Write', input: {}, tool_use_id: 's1' }, undefined, { fromSubagent: true });
+  const pParent = perms.request(a1, { tool_name: 'Edit', input: {}, tool_use_id: 'p1' });
+  const [sub, parent] = perms.pending(a1);
+  perms.on('resolved', (r) => resolved.push(r));
+  const seen: PendingRequest[] = [];
+  perms.cancelForAgent(a1, '차례 끝', (r) => {
+    seen.push(r);
+    return !!r.fromSubagent;
+  });
+  expect(await pParent).toEqual({ behavior: 'deny', message: '차례 끝' });
+  expect(resolved).toEqual([{ id: parent.id, agentId: a1 }]);
+  expect(seen.map((r) => r.id).sort()).toEqual([sub.id, parent.id].sort());
+  expect(perms.pending(a1).map((r) => r.id)).toEqual([sub.id]);
+  // keep 없이 부르면 지금처럼 모두
+  perms.cancelForAgent(a1, '종료');
+  expect(await pSub).toEqual({ behavior: 'deny', message: '종료' });
+  expect(perms.pending()).toEqual([]);
+});
+
 test('wasAsked: 물어본 toolUseId 만 true', async () => {
   store.updateAgent(a1, { alwaysAllow: ['Read'] });
   await perms.request(a1, { tool_name: 'Read', input: {}, tool_use_id: 'auto' });

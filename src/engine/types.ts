@@ -120,6 +120,8 @@ export interface PendingRequest {
   toolUseId?: string;
   kind: 'permission' | 'question';
   createdAt: number;
+  /** 서브에이전트가 물은 것(tool_use id 로 가른다) — 부모 차례가 끝나도 도는 동안 남는다. 부모 것엔 칸이 없다 */
+  fromSubagent?: true;
 }
 
 export interface EngineEventMap {

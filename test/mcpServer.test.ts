@@ -95,6 +95,29 @@ describe('mcpServer', () => {
     expect(j.result.isError).toBeUndefined();
   });
 
+  test('list_agents·send_message → _meta 의 claudecode/toolUseId 를 handler 에 — 없거나 문자열이 아니면 undefined', async () => {
+    const lists: unknown[] = [];
+    const sends: unknown[] = [];
+    handle = await startMcpServer(handlers({
+      listAgents: (id, toolUseId) => { lists.push([id, toolUseId]); return '[]'; },
+      sendMessage: (a, to, text, toolUseId) => { sends.push([a, to, text, toolUseId]); return 'ok'; },
+    }));
+    const withMeta = (id: number, name: string, args: unknown, meta: unknown) => ({
+      jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args, _meta: meta },
+    });
+    await rpc(handle, withMeta(20, 'list_agents', {}, { 'claudecode/toolUseId': 'toolu_sub', progressToken: 3 }));
+    await rpc(handle, call(21, 'list_agents', {}));
+    await rpc(handle, withMeta(22, 'send_message', { to: 'B', text: '안녕' }, { 'claudecode/toolUseId': 'toolu_sub2' }));
+    await rpc(handle, withMeta(23, 'send_message', { to: 'B', text: '또' }, { 'claudecode/toolUseId': 42 }));
+    await rpc(handle, withMeta(24, 'send_message', { to: 'B', text: '셋' }, 'not-an-object'));
+    expect(lists).toEqual([['agent-A', 'toolu_sub'], ['agent-A', undefined]]);
+    expect(sends).toEqual([
+      ['agent-A', 'B', '안녕', 'toolu_sub2'],
+      ['agent-A', 'B', '또', undefined],
+      ['agent-A', 'B', '셋', undefined],
+    ]);
+  });
+
   test('approve → handler 결과를 JSON 문자열 text 로 (SSE event: message)', async () => {
     const seen: unknown[] = [];
     handle = await startMcpServer(handlers({ approve: async (a, args) => { seen.push([a, args]); return { behavior: 'allow', updatedInput: { x: 1 } }; } }));

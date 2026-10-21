@@ -5,6 +5,8 @@ export const DENY = {
   turnEnded: '차례가 끝났습니다.',
   userStopped: '사용자가 멈췄습니다.',
   claudeExited: 'Claude 가 종료되었습니다.',
+  /** 서브에이전트가 두레 도구(send_message·list_agents)를 불렀다 — 실행하지 않고 도구 오류로(spec §4.7) */
+  subagentDureTool: '서브에이전트는 두레 도구를 쓸 수 없어요. 결과를 부모 에이전트에게 보고하면 부모가 전해요.',
 } as const
 
 export const DENY_TEXTS: readonly string[] = Object.values(DENY)

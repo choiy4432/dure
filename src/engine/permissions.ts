@@ -25,11 +25,15 @@ export class Permissions extends EventEmitter {
     super();
   }
 
-  /** signal 이 abort 되면(부른 쪽이 끊김) 대기에서 빼고 deny 로 끝낸다 — 죽은 호출의 카드가 남지 않게 */
+  /**
+   * signal 이 abort 되면(부른 쪽이 끊김) 대기에서 빼고 deny 로 끝낸다 — 죽은 호출의 카드가 남지 않게.
+   * o.fromSubagent: 서브에이전트가 물은 것 — 요청에 표시해 둔다(차례 끝 정리에서 남길지 가른다)
+   */
   request(
     agentId: AgentId,
     args: { tool_name: string; input: unknown; tool_use_id?: string },
     signal?: AbortSignal,
+    o: { fromSubagent?: boolean } = {},
   ): Promise<ApproveResult> {
     const agent = this.store.agent(agentId);
     if (!agent) return Promise.resolve({ behavior: 'deny', message: '에이전트를 찾을 수 없습니다.' });
@@ -46,6 +50,7 @@ export class Permissions extends EventEmitter {
       toolUseId: args.tool_use_id,
       kind: isQuestion ? 'question' : 'permission',
       createdAt: Date.now(),
+      ...(o.fromSubagent ? { fromSubagent: true as const } : {}),
     };
     if (args.tool_use_id) this.asked.add(`${agentId}:${args.tool_use_id}`);
     let resolve!: (r: ApproveResult) => void;
@@ -94,9 +99,11 @@ export class Permissions extends EventEmitter {
     this.finish(entry, result);
   }
 
-  cancelForAgent(agentId: AgentId, message: string): void {
+  /** 그 에이전트의 대기를 message 로 거절한다 — keep 이 true 인 요청은 남긴다(차례가 끝나도 도는 서브에이전트가 물은 것) */
+  cancelForAgent(agentId: AgentId, message: string, keep?: (r: PendingRequest) => boolean): void {
     for (const entry of [...this.entries.values()]) {
-      if (entry.req.agentId === agentId) this.finish(entry, { behavior: 'deny', message });
+      if (entry.req.agentId !== agentId || keep?.({ ...entry.req })) continue;
+      this.finish(entry, { behavior: 'deny', message });
     }
   }
 
