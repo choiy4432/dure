@@ -142,6 +142,8 @@ const BYPASS_TIMEOUT_MS = 15_000;
 /** 띄울 때 보낸 set_permission_mode — CLI 시작·--resume 대화 읽기 뒤에야 답하니 /effort 와 같은 만큼 기다린다 */
 const BYPASS_SPAWN_TIMEOUT_MS = EFFORT_TIMEOUT_MS;
 const BYPASS_NOT_ALLOWED = '설정에서 묻지 않고 실행을 허용해야 켤 수 있어요.';
+/** 켜고 끄는 값은 true·false 만 — 문자열 'false' 같은 값이 켜짐으로 저장되지 않게 */
+const BYPASS_VALUE_INVALID = '켜기·끄기 값이 올바르지 않아요.';
 const BYPASS_ON_FAILED = "'묻지 않음'을 켜지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.";
 const BYPASS_ON_FAILED_NOTICE = "'묻지 않음'을 켜지 못해 평소처럼 승인을 물어요";
 const BYPASS_OFF_FAILED = "'묻지 않음'을 끄지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.";
@@ -290,6 +292,7 @@ class EngineImpl extends EventEmitter implements Engine {
   allowBypass(): boolean { return this.allow; }
 
   async setAllowBypass(on: boolean): Promise<void> {
+    if (typeof on !== 'boolean') throw new Error(BYPASS_VALUE_INVALID);
     const was = this.allow;
     this.writeSettings({ allowBypass: on });
     this.allow = on;
@@ -376,14 +379,14 @@ class EngineImpl extends EventEmitter implements Engine {
   private flagsOf(a: Agent): { bypass: boolean; bySettings: boolean } {
     // 살아 있는 세션이 없으면 다음에 띄울 때의 모드를 알린다 — ensure() 가 첫 입력 전에 적용하니 사실과 같다
     // (세션 없이는 읽은 모드가 없어서, 저장된 켜짐이 꺼짐으로 보여 스위치가 갇히던 것)
-    if (!this.sessions.has(a.id)) return { bypass: this.allow && a.bypassOn, bySettings: false };
-    const bypass = this.bypass.get(a.id) ?? false;
+    if (!this.sessions.has(a.id)) return { bypass: this.allow && !!a.bypassOn, bySettings: false };
+    const bypass = !!this.bypass.get(a.id);
     // 원인 = 그 세션이 읽은 내 Claude 설정의 기본 모드(get_settings — 세션이 bypass 여도 내 설정 값 그대로, probe12).
     // 두레가 켠 채 남은 bypass 는 내 설정 탓이 아니라 잠그지 않는다(다시 끌 수 있게).
     // 아직 못 읽었거나 읽지 못하면 두레 스위치로 가른다 — 허용이 꺼진 채 남은 bypassOn 은 끈 것으로 친다
     const s = this.sessions.get(a.id);
     const settings = s ? this.settingsDefaults.get(s) : undefined;
-    return { bypass, bySettings: bypass && (settings !== undefined ? settings === BYPASS_MODE : !(this.allow && a.bypassOn)) };
+    return { bypass, bySettings: bypass && (settings !== undefined ? settings === BYPASS_MODE : !(this.allow && !!a.bypassOn)) };
   }
 
   errorText(id: AgentId): string | null {
@@ -479,6 +482,7 @@ class EngineImpl extends EventEmitter implements Engine {
 
   async setBypass(id: AgentId, on: boolean) {
     this.need(id);
+    if (typeof on !== 'boolean') throw new Error(BYPASS_VALUE_INVALID);
     if (on && !this.allow) throw new Error(BYPASS_NOT_ALLOWED);
     this.store.updateAgent(id, { bypassOn: on });
     this.emitFlags(id);

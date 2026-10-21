@@ -2389,3 +2389,32 @@ test('bypass: bypass 로 돌던 세션이 끝나도 flags 는 다음 모드(fals
   expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false });
   expect(got.every((f) => f.agentId !== a.id || f.bypass)).toBe(true);
 });
+
+// ── 묻지 않음: 마지막 바로잡기 ──
+const VALUE_INVALID = '켜기·끄기 값이 올바르지 않아요.';
+
+test('bypass: setBypass · setAllowBypass 는 boolean 이 아닌 값을 던진다 — 문자열 "false" 가 켜짐으로 저장되지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  // 허용 — 문자열은 확인 창 없이 허용을 켜지 못한다
+  for (const bad of ['false', 'true', 1, null, undefined]) {
+    await expect(e.setAllowBypass(bad as any)).rejects.toThrow(VALUE_INVALID);
+  }
+  expect(e.allowBypass()).toBe(false);
+  expect(fs.existsSync(path.join(dataDir, 'settings.json'))).toBe(false);
+
+  await e.setAllowBypass(true);
+  const got = flagEvents(e);
+  for (const bad of ['false', 'true', 0, 1, null, undefined, {}]) {
+    await expect(e.setBypass(a.id, bad as any)).rejects.toThrow(VALUE_INVALID);
+  }
+  expect(agentOf(e, a.id).bypassOn).toBe(false);
+  expect(openStore(dataDir).agent(a.id)!.bypassOn).toBe(false);
+  expect(got).toEqual([]);
+  const f = e.flags(a.id);
+  for (const v of Object.values(f)) expect(typeof v).toBe('boolean');
+  expect(f.bypass).toBe(false);
+  await turn(e, a.id, 'echo 하나'); // 다음에 띄워도 켜지지 않는다
+  expect(controlRequests('set_permission_mode')).toEqual([]);
+  expect(e.flags(a.id).bypass).toBe(false);
+});
