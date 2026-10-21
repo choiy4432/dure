@@ -3218,3 +3218,59 @@ test('subagent: 새 대화 — 스스로 시작할 차례를 기다리는 중이
   await sleep(500); // 옛 기다림 타이머가 남아 있었다면 이 사이에 울린다
   expect(statuses).toEqual(['idle']);
 });
+
+test('subagent: 뒤에서 돈 것으로 못 본 서브에이전트가 마지막으로 끝나도 — 미뤄 둔 다시 띄우기와 기다리던 입력이 나가고 대기로', async () => {
+  const gate = path.join(dir, 'gate');
+  const e = await start({ FAKE_SUB_GATE: gate, FAKE_INTERRUPT_SPARES_TASKS: '1' });
+  const { a } = setup(e);
+  // 앞에서 도는 서브에이전트(뒤에서 돈다는 표시 없음) — 이 가짜에선 부모 차례를 멈춰도 계속 돌고, 끝 알림은 그 차례의 result 뒤 쉬는 중에 온다
+  const started = waitFor<SubagentsEvent>(e, 'subagents', (x) => x.agentId === a.id && x.running.length === 1);
+  await e.sendUser(a.id, text('SUBFG 조사'));
+  await started;
+  const stopped = resultOf(e, a.id);
+  await e.interrupt(a.id);
+  await stopped;
+  expect(e.subagentsRunning(a.id)).toHaveLength(1);
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true); // 서브에이전트가 돌아 미룬다
+  expect(e.flags(a.id).pending).toBe(true);
+  await e.sendUser(a.id, text('echo 둘'));
+  await sleep(200);
+  expect(e.heldInput(a.id)).toBe(1);
+
+  const on = waitFor<FlagsEvent>(e, 'flags', (f) => f.agentId === a.id && f.bypass);
+  const done = resultTextIs(e, a.id, '받음: echo 둘');
+  fs.writeFileSync(gate, '');
+  await done;
+  expect(await on).toEqual({ agentId: a.id, bypass: true, bySettings: false, pending: false });
+  expect(modeLines('A')).toEqual([['SUBFG 조사'], ['mode:bypassPermissions', 'echo 둘']]);
+  expect(e.history(a.id).find((x) => x.kind === 'subagent-end')).toMatchObject({ status: 'completed' });
+  expect(e.heldInput(a.id)).toBe(0);
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('subagent: 스스로 시작할 차례를 기다리는 중 보낸 사람 입력의 차례는 그 기다림을 쓰지 않는다 — /effort 는 진짜 스스로 시작한 차례 뒤에', async () => {
+  const gate = path.join(dir, 'gate');
+  // 스스로 시작한 차례를 늦게 연다 · 사용자 줄의 init 앞에 서브에이전트 system 줄(부모 줄이 아니다 — 보낸 줄을 읽은 것으로 치지 않는다)
+  const e = await start({ FAKE_SUB_GATE: gate, FAKE_SELF_TURN_MS: '400', FAKE_PRE_INIT_SYSTEM: '1' });
+  const { a } = setup(e);
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 조사'));
+  await launched;
+  await e.setEffort(a.id, 'low');
+  const ended = waitFor<SubagentsEvent>(e, 'subagents', (x) => x.agentId === a.id && x.running.length === 0);
+  fs.writeFileSync(gate, '');
+  await ended;
+
+  const order: string[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === a.id && x.event.kind === 'result' && order.push(`result:${x.event.text}`));
+  e.on('effort', (x: EffortEvent) => x.agentId === a.id && x.effortNow && order.push(`effort:${x.effortNow}`));
+  const heard = waitFor<EffortEvent>(e, 'effort', (x) => x.agentId === a.id && x.effortNow === 'low');
+  await e.sendUser(a.id, text('echo 끼어듦')); // 기다리는 중에도 입력은 바로 간다
+  expect(e.heldInput(a.id)).toBe(0);
+  await heard;
+  expect(order).toEqual(['result:받음: echo 끼어듦', 'result:전달: 보고: 조사', 'effort:low']);
+  expect(userTexts()).toEqual(['SUB 조사', 'echo 끼어듦', '/effort low']);
+  expect(e.history(a.id).filter((x) => isText(x, '전달: 보고: 조사'))).toHaveLength(1);
+  expect(e.status(a.id)).toBe('idle');
+});

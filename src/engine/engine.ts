@@ -865,8 +865,8 @@ class EngineImpl extends EventEmitter implements Engine {
         if (ev.kind === 'assistant') this.seen.get(s)?.note(ev);
         if (ev.kind !== 'control-response' && this.effortTurn.has(s)) this.onEffortEvent(id, s, ev);
         else {
-          // 보낸 줄 없이 온 init — Claude 가 스스로 연 차례. 서브에이전트가 끝난 뒤 기다리던 것이면 하나 지운다(그 result 가 pump 한다)
-          if (ev.kind === 'init' && !answered) this.autoTurnStarted(id);
+          // 차례의 init — 보낸 줄 없이 왔으면 Claude 가 스스로 연 차례: 서브에이전트가 끝난 뒤 기다리던 것 하나(그 result 가 pump 한다)
+          if (ev.kind === 'init') this.turnStarted(id, !answered);
           this.onEvent(id, ev);
         }
       }),
@@ -1348,6 +1348,9 @@ class EngineImpl extends EventEmitter implements Engine {
       if (ended.background) this.expectAutoTurn(id);
     }
     this.emitSubagents(id);
+    // 마지막 서브에이전트가 끝났다 — 쉬는 중이면 미뤄 둔 일을 꺼낸다(기다릴 차례가 있으면 pump 가 기다림을 잰다). 뒤에서 돈다는 표시는
+    // 차례 순서로 짐작한 것이라(앞에서 돌던 것이 멈춘 차례 뒤에 끝나는 등) 표시와 상관없이 — 안 하면 다시 띄우기·입력이 다음 계기까지 막힌다
+    if (ev.kind === 'task-ended' && !this.subagents.has(id)) this.guard(id, () => this.pump(id));
     this.emitStatus(id);
   }
 
@@ -1356,12 +1359,11 @@ class EngineImpl extends EventEmitter implements Engine {
     for (const sub of this.subagents.get(id)?.values() ?? []) if (sub.toolUseId === toolUseId) sub.background = true;
   }
 
-  /** 뒤에서 돈 서브에이전트가 끝났다 — Claude 가 스스로 열 차례 하나를 기다린다(쉬면 기다림을 잰다) */
+  /** 뒤에서 돈 서브에이전트가 끝났다 — Claude 가 스스로 열 차례 하나를 기다린다(기다림은 쉴 때 pump 가 잰다) */
   private expectAutoTurn(id: AgentId): void {
     const wait = this.autoTurns.get(id) ?? { left: 0, timer: null };
     wait.left++;
     this.autoTurns.set(id, wait);
-    this.armAutoTurn(id);
   }
 
   /**
@@ -1386,13 +1388,16 @@ class EngineImpl extends EventEmitter implements Engine {
     wait.timer.unref?.();
   }
 
-  /** Claude 가 스스로 차례를 열었다 — 기다리던 것 하나가 왔다. 더 남았으면 그 차례가 끝난 뒤 다시 잰다 */
-  private autoTurnStarted(id: AgentId): void {
+  /**
+   * 차례가 시작됐다(init) — 기다림 시계를 멈춘다(차례가 끝나 다시 쉬면 pump 가 처음부터 잰다 — 차례 앞에 걸어 둔 시계가 그 차례를 지나
+   * 이어 가 끝난 뒤의 기다림이 거의 없어지지 않게). own: 보낸 줄 없이 온 init — Claude 가 스스로 연 차례라 기다리던 것 하나가 왔다
+   */
+  private turnStarted(id: AgentId, own: boolean): void {
     const wait = this.autoTurns.get(id);
     if (!wait) return;
     if (wait.timer) clearTimeout(wait.timer);
     wait.timer = null;
-    if (--wait.left <= 0) this.autoTurns.delete(id);
+    if (own && --wait.left <= 0) this.autoTurns.delete(id);
   }
 
   /**
@@ -1520,11 +1525,12 @@ function sameFlags(x: Flags, y: Flags): boolean {
 }
 
 /**
- * 보낸 줄을 읽었다는 뜻인 사건 — 부모의 줄(init·글·하는 일·result 등). 제어 응답 · 서브에이전트 줄(parent) · 서브에이전트 시작·끝은
+ * 보낸 줄을 읽었다는 뜻인 사건 — 부모의 줄(init·글·하는 일·result 등). 제어 응답 · 서브에이전트 줄(parent) · 서브에이전트 시작·끝 ·
+ * 버린 줄(task_progress·task_updated·background_tasks_changed 같은 서브에이전트·백그라운드 system 줄 — 세션이 보통 먼저 거른다)은
  * 보낸 줄과 상관없이 온다(부모 차례가 끝난 뒤에도 서브에이전트는 돈다)
  */
 function readsInput(ev: StreamEvent): boolean {
-  if (ev.kind === 'control-response' || ev.kind === 'task-started' || ev.kind === 'task-ended') return false;
+  if (ev.kind === 'control-response' || ev.kind === 'task-started' || ev.kind === 'task-ended' || ev.kind === 'ignored') return false;
   return !((ev.kind === 'assistant' || ev.kind === 'tool-result') && ev.parent);
 }
 

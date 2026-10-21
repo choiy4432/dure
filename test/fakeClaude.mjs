@@ -29,8 +29,12 @@
 //   FAKE_SUB_GATE=<파일>   서브에이전트가 그 파일이 생길 때까지 일을 시작하지 않는다(20ms 간격)
 //   FAKE_SUB_MS=<ms>       FAKE_SUB_GATE 가 없으면 그만큼 뒤에 시작한다(기본 150)
 //   FAKE_MUTE_FILE=<파일>  그 파일이 있는 동안 사용자 줄을 읽지 않고(받은 줄을 기록만 한다) 스스로 시작한 차례도 미룬다
+//   FAKE_SELF_TURN_MS=<ms> 끝 알림 뒤 스스로 시작한 차례를 그만큼 늦게 연다(그사이 온 사용자 줄의 차례가 먼저)
+//   FAKE_PRE_INIT_SYSTEM=1 사용자 줄의 init 앞에 서브에이전트·백그라운드 system 줄(background_tasks_changed · task_progress — 부모 줄이 아니다)
 //   interrupt(제어 요청)   도는 서브에이전트마다 task_updated {status:'killed'} · task_notification {status:'stopped'} 를 내고
 //                          스스로 시작한 차례는 내지 않는다(probe14 C). 진행 중인 차례는 오류 result 로 끝낸다
+//   FAKE_INTERRUPT_SPARES_TASKS=1  interrupt 가 진행 중인 차례만 끝내고 서브에이전트는 그대로 둔다 — 앞에서 돌던 서브에이전트의
+//                          끝 알림이 그 차례의 result 뒤(쉬는 중)에 온다(부모 tool_result·스스로 시작한 차례 없이)
 import fs from 'node:fs';
 import readline from 'node:readline';
 
@@ -289,6 +293,8 @@ async function killTasks() {
 
 /** 뒤에서 돈 서브에이전트가 끝난 뒤 Claude 가 입력 없이 여는 차례(probe13) — 진행 중인 차례가 있거나 막혀 있으면(FAKE_MUTE_FILE) 그 뒤에 */
 async function selfTurn(report) {
+  const late = Number(process.env.FAKE_SELF_TURN_MS ?? 0);
+  if (late) await sleep(late);
   while (current || muted()) await sleep(20);
   const tok = { ended: false };
   current = tok;
@@ -351,6 +357,12 @@ async function turn(text) {
     await emit({ type: 'user', message: { role: 'user', content: '<local-command-stdout>Compacted</local-command-stdout>' } });
     await result('');
     return;
+  }
+  if (process.env.FAKE_PRE_INIT_SYSTEM === '1') {
+    await system('background_tasks_changed', { tasks: backgroundTasks() });
+    await system('task_progress', {
+      task_id: 'task_bg', tool_use_id: 'toolu_bg', description: 'Working', usage: { total_tokens: 1, tool_uses: 0, duration_ms: 0 }, last_tool_name: 'Read',
+    });
   }
   await init();
   if (text.startsWith('SLOW')) return; // interrupt 가 올 때까지 대기
@@ -553,7 +565,7 @@ async function control(msg) {
     const total = 12000 * turnsDone;
     await ok({ totalTokens: total, maxTokens: 200000, percentage: (total / 200000) * 100, autoCompactThreshold: 167000, isAutoCompactEnabled: true });
   } else if (sub === 'interrupt') {
-    await killTasks(); // 진짜(probe14 C)처럼 제어 응답보다 먼저
+    if (process.env.FAKE_INTERRUPT_SPARES_TASKS !== '1') await killTasks(); // 진짜(probe14 C)처럼 제어 응답보다 먼저
     await ok();
     if (current && !current.ended) {
       current.ended = true;
