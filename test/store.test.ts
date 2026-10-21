@@ -217,3 +217,18 @@ test('bypassOn 이 없는 옛 에이전트 기록은 false 로 읽힌다 · upda
   old.updateAgent(a.id, { bypassOn: true });
   expect(openStore(dir).agent(a.id)!.bypassOn).toBe(true);
 });
+
+test('bypassNoticeClosed — 새 에이전트·옛 기록은 false · 닫으면 남는다', () => {
+  const s = openStore(dir);
+  const r = s.addRoom('A');
+  const a = s.addAgent({ roomId: r.id, name: 'x', role: 'r', folder: dir });
+  expect(a.bypassNoticeClosed).toBe(false);
+  const file = path.join(dir, 'state.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  for (const ag of raw.agents) delete ag.bypassNoticeClosed;
+  fs.writeFileSync(file, JSON.stringify(raw));
+  const old = openStore(dir);
+  expect(old.agent(a.id)!.bypassNoticeClosed).toBe(false);
+  old.updateAgent(a.id, { bypassNoticeClosed: true });
+  expect(openStore(dir).agent(a.id)!.bypassNoticeClosed).toBe(true);
+});

@@ -654,6 +654,24 @@ describe('PanelHeader — 맡기는 정도 스위치', () => {
     await renderPanel()
     expect(document.querySelector('.band.warn')!.textContent).toBe('이 에이전트는 묻지 않고 실행해요')
   })
+
+  it('띠의 닫기를 누르면 그 에이전트에 닫힘을 저장하고 띠가 사라진다 — 묻지 않음은 그대로', async () => {
+    withAllow({ bypassOn: true, bypass: true })
+    await renderPanel()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '경고 닫기' })) })
+    expect(api.updateAgent).toHaveBeenCalledWith('w', { bypassNoticeClosed: true })
+    expect(document.querySelector('.band.warn')).toBeNull()
+    expect(lv().getAttribute('aria-valuetext')).toBe('묻지 않음')
+  })
+
+  it('한 번 닫은 에이전트는 묻지 않음이어도 띠가 다시 뜨지 않는다(내 Claude 설정 때문이어도)', async () => {
+    withAllow({ bypassOn: true, bypass: true, bypassNoticeClosed: true })
+    await renderPanel()
+    expect(document.querySelector('.band.warn')).toBeNull()
+    withAllow({ bypass: true, bypassBySettings: true, bypassNoticeClosed: true })
+    await renderPanel()
+    expect(document.querySelector('.band.warn')).toBeNull()
+  })
 })
 
 describe('ConfirmDialog', () => {

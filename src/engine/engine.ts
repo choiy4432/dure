@@ -65,7 +65,7 @@ export interface Engine extends EventEmitter {
   renameRoom(id: RoomId, name: string): Room;
   removeRoom(id: RoomId): Promise<void>;
   addAgent(i: { roomId: RoomId; name: string; role: string; folder: string }): Agent;
-  updateAgent(id: AgentId, p: Pick<AgentPatch, 'name' | 'role' | 'auto' | 'pos' | 'color'>): Agent;
+  updateAgent(id: AgentId, p: Pick<AgentPatch, 'name' | 'role' | 'auto' | 'pos' | 'color' | 'bypassNoticeClosed'>): Agent;
   removeAgent(id: AgentId): Promise<void>;
   status(id: AgentId): AgentStatus;
   heldInput(id: AgentId): number;
@@ -333,10 +333,12 @@ class EngineImpl extends EventEmitter implements Engine {
   renameRoom(id: RoomId, name: string) { return this.store.renameRoom(id, name); }
   addAgent(i: { roomId: RoomId; name: string; role: string; folder: string }) { return this.store.addAgent(i); }
 
-  updateAgent(id: AgentId, p: Pick<AgentPatch, 'name' | 'role' | 'auto' | 'pos' | 'color'>) {
+  updateAgent(id: AgentId, p: Pick<AgentPatch, 'name' | 'role' | 'auto' | 'pos' | 'color' | 'bypassNoticeClosed'>) {
     this.need(id);
     const { name, role, auto, pos, color } = p; // model·alwaysAllow·sessionId 는 엔진이 따로 다룬다
-    return this.store.updateAgent(id, { name, role, auto, pos, color });
+    // 경고 닫힘은 true·false 만 — 다른 값은 없는 것으로
+    const bypassNoticeClosed = typeof p.bypassNoticeClosed === 'boolean' ? p.bypassNoticeClosed : undefined;
+    return this.store.updateAgent(id, { name, role, auto, pos, color, bypassNoticeClosed });
   }
 
   async removeRoom(id: RoomId) {

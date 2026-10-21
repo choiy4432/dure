@@ -1445,6 +1445,14 @@ code {
   color: var(--warn-text);
 }
 
+/* 띠 오른쪽 끝 닫기(묻지 않음 경고) — 띠 높이를 늘리지 않게 위아래를 당긴다 */
+.band-x {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin: -5px -8px -5px auto;
+}
+
 .band-tx {
   min-width: 0;
   display: flex;

@@ -39,7 +39,7 @@ export interface DureApi {
   addAgent(i: { roomId: RoomId; name: string; role: string; folder: string }): Promise<Agent>
   updateAgent(
     id: AgentId,
-    p: { name?: string; role?: string; auto?: boolean; pos?: { x: number; y: number } },
+    p: { name?: string; role?: string; auto?: boolean; pos?: { x: number; y: number }; bypassNoticeClosed?: boolean },
   ): Promise<Agent>
   removeAgent(id: AgentId): Promise<void>
   sendUser(id: AgentId, parts: UserPart[]): Promise<void>

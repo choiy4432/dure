@@ -196,6 +196,13 @@ describe('AgentNode — 카드 내용', () => {
     expect(off.card.classList.contains('byp')).toBe(false)
   })
 
+  it('경고를 닫은 에이전트는 이름 옆 경고가 없다 — 주황 테두리(byp)는 남는다', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', bypass: true, bypassNoticeClosed: true })]
+    const { card } = await renderCard()
+    expect(screen.queryByRole('img', { name: '묻지 않고 실행해요' })).toBeNull()
+    expect(card.classList.contains('byp')).toBe(true)
+  })
+
   it('오류면 바닥에 빨간 "멈춤" + errorText 앞 30자', async () => {
     const errorText = '가'.repeat(30) + '나'.repeat(10)
     snapshot.agents = [agent('d', { name: '디자인', status: 'error', errorText })]

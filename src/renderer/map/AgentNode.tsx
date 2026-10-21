@@ -170,7 +170,7 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
             <b className="trunc" title={agent.name}>
               {agent.name}
             </b>
-            {agent.bypass && (
+            {agent.bypass && !agent.bypassNoticeClosed && (
               <span className="bp" role="img" aria-label="묻지 않고 실행해요" title="묻지 않고 실행해요">
                 <ShieldAlert className="i" size={14} aria-hidden="true" />
               </span>

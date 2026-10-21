@@ -45,10 +45,12 @@ export interface Agent {
   lastContext: ContextUsage | null;
   /** 사용자가 켠 '묻지 않음' — 옛 기록엔 없음 → false */
   bypassOn: boolean;
+  /** 이 에이전트의 '묻지 않고 실행해요' 경고를 닫음 — 다시 띄우지 않는다(옛 기록엔 없음 → false) */
+  bypassNoticeClosed?: boolean;
 }
 
 export type AgentPatch = Partial<
-  Pick<Agent, 'name' | 'role' | 'auto' | 'model' | 'alwaysAllow' | 'pos' | 'color' | 'started' | 'sessionId' | 'effort' | 'lastContext' | 'bypassOn'>
+  Pick<Agent, 'name' | 'role' | 'auto' | 'model' | 'alwaysAllow' | 'pos' | 'color' | 'started' | 'sessionId' | 'effort' | 'lastContext' | 'bypassOn' | 'bypassNoticeClosed'>
 >;
 
 export type MessageState = 'pending' | 'held' | 'queued' | 'delivered' | 'dismissed';

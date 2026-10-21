@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { CircleAlert, ShieldAlert, Square } from 'lucide-react'
+import { CircleAlert, ShieldAlert, Square, X } from 'lucide-react'
 import type { AgentId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
@@ -79,6 +79,17 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
       setError(errorMessage(e))
     } finally {
       savingAuto.current = false
+    }
+  }
+
+  // 묻지 않음 경고 닫기 — 그 에이전트에 저장해 다시 띄우지 않는다(주황 테두리·스위치로는 계속 보인다)
+  const closeNotice = async () => {
+    setError(null)
+    try {
+      await window.dure.updateAgent(agent.id, { bypassNoticeClosed: true })
+      await getStore().refresh()
+    } catch (e) {
+      setError(errorMessage(e))
     }
   }
 
@@ -174,12 +185,15 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
           </div>
         </div>
       )}
-      {agent.bypass && (
+      {agent.bypass && !agent.bypassNoticeClosed && (
         <div className="band warn">
           <ShieldAlert className="i" aria-hidden="true" />
           <span className="band-t">
             {agent.bypassBySettings ? '이 에이전트는 묻지 않고 실행해요 (Claude 설정의 전부 허용)' : '이 에이전트는 묻지 않고 실행해요'}
           </span>
+          <button type="button" className="ib band-x" aria-label="경고 닫기" title="닫으면 이 에이전트에선 다시 뜨지 않아요" onClick={closeNotice}>
+            <X className="i" size={14} aria-hidden="true" />
+          </button>
         </div>
       )}
     </>

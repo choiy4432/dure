@@ -1123,6 +1123,18 @@ test('자동 전달 상한: 기본 3 · 저장돼 재시작 뒤에도 · 잘못�
   expect(e2.autoChainLimit()).toBe(5);
 });
 
+test('묻지 않음 경고 닫힘: updateAgent 로 저장되고 다시 켜도 남는다 · true·false 가 아닌 값은 받지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  expect(e.agents().find((x) => x.id === a.id)!.bypassNoticeClosed).toBe(false);
+  e.updateAgent(a.id, { bypassNoticeClosed: 'yes' as unknown as boolean });
+  expect(e.agents().find((x) => x.id === a.id)!.bypassNoticeClosed).toBe(false);
+  e.updateAgent(a.id, { bypassNoticeClosed: true });
+  await e.shutdown();
+  const e2 = await start();
+  expect(e2.agents().find((x) => x.id === a.id)!.bypassNoticeClosed).toBe(true);
+});
+
 test('설정: allowBypass 는 기본 false · 켜면 파일에 남아 다시 켜도 true · autoChainLimit 과 서로 지우지 않는다', async () => {
   const e = await start();
   expect(e.allowBypass()).toBe(false);
