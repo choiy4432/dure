@@ -6,7 +6,7 @@ import { allowMotion } from './motion'
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, subagentsRunning: [], ...over,
 })
 const request = (over: Partial<PendingRequest> = {}): PendingRequest => ({
   id: 'q1', agentId: 'd', toolName: 'Write', input: { file_path: 'C:\\w\\src\\styles\\tokens.css' }, kind: 'permission',

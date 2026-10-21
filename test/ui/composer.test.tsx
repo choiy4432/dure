@@ -10,7 +10,7 @@ vi.mock('../../src/renderer/lib/image', async orig => ({ ...(await orig<object>(
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, subagentsRunning: [], ...over,
 })
 const cmd = (name: string, description = `${name} command`) => ({ name, description, argumentHint: '' })
 // Claude 가 주는 그대로 — 기본 명령은 영어 설명에 꼬리표 없음, 사용자 명령·스킬은 끝에 (user)·(project) 꼬리표

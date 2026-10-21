@@ -12,7 +12,7 @@ vi.mock('animejs', async orig => {
 
 const agent = (id: string): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0,
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, subagentsRunning: [],
 })
 const perm = (id: string, agentId = 'w'): PendingRequest => ({
   id, agentId, toolName: 'Edit', input: { file_path: 'C:\w\a.css' }, kind: 'permission', createdAt: Date.now(),

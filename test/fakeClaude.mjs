@@ -1,4 +1,25 @@
 // 테스트용 가짜 claude — 진짜와 같은 argv 를 받고 stream-json 으로 말한다. 동작 표는 plan Task 6.
+//
+// 사용자 줄(글) 하나에 차례 하나(init … result). 글에 따라:
+//   SLOW                init 뒤 interrupt 가 올 때까지 기다린다
+//   CRASH               init 뒤 stderr 에 'fake crash' 를 쓰고 죽는다(exit 3)
+//   SEND <이름>: <글>   mcp__dure__send_message 를 부르고 받은 글로 끝낸다
+//   ASK <도구>          MCP approve 로 묻고 답대로 tool_result
+//   /effort · /compact  로컬 명령(아래)
+//   SUB <설명>          서브에이전트를 뒤에서 띄운다(probe13) — Agent tool_use(id toolu_<n>) → task_started(task_<n>, is_backgrounded:true,
+//                       task_type:'local_agent', spawn_depth:1) → 부모 tool_result "Async agent launched successfully. …" → 글 "LAUNCHED" → result.
+//                       그 뒤 차례 밖에서 서브에이전트 줄(Read tool_use · tool_result · 글 "보고: <설명>" — 모두 parent_tool_use_id) →
+//                       task_updated · task_notification(completed, summary "보고: <설명>", usage) → 스스로 시작한 차례
+//                       (init → 글 "전달: 보고: <설명>" → result — 진행 중인 차례가 있으면 그 뒤에, probe14 B)
+//   SUBFG <설명>        같은 서브에이전트를 차례 안에서(is_backgrounded:false, probe14 A) — 끝 알림 뒤 부모 tool_result
+//                       "[Subagent hand-back] …" → 글 "정리: 보고: <설명>" → result. 스스로 시작한 차례는 없다
+//   그 밖               글 "받음: <글>"
+// 서브에이전트 손잡이:
+//   FAKE_SUB_GATE=<파일>   서브에이전트가 그 파일이 생길 때까지 일을 시작하지 않는다(20ms 간격)
+//   FAKE_SUB_MS=<ms>       FAKE_SUB_GATE 가 없으면 그만큼 뒤에 시작한다(기본 150)
+//   FAKE_MUTE_FILE=<파일>  그 파일이 있는 동안 사용자 줄을 읽지 않고(받은 줄을 기록만 한다) 스스로 시작한 차례도 미룬다
+//   interrupt(제어 요청)   도는 서브에이전트마다 task_updated {status:'killed'} · task_notification {status:'stopped'} 를 내고
+//                          스스로 시작한 차례는 내지 않는다(probe14 C). 진행 중인 차례는 오류 result 로 끝낸다
 import fs from 'node:fs';
 import readline from 'node:readline';
 
@@ -61,9 +82,10 @@ const init = () =>
   emit({ type: 'system', subtype: 'init', session_id: sessionId, model, permissionMode, slash_commands: ['compact'], tools: ['Bash'] });
 const result = (text, extra = {}) =>
   emit({ type: 'result', subtype: 'success', is_error: false, result: text, permission_denials: [], ...extra });
-const assistant = (content) => emit({ type: 'assistant', message: { role: 'assistant', content } });
-const toolResult = (id, text, isError = false) =>
-  emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: text }] } });
+const assistant = (content, extra = {}) => emit({ type: 'assistant', message: { role: 'assistant', content }, ...extra });
+const toolResult = (id, text, isError = false, extra = {}) =>
+  emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: text }] }, ...extra });
+const system = (subtype, fields) => emit({ type: 'system', subtype, session_id: sessionId, ...fields });
 
 async function rpc(method, params, id, sid) {
   const res = await fetch(mcp.url, {
@@ -98,6 +120,97 @@ let effortNow = process.env.FAKE_EFFORT ?? 'high';
 let turnsDone = 0; // context = 12000 x 끝난 차례 수 (/compact 하면 0 으로)
 let current = null; // 진행 중인 차례 { ended }
 let sequence = 0;
+
+// ── 서브에이전트(위 SUB·SUBFG) ──
+const tasks = new Set(); // 도는 서브에이전트 { taskId, toolUseId, description, background, killed, startedAt, tools }
+const subGate = process.env.FAKE_SUB_GATE;
+const subMs = Number(process.env.FAKE_SUB_MS ?? 150);
+const muteFile = process.env.FAKE_MUTE_FILE;
+const muted = () => !!muteFile && fs.existsSync(muteFile);
+const usageOf = (task) => ({ total_tokens: 1000 + 100 * task.tools, tool_uses: task.tools, duration_ms: Date.now() - task.startedAt });
+const backgroundTasks = () => [...tasks].filter((t) => t.background).map((t) => ({ task_id: t.taskId, description: t.description }));
+// 서브에이전트 줄 — parent_tool_use_id = 부모의 Agent tool_use id
+const taskAssistant = (task, content) => assistant(content, { parent_tool_use_id: task.toolUseId });
+const taskToolResult = (task, id, text) => toolResult(id, text, false, { parent_tool_use_id: task.toolUseId });
+
+/** 부모가 Agent 로 서브에이전트를 띄운다 — Agent tool_use · task_started(probe13) */
+async function launchTask(description, background) {
+  const n = ++sequence;
+  const task = { taskId: `task_${n}`, toolUseId: `toolu_${n}`, description, background, killed: false, startedAt: Date.now(), tools: 0 };
+  const prompt = `${description} 해 줘`;
+  await assistant([{ type: 'tool_use', id: task.toolUseId, name: 'Agent', input: { description, subagent_type: 'general-purpose', prompt } }]);
+  tasks.add(task);
+  await system('task_started', {
+    task_id: task.taskId, tool_use_id: task.toolUseId, description, subagent_type: 'general-purpose',
+    is_backgrounded: background, spawn_depth: 1, task_type: 'local_agent', prompt,
+  });
+  if (background) await system('background_tasks_changed', { tasks: backgroundTasks() });
+  return task;
+}
+
+/** 일을 시작해도 되면 true — 그새 멈췄으면 false */
+async function taskWait(task) {
+  if (subGate) {
+    while (!fs.existsSync(subGate)) {
+      if (task.killed) return false;
+      await sleep(20);
+    }
+  } else await sleep(subMs);
+  return !task.killed;
+}
+
+/** 서브에이전트의 일 — Read 한 번 · 보고 · 끝 알림. 끝까지 가면 보고, 멈췄으면 null */
+async function runTask(task) {
+  if (!(await taskWait(task))) return null;
+  const readId = `toolu_${++sequence}`;
+  await taskAssistant(task, [{ type: 'tool_use', id: readId, name: 'Read', input: { file_path: 'note.txt' } }]);
+  task.tools++;
+  await system('task_progress', {
+    task_id: task.taskId, tool_use_id: task.toolUseId, description: 'Reading note.txt', usage: usageOf(task), last_tool_name: 'Read',
+  });
+  if (task.killed) return null;
+  await taskToolResult(task, readId, 'note.txt 내용');
+  const report = `보고: ${task.description}`;
+  await taskAssistant(task, [{ type: 'text', text: report }]);
+  if (task.killed) return null;
+  tasks.delete(task);
+  await system('task_updated', { task_id: task.taskId, patch: { status: 'completed', end_time: Date.now() } });
+  await system('task_notification', {
+    task_id: task.taskId, tool_use_id: task.toolUseId, status: 'completed', summary: report,
+    output_file: `${task.taskId}.output`, usage: usageOf(task),
+  });
+  if (task.background) await system('background_tasks_changed', { tasks: backgroundTasks() });
+  return report;
+}
+
+/** interrupt — 도는 서브에이전트를 모두 멈춘다(probe14 C). 스스로 시작한 차례는 오지 않는다 */
+async function killTasks() {
+  if (tasks.size === 0) return;
+  for (const task of [...tasks]) {
+    task.killed = true;
+    tasks.delete(task);
+    await system('task_updated', { task_id: task.taskId, patch: { status: 'killed', end_time: Date.now() } });
+    await system('task_notification', {
+      task_id: task.taskId, tool_use_id: task.toolUseId, status: 'stopped', output_file: `${task.taskId}.output`, usage: usageOf(task),
+    });
+  }
+  await system('background_tasks_changed', { tasks: [] });
+}
+
+/** 뒤에서 돈 서브에이전트가 끝난 뒤 Claude 가 입력 없이 여는 차례(probe13) — 진행 중인 차례가 있거나 막혀 있으면(FAKE_MUTE_FILE) 그 뒤에 */
+async function selfTurn(report) {
+  while (current || muted()) await sleep(20);
+  const tok = { ended: false };
+  current = tok;
+  await init();
+  const said = `전달: ${report}`;
+  await assistant([{ type: 'text', text: said }]);
+  if (tok.ended) return;
+  tok.ended = true;
+  current = null;
+  turnsDone++;
+  await result(said);
+}
 
 // 로컬 명령 /effort — 진짜(2.1.304, probe9)처럼 init · 안내 글 · result(비용 0). 모델을 부르지 않으니 끝난 차례로 세지 않고(context 그대로),
 // get_settings 의 값도 바꾸지 않는다(세션 effort 는 설정 층에 안 보인다). 손잡이:
@@ -154,6 +267,31 @@ async function turn(text) {
   if (text.startsWith('CRASH')) {
     process.stderr.write('fake crash\n');
     process.exit(3);
+  }
+  const subCmd = /^SUB(FG)? ([\s\S]+)$/.exec(text);
+  if (subCmd) {
+    const background = !subCmd[1];
+    const task = await launchTask(subCmd[2], background);
+    if (background) {
+      // 진짜(probe13)의 내부 안내 — 화면에 보이면 안 되는 글
+      await toolResult(
+        task.toolUseId,
+        `Async agent launched successfully. (This tool result is internal metadata — never quote, paraphrase, or reference it to the user.) agentId: ${task.taskId} The agent is working in the background. You will be notified automatically when it completes.`,
+        false,
+        { tool_use_result: { isAsync: true, status: 'async_launched', agentId: task.taskId } },
+      );
+      await assistant([{ type: 'text', text: 'LAUNCHED' }]);
+      await finish('LAUNCHED');
+      void runTask(task).then((report) => report && selfTurn(report));
+      return;
+    }
+    const report = await runTask(task);
+    if (!report || tok.ended) return; // 멈춤 — interrupt 가 이 차례를 끝냈다
+    await toolResult(task.toolUseId, `[Subagent hand-back] The text below is the final report of a subagent you launched.\n\n${report}`);
+    const said = `정리: ${report}`;
+    await assistant([{ type: 'text', text: said }]);
+    await finish(said);
+    return;
   }
   const send = /^SEND ([^:]+): ([\s\S]*)$/.exec(text);
   const ask = /^ASK (\S+)/.exec(text);
@@ -311,6 +449,7 @@ async function control(msg) {
     const total = 12000 * turnsDone;
     await ok({ totalTokens: total, maxTokens: 200000, percentage: (total / 200000) * 100, autoCompactThreshold: 167000, isAutoCompactEnabled: true });
   } else if (sub === 'interrupt') {
+    await killTasks(); // 진짜(probe14 C)처럼 제어 응답보다 먼저
     await ok();
     if (current && !current.ended) {
       current.ended = true;
@@ -338,7 +477,7 @@ if (hang) {
     }
     log(JSON.stringify({ ...msg, pid: process.pid })); // 어느 프로세스가 받은 줄인지(argv 줄의 pid 와 맞춘다)
     if (msg.type === 'control_request') void control(msg);
-    else if (msg.type === 'user' && !mute) {
+    else if (msg.type === 'user' && !mute && !muted()) {
       const content = msg.message?.content ?? [];
       const text = (Array.isArray(content) ? content : [{ type: 'text', text: String(content) }])
         .filter((c) => c.type === 'text')

@@ -42,6 +42,26 @@ test('history: append·read·깨진 줄·boundary 이후만', () => {
   expect(h2.read('a')).toEqual([]);
 });
 
+test('history: limit 은 parent 없는 기록만 센다 — 서브에이전트 줄이 많아도 부모 대화가 잘리지 않고, 그 사이 서브에이전트 줄은 함께', () => {
+  const h = openHistory(dir);
+  const sub = (t: number): HistoryItem =>
+    t % 2 === 0
+      ? { t, kind: 'assistant', blocks: [{ type: 'text', text: `s${t}` }], parent: 'toolu_A' }
+      : { t, kind: 'tool-result', toolUseId: `u${t}`, isError: false, text: `r${t}`, viaApproval: false, parent: 'toolu_A' };
+  h.append('a', note('1', 1));
+  h.append('a', sub(2)); // 첫 부모 줄과 함께 잘린다
+  h.append('a', note('2', 3));
+  for (let t = 4; t < 30; t++) h.append('a', sub(t));
+  h.append('a', { t: 30, kind: 'subagent-end', toolUseId: 'toolu_A', taskId: 'task_1', status: 'completed', summary: '보고', toolUses: 26, durationMs: 9 });
+  h.append('a', note('3', 31));
+  h.append('a', sub(32));
+  const got = h.read('a', { limit: 3 });
+  expect(got.map((x) => x.t)).toEqual([3, ...Array.from({ length: 26 }, (_, i) => i + 4), 30, 31, 32]);
+  expect(h.read('a', { limit: 1 }).map((x) => x.t)).toEqual([31, 32]);
+  expect(h.read('a', { limit: 9 })).toHaveLength(32); // 부모 기록이 한도보다 적으면 전부
+  expect(h.read('a')).toHaveLength(32);
+});
+
 test('history: 마지막 바이트만 보고 끊긴 줄을 닫는다 — 파일 전체를 읽지 않는다', () => {
   const file = path.join(dir, 'history', 'a.jsonl');
   fs.mkdirSync(path.dirname(file), { recursive: true });

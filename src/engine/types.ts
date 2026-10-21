@@ -141,6 +141,8 @@ export interface EngineEventMap {
   context: { agentId: AgentId; value: ContextUsage | null };
   effort: { agentId: AgentId; effort: EffortLevel | null; effortNow: EffortLevel | null };
   'model-now': { agentId: AgentId; modelNow: string | null };
+  /** 도는 서브에이전트 — 부모의 Agent tool_use id, 시작 순. 바뀔 때마다(시작·끝·세션이 끝나 비울 때) */
+  subagents: { agentId: AgentId; running: string[] };
 }
 
 export interface AgentDescription {

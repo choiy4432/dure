@@ -61,6 +61,63 @@ test('여러 차례: send → working → result → idle, 두 번', async () =>
   expect(seen).toEqual(['working', 'idle', 'working', 'idle']);
 });
 
+test('쉬는 세션에 init 이 오면 working, 그 result 에 idle — 서브에이전트가 끝난 뒤 Claude 가 스스로 시작한 차례(probe13)', async () => {
+  const s = make({ FAKE_SUB_MS: '50' });
+  const seen: SessionStatus[] = [];
+  s.on('status', (x) => seen.push(x));
+  s.start();
+  const launched = waitFor<any>(s, 'event', (e) => e.kind === 'result');
+  s.send(text('SUB 조사'));
+  expect((await launched).text).toBe('LAUNCHED');
+  expect(s.status).toBe('idle');
+  const statusAtInit: SessionStatus[] = [];
+  s.on('event', (e) => e.kind === 'init' && statusAtInit.push(s.status));
+  const relayed = waitFor<any>(s, 'event', (e) => e.kind === 'result');
+  expect((await relayed).text).toBe('전달: 보고: 조사');
+  expect(statusAtInit).toEqual(['working']); // 보낸 줄 없이 온 init
+  expect(s.status).toBe('idle');
+  expect(seen).toEqual(['working', 'idle', 'working', 'idle']);
+});
+
+test('send(quiet) 로 시작한 차례는 init 이 와도 상태를 바꾸지 않는다 — 그 result 뒤의 init 은 다시 working', async () => {
+  const s = make({ FAKE_SUB_MS: '50' });
+  const seen: SessionStatus[] = [];
+  s.on('status', (x) => seen.push(x));
+  s.start();
+  const inits: unknown[] = [];
+  s.on('event', (e) => e.kind === 'init' && inits.push(e));
+  let done = waitFor<any>(s, 'event', (e) => e.kind === 'result');
+  s.send(text('/effort max'), { quiet: true });
+  await done;
+  expect(inits).toHaveLength(1);
+  expect(seen).toEqual([]);
+  expect(s.status).toBe('idle');
+  // 조용한 차례가 끝났다 — 스스로 시작한 차례의 init 은 다시 작업 중으로
+  done = waitFor<any>(s, 'event', (e) => e.kind === 'result' && e.text === '전달: 보고: 조사');
+  s.send(text('SUB 조사'));
+  await done;
+  expect(seen).toEqual(['working', 'idle', 'working', 'idle']);
+});
+
+test('interrupt: 뒤에서 도는 서브에이전트는 멈춤(stopped) 끝 알림 — 스스로 시작한 차례는 오지 않고 세션은 쉰다(probe14 C)', async () => {
+  const s = make({ FAKE_SUB_GATE: path.join(dir, 'gate') }); // 문을 만들지 않는다 — 서브에이전트는 일을 시작하지 못한다
+  s.start();
+  const events: any[] = [];
+  s.on('event', (e) => events.push(e));
+  const launched = waitFor<any>(s, 'event', (e) => e.kind === 'result');
+  s.send(text('SUB 조사'));
+  await launched;
+  const started = events.find((e) => e.kind === 'task-started');
+  expect(started).toMatchObject({ description: '조사', subagentType: 'general-purpose', parentTaskId: null });
+  const stopped = waitFor<any>(s, 'event', (e) => e.kind === 'task-ended');
+  await s.interrupt();
+  expect(await stopped).toMatchObject({ taskId: started.taskId, toolUseId: started.toolUseId, status: 'stopped' });
+  await new Promise((r) => setTimeout(r, 300));
+  expect(events.filter((e) => e.kind === 'init')).toHaveLength(1); // SUB 차례의 init 하나뿐
+  expect(events.filter((e) => e.parent !== undefined)).toEqual([]); // 서브에이전트 줄도 없다
+  expect(s.status).toBe('idle');
+});
+
 test('initialize 로 명령·모델 목록', async () => {
   const s = make();
   s.start();

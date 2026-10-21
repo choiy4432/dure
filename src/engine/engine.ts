@@ -54,6 +54,7 @@ export interface EngineOptions {
 //  'effort'      { agentId; effort; effortNow }   (고른 값이 바뀌거나 Claude 에게 지금 값을 읽을 때마다)
 //  'context'     { agentId; value: ContextUsage | null }   (차례 끝에 대화 공간을 받았을 때 · 요약·새 대화 직후엔 null)
 //  'model-now'   { agentId; modelNow }   (차례의 init 이 알려 준 모델 id 가 바뀔 때 · setModel 은 null 로 비운다)
+//  'subagents'   { agentId; running }   (도는 서브에이전트 목록이 바뀔 때마다 — 부모의 Agent tool_use id, 시작 순. 세션이 끝나면 빈 목록)
 //  'usage'       PlanUsage | null   (플랜 사용량을 받을 때마다 — 모르는 모양·한도 없음이면 null)
 //  'engine-error' { agentId: string | null; message: string }  (프로세스 이벤트 처리·듣는 쪽에서 난 오류 — 앱을 죽이지 않고 알린다)
 export interface Engine extends EventEmitter {
@@ -67,8 +68,11 @@ export interface Engine extends EventEmitter {
   addAgent(i: { roomId: RoomId; name: string; role: string; folder: string }): Agent;
   updateAgent(id: AgentId, p: Pick<AgentPatch, 'name' | 'role' | 'auto' | 'pos' | 'color' | 'bypassNoticeClosed'>): Agent;
   removeAgent(id: AgentId): Promise<void>;
+  /** 승인 대기 · 오류가 앞선다. 세션이 쉬어도(부모 차례가 끝나도) 서브에이전트가 돌면 working */
   status(id: AgentId): AgentStatus;
   heldInput(id: AgentId): number;
+  /** 도는 서브에이전트 — 부모의 Agent tool_use id, 시작 순. 살아 있는 세션이 없으면 빈 목록 */
+  subagentsRunning(id: AgentId): string[];
   /**
    * bypass = Claude 가 알려 준 실제 모드 · bySettings = 그 bypass 가 두레 스위치가 아니라 내 Claude 설정 때문 ·
    * pending = 켜려고 그 차례 뒤의 다시 띄우기를 기다리는 중. 살아 있는 세션이 없으면 다음에 띄울 때의 모드
@@ -192,6 +196,8 @@ class EngineImpl extends EventEmitter implements Engine {
   private effortTurn = new WeakMap<ClaudeSession, EffortTurn>(); // 써 넣은 /effort — 그 result 까지 이벤트를 삼킨다
   private effortBroken = new Set<AgentId>(); // /effort 가 막혀 다시 띄움 — 고르기·모델 바꾸기 전까지 /effort 없이 띄운다(메모리만)
   private compactedTurn = new WeakSet<ClaudeSession>(); // 이번 차례에 요약됨 — 그 차례의 result 뒤엔 값을 받지 않는다
+  // 도는 서브에이전트 — task_id → 부모의 Agent tool_use id(넣은 순서 = 시작 순). 끝 알림·세션 끝에 빠진다(메모리만, 빈 목록은 지운다)
+  private subagents = new Map<AgentId, Map<string, string>>();
   private started = false;
   private limit: number;
   private allow: boolean;
@@ -375,14 +381,22 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     if (this.perms.pending(id).length > 0) return 'awaiting';
     const s = this.sessions.get(id);
+    if (!s) return this.errors.has(id) ? 'error' : 'idle';
+    if (s.status !== 'idle') return s.status;
+    // 부모 차례는 끝났어도 서브에이전트가 돌면 작업 중(끝나면 Claude 가 스스로 차례를 연다)
+    if (this.subagents.has(id)) return 'working';
     // 엔진이 보낸 /effort 차례 중에 사람 입력이 기다리면 작업 중 — 첫 입력이 멈춘 듯 보이지 않게(멈추기도 켜진다)
-    if (s) return s.status === 'idle' && this.effortTurn.has(s) && (this.held.get(id)?.length ?? 0) > 0 ? 'working' : s.status;
-    return this.errors.has(id) ? 'error' : 'idle';
+    return this.effortTurn.has(s) && (this.held.get(id)?.length ?? 0) > 0 ? 'working' : 'idle';
   }
 
   heldInput(id: AgentId): number {
     this.need(id);
     return this.held.get(id)?.length ?? 0;
+  }
+
+  subagentsRunning(id: AgentId): string[] {
+    this.need(id);
+    return [...(this.subagents.get(id)?.values() ?? [])];
   }
 
   flags(id: AgentId): { bypass: boolean; bySettings: boolean; pending: boolean } {
@@ -710,8 +724,8 @@ class EngineImpl extends EventEmitter implements Engine {
     // 세션 콜백 안에서 던지면 stdout 처리 중 잡히지 않은 예외가 되어 앱이 죽는다 — 모두 guard 로 감싼다
     s.on('event', (ev: StreamEvent) =>
       this.guard(id, () => {
-        // 제어 응답이 아닌 이벤트가 오면 보낸 줄을 읽은 것 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
-        if (ev.kind !== 'control-response') this.inFlight.delete(s);
+        // 부모의 줄이 오면 보낸 줄을 읽은 것 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
+        if (readsInput(ev)) this.inFlight.delete(s);
         if (this.sessions.get(id) !== s) return;
         if (ev.kind !== 'control-response' && this.effortTurn.has(s)) this.onEffortEvent(id, s, ev);
         else this.onEvent(id, ev);
@@ -729,6 +743,7 @@ class EngineImpl extends EventEmitter implements Engine {
         this.endEffortTurn(s); // /effort 차례 중이었으면 그 타이머도(다음에 띄울 때 다시 보낸다)
         this.guard(id, () => this.forgetEffortNow(id));
         this.guard(id, () => this.forgetMode(id));
+        this.guard(id, () => this.forgetSubagents(id));
         if (!expected) {
           this.guard(id, () => this.restoreInFlight(id, s)); // 기록 실패여도 아래 정리는 한다
           const why = s.errorText ?? EXITED;
@@ -1120,6 +1135,8 @@ class EngineImpl extends EventEmitter implements Engine {
 
   private onEvent(id: AgentId, ev: StreamEvent): void {
     if (ev.kind === 'control-response') return; // 내부 응답 — initialize 의 account 같은 것이 밖으로 새지 않게
+    // 시작을 보지 못한 일의 끝 — 서브에이전트가 아닌 일(백그라운드 명령 등)이다. 기록도 사건도 없다
+    if (ev.kind === 'task-ended' && !this.subagents.get(id)?.has(ev.taskId)) return;
     if (ev.kind === 'compacted') {
       const cur = this.sessions.get(id);
       if (cur) this.compactedTurn.add(cur);
@@ -1134,6 +1151,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.guard(id, () => this.emit('agent-event', { agentId: id, event: ev }));
     }
     this.guard(id, () => this.recordEvent(id, ev));
+    if (ev.kind === 'task-started' || ev.kind === 'task-ended') this.guard(id, () => this.noteSubagent(id, ev));
     // 세션은 result 를 내보내기 직전에 idle 이 된다 — 이 차례의 result 를 먼저 알린 뒤 다음 입력을 보낸다
     if (ev.kind === 'result') {
       // 끝난 차례엔 살아 있는 권한 질문이 있을 수 없다 — 남은 것(떠난 프로세스의 호출 등)은 정리해야 다음 입력이 나간다
@@ -1166,12 +1184,39 @@ class EngineImpl extends EventEmitter implements Engine {
     this.guard(id, () => this.setModelNow(id, ev.model || null));
   }
 
+  /** 서브에이전트 시작·끝 — 도는 목록을 고치고 알린다(세션이 쉬어도 도는 동안은 작업 중) */
+  private noteSubagent(id: AgentId, ev: Extract<StreamEvent, { kind: 'task-started' | 'task-ended' }>): void {
+    if (ev.kind === 'task-started') {
+      const running = this.subagents.get(id) ?? new Map<string, string>();
+      if (running.get(ev.taskId) === ev.toolUseId) return; // 이미 아는 시작 — 목록이 그대로다
+      running.set(ev.taskId, ev.toolUseId);
+      this.subagents.set(id, running);
+    } else {
+      const running = this.subagents.get(id);
+      if (!running?.delete(ev.taskId)) return;
+      if (running.size === 0) this.subagents.delete(id);
+    }
+    this.emitSubagents(id);
+    this.emitStatus(id);
+  }
+
+  /** 세션이 끝났다 — 그 세션이 돌리던 서브에이전트도 끝났다. 끝 기록은 남기지 않는다(화면은 끝 기록 없는 서브에이전트를 끊김으로 본다) */
+  private forgetSubagents(id: AgentId): void {
+    if (this.subagents.delete(id)) this.emitSubagents(id);
+  }
+
+  private emitSubagents(id: AgentId): void {
+    if (this.closed || this.removing.has(id) || !this.store.agent(id)) return;
+    this.guard(id, () => this.emit('subagents', { agentId: id, running: this.subagentsRunning(id) }));
+  }
+
   private recordEvent(id: AgentId, ev: StreamEvent): void {
     if (ev.kind === 'assistant')
       this.record(id, {
         kind: 'assistant',
         // 하는 일 입력은 화면이 읽는 칸만 — 파일 본문·넘김 본문으로 기록 파일이 커지지 않게(이벤트로 나가는 것도 같은 모양)
         blocks: ev.blocks.map((b) => (b.type === 'tool_use' ? { ...b, input: trimToolInput(b.input) } : b)),
+        ...(ev.parent ? { parent: ev.parent } : {}), // 서브에이전트 줄 — 부모의 Agent tool_use id
       });
     else if (ev.kind === 'tool-result')
       this.record(id, {
@@ -1180,6 +1225,26 @@ class EngineImpl extends EventEmitter implements Engine {
         isError: ev.isError,
         text: ev.text.slice(0, TOOL_TEXT_KEEP),
         viaApproval: this.perms.wasAsked(id, ev.toolUseId),
+        ...(ev.parent ? { parent: ev.parent } : {}),
+      });
+    else if (ev.kind === 'task-started')
+      this.record(id, {
+        kind: 'subagent-start',
+        toolUseId: ev.toolUseId,
+        taskId: ev.taskId,
+        description: ev.description,
+        subagentType: ev.subagentType,
+        parentTaskId: ev.parentTaskId,
+      });
+    else if (ev.kind === 'task-ended')
+      this.record(id, {
+        kind: 'subagent-end',
+        toolUseId: ev.toolUseId,
+        taskId: ev.taskId,
+        status: ev.status,
+        summary: ev.summary.slice(0, TOOL_TEXT_KEEP),
+        toolUses: ev.toolUses,
+        durationMs: ev.durationMs,
       });
     else if (ev.kind === 'local-output') this.record(id, { kind: 'local-output', text: ev.text });
     else if (ev.kind === 'result') this.record(id, { kind: 'result', ok: ev.ok, subtype: ev.subtype });
@@ -1206,6 +1271,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.errors.delete(id);
     this.guard(id, () => this.forgetEffortNow(id)); // 끝난 세션의 지금 값은 다음 세션의 값이 아니다
     if (s) this.guard(id, () => this.forgetMode(id)); // 알리는 권한 모드도 — 이제 다음에 띄울 때의 모드
+    this.guard(id, () => this.forgetSubagents(id)); // 그 세션이 돌리던 서브에이전트도 함께 끝난다
     this.perms.cancelForAgent(id, EXITED);
     if (!s) return;
     let timer: NodeJS.Timeout | undefined;
@@ -1249,6 +1315,15 @@ class EngineImpl extends EventEmitter implements Engine {
 type Flags = { bypass: boolean; bySettings: boolean; pending: boolean };
 function sameFlags(x: Flags, y: Flags): boolean {
   return x.bypass === y.bypass && x.bySettings === y.bySettings && x.pending === y.pending;
+}
+
+/**
+ * 보낸 줄을 읽었다는 뜻인 사건 — 부모의 줄(init·글·하는 일·result 등). 제어 응답 · 서브에이전트 줄(parent) · 서브에이전트 시작·끝은
+ * 보낸 줄과 상관없이 온다(부모 차례가 끝난 뒤에도 서브에이전트는 돈다)
+ */
+function readsInput(ev: StreamEvent): boolean {
+  if (ev.kind === 'control-response' || ev.kind === 'task-started' || ev.kind === 'task-ended') return false;
+  return !((ev.kind === 'assistant' || ev.kind === 'tool-result') && ev.parent);
 }
 
 /** /effort 답에서 정해진 단계 — 모르는 말이면 null */

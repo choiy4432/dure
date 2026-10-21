@@ -30,6 +30,7 @@ function agentViews(engine: Engine): AgentView[] {
       heldInput: engine.heldInput(a.id),
       effortNow: engine.effortNow(a.id),
       modelNow: engine.modelNow(a.id),
+      subagentsRunning: engine.subagentsRunning(a.id),
     }
   })
 }

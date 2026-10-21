@@ -43,9 +43,29 @@ function endsOpen(file: string): boolean {
   }
 }
 
+/** 서브에이전트 줄 — 부모의 Agent 하는 일 아래에서 온 assistant·tool-result */
+const fromSubagent = (x: HistoryItem): boolean => (x.kind === 'assistant' || x.kind === 'tool-result') && typeof x.parent === 'string';
+
+/**
+ * 마지막 limit 개를 남길 때 자를 자리 — 서브에이전트 줄은 세지 않는다(서브에이전트가 많이 일해도 부모 대화가 잘리지 않게).
+ * 남긴 첫 부모 기록 뒤의 서브에이전트 줄은 함께 남는다
+ */
+function cutFor(items: HistoryItem[], limit: number): number {
+  if (limit <= 0) return items.length;
+  let n = 0;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (fromSubagent(items[i])) continue;
+    if (++n >= limit) return i;
+  }
+  return 0;
+}
+
 export interface History {
   append(agentId: AgentId, item: HistoryItem): void;
-  /** 오래된 것부터. sinceBoundary(기본 true)면 마지막 boundary 뒤만, limit(기본 500)은 그 가운데 마지막 N 개 */
+  /**
+   * 오래된 것부터. sinceBoundary(기본 true)면 마지막 boundary 뒤만, limit(기본 500)은 그 가운데 마지막 N 개 —
+   * 서브에이전트 줄(parent)은 세지 않고 그 사이에 있으면 함께 돌려준다
+   */
   read(agentId: AgentId, o?: { sinceBoundary?: boolean; limit?: number }): HistoryItem[];
   remove(agentId: AgentId): void;
 }
@@ -83,7 +103,7 @@ export function openHistory(dataDir: string): History {
         const i = items.map((x) => x.kind).lastIndexOf('boundary');
         if (i >= 0) items = items.slice(i + 1);
       }
-      return limit < items.length ? items.slice(items.length - limit) : items;
+      return items.slice(cutFor(items, limit));
     },
     remove(agentId) {
       closed.delete(agentId);

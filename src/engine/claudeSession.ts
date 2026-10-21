@@ -28,6 +28,7 @@ export class ClaudeSession extends EventEmitter {
   private child: ChildProcess | null = null;
   private running = false;
   private stopping = false;
+  private quietTurn = false; // send(quiet) 로 연 차례 — 그 result 까지 init 이 와도 작업 중으로 바꾸지 않는다
   private buf = '';
   private stderrTail = '';
   private pending = new Map<string, Pending>();
@@ -110,7 +111,14 @@ export class ClaudeSession extends EventEmitter {
           else p.reject(new Error('요청이 거부되었습니다'));
         }
       }
-      if (ev.kind === 'result' && this._status === 'working') this.setStatus('idle');
+      // 쉬는 중에 온 init — 보낸 줄 없이 Claude 가 스스로 시작한 차례(서브에이전트가 끝난 뒤, probe13)도 작업 중이다.
+      // 몰래 보낸 줄(send quiet)의 차례는 그 result 까지 상태를 바꾸지 않는다
+      if (ev.kind === 'init' && this._status === 'idle' && !this.quietTurn) this.setStatus('working');
+      if (ev.kind === 'result') {
+        const quiet = this.quietTurn;
+        this.quietTurn = false;
+        if (!quiet && this._status === 'working') this.setStatus('idle');
+      }
       this.emit('event', ev);
     }
   }
@@ -136,10 +144,11 @@ export class ClaudeSession extends EventEmitter {
     this.child?.stdin?.write(line);
   }
 
-  /** quiet: 상태를 working 으로 바꾸지 않는다 — 모델을 부르지 않는 로컬 명령(/effort)을 엔진이 몰래 보낼 때 */
+  /** quiet: 그 차례의 result 까지 상태를 working 으로 바꾸지 않는다 — 모델을 부르지 않는 로컬 명령(/effort)을 엔진이 몰래 보낼 때 */
   send(parts: UserPart[], o: { quiet?: boolean } = {}): void {
     if (!this.running) throw new Error('세션이 실행 중이 아닙니다');
-    if (!o.quiet) this.setStatus('working');
+    if (o.quiet) this.quietTurn = true;
+    else this.setStatus('working');
     this.write(encodeUser(parts));
   }
 
