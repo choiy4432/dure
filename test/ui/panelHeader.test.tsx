@@ -5,7 +5,7 @@ import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, ...over,
 })
 const request = (over: Partial<PendingRequest> = {}): PendingRequest => ({
   id: 'q1', agentId: 'w', toolName: 'Write', input: { file_path: 'C:\\w\\a.ts' }, kind: 'permission',
@@ -515,6 +515,19 @@ describe('PanelHeader — 묻지 않음 스위치', () => {
     await renderPanel()
     expect(sw().getAttribute('aria-checked')).toBe('true')
     fireEvent.click(sw())
+    expect(api.setBypass).toHaveBeenCalledWith('w', false)
+  })
+
+  it('다시 띄우기를 기다리는 중(bypassPending)이면 꺼진 채 바뀌는 중으로 보이고, 다시 누르면 setBypass(id,false) 로 거둔다', async () => {
+    snapshot.allowBypass = true
+    snapshot.agents = [agent('w', { name: '웹 화면', status: 'working', bypassOn: true, bypass: false, bypassPending: true })]
+    await renderPanel()
+    expect(sw().getAttribute('aria-checked')).toBe('false') // 실제 모드는 아직 그대로
+    expect(sw().getAttribute('aria-busy')).toBe('true')
+    expect(document.querySelector('.band.warn')).toBeNull()
+    await act(async () => { fireEvent.click(sw()) })
+    await settle()
+    expect(api.setBypass).toHaveBeenCalledTimes(1)
     expect(api.setBypass).toHaveBeenCalledWith('w', false)
   })
 

@@ -9,6 +9,8 @@ export interface AgentView extends Agent {
   bypass: boolean
   /** 묻지 않음이 내 Claude 설정 때문인가 — 그러면 두레 스위치로 끌 수 없다 */
   bypassBySettings: boolean
+  /** 켜려고 그 차례 뒤의 다시 띄우기를 기다리는 중(허용 전에 띄운 세션) — 실제 모드는 아직 그대로, 스위치는 바뀌는 중 */
+  bypassPending: boolean
   heldInput: number
   /** Claude 에게 마지막으로 읽은 지금 effort — 모르면 null */
   effortNow: EffortLevel | null

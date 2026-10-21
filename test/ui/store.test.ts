@@ -5,7 +5,7 @@ import type { AgentView, DureApi, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, roomId = 'r1', over: Partial<AgentView> = {}): AgentView => ({
   id, roomId, name: id, role: '', folder: '/x', sessionId: '', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, ...over,
 })
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   claudeMissing: false,
@@ -260,6 +260,16 @@ describe('store selection', () => {
     emit('flags', { agentId: 'a', bypass: true, bySettings: true, pending: false })
     expect(s.getState().agents.find(a => a.id === 'a')).toMatchObject({ bypass: true, bypassBySettings: true })
     expect(s.getState().agents.find(a => a.id === 'b')).toMatchObject({ bypass: false, bypassBySettings: false })
+  })
+
+  it('flags 사건의 pending 이 그 에이전트의 bypassPending — 다시 띄우기를 기다리는 동안 바뀌는 중', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('flags', { agentId: 'a', bypass: false, bySettings: false, pending: true })
+    expect(s.getState().agents.find(a => a.id === 'a')).toMatchObject({ bypass: false, bypassPending: true })
+    emit('flags', { agentId: 'a', bypass: true, bySettings: false, pending: false })
+    expect(s.getState().agents.find(a => a.id === 'a')).toMatchObject({ bypass: true, bypassPending: false })
   })
 
   it('subscribe 는 변경을 알리고 해제할 수 있다', async () => {

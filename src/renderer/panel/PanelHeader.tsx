@@ -83,14 +83,15 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
     }
   }
 
-  // 묻지 않음 — 보이는 값은 실제 모드(agent.bypass). 응답이 올 때까지 흐리게, 두 번 누르기는 막는다
+  // 묻지 않음 — 보이는 값은 실제 모드(agent.bypass). 응답이 올 때까지, 그리고 켜려고 그 차례 뒤의 다시 띄우기를 기다리는 동안
+  // (bypassPending) 흐리게. 응답 전 두 번 누르기는 막고, 다시 띄우기를 기다리는 중에 누르면 끄기로 보내 미뤄 둔 켜기를 거둔다
   const toggleBypass = async () => {
     if (savingBypass.current || agent.bypassBySettings) return
     savingBypass.current = true
     setSettingBypass(true)
     setError(null)
     try {
-      await window.dure.setBypass(agent.id, !agent.bypass)
+      await window.dure.setBypass(agent.id, !(agent.bypass || agent.bypassPending))
     } catch (e) {
       setError(errorMessage(e))
     } finally {
@@ -177,7 +178,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
               className="sw"
               role="switch"
               aria-checked={agent.bypass}
-              aria-busy={settingBypass || undefined}
+              aria-busy={settingBypass || agent.bypassPending || undefined}
               aria-disabled={agent.bypassBySettings || undefined}
               title={agent.bypassBySettings ? 'Claude 설정이 전부 허용이라 끌 수 없어요' : undefined}
               onClick={toggleBypass}

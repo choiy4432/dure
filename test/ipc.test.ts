@@ -22,7 +22,7 @@ function fakeEngine() {
     agents: () => [{ ...agent, bypassOn: true }],
     status: () => 'idle',
     errorText: () => null,
-    flags: () => ({ bypass: true, bySettings: false }),
+    flags: () => ({ bypass: true, bySettings: false, pending: true }), // 서로 다른 값 — 칸이 뒤바뀌면 잡힌다
     allowBypass: () => true,
     heldInput: () => 2,
     messages: () => [],
@@ -129,7 +129,7 @@ describe('registerIpc', () => {
       autoChainLimit: 8,
       allowBypass: true,
       rooms: [{ id: 'r1' }],
-      agents: [{ id: 'a1', status: 'idle', errorText: null, bypassOn: true, bypass: true, bypassBySettings: false, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5' }],
+      agents: [{ id: 'a1', status: 'idle', errorText: null, bypassOn: true, bypass: true, bypassBySettings: false, bypassPending: true, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5' }],
       usage: { windows: [{ key: 'session', percent: 40 }] },
     })
   })

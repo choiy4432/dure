@@ -95,7 +95,12 @@ export function createStore(api: DureApi): Store {
       }
       case 'flags': {
         const p = ev.payload
-        state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, bypass: p.bypass, bypassBySettings: p.bySettings } : a)) }
+        state = {
+          ...state,
+          agents: state.agents.map(a =>
+            a.id === p.agentId ? { ...a, bypass: p.bypass, bypassBySettings: p.bySettings, bypassPending: p.pending } : a,
+          ),
+        }
         break
       }
       case 'held-input': {
