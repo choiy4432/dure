@@ -104,6 +104,16 @@ describe('AgentNode — 카드 내용', () => {
     expect(au.classList.contains('on')).toBe(true)
   })
 
+  it('묻지 않음이면 구석 글씨도 "묻지 않음"(테두리와 같은 주황) — 자동 켬/끔 대신', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', auto: true, bypass: true })]
+    await renderCard()
+    expect(screen.queryByText('자동 켬')).toBeNull()
+    const au = screen.getByText('묻지 않음')
+    expect(au.classList.contains('au')).toBe(true)
+    expect(au.classList.contains('byp')).toBe(true)
+    expect(au.classList.contains('on')).toBe(false)
+  })
+
   it('긴 이름·역할은 말줄임 클래스(카드 크기 유지), 전체는 title 로', async () => {
     const name = '아주 긴 이름을 가진 마케팅 문구 담당 에이전트'
     const role = '보도자료·뉴스레터·소셜 문구·광고 카피·고객 안내문 작성'

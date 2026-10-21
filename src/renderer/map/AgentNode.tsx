@@ -187,7 +187,12 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
             <span className="nr-meta keep">{meta}</span>
           </span>
         </div>
-        <span className={`au${agent.auto ? ' on' : ''}`}>{agent.auto ? '자동 켬' : '자동 끔'}</span>
+        {/* 묻지 않음(테두리 주황과 같은 상태 — Claude 가 알려 준 실제 모드)이면 자동 켬/끔 대신 */}
+        {agent.bypass ? (
+          <span className="au byp">묻지 않음</span>
+        ) : (
+          <span className={`au${agent.auto ? ' on' : ''}`}>{agent.auto ? '자동 켬' : '자동 끔'}</span>
+        )}
       </div>
 
       {request?.kind === 'question' ? (

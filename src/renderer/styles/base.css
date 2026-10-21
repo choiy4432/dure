@@ -845,6 +845,11 @@ code {
   font-weight: 500;
 }
 
+.au.byp {
+  color: var(--warn-text);
+  font-weight: 500;
+}
+
 .na {
   padding: 0 14px 12px;
   font-size: 13px;
