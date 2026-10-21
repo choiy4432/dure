@@ -3,7 +3,7 @@ import {
   ChevronDown, ChevronRight, File, Globe, Image as ImageIcon, MessageCircleQuestion, Pencil, Search, Send, ShieldCheck, SquareTerminal,
   Wrench, type LucideProps,
 } from 'lucide-react'
-import type { ActionLine, ChatLine } from '../state/transcript'
+import type { ActionLine, ChatLine, ClaudePart } from '../state/transcript'
 import type { ToolIcon } from '../lib/toolSummary'
 import { Markdown } from '../lib/Markdown'
 import { useFrameValue } from '../lib/useFrameValue'
@@ -173,7 +173,7 @@ function ChatItemView({ line, folded = false, index }: Props) {
           {line.parts.map((p, i) =>
             p.type === 'text' ? (
               <Markdown key={i} text={p.text} />
-            ) : (
+            ) : p.type === 'subagents' ? null /* 요약 줄은 Task 7 이 그린다 */ : (
               <ul key={i} className="acts">
                 {p.actions.map(a => (
                   <Action key={a.id} a={a} />
@@ -196,6 +196,16 @@ const sameAction = (a: ActionLine, b: ActionLine) =>
   a.id === b.id && a.verb === b.verb && a.target === b.target && a.icon === b.icon && a.allowed === b.allowed &&
   a.denied === b.denied && a.output === b.output && a.pending === b.pending && a.truncated === b.truncated
 
+/** 같은 종류의 조각 둘이 같은가 — 글은 내용, 하는 일은 개수, 서브에이전트 요약은 key·id·개수 */
+function samePart(p: ClaudePart, q: ClaudePart): boolean {
+  if (p.type === 'text') return q.type === 'text' && p.text === q.text
+  if (p.type === 'acts') return q.type === 'acts' && p.actions.length === q.actions.length
+  return (
+    q.type === 'subagents' && p.key === q.key && p.ids.length === q.ids.length && p.ids.every((id, i) => id === q.ids[i]) &&
+    p.counts.running === q.counts.running && p.counts.done === q.counts.done && p.counts.bad === q.counts.bad
+  )
+}
+
 /** 기록이 하나 늘 때마다 줄 객체는 새로 만들어진다 — 내용이 같으면 다시 그리지 않는다(마크다운을 다시 읽지 않게) */
 function sameLine(prev: Props, next: Props): boolean {
   if (!!prev.folded !== !!next.folded || prev.index !== next.index) return false
@@ -212,7 +222,7 @@ function sameLine(prev: Props, next: Props): boolean {
       const x = (b as typeof a).actions
       const y = (b as typeof a).parts
       // 조각의 차례·나뉨도 같아야 — 글과 하는 일이 같아도 놓인 차례가 다르면 다시 그린다
-      const sameParts = a.parts.length === y.length && a.parts.every((p, i) => p.type === y[i].type && (p.type === 'text' ? p.text === (y[i] as typeof p).text : p.actions.length === (y[i] as typeof p).actions.length))
+      const sameParts = a.parts.length === y.length && a.parts.every((p, i) => p.type === y[i].type && samePart(p, y[i]))
       return a.at === (b as typeof a).at && a.actions.length === x.length && a.actions.every((act, i) => sameAction(act, x[i])) && sameParts
     }
     case 'notice':

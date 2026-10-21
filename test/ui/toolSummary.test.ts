@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { requestTarget, requestTitle, toolSummary } from '../../src/renderer/lib/toolSummary'
+import { ongoing, requestTarget, requestTitle, toolSummary } from '../../src/renderer/lib/toolSummary'
 
 describe('toolSummary', () => {
   it('파일 도구는 마지막 조각만', () => {
@@ -18,8 +18,8 @@ describe('toolSummary', () => {
     expect(toolSummary('WebFetch', { url: 'https://x.y' })).toEqual({ verb: '웹에서 찾아봄', target: 'https://x.y', icon: 'web' })
     expect(toolSummary('WebSearch', { query: '두레' }).target).toBe('두레')
     expect(toolSummary('TodoWrite', {})).toMatchObject({ verb: '할 일 정리', target: null })
-    expect(toolSummary('Task', { description: '조사' })).toMatchObject({ verb: '도우미에게 맡김', target: '조사' })
-    expect(toolSummary('Agent', { description: '조사' }).verb).toBe('도우미에게 맡김')
+    expect(toolSummary('Task', { description: '조사' })).toMatchObject({ verb: '서브에이전트에게 맡김', target: '조사' })
+    expect(toolSummary('Agent', { description: '조사' }).verb).toBe('서브에이전트에게 맡김')
     expect(toolSummary('AskUserQuestion', {})).toEqual({ verb: '물어봄', target: null, icon: 'question' })
   })
   it('스킬은 이름까지 — 이름이 없으면(옛 기록) 도구 이름', () => {
@@ -48,6 +48,16 @@ describe('requestTitle', () => {
     expect(requestTitle('기획', 'WebFetch', { url: 'https://x.y' })).toBe('기획이 웹에서 찾아보려 해요')
   })
 
+  it('서브에이전트가 한 일이면 "<이름>의 서브에이전트가 …"', () => {
+    expect(requestTitle('기획', 'Write', {}, true)).toBe('기획의 서브에이전트가 파일을 만들려 해요')
+    expect(requestTitle('기획', 'Write', {}, false)).toBe('기획이 파일을 만들려 해요')
+  })
+
+  it('Agent·Task 는 서브에이전트에게 일을 맡기려', () => {
+    expect(requestTitle('기획', 'Agent', { description: '조사' })).toBe('기획이 서브에이전트에게 일을 맡기려 해요')
+    expect(requestTitle('기획', 'Task', {})).toBe('기획이 서브에이전트에게 일을 맡기려 해요')
+  })
+
   it('모르는 도구는 "도구를 쓰려"', () => {
     expect(requestTitle('기획', 'mcp__figma__get_file', {})).toBe('기획이 도구를 쓰려 해요')
   })
@@ -66,5 +76,17 @@ describe('requestTarget', () => {
     expect(requestTarget('Bash', { command: 'npm run build -- --mode production --watch\nrm x' })).toBe('npm run build -- --mode production --watch')
     expect(requestTarget('mcp__figma__get_file', {})).toBe('get_file')
     expect(requestTarget('TodoWrite', {})).toBeNull()
+  })
+})
+
+describe('ongoing', () => {
+  it('동사 표 전부 진행형으로, 그 밖은 "<동사> 중"', () => {
+    const table: Record<string, string> = {
+      읽음: '읽는 중', 만듦: '만드는 중', 수정: '고치는 중', 실행: '실행하는 중', 찾음: '찾는 중',
+      '웹에서 찾아봄': '웹에서 찾는 중', '할 일 정리': '할 일 정리하는 중', '서브에이전트에게 맡김': '서브에이전트에게 맡기는 중',
+      넘김: '넘기는 중', '동료 확인': '동료 확인하는 중', 물어봄: '묻는 중', '스킬 사용': '스킬 쓰는 중', 사용: '쓰는 중',
+    }
+    for (const [verb, want] of Object.entries(table)) expect(ongoing(verb)).toBe(want)
+    expect(ongoing('새 동사')).toBe('새 동사 중')
   })
 })

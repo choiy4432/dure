@@ -1,4 +1,4 @@
-import type { HistoryItem } from '../../engine/types'
+import type { AssistantBlock, HistoryItem } from '../../engine/types'
 import { DENY_TEXTS } from '../../shared/denyTexts'
 import { toolSummary, type ToolIcon } from '../lib/toolSummary'
 
@@ -16,7 +16,11 @@ export interface ActionLine {
 }
 
 /** Claude 답 안의 한 조각 — 글, 또는 이어진 하는 일 한 상자. 일어난 차례대로 놓는다 */
-export type ClaudePart = { type: 'text'; text: string } | { type: 'acts'; actions: ActionLine[] }
+export type ClaudePart =
+  | { type: 'text'; text: string }
+  | { type: 'acts'; actions: ActionLine[] }
+  // 이어서 맡긴 서브에이전트 — 대화엔 요약 한 조각만(안쪽 일은 '서브에이전트' 탭). description 은 하나일 때만
+  | { type: 'subagents'; key: string; ids: string[]; description: string | null; counts: { running: number; done: number; bad: number } }
 
 export type ChatLine =
   | { kind: 'me'; text: string; images: number; at: number }
@@ -31,7 +35,7 @@ const RELAY_PREFIX = '[두레 메시지 — 보낸 쪽: '
 
 // 첫 줄이 '[두레 메시지 — 보낸 쪽: 이름(역할)]' 이어야 한다. 이름 = 첫 '(' 앞이라 역할 안 괄호는 상관없다.
 // 읽지 못하면 이름 없이 통째로 — 전달된 글이 '내 말'로 둔갑하지 않게.
-function stripRelay(text: string): { from: string; body: string } {
+export function stripRelay(text: string): { from: string; body: string } {
   const nl = text.indexOf('\n')
   const first = nl === -1 ? text : text.slice(0, nl)
   if (first.startsWith(RELAY_PREFIX) && first.endsWith(')]')) {
@@ -42,13 +46,55 @@ function stripRelay(text: string): { from: string; body: string } {
   return { from: '', body: text }
 }
 
+type ToolResult = Extract<HistoryItem, { kind: 'tool-result' }>
+type ToolUse = Extract<AssistantBlock, { type: 'tool_use' }>
+
+export const isAgentTool = (name: string) => name === 'Agent' || name === 'Task'
+
+/** tool_use 한 줄 + 짝 결과 → 하는 일 한 줄. 대화와 서브에이전트 나무가 같이 쓴다 */
+export function actionFor(b: ToolUse, results: Map<string, ToolResult>): ActionLine {
+  const s = toolSummary(b.name, b.input)
+  const r = results.get(b.id)
+  if (!r) return { id: b.id, ...s, allowed: false, denied: false, output: '', pending: true }
+  return {
+    id: b.id,
+    ...s,
+    allowed: !r.viaApproval && !r.isError,
+    denied: r.isError && DENY_TEXTS.includes(r.text),
+    output: r.text.slice(0, OUTPUT_MAX),
+    ...(r.text.length > OUTPUT_MAX ? { truncated: true } : {}),
+  }
+}
+
+function agentDescription(input: unknown): string | null {
+  return toolSummary('Agent', input).target
+}
+
 export function buildTranscript(
   items: HistoryItem[],
   streaming: string | undefined,
   limit = 300,
+  running: ReadonlySet<string> = new Set(),
 ): { lines: ChatLine[]; hiddenBefore: number } {
-  const results = new Map<string, Extract<HistoryItem, { kind: 'tool-result' }>>()
-  for (const it of items) if (it.kind === 'tool-result') results.set(it.toolUseId, it)
+  const results = new Map<string, ToolResult>()
+  const starts = new Map<string, Extract<HistoryItem, { kind: 'subagent-start' }>>()
+  const ends = new Map<string, Extract<HistoryItem, { kind: 'subagent-end' }>>()
+  for (const it of items) {
+    if (it.kind === 'tool-result') results.set(it.toolUseId, it)
+    else if (it.kind === 'subagent-start') starts.set(it.toolUseId, it)
+    else if (it.kind === 'subagent-end') ends.set(it.toolUseId, it)
+  }
+
+  // 서브에이전트 하나의 상태 — 끝 기록이 우선, 없으면 도는 중인지, 시작 기록도 없는 옛 기록이면 부모가 받은 결과로.
+  // 시작 기록이 있으면 부모의 Agent 결과('Async agent launched…')는 Claude 내부 안내라 보지 않는다
+  const stateOf = (id: string): 'running' | 'done' | 'bad' => {
+    const e = ends.get(id)
+    if (e) return e.status === 'completed' ? 'done' : 'bad'
+    if (running.has(id)) return 'running'
+    const r = starts.has(id) ? undefined : results.get(id)
+    if (r) return r.isError ? 'bad' : 'done'
+    return 'bad'
+  }
 
   const all: ChatLine[] = []
   let cur: Extract<ChatLine, { kind: 'claude' }> | null = null
@@ -56,7 +102,7 @@ export function buildTranscript(
   const flush = () => {
     if (cur) {
       cur.text = texts.join('\n\n')
-      if (cur.text !== '' || cur.actions.length > 0) all.push(cur)
+      if (cur.parts.length > 0) all.push(cur)
     }
     cur = null
     texts.length = 0
@@ -65,6 +111,7 @@ export function buildTranscript(
   for (const it of items) {
     switch (it.kind) {
       case 'assistant': {
+        if (it.parent) break
         if (!cur) cur = { kind: 'claude', text: '', actions: [], parts: [], at: it.t }
         const parts = cur.parts
         for (const b of it.blocks) {
@@ -75,22 +122,18 @@ export function buildTranscript(
             const last = parts[parts.length - 1]
             if (last?.type === 'text') last.text += `\n\n${b.text}`
             else parts.push({ type: 'text', text: b.text })
-          } else {
-            const s = toolSummary(b.name, b.input)
-            const r = results.get(b.id)
-            let action: ActionLine
-            if (!r) {
-              action = { id: b.id, ...s, allowed: false, denied: false, output: '', pending: true }
+          } else if (isAgentTool(b.name)) {
+            const last = parts[parts.length - 1]
+            if (last?.type === 'subagents') {
+              last.ids.push(b.id)
+              last.description = null
             } else {
-              action = {
-                id: b.id,
-                ...s,
-                allowed: !r.viaApproval && !r.isError,
-                denied: r.isError && DENY_TEXTS.includes(r.text),
-                output: r.text.slice(0, OUTPUT_MAX),
-                ...(r.text.length > OUTPUT_MAX ? { truncated: true } : {}),
-              }
+              parts.push({ type: 'subagents', key: b.id, ids: [b.id], description: starts.get(b.id)?.description || agentDescription(b.input), counts: { running: 0, done: 0, bad: 0 } })
             }
+            const part = parts[parts.length - 1] as Extract<ClaudePart, { type: 'subagents' }>
+            part.counts[stateOf(b.id)]++
+          } else {
+            const action = actionFor(b, results)
             cur.actions.push(action)
             // 이어진 하는 일은 한 상자에
             const last = parts[parts.length - 1]
@@ -101,6 +144,8 @@ export function buildTranscript(
         break
       }
       case 'tool-result':
+      case 'subagent-start':
+      case 'subagent-end':
         break
       case 'user': {
         flush()

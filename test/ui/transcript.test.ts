@@ -147,3 +147,83 @@ describe('buildTranscript', () => {
     expect(lines[300]).toEqual({ kind: 'streaming', text: '쓰는 중' })
   })
 })
+
+describe('buildTranscript — 서브에이전트', () => {
+  const agent = (id: string, description = '조사') => ({ type: 'tool_use', id, name: 'Agent', input: { description, prompt: 'p' } })
+  const start = (id: string, t = 3): HistoryItem => ({ t, kind: 'subagent-start', toolUseId: id, taskId: `task-${id}`, description: `설명 ${id}`, subagentType: null, parentTaskId: null })
+  const end = (id: string, status: 'completed' | 'failed' | 'stopped' = 'completed', t = 9): HistoryItem => ({
+    t, kind: 'subagent-end', toolUseId: id, taskId: `task-${id}`, status, summary: '끝', toolUses: 2, durationMs: 1000,
+  })
+  const subpart = (lines: any[]) => lines.flatMap((l) => (l.kind === 'claude' ? l.parts : [])).filter((p: any) => p.type === 'subagents')
+
+  it('parent 붙은 줄과 subagent-* 기록은 줄을 만들지 않는다', () => {
+    const { lines } = buildTranscript(
+      [
+        human('hi'),
+        asst([agent('A')]),
+        start('A'),
+        { t: 4, kind: 'assistant', parent: 'A', blocks: [{ type: 'text', text: '안쪽 글' }, { type: 'tool_use', id: 'x', name: 'Read', input: { file_path: '/f.ts' } }] },
+        { t: 5, kind: 'tool-result', toolUseId: 'x', isError: false, text: 'c', viaApproval: false, parent: 'A' },
+        end('A'),
+        asst([{ type: 'text', text: '바깥 글' }]),
+      ],
+      undefined,
+    )
+    expect(lines).toHaveLength(2)
+    const c = lines[1] as any
+    expect(c.text).toBe('바깥 글')
+    expect(c.actions).toEqual([])
+    expect(JSON.stringify(lines)).not.toContain('안쪽 글')
+  })
+
+  it('이어진 Agent 3개는 조각 하나 — ids·counts, actions 엔 안 들어간다', () => {
+    const { lines } = buildTranscript(
+      [human('hi'), asst([agent('A'), agent('B'), agent('C')]), start('A'), start('B'), start('C'), end('A'), end('B', 'failed')],
+      undefined,
+      300,
+      new Set(['C']),
+    )
+    const parts = subpart(lines)
+    expect(parts).toHaveLength(1)
+    expect(parts[0]).toMatchObject({ key: 'A', ids: ['A', 'B', 'C'], description: null, counts: { running: 1, done: 1, bad: 1 } })
+    expect((lines[1] as any).actions).toEqual([])
+  })
+
+  it('하나면 설명이 따라온다', () => {
+    const { lines } = buildTranscript([human('hi'), asst([agent('A', '자료 모으기')]), start('A')], undefined, 300, new Set(['A']))
+    expect(subpart(lines)[0]).toMatchObject({ ids: ['A'], description: '설명 A', counts: { running: 1, done: 0, bad: 0 } })
+  })
+
+  it('끝 기록이 없고 running 에도 없으면 끊김 = bad, stopped 도 bad', () => {
+    const { lines } = buildTranscript([human('hi'), asst([agent('A'), agent('B')]), start('A'), start('B'), end('B', 'stopped')], undefined)
+    expect(subpart(lines)[0].counts).toEqual({ running: 0, done: 0, bad: 2 })
+  })
+
+  it('12개도 조각 하나', () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `a${i}`)
+    const { lines } = buildTranscript([human('hi'), asst(ids.map((i) => agent(i))), ...ids.map((i) => start(i)), ...ids.map((i) => end(i))], undefined)
+    const parts = subpart(lines)
+    expect(parts).toHaveLength(1)
+    expect(parts[0].ids).toHaveLength(12)
+    expect(parts[0].counts).toEqual({ running: 0, done: 12, bad: 0 })
+  })
+
+  it('글이 사이에 끼면 조각이 나뉜다', () => {
+    const { lines } = buildTranscript([human('hi'), asst([agent('A'), { type: 'text', text: '중간' }, agent('B')]), start('A'), start('B')], undefined, 300, new Set(['A', 'B']))
+    expect((lines[1] as any).parts.map((p: any) => p.type)).toEqual(['subagents', 'text', 'subagents'])
+  })
+
+  it('옛 기록(시작 없음) — 안내 글은 어디에도 안 보이고 상태는 결과로', () => {
+    const { lines } = buildTranscript(
+      [human('hi'), asst([agent('A'), agent('B')]), res('A', 'Async agent launched. agentId: x'), res('B', '[Subagent hand-back] 내용', true)],
+      undefined,
+    )
+    expect(subpart(lines)[0].counts).toEqual({ running: 0, done: 1, bad: 1 })
+    expect(JSON.stringify(lines)).not.toMatch(/Async agent launched|Subagent hand-back/)
+  })
+
+  it('subagent-start 가 있으면 부모의 Agent tool_result 안내는 상태를 바꾸지 않는다', () => {
+    const { lines } = buildTranscript([human('hi'), asst([agent('A')]), start('A'), res('A', 'Async agent launched…')], undefined, 300, new Set(['A']))
+    expect(subpart(lines)[0].counts).toEqual({ running: 1, done: 0, bad: 0 })
+  })
+})

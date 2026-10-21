@@ -48,7 +48,7 @@ export function toolSummary(name: string, input: unknown): ToolSummary {
       return { verb: '할 일 정리', target: null, icon: 'other' }
     case 'Task':
     case 'Agent':
-      return { verb: '도우미에게 맡김', target: field(input, 'description'), icon: 'other' }
+      return { verb: '서브에이전트에게 맡김', target: field(input, 'description'), icon: 'other' }
     case 'mcp__dure__send_message': {
       const to = field(input, 'to')
       return { verb: '넘김', target: to ? `${to} 에게` : null, icon: 'handoff' }
@@ -78,7 +78,7 @@ const INTENT: Record<string, string> = {
   찾음: '파일을 찾아보려',
   '웹에서 찾아봄': '웹에서 찾아보려',
   '할 일 정리': '할 일을 정리하려',
-  '도우미에게 맡김': '도우미에게 일을 맡기려',
+  '서브에이전트에게 맡김': '서브에이전트에게 일을 맡기려',
   넘김: '일을 넘기려',
   '동료 확인': '동료를 확인하려',
   물어봄: '물어보려',
@@ -86,10 +86,33 @@ const INTENT: Record<string, string> = {
 }
 const INTENT_OTHER = '도구를 쓰려'
 
-/** 승인 요청 제목 — '디자인이 파일을 고치려 해요' */
-export function requestTitle(agentName: string, toolName: string, input: unknown): string {
+/** 승인 요청 제목 — '디자인이 파일을 고치려 해요'. 서브에이전트가 한 일이면 '디자인의 서브에이전트가 파일을 고치려 해요' */
+export function requestTitle(agentName: string, toolName: string, input: unknown, fromSubagent = false): string {
   const { verb } = toolSummary(toolName, input)
-  return `${agentName}${josa(agentName, '이/가')} ${INTENT[verb] ?? INTENT_OTHER} 해요`
+  const intent = INTENT[verb] ?? INTENT_OTHER
+  if (fromSubagent) return `${agentName}의 서브에이전트가 ${intent} 해요`
+  return `${agentName}${josa(agentName, '이/가')} ${intent} 해요`
+}
+
+// 하는 일 동사의 진행형 — 서브에이전트 줄 둘째 줄('조사 읽는 중 · 도구 3번')에서 아직 끝나지 않은 일에 쓴다
+const ONGOING: Record<string, string> = {
+  읽음: '읽는 중',
+  만듦: '만드는 중',
+  수정: '고치는 중',
+  실행: '실행하는 중',
+  찾음: '찾는 중',
+  '웹에서 찾아봄': '웹에서 찾는 중',
+  '할 일 정리': '할 일 정리하는 중',
+  '서브에이전트에게 맡김': '서브에이전트에게 맡기는 중',
+  넘김: '넘기는 중',
+  '동료 확인': '동료 확인하는 중',
+  물어봄: '묻는 중',
+  '스킬 사용': '스킬 쓰는 중',
+  사용: '쓰는 중',
+}
+
+export function ongoing(verb: string): string {
+  return ONGOING[verb] ?? `${verb} 중`
 }
 
 const FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'])
