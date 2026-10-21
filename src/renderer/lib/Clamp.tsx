@@ -27,9 +27,12 @@ export function Clamp({ lines = 3, className, dataLine, children }: Props) {
   const from = useRef<number | null>(null) // 누르는 순간의 크기
   const moved = useRef(false)
 
+  // 그려지지 않은 상자(숨은 패널 탭 칸 — display:none)는 높이가 모두 0 이라 재면 '안 넘침'이 된다 — 재지 않고 지난 값을 둔다.
+  // 다시 보이면 크기가 바뀌어 ResizeObserver 가 다시 잰다(숨은 동안 바뀐 내용도 그때)
   const measure = useCallback(() => {
     const el = box.current
-    if (el) setOver(el.scrollHeight > el.clientHeight)
+    if (!el || !el.getClientRects().length) return
+    setOver(el.scrollHeight > el.clientHeight)
   }, [])
 
   // 펼친 동안엔 잴 수 없다(높이가 내용 그대로) — 접힌 상태에서만 잰다

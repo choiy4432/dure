@@ -1,14 +1,20 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import '@testing-library/jest-dom/vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { Clamp } from '../../src/renderer/lib/Clamp'
 
-// jsdom 에는 레이아웃이 없다 — 상자 높이를 흉내 낸다
+// jsdom 에는 레이아웃이 없다 — 상자 높이를 흉내 낸다.
+// 숨은 상자(display:none 안)는 Chromium 처럼 — 높이가 모두 0, 그려진 자리(getClientRects)가 없다
 let tall = false
+let hidden = false
 beforeEach(() => {
   tall = false
-  vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => (tall ? 200 : 40))
-  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => 54)
+  hidden = false
+  vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => (hidden ? 0 : tall ? 200 : 40))
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => (hidden ? 0 : 54))
+  vi.spyOn(HTMLElement.prototype, 'getClientRects').mockImplementation(
+    () => (hidden ? [] : [{ x: 0, y: 0, width: 300, height: 54, top: 0, left: 0, right: 300, bottom: 54 }]) as unknown as DOMRectList,
+  )
 })
 afterEach(() => {
   cleanup()
@@ -86,5 +92,56 @@ describe('Clamp', () => {
     tall = true
     fire()
     return screen.findByRole('button', { name: '더 보기' }).finally(() => vi.unstubAllGlobals())
+  })
+
+  describe('숨은 칸(패널 탭이 그려 둔 채 숨긴 대화·지도)', () => {
+    let fire: () => void = () => {}
+    beforeEach(() => {
+      vi.stubGlobal('ResizeObserver', class {
+        constructor(cb: () => void) { fire = cb }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      })
+    })
+    afterEach(() => vi.unstubAllGlobals())
+
+    it('숨으면(크기 0) 재지 않는다 — 더 보기·흐림이 그대로, 다시 보여도 그대로', () => {
+      tall = true
+      const { container, rerender } = render(<Clamp>길어요</Clamp>)
+      expect(screen.getByRole('button', { name: '더 보기' })).toBeInTheDocument()
+      hidden = true
+      act(() => fire()) // 숨는 순간 — 상자가 0×0 이 된다
+      expect(screen.getByRole('button', { name: '더 보기' })).toBeInTheDocument()
+      expect(boxOf(container)).toHaveClass('clamped')
+      rerender(<Clamp>길어요 — 숨은 동안 바뀐 글</Clamp>) // 숨은 동안 내용이 바뀌어도
+      expect(screen.getByRole('button', { name: '더 보기' })).toBeInTheDocument()
+      expect(boxOf(container)).toHaveClass('clamped')
+      hidden = false
+      act(() => fire()) // 다시 보인다
+      expect(screen.getByRole('button', { name: '더 보기' })).toBeInTheDocument()
+      expect(boxOf(container)).toHaveClass('clamped')
+    })
+
+    it('숨은 채 처음 그려지면 보일 때 잰다', () => {
+      tall = true
+      hidden = true
+      const { container } = render(<Clamp>길어요</Clamp>)
+      expect(screen.queryByRole('button')).toBeNull()
+      hidden = false
+      act(() => fire())
+      expect(screen.getByRole('button', { name: '더 보기' })).toBeInTheDocument()
+      expect(boxOf(container)).toHaveClass('clamped')
+    })
+
+    it('보이는 동안엔 그대로 잰다 — 넓어져 안 넘치면 버튼·흐림이 빠진다', () => {
+      tall = true
+      const { container } = render(<Clamp>가변</Clamp>)
+      expect(screen.getByRole('button', { name: '더 보기' })).toBeInTheDocument()
+      tall = false
+      act(() => fire())
+      expect(screen.queryByRole('button')).toBeNull()
+      expect(boxOf(container)).not.toHaveClass('clamped')
+    })
   })
 })
