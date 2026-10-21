@@ -73,7 +73,7 @@ function load(file: string): State {
     return {
       version: 1,
       rooms: raw.rooms,
-      agents: raw.agents.map((a: Agent) => ({ ...a, effort: savedEffort(a.effort), lastContext: savedContext(a.lastContext) })),
+      agents: raw.agents.map((a: Agent) => ({ ...a, effort: savedEffort(a.effort), lastContext: savedContext(a.lastContext), bypassOn: a.bypassOn === true })),
     };
   } catch {
     renameRetrying(file, `${file}.broken-${Date.now()}`);
@@ -146,7 +146,7 @@ export function openStore(dataDir: string): Store {
       const agent: Agent = {
         id: crypto.randomUUID(), roomId, name: name.trim(), role, folder,
         sessionId: crypto.randomUUID(), started: false, auto: false, model: null,
-        alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null,
+        alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null, bypassOn: false,
       };
       state.agents.push(agent);
       save();

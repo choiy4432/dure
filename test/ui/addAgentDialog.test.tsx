@@ -6,7 +6,7 @@ import { placeNew } from '../../src/renderer/map/layout'
 
 const agent = (id: string, roomId: string, name: string, pos: { x: number; y: number }): AgentView => ({
   id, roomId, name, role: '역할', folder: 'C:\\w', sessionId: 's', started: false, auto: false, model: null,
-  alwaysAllow: [], pos, color: null, effort: null, lastContext: null, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, heldInput: 0,
+  alwaysAllow: [], pos, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, heldInput: 0,
 })
 
 let snapshot: Snapshot

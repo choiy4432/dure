@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createEngine, type AgentStatus, type Engine, type EngineOptions, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
 import { openMessageLog } from '../src/engine/messageLog';
+import { openStore } from '../src/engine/store';
 
 const FAKE = path.resolve('test/fakeClaude.mjs');
 let dir: string;
@@ -1120,6 +1121,40 @@ test('자동 전달 상한: 기본 3 · 저장돼 재시작 뒤에도 · 잘못�
   await e.shutdown();
   const e2 = await start();
   expect(e2.autoChainLimit()).toBe(5);
+});
+
+test('설정: allowBypass 는 기본 false · 켜면 파일에 남아 다시 켜도 true · autoChainLimit 과 서로 지우지 않는다', async () => {
+  const e = await start();
+  expect(e.allowBypass()).toBe(false);
+  await e.setAllowBypass(true);
+  e.setAutoChainLimit(7);
+  expect(e.allowBypass()).toBe(true);
+  expect(JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'))).toEqual({ autoChainLimit: 7, allowBypass: true });
+  await e.shutdown();
+  const e2 = await start();
+  expect(e2.allowBypass()).toBe(true);
+  expect(e2.autoChainLimit()).toBe(7);
+  await e2.shutdown();
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), '{"autoChainLimit":5}');
+  const e3 = await start();
+  expect(e3.allowBypass()).toBe(false);
+  expect(e3.autoChainLimit()).toBe(5);
+});
+
+test('설정: 허용을 끄면 모든 에이전트의 bypassOn 을 false 로 저장한다', async () => {
+  const seed = openStore(dataDir);
+  const r1 = seed.addRoom('A');
+  const r2 = seed.addRoom('B');
+  const x = seed.addAgent({ roomId: r1.id, name: 'x', role: 'r', folder: dir });
+  const y = seed.addAgent({ roomId: r2.id, name: 'y', role: 'r', folder: dir });
+  seed.updateAgent(x.id, { bypassOn: true });
+  seed.updateAgent(y.id, { bypassOn: true });
+  const e = await start();
+  await e.setAllowBypass(true);
+  await e.setAllowBypass(false);
+  expect(e.allowBypass()).toBe(false);
+  expect(e.agents().map((a) => a.bypassOn)).toEqual([false, false]);
+  expect(openStore(dataDir).agents().map((a) => a.bypassOn)).toEqual([false, false]);
 });
 
 test('settings.json 이 깨졌으면 기본값 3', async () => {

@@ -63,6 +63,9 @@ export interface Engine extends EventEmitter {
   flags(id: AgentId): { bypass: boolean };
   setAutoChainLimit(n: number): void;
   autoChainLimit(): number;
+  allowBypass(): boolean;
+  /** 저장 + (끄면) 모든 에이전트 bypassOn=false 저장 */
+  setAllowBypass(on: boolean): Promise<void>;
   errorText(id: AgentId): string | null;
   sendUser(id: AgentId, parts: UserPart[]): Promise<void>;
   interrupt(id: AgentId): Promise<void>;
@@ -142,6 +145,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private compactedTurn = new WeakSet<ClaudeSession>(); // 이번 차례에 요약됨 — 그 차례의 result 뒤엔 값을 받지 않는다
   private started = false;
   private limit: number;
+  private allow: boolean;
   private closed = false;
   private closing: Promise<void> | null = null;
   private stopping = new Set<Promise<void>>(); // 끄는 중인 세션(상한 STOP_LIMIT_MS) — 맵에서 빠졌어도 shutdown 이 기다린다
@@ -154,6 +158,7 @@ class EngineImpl extends EventEmitter implements Engine {
   constructor(private o: EngineOptions, private store: Store, private log: MessageLog, private hist: History) {
     super();
     this.limit = this.loadLimit(o.autoChainLimit ?? AUTO_CHAIN_LIMIT);
+    this.allow = this.readSettings().allowBypass === true;
     this.watcher =
       o.usage === false
         ? null
@@ -221,24 +226,43 @@ class EngineImpl extends EventEmitter implements Engine {
   // ── 설정 ──
   private settingsFile() { return path.join(this.o.dataDir, 'settings.json'); }
 
+  /** 설정 파일 — 없거나 깨졌으면 빈 객체 */
+  private readSettings(): { autoChainLimit?: unknown; allowBypass?: unknown } {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.settingsFile(), 'utf8'));
+      return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** 있던 값은 그대로 두고 patch 만 덮어 쓴다 */
+  private writeSettings(patch: { autoChainLimit?: number; allowBypass?: boolean }): void {
+    const file = this.settingsFile();
+    fs.mkdirSync(this.o.dataDir, { recursive: true });
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify({ ...this.readSettings(), ...patch }, null, 2));
+    renameRetrying(`${file}.tmp`, file);
+  }
+
   /** 저장된 값이 없거나 깨졌으면 fallback */
   private loadLimit(fallback: number): number {
-    try {
-      const n = JSON.parse(fs.readFileSync(this.settingsFile(), 'utf8'))?.autoChainLimit;
-      return Number.isInteger(n) && n >= 1 ? n : fallback;
-    } catch {
-      return fallback;
-    }
+    const n = this.readSettings().autoChainLimit;
+    return typeof n === 'number' && Number.isInteger(n) && n >= 1 ? n : fallback;
+  }
+
+  allowBypass(): boolean { return this.allow; }
+
+  async setAllowBypass(on: boolean): Promise<void> {
+    this.writeSettings({ allowBypass: on });
+    this.allow = on;
+    if (!on) for (const a of this.store.agents()) if (a.bypassOn) this.store.updateAgent(a.id, { bypassOn: false });
   }
 
   autoChainLimit(): number { return this.limit; }
 
   setAutoChainLimit(n: number): void {
     if (!Number.isInteger(n) || n < 1) throw new Error(LIMIT_INVALID);
-    const file = this.settingsFile();
-    fs.mkdirSync(this.o.dataDir, { recursive: true });
-    fs.writeFileSync(`${file}.tmp`, JSON.stringify({ autoChainLimit: n }, null, 2));
-    renameRetrying(`${file}.tmp`, file);
+    this.writeSettings({ autoChainLimit: n });
     this.limit = n;
     this.router.setLimit(n);
   }

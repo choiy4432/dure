@@ -43,10 +43,12 @@ export interface Agent {
   color: string | null;
   effort: EffortLevel | null;
   lastContext: ContextUsage | null;
+  /** 사용자가 켠 '묻지 않음' — 옛 기록엔 없음 → false */
+  bypassOn: boolean;
 }
 
 export type AgentPatch = Partial<
-  Pick<Agent, 'name' | 'role' | 'auto' | 'model' | 'alwaysAllow' | 'pos' | 'color' | 'started' | 'sessionId' | 'effort' | 'lastContext'>
+  Pick<Agent, 'name' | 'role' | 'auto' | 'model' | 'alwaysAllow' | 'pos' | 'color' | 'started' | 'sessionId' | 'effort' | 'lastContext' | 'bypassOn'>
 >;
 
 export type MessageState = 'pending' | 'held' | 'queued' | 'delivered' | 'dismissed';

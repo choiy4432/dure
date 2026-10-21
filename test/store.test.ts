@@ -202,3 +202,18 @@ test('updateAgent 로 effort·lastContext 를 저장하면 다시 열어도 남�
   s.updateAgent(a.id, { effort: 'low', lastContext: ctx });
   expect(openStore(dir).agent(a.id)).toMatchObject({ effort: 'low', lastContext: ctx });
 });
+
+test('bypassOn 이 없는 옛 에이전트 기록은 false 로 읽힌다 · updateAgent 로 바꾸면 남는다', () => {
+  const s = openStore(dir);
+  const r = s.addRoom('A');
+  const a = s.addAgent({ roomId: r.id, name: 'x', role: 'r', folder: dir });
+  expect(a.bypassOn).toBe(false);
+  const file = path.join(dir, 'state.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  for (const ag of raw.agents) delete ag.bypassOn;
+  fs.writeFileSync(file, JSON.stringify(raw));
+  const old = openStore(dir);
+  expect(old.agent(a.id)!.bypassOn).toBe(false);
+  old.updateAgent(a.id, { bypassOn: true });
+  expect(openStore(dir).agent(a.id)!.bypassOn).toBe(true);
+});

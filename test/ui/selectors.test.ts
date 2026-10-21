@@ -5,7 +5,7 @@ import type { AgentView } from '../../src/shared/ipcContract'
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '', folder: '/x', sessionId: '', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
 })
 let n = 0
 const msg = (from: string, to: string, state: MessageState, over: Partial<RelayMessage> = {}): RelayMessage => ({
