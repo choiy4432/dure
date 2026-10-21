@@ -3252,3 +3252,29 @@ code {
   line-height: 18px;
   color: var(--muted);
 }
+
+/* 설정의 스위치 줄 — 이름 뒤 작은 영문 · 한 줄 설명은 .fld-d */
+.fld > .sw {
+  justify-content: space-between;
+  color: var(--text);
+}
+
+.sw-en {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* 응답 기다리는 스위치는 흐리게, 잠긴 스위치는 누를 수 없는 손 모양 */
+.sw[aria-busy="true"] {
+  opacity: 0.6;
+}
+
+.sw[aria-disabled="true"] {
+  cursor: default;
+}
+
+/* 패널 머리의 스위치 둘 — 자동이 오른쪽으로 밀고, 뒤따르는 스위치는 그 옆에 */
+.ph .sw + .sw {
+  margin-left: 12px;
+}

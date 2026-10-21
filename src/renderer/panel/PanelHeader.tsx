@@ -35,10 +35,13 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
     const agent = s.agents.find(a => a.id === agentId)
     return agent ? { agent, status: displayStatus(agent, s.requests) } : null
   })
+  const allowBypass = useDure(s => s.allowBypass)
   const [editing, setEditing] = useState(false)
+  const [settingBypass, setSettingBypass] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [stopping, setStopping] = useState(false)
   const savingAuto = useRef(false)
+  const savingBypass = useRef(false)
   const menuButton = useRef<HTMLButtonElement>(null)
   const refocus = useRef(false)
 
@@ -77,6 +80,22 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
       setError(errorMessage(e))
     } finally {
       savingAuto.current = false
+    }
+  }
+
+  // 묻지 않음 — 보이는 값은 실제 모드(agent.bypass). 응답이 올 때까지 흐리게, 두 번 누르기는 막는다
+  const toggleBypass = async () => {
+    if (savingBypass.current || agent.bypassBySettings) return
+    savingBypass.current = true
+    setSettingBypass(true)
+    setError(null)
+    try {
+      await window.dure.setBypass(agent.id, !agent.bypass)
+    } catch (e) {
+      setError(errorMessage(e))
+    } finally {
+      savingBypass.current = false
+      setSettingBypass(false)
     }
   }
 
@@ -152,6 +171,21 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
             자동
             <span className="tg" aria-hidden="true" />
           </button>
+          {allowBypass && (
+            <button
+              type="button"
+              className="sw"
+              role="switch"
+              aria-checked={agent.bypass}
+              aria-busy={settingBypass || undefined}
+              aria-disabled={agent.bypassBySettings || undefined}
+              title={agent.bypassBySettings ? 'Claude 설정이 전부 허용이라 끌 수 없어요' : undefined}
+              onClick={toggleBypass}
+            >
+              묻지 않음
+              <span className="tg" aria-hidden="true" />
+            </button>
+          )}
         </div>
         {error && (
           <p className="ph-msg" role="alert">
@@ -171,7 +205,9 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
       {agent.bypass && (
         <div className="band warn">
           <ShieldAlert className="i" aria-hidden="true" />
-          <span className="band-t">이 에이전트는 묻지 않고 실행해요 (Claude 설정의 전부 허용)</span>
+          <span className="band-t">
+            {agent.bypassBySettings ? '이 에이전트는 묻지 않고 실행해요 (Claude 설정의 전부 허용)' : '이 에이전트는 묻지 않고 실행해요'}
+          </span>
         </div>
       )}
     </>

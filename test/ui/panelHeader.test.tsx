@@ -24,7 +24,7 @@ const DESC: AgentDescription = {
 }
 
 let snapshot: Snapshot
-let api: Record<'describe' | 'setModel' | 'updateAgent' | 'removeAgent' | 'newConversation' | 'interrupt' | 'openFolder', ReturnType<typeof vi.fn>>
+let api: Record<'describe' | 'setModel' | 'updateAgent' | 'removeAgent' | 'newConversation' | 'interrupt' | 'openFolder' | 'setBypass',ReturnType<typeof vi.fn>>
 
 // 엔진처럼 — 바꾼 값은 다음 스냅샷에 들어 있다(엔진은 에이전트 바뀜 이벤트를 보내지 않는다)
 const patch = (id: string, p: Partial<AgentView>) => {
@@ -55,6 +55,7 @@ beforeEach(() => {
     newConversation: vi.fn(async (_id: string) => {}),
     interrupt: vi.fn(async (_id: string) => {}),
     openFolder: vi.fn(async (_path: string) => {}),
+    setBypass: vi.fn(async (_id: string, _on: boolean) => {}),
   }
   ;(window as any).dure = { ...api, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
 })
@@ -449,8 +450,73 @@ describe('PanelHeader — 띠', () => {
   it('묻지 않고 실행하는 에이전트면 앰버 띠', async () => {
     snapshot.agents = [agent('w', { name: '웹 화면', bypass: true })]
     await renderPanel()
-    expect(document.querySelector('.band.warn')!.textContent).toBe('이 에이전트는 묻지 않고 실행해요 (Claude 설정의 전부 허용)')
+    expect(document.querySelector('.band.warn')!.textContent).toBe('이 에이전트는 묻지 않고 실행해요')
     expect(document.querySelector('.band.err')).toBeNull()
+  })
+})
+
+describe('PanelHeader — 묻지 않음 스위치', () => {
+  const sw = () => screen.getByRole('switch', { name: /묻지 않음/ })
+
+  it('허용이 꺼져 있으면 "묻지 않음" 스위치가 없다 · 켜져 있으면 자동 옆에 있다', async () => {
+    await renderPanel()
+    expect(screen.queryByRole('switch', { name: /묻지 않음/ })).toBeNull()
+    cleanup()
+    vi.resetModules()
+    snapshot.allowBypass = true
+    await renderPanel()
+    const auto = screen.getByRole('switch', { name: /^자동/ })
+    expect(auto.nextElementSibling).toBe(sw())
+    expect(sw().getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('누르면 setBypass(id, true) · 응답 전엔 aria-busy · 두 번 눌러도 한 번만 부른다', async () => {
+    snapshot.allowBypass = true
+    let release!: () => void
+    api.setBypass.mockImplementationOnce(() => new Promise<void>(r => { release = () => { patch('w', { bypass: true }); r() } }))
+    await renderPanel()
+    fireEvent.click(sw())
+    fireEvent.click(sw())
+    expect(api.setBypass).toHaveBeenCalledTimes(1)
+    expect(api.setBypass).toHaveBeenCalledWith('w', true)
+    expect(sw().getAttribute('aria-busy')).toBe('true')
+    expect(sw().getAttribute('aria-checked')).toBe('false') // 실제 모드는 아직 그대로
+    await act(async () => { release() })
+    await settle()
+    expect(sw().getAttribute('aria-busy')).toBeNull()
+  })
+
+  it('bypassBySettings 면 켜진 채 aria-disabled 와 잠김 안내 · 띠 문구는 Claude 설정 쪽', async () => {
+    snapshot.allowBypass = true
+    snapshot.agents = [agent('w', { name: '웹 화면', bypass: true, bypassBySettings: true })]
+    await renderPanel()
+    expect(sw().getAttribute('aria-checked')).toBe('true')
+    expect(sw().getAttribute('aria-disabled')).toBe('true')
+    expect(sw().getAttribute('title')).toBe('Claude 설정이 전부 허용이라 끌 수 없어요')
+    fireEvent.click(sw())
+    expect(api.setBypass).not.toHaveBeenCalled()
+    expect(document.querySelector('.band.warn')!.textContent).toBe('이 에이전트는 묻지 않고 실행해요 (Claude 설정의 전부 허용)')
+  })
+
+  it('두레 스위치로 켜졌으면 띠 문구가 "이 에이전트는 묻지 않고 실행해요"', async () => {
+    snapshot.allowBypass = true
+    snapshot.agents = [agent('w', { name: '웹 화면', bypassOn: true, bypass: true })]
+    await renderPanel()
+    expect(sw().getAttribute('aria-checked')).toBe('true')
+    expect(sw().getAttribute('aria-disabled')).toBeNull()
+    expect(document.querySelector('.band.warn')!.textContent).toBe('이 에이전트는 묻지 않고 실행해요')
+    fireEvent.click(sw())
+    expect(api.setBypass).toHaveBeenCalledWith('w', false)
+  })
+
+  it('setBypass 가 실패하면 패널 오류 줄에 엔진 문구', async () => {
+    snapshot.allowBypass = true
+    api.setBypass.mockRejectedValueOnce(new Error('먼저 설정에서 허용을 켜 주세요.'))
+    await renderPanel()
+    await act(async () => { fireEvent.click(sw()) })
+    await settle()
+    expect(document.querySelector('.ph-msg')!.textContent).toBe('먼저 설정에서 허용을 켜 주세요.')
+    expect(sw().getAttribute('aria-busy')).toBeNull()
   })
 })
 

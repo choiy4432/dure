@@ -15,9 +15,14 @@ function parseLimit(text: string): number | null {
   return n >= LIMIT_MIN && n <= LIMIT_MAX ? n : null
 }
 
-/** 설정(위 띠 톱니) — 지금은 자동 전달 상한 하나 */
-export function SettingsDialog({ onClose }: { onClose: () => void }) {
+/**
+ * 설정(위 띠 톱니) — 자동 전달 상한 · 묻지 않고 실행 허용.
+ * 허용을 켜고 저장하면 설정 창을 닫은 뒤 onAskAllow 로 확인 창을 부른다(두 창을 겹쳐 띄우지 않는다).
+ */
+export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; onAskAllow: () => void }) {
   const limit = useDure(s => s.autoChainLimit)
+  const allowed = useDure(s => s.allowBypass)
+  const [allow, setAllow] = useState(allowed)
   const [value, setValue] = useState(() => String(limit))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -32,9 +37,11 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     setBusy(true)
     setError(null)
     try {
-      await window.dure.setAutoChainLimit(n)
+      if (n !== limit) await window.dure.setAutoChainLimit(n)
+      if (!allow && allowed) await window.dure.setAllowBypass(false) // 끄기는 바로
       await getStore().refresh()
       onClose()
+      if (allow && !allowed) onAskAllow() // 켜기는 확인 창을 거쳐서
     } catch (e) {
       setError(errorMessage(e))
       setBusy(false)
@@ -48,7 +55,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
     <FormDialog
       title="설정"
       submitLabel="저장"
-      canSubmit={n !== null && n !== limit}
+      canSubmit={n !== null && (n !== limit || allow !== allowed)}
       busy={busy}
       onSubmit={() => void submit()}
       onClose={onClose}
@@ -90,6 +97,24 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
             {error}
           </p>
         )}
+      </div>
+      <div className="fld">
+        <button
+          type="button"
+          className="sw"
+          role="switch"
+          aria-checked={allow}
+          aria-describedby={`${id}-b`}
+          onClick={() => setAllow(a => !a)}
+        >
+          <span>
+            묻지 않고 실행 허용 <span className="sw-en">Bypass Permissions</span>
+          </span>
+          <span className="tg" aria-hidden="true" />
+        </button>
+        <p className="fld-d" id={`${id}-b`}>
+          켜면 에이전트마다 승인 없이 실행하게 할 수 있어요
+        </p>
       </div>
     </FormDialog>
   )

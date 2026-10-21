@@ -7,6 +7,7 @@ import { Empty } from './shell/Empty'
 import { NewRoomDialog } from './shell/RoomSwitcher'
 import { AddAgentDialog } from './shell/AddAgentDialog'
 import { SettingsDialog } from './shell/SettingsDialog'
+import { ConfirmDialog } from './shell/ConfirmDialog'
 import { Presence } from './lib/presence'
 import { RelationMap } from './map/RelationMap'
 import { AgentPanel } from './panel/AgentPanel'
@@ -24,6 +25,7 @@ export function App() {
     }
   })
   const [dialog, setDialog] = useState<Dialog>(null)
+  const [askAllow, setAskAllow] = useState(false)
   const close = () => setDialog(null)
   const blocked = v.loadError !== null || v.claudeMissing
 
@@ -76,8 +78,20 @@ export function App() {
           {v.roomId !== null && <AddAgentDialog roomId={v.roomId} onClose={close} />}
         </Presence>
         <Presence show={dialog === 'settings'}>
-          <SettingsDialog onClose={close} />
+          <SettingsDialog onClose={close} onAskAllow={() => setAskAllow(true)} />
         </Presence>
+        <ConfirmDialog
+          open={askAllow}
+          title="묻지 않고 실행을 허용할까요?"
+          body="허용하면 에이전트마다 '묻지 않음'을 켤 수 있어요. 켠 에이전트는 파일 수정·명령 실행을 묻지 않고 바로 해요. 믿을 수 있는 폴더에서만 켜 주세요."
+          confirmLabel="허용"
+          onConfirm={async () => {
+            await window.dure.setAllowBypass(true)
+            await getStore().refresh()
+            setAskAllow(false)
+          }}
+          onCancel={() => setAskAllow(false)}
+        />
       </div>
     </LucideProvider>
   )

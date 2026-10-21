@@ -4,6 +4,7 @@ import type { Snapshot } from '../../src/shared/ipcContract'
 
 let snapshot: Snapshot
 let setAutoChainLimit: ReturnType<typeof vi.fn>
+let setAllowBypass: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   vi.resetModules()
@@ -15,7 +16,10 @@ beforeEach(() => {
   setAutoChainLimit = vi.fn(async (n: number) => {
     snapshot = { ...snapshot, autoChainLimit: n }
   })
-  ;(window as any).dure = { setAutoChainLimit, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
+  setAllowBypass = vi.fn(async (on: boolean) => {
+    snapshot = { ...snapshot, allowBypass: on }
+  })
+  ;(window as any).dure = { setAutoChainLimit, setAllowBypass, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
 })
 afterEach(() => cleanup())
 
@@ -98,5 +102,68 @@ describe('SettingsDialog', () => {
     fireEvent.keyDown(input, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(setAutoChainLimit).not.toHaveBeenCalled()
+  })
+})
+
+describe('SettingsDialog — 묻지 않고 실행 허용', () => {
+  const allowSwitch = (dlg: HTMLElement) => within(dlg).getByRole('switch', { name: /묻지 않고 실행 허용/ })
+
+  it('허용이 꺼져 있으면 스위치는 꺼짐 · 켜고 저장하면 설정 창이 닫히고 확인 창이 뜬다 — [허용] 이면 setAllowBypass(true)', async () => {
+    const store = await renderApp()
+    const { dlg } = openSettings()
+    const sw = allowSwitch(dlg)
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    expect(dlg.textContent).toContain('Bypass Permissions')
+    expect(dlg.textContent).toContain('켜면 에이전트마다 승인 없이 실행하게 할 수 있어요')
+    const save = within(dlg).getByRole('button', { name: '저장' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.click(sw)
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    expect(save.disabled).toBe(false)
+    expect(setAllowBypass).not.toHaveBeenCalled() // 폼 값일 뿐 — 저장에서 반영
+    await act(async () => { fireEvent.click(save) })
+    await settle()
+    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
+    expect(setAllowBypass).not.toHaveBeenCalled()
+    const confirm = screen.getByRole('alertdialog', { name: '묻지 않고 실행을 허용할까요?' })
+    expect(confirm.textContent).toContain("허용하면 에이전트마다 '묻지 않음'을 켤 수 있어요. 켠 에이전트는 파일 수정·명령 실행을 묻지 않고 바로 해요. 믿을 수 있는 폴더에서만 켜 주세요.")
+    await act(async () => { fireEvent.click(within(confirm).getByRole('button', { name: '허용' })) })
+    await settle()
+    expect(setAllowBypass).toHaveBeenCalledWith(true)
+    expect(store.getState().allowBypass).toBe(true)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('확인 창에서 [취소] 면 setAllowBypass 를 부르지 않고, 같이 바꾼 상한은 저장된다', async () => {
+    const store = await renderApp()
+    const { dlg } = openSettings()
+    fireEvent.change(within(dlg).getByRole('spinbutton', { name: '자동 전달 상한' }), { target: { value: '7' } })
+    fireEvent.click(allowSwitch(dlg))
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '저장' })) })
+    await settle()
+    expect(setAutoChainLimit).toHaveBeenCalledWith(7)
+    const confirm = screen.getByRole('alertdialog')
+    await act(async () => { fireEvent.click(within(confirm).getByRole('button', { name: '취소' })) })
+    await settle()
+    expect(setAllowBypass).not.toHaveBeenCalled()
+    expect(store.getState().allowBypass).toBe(false)
+    expect(store.getState().autoChainLimit).toBe(7)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('켜져 있을 때 끄고 저장하면 확인 없이 setAllowBypass(false)', async () => {
+    snapshot.allowBypass = true
+    const store = await renderApp()
+    const { dlg } = openSettings()
+    const sw = allowSwitch(dlg)
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(sw)
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '저장' })) })
+    await settle()
+    expect(setAllowBypass).toHaveBeenCalledWith(false)
+    expect(setAutoChainLimit).not.toHaveBeenCalled()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
+    expect(store.getState().allowBypass).toBe(false)
   })
 })
