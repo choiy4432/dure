@@ -2137,19 +2137,21 @@ const initModes = (e: Engine, id: string) => {
 };
 
 test('bypass: 답 없이 지난 켜기가 늦게 적용돼도 이어 보낸 끄기가 덮는다 — 다음 차례는 묻고, 스위치는 잠기지 않는다', async () => {
-  // 켜기 요청은 1.5 초 뒤에야 적용·답한다(엔진 한도 1 초) — 진짜 claude 는 제어 요청을 차례대로 처리하니 이어 보낸 끄기는 그 뒤에
-  const e = await start({ FAKE_SET_MODE_LATE_MS: '1500' }, false, { bypassTimeoutMs: 1000 });
+  // 켜기 요청은 3 초 뒤에야 적용·답한다(엔진 한도 2 초) — 진짜 claude 는 제어 요청을 차례대로 처리하니 이어 보낸 끄기는 그 뒤에.
+  // 여유는 양쪽 다 약 1 초: 켜기는 한도(2 초)가 적용(3 초)보다 먼저 지나고, 2 초쯤 보낸 끄기는 3 초쯤 답해 제 한도(2 초) 안이다
+  // (끄기도 같은 한도라 한도를 1 초로 두면 끄기마저 지나 다시 띄운다 — 바쁜 PC 에서 흔들리지 않게 둘 다 넓혔다)
+  const e = await start({ FAKE_SET_MODE_LATE_MS: '3000' }, false, { bypassTimeoutMs: 2000 });
   const { a } = setup(e);
   await e.setAllowBypass(true);
   await e.setBypass(a.id, true);
   const errs: { agentId: string | null; message: string }[] = [];
   e.on('engine-error', (x) => errs.push(x));
   const modes = initModes(e, a.id);
-  const failed = waitFor(e, 'engine-error', () => true, 3000);
+  const failed = waitFor(e, 'engine-error', () => true, 5000);
   await turn(e, a.id, 'echo 하나');
   await failed;
   expect(agentOf(e, a.id).bypassOn).toBe(false);
-  const settled = waitFor<FlagsEvent>(e, 'flags', (f) => f.agentId === a.id, 3000); // 늦은 켜기 뒤에 처리된 끄기의 답
+  const settled = waitFor<FlagsEvent>(e, 'flags', (f) => f.agentId === a.id, 8000); // 늦은 켜기 뒤에 처리된 끄기의 답
   expect(await settled).toEqual({ agentId: a.id, bypass: false, bySettings: false, pending: false });
   await turn(e, a.id, 'echo 둘');
   expect(modes).toEqual(['default', 'default']); // 다음 차례도 묻는 모드
@@ -2157,7 +2159,7 @@ test('bypass: 답 없이 지난 켜기가 늦게 적용돼도 이어 보낸 끄�
   expect(modeLines('A')).toEqual([['mode:bypassPermissions', 'echo 하나', 'mode:default', 'echo 둘']]);
   expect(errs).toEqual([{ agentId: a.id, message: ON_FAILED }]);
   expect(noticesOf(e, a.id)).toEqual([ON_FAILED_NOTICE]);
-});
+}, 20_000);
 
 test('bypass: 옵션으로 뜬 세션이 스위치가 꺼진 채 bypass 로 알리면(init) 내 기본 모드로 맞춘다 — 내 설정이 bypass 면 그대로', async () => {
   // 시작부터 bypass(엔진 모르게 늦게 적용된 켜기 흉내) · 내 설정의 기본 모드는 default

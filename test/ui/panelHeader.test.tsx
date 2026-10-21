@@ -531,13 +531,14 @@ describe('PanelHeader — 묻지 않음 스위치', () => {
     expect(api.setBypass).toHaveBeenCalledWith('w', false)
   })
 
-  it('setBypass 가 실패하면 패널 오류 줄에 엔진 문구', async () => {
+  it('setBypass 가 거절되면(그새 다른 창에서 허용을 끔) 패널 오류 줄에 엔진 문구', async () => {
     snapshot.allowBypass = true
-    api.setBypass.mockRejectedValueOnce(new Error('먼저 설정에서 허용을 켜 주세요.'))
+    // 엔진(engine.ts BYPASS_NOT_ALLOWED)이 실제로 던지는 문구 — 모드 바꾸기 실패는 던지지 않고 대화 안내 한 줄로 알린다
+    api.setBypass.mockRejectedValueOnce(new Error('설정에서 묻지 않고 실행을 허용해야 켤 수 있어요.'))
     await renderPanel()
     await act(async () => { fireEvent.click(sw()) })
     await settle()
-    expect(document.querySelector('.ph-msg')!.textContent).toBe('먼저 설정에서 허용을 켜 주세요.')
+    expect(document.querySelector('.ph-msg')!.textContent).toBe('설정에서 묻지 않고 실행을 허용해야 켤 수 있어요.')
     expect(sw().getAttribute('aria-busy')).toBeNull()
   })
 })
