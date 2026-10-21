@@ -995,6 +995,69 @@ test('engine: 하는 일 입력은 화면이 읽는 칸만 기록 — 넘김 본
   expect(lines.filter((l) => l.includes('아주 긴 넘김 본문'))).toHaveLength(1);
 });
 
+/** 그 차례의 하는 일 결과 하나(EDIT·EDITBARE 는 하나뿐) */
+async function editResult(env: Record<string, string>, line: string) {
+  const e = await start(env);
+  const { a } = setup(e);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text(line));
+  await done;
+  const r = e.history(a.id).find((x) => x.kind === 'tool-result')!;
+  const file = fs.readFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), 'utf8');
+  return { r, file };
+}
+
+test('수정: 결과의 structuredPatch 를 바뀐 줄(patch)로 기록 — 결과 글은 그대로, originalFile·옛/새 글 통째는 기록 파일에 없다', async () => {
+  const { r, file } = await editResult({}, 'EDIT src/a.ts');
+  expect(r).toEqual({
+    t: expect.any(Number), kind: 'tool-result', toolUseId: expect.any(String), isError: false,
+    text: 'The file src/a.ts has been updated successfully.', viaApproval: false,
+    patch: [{ oldStart: 10, newStart: 10, lines: [' const a = 1', '-const b = 2', '+const b = 3', '+const c = 4', ' const d = 5'] }],
+  });
+  expect(file).not.toContain('ORIGINAL FILE BODY');
+  expect(file).not.toContain('originalFile');
+  expect(file).not.toContain('old_string');
+  expect(file).not.toContain('oldLines');
+});
+
+test('수정: structuredPatch 가 없으면(서브에이전트 줄 등) 하는 일 입력으로 — 옛 줄 전부 - · 새 줄 전부 +, 줄 번호 null', async () => {
+  const { r, file } = await editResult({}, 'EDITBARE');
+  expect(r).toMatchObject({ kind: 'tool-result', isError: false, text: 'The file bare.txt has been updated successfully.' });
+  expect(r.kind === 'tool-result' && r.patch).toEqual([{ oldStart: null, newStart: null, lines: ['-old 1', '-old 2', '+new 1', '+new 2', '+new 3'] }]);
+  expect(r).not.toHaveProperty('patchCut');
+  // 입력은 기록 파일에 지금처럼 화면이 읽는 칸만
+  expect(file).not.toContain('old_string');
+});
+
+test('수정: MultiEdit 은 고친 군데마다 한 묶음', async () => {
+  const { r } = await editResult({}, 'EDITBARE MULTI');
+  expect(r.kind === 'tool-result' && r.patch).toEqual([
+    { oldStart: null, newStart: null, lines: ['-a', '+A'] },
+    { oldStart: null, newStart: null, lines: ['-b', '-c', '+B'] },
+  ]);
+});
+
+test('수정: 실패한 결과엔 바뀐 줄이 없다(입력으로도 만들지 않는다)', async () => {
+  const { r } = await editResult({}, 'EDITBARE FAIL');
+  expect(r).toMatchObject({ kind: 'tool-result', isError: true, text: 'String to replace not found in file.' });
+  expect(r).not.toHaveProperty('patch');
+});
+
+test('수정: 401줄이면 앞 400줄 + patchCut', async () => {
+  const { r } = await editResult({}, 'EDIT big.txt 401');
+  if (r.kind !== 'tool-result') throw new Error('tool-result 아님');
+  expect(r.patch!.flatMap((h) => h.lines)).toHaveLength(400);
+  expect(r.patch![0].lines.at(-1)).toBe('+줄 400');
+  expect(r.patchCut).toBe(true);
+});
+
+test('수정이 아닌 일(만듦)엔 structuredPatch 가 와도 바뀐 줄을 남기지 않는다', async () => {
+  const { r, file } = await editResult({ FAKE_EDIT_TOOL: 'Write' }, 'EDIT src/a.ts');
+  expect(r).toMatchObject({ kind: 'tool-result', text: 'The file src/a.ts has been updated successfully.' });
+  expect(r).not.toHaveProperty('patch');
+  expect(file).not.toContain('const c = 4');
+});
+
 test('engine: 이미지는 바이트 수만 기록', async () => {
   const e = await start();
   const { a } = setup(e);

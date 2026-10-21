@@ -23,6 +23,12 @@
 //   BGTASK <명령>       서브에이전트가 아닌 일(백그라운드 명령) — Bash tool_use(run_in_background) → task_started(task_<n>,
 //                       task_type:'local_bash' — 파서가 버린다) → tool_result → task_notification(completed — 같은 모양, 엔진엔 모르는 끝으로 온다)
 //                       → 글 "BG DONE" → result. 끝 알림까지 차례 안에서(시험이 result 로 기다릴 수 있게)
+//   EDIT <파일> [<n>]   Edit tool_use(file_path·old_string·new_string) → tool_result "The file <파일> has been updated successfully."
+//                       + 최상위 tool_use_result {filePath, oldString, newString, originalFile, structuredPatch, userModified, replaceAll}
+//                       (진짜 Claude Code 의 Edit 결과 모양) → 글 "EDITED" → result. 묶음은 앞뒤 줄 · '-' 한 줄 · '+' 두 줄,
+//                       n 을 주면 '+' 줄 n 개 한 묶음. FAKE_EDIT_TOOL=<도구> 면 그 이름의 tool_use 로(기본 Edit)
+//   EDITBARE [MULTI|FAIL] structuredPatch 없이(tool_use_result 가 없는 서브에이전트 줄처럼) — Edit tool_use(MULTI 면 MultiEdit, 두 군데)
+//                       → tool_result 만 → 글 "EDITED" → result. FAIL 이면 결과가 is_error "String to replace not found in file."
 //   그 밖               글 "받음: <글>"
 // MCP tools/call 은 진짜(probe14 A)처럼 params._meta = { 'claudecode/toolUseId': <그 부르기의 tool_use id> } 를 싣는다.
 // 서브에이전트 손잡이:
@@ -412,6 +418,41 @@ async function turn(text) {
     });
     await assistant([{ type: 'text', text: 'BG DONE' }]);
     await finish('BG DONE');
+    return;
+  }
+  const edit = /^EDIT (\S+)(?: (\d+))?$/.exec(text);
+  if (edit) {
+    const [, file, count] = edit;
+    const id = `toolu_${++sequence}`;
+    const oldString = 'const b = 2';
+    const newString = 'const b = 3\nconst c = 4';
+    await assistant([{ type: 'tool_use', id, name: process.env.FAKE_EDIT_TOOL || 'Edit', input: { file_path: file, old_string: oldString, new_string: newString } }]);
+    const n = count === undefined ? null : Number(count);
+    const hunk =
+      n === null
+        ? { oldStart: 10, oldLines: 3, newStart: 10, newLines: 4, lines: [' const a = 1', '-const b = 2', '+const b = 3', '+const c = 4', ' const d = 5'] }
+        : { oldStart: 1, oldLines: 0, newStart: 1, newLines: n, lines: Array.from({ length: n }, (_, i) => `+줄 ${i + 1}`) };
+    await toolResult(id, `The file ${file} has been updated successfully.`, false, {
+      tool_use_result: {
+        filePath: file, oldString, newString, originalFile: 'ORIGINAL FILE BODY\n'.repeat(50), structuredPatch: [hunk], userModified: false, replaceAll: false,
+      },
+    });
+    await assistant([{ type: 'text', text: 'EDITED' }]);
+    await finish('EDITED');
+    return;
+  }
+  const bare = /^EDITBARE(?: (MULTI|FAIL))?$/.exec(text);
+  if (bare) {
+    const id = `toolu_${++sequence}`;
+    const multi = bare[1] === 'MULTI';
+    const input = multi
+      ? { file_path: 'bare.txt', edits: [{ old_string: 'a', new_string: 'A' }, { old_string: 'b\nc', new_string: 'B' }] }
+      : { file_path: 'bare.txt', old_string: 'old 1\nold 2', new_string: 'new 1\nnew 2\nnew 3' };
+    await assistant([{ type: 'tool_use', id, name: multi ? 'MultiEdit' : 'Edit', input }]);
+    if (bare[1] === 'FAIL') await toolResult(id, 'String to replace not found in file.', true);
+    else await toolResult(id, 'The file bare.txt has been updated successfully.');
+    await assistant([{ type: 'text', text: 'EDITED' }]);
+    await finish('EDITED');
     return;
   }
   const send = /^SEND ([^:]+): ([\s\S]*)$/.exec(text);

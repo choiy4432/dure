@@ -2313,6 +2313,71 @@ code {
   margin-top: 6px;
 }
 
+/* 수정의 바뀐 줄(diff) — 출력과 같은 고정폭 12px · 줄 높이 18px. 줄마다 옛/새 번호(알면) · 앞 기호 그대로의 글 */
+.df {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: 0;
+  color: var(--text-2);
+}
+
+/* 묶음 사이 얇은 나눔 줄 */
+.df-h + .df-h {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.df-l {
+  position: relative;
+  display: flex;
+}
+
+/* 지운 줄 · 더한 줄은 바탕으로(앞 기호 -·+ 와 읽는 말이 함께 — 색만으로 알리지 않는다), 앞뒤 줄은 옅게 */
+.df-l.del {
+  background: var(--danger-bg);
+}
+
+.df-l.add {
+  background: var(--ok-bg);
+}
+
+.df-l.ctx,
+.df-l.meta {
+  color: var(--muted);
+}
+
+/* 줄 번호 — 가장 큰 번호의 자릿수(--df-w)만큼, 오른쪽 맞춤. 복사할 때 따라오지 않는다 */
+.df-n {
+  flex: none;
+  box-sizing: content-box;
+  width: var(--df-w, 1ch);
+  padding-right: 8px;
+  text-align: right;
+  color: var(--muted);
+  user-select: none;
+}
+
+.df-t {
+  flex: 1;
+  min-width: 0;
+  padding: 0 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 읽는 말(지운 줄·더한 줄) — 화면엔 안 보이고 복사에도 안 따라온다 */
+.df-hid {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  user-select: none;
+}
+
 /* 서브에이전트 요약 한 줄(시안 2안) — 하는 일 줄 모양 그대로: Bot · 설명(본문 글꼴, 하나일 때) · 동사 · 오른쪽 끝에 상태별 개수와 화살표 */
 .sa-sum-d {
   color: var(--text);

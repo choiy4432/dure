@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { openStore, renameRetrying, type Store } from './store';
 import { openMessageLog, type MessageLog } from './messageLog';
-import { openHistory, trimToolInput, type History } from './history';
+import { capPatch, openHistory, patchFromInput, trimToolInput, type History } from './history';
 import { buildArgs, buildMcpConfig, buildUsageArgs, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
 import { ClaudeSession } from './claudeSession';
@@ -16,7 +16,7 @@ import { EFFORT_LEVELS, type EffortLevel } from './types';
 import { toContextUsage } from './usage';
 import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
 import type {
-  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, ContextUsage, Decision, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, StreamEvent, UserPart,
+  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, ContextUsage, Decision, DiffHunk, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, StreamEvent, UserPart,
 } from './types';
 
 export interface EngineOptions {
@@ -138,6 +138,10 @@ const EXITED: string = DENY.claudeExited;
 const STOPPED_BY_USER: string = DENY.userStopped;
 const TURN_ENDED: string = DENY.turnEnded;
 const TOOL_TEXT_KEEP = 2000;
+/** 바뀐 줄(patch)을 남기는 하는 일 — 화면의 '수정'. 만듦(Write)의 결과에도 structuredPatch 가 오지만 남기지 않는다 */
+const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit']);
+/** 결과를 기다리는 고친 일의 입력 묶음 상한(세션마다) — 결과가 끝내 안 온 것(멈춤 등)이 쌓이지 않게 오래된 것부터 버린다 */
+const EDITS_PENDING_MAX = 32;
 const STOPPED_NOTICE = '멈췄어요';
 const NO_AGENT = '에이전트를 찾을 수 없습니다.';
 const LIMIT_INVALID = '상한은 1 이상이어야 해요.';
@@ -272,6 +276,9 @@ class EngineImpl extends EventEmitter implements Engine {
   // 뒤에서 돈 서브에이전트가 끝나 Claude 가 스스로 열 차례를 기다린다 — 그동안 다시 띄우기·/effort 를 미루고 화면은 작업 중(세션 끝에 지운다)
   private autoTurns = new Map<AgentId, AutoTurnWait>();
   private seen = new WeakMap<ClaudeSession, SeenToolUses>(); // 그 세션 스트림에서 본 하는 일 — 승인·두레 도구를 부른 쪽을 가른다(세션이 끝나면 비운다)
+  // 결과를 기다리는 고친 일(EDIT_TOOLS) — tool_use id → 입력으로 만들어 기록용으로 줄인 바뀐 줄(못 만들면 null). 결과가 오면 빼고, 세션이 끝나면 비운다.
+  // 결과에 structuredPatch 가 없을 때(서브에이전트 줄 등)만 쓴다. 입력 통째는 들고 있지 않는다
+  private edits = new WeakMap<ClaudeSession, Map<string, { patch: DiffHunk[]; cut: boolean } | null>>();
   private started = false;
   private limit: number;
   private allow: boolean;
@@ -882,6 +889,7 @@ class EngineImpl extends EventEmitter implements Engine {
         this.sessions.delete(id);
         this.endEffortTurn(s); // /effort 차례 중이었으면 그 타이머도(다음에 띄울 때 다시 보낸다)
         this.forgetSeen(s);
+        this.edits.delete(s);
         this.guard(id, () => this.forgetEffortNow(id));
         this.guard(id, () => this.forgetMode(id));
         this.guard(id, () => this.forgetSubagents(id));
@@ -1419,15 +1427,46 @@ class EngineImpl extends EventEmitter implements Engine {
     this.guard(id, () => this.emit('subagents', { agentId: id, running: this.subagentsRunning(id) }));
   }
 
+  /** 고친 일을 불렀다 — 결과에 바뀐 줄이 없을 때 쓸 입력 묶음을 줄여 둔다(Edit·MultiEdit 만 만들 수 있다) */
+  private noteEdits(id: AgentId, ev: Extract<StreamEvent, { kind: 'assistant' }>): void {
+    const s = this.sessions.get(id);
+    if (!s) return;
+    for (const b of ev.blocks) {
+      if (b.type !== 'tool_use' || !EDIT_TOOLS.has(b.name) || typeof b.id !== 'string') continue;
+      const pending = this.edits.get(s) ?? new Map<string, { patch: DiffHunk[]; cut: boolean } | null>();
+      this.edits.set(s, pending);
+      const hunks = patchFromInput(b.name, b.input);
+      pending.set(b.id, hunks ? capPatch(hunks) : null);
+      if (pending.size > EDITS_PENDING_MAX) pending.delete(pending.keys().next().value!);
+    }
+  }
+
+  /**
+   * 고친 일의 결과 — 기록할 바뀐 줄: 결과의 structuredPatch, 없으면 부를 때 본 입력으로 만든 것. 둘 다 400줄·줄당 500자로 줄였다.
+   * 고친 일이 아니거나(만듦 포함) 실패·거절이면 없다
+   */
+  private takeEdit(id: AgentId, ev: Extract<StreamEvent, { kind: 'tool-result' }>): { patch: DiffHunk[]; cut: boolean } | null {
+    const s = this.sessions.get(id);
+    const pending = s && this.edits.get(s);
+    if (!pending?.has(ev.toolUseId)) return null;
+    const fromInput = pending.get(ev.toolUseId) ?? null;
+    pending.delete(ev.toolUseId);
+    if (ev.isError) return null;
+    const diff = ev.patch ? capPatch(ev.patch) : fromInput;
+    return diff && diff.patch.length > 0 ? diff : null;
+  }
+
   private recordEvent(id: AgentId, ev: StreamEvent): void {
-    if (ev.kind === 'assistant')
+    if (ev.kind === 'assistant') {
+      this.noteEdits(id, ev);
       this.record(id, {
         kind: 'assistant',
         // 하는 일 입력은 화면이 읽는 칸만 — 파일 본문·넘김 본문으로 기록 파일이 커지지 않게(이벤트로 나가는 것도 같은 모양)
         blocks: ev.blocks.map((b) => (b.type === 'tool_use' ? { ...b, input: trimToolInput(b.input) } : b)),
         ...(ev.parent ? { parent: ev.parent } : {}), // 서브에이전트 줄 — 부모의 Agent tool_use id
       });
-    else if (ev.kind === 'tool-result')
+    } else if (ev.kind === 'tool-result') {
+      const diff = this.takeEdit(id, ev);
       this.record(id, {
         kind: 'tool-result',
         toolUseId: ev.toolUseId,
@@ -1435,8 +1474,10 @@ class EngineImpl extends EventEmitter implements Engine {
         text: ev.text.slice(0, TOOL_TEXT_KEEP),
         viaApproval: this.perms.wasAsked(id, ev.toolUseId),
         ...(ev.parent ? { parent: ev.parent } : {}),
+        // 수정의 바뀐 줄 — 기록용으로 줄인 것(잘랐으면 patchCut)
+        ...(diff ? { patch: diff.patch, ...(diff.cut ? { patchCut: true as const } : {}) } : {}),
       });
-    else if (ev.kind === 'task-started')
+    } else if (ev.kind === 'task-started')
       this.record(id, {
         kind: 'subagent-start',
         toolUseId: ev.toolUseId,
@@ -1478,6 +1519,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.sessions.delete(id);
     if (s) this.endEffortTurn(s); // /effort 차례 중이었으면 그 타이머도
     if (s) this.forgetSeen(s);
+    if (s) this.edits.delete(s); // 결과를 기다리던 고친 일 — 끝낸 세션의 결과는 오지 않는다
     this.errors.delete(id);
     this.guard(id, () => this.forgetEffortNow(id)); // 끝난 세션의 지금 값은 다음 세션의 값이 아니다
     if (s) this.guard(id, () => this.forgetMode(id)); // 알리는 권한 모드도 — 이제 다음에 띄울 때의 모드

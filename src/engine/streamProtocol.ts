@@ -1,4 +1,4 @@
-import type { AssistantBlock, ControlRequest, StreamEvent, SubagentEnd, UserPart } from './types.js';
+import type { AssistantBlock, ControlRequest, DiffHunk, StreamEvent, SubagentEnd, UserPart } from './types.js';
 
 const ignored = (type: string): StreamEvent => ({ kind: 'ignored', type });
 
@@ -22,6 +22,23 @@ const END_STATUS: readonly string[] = ['completed', 'failed', 'stopped'];
 
 const LOCAL_OUT = /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>$/;
 
+/**
+ * 고친 일의 바뀐 줄 — user 줄 최상위 tool_use_result.structuredPatch 의 묶음마다 oldStart·newStart·lines 만(lines 는 그대로).
+ * originalFile 같은 다른 칸은 읽지 않는다. 묶음 하나라도 모양이 다르거나 비었으면 없음
+ */
+function patchOf(obj: any): { patch?: DiffHunk[] } {
+  const sp = obj.tool_use_result?.structuredPatch;
+  if (!Array.isArray(sp) || sp.length === 0) return {};
+  const patch: DiffHunk[] = [];
+  for (const h of sp) {
+    const oldStart = num(h?.oldStart);
+    const newStart = num(h?.newStart);
+    if (oldStart === null || newStart === null || !Array.isArray(h.lines) || !h.lines.every((l: unknown) => typeof l === 'string')) return {};
+    patch.push({ oldStart, newStart, lines: h.lines });
+  }
+  return { patch };
+}
+
 function parseUser(obj: any): StreamEvent {
   const content = obj.message?.content;
   if (typeof content === 'string') {
@@ -38,6 +55,7 @@ function parseUser(obj: any): StreamEvent {
         isError: tr.is_error === true,
         text: toolResultText(tr.content),
         ...parentOf(obj),
+        ...patchOf(obj),
       };
     }
   }

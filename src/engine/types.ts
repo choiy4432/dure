@@ -76,12 +76,22 @@ export type ControlRequest =
   | { subtype: 'get_usage'; skip_behaviors: true }
   | { subtype: 'get_context_usage'; detail: 'summary' };
 export type AssistantBlock = { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown };
+/**
+ * 고친 일의 바뀐 줄 한 묶음 — 줄 머리 ' '(앞뒤 줄)·'-'(지운 줄)·'+'(더한 줄)는 통합 diff 그대로.
+ * 시작 줄 번호를 모르면(하는 일 입력으로 만든 묶음) null
+ */
+export interface DiffHunk {
+  oldStart: number | null;
+  newStart: number | null;
+  lines: string[];
+}
 export type SubagentEnd = 'completed' | 'failed' | 'stopped';
 export type StreamEvent =
   | { kind: 'init'; sessionId: string; model: string; permissionMode: string; slashCommands: string[] }
   | { kind: 'text-delta'; text: string }
   | { kind: 'assistant'; blocks: AssistantBlock[]; parent?: string } // thinking 블록은 버린다. parent = 서브에이전트 줄이면 부모의 Agent tool_use id
-  | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; parent?: string }
+  // patch = user 줄 최상위 tool_use_result.structuredPatch(Claude Code 가 고친 일 결과에 싣는다) — 모양이 다르면 없음
+  | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; parent?: string; patch?: DiffHunk[] }
   | { kind: 'task-started'; taskId: string; toolUseId: string; description: string; subagentType: string | null; parentTaskId: string | null }
   | { kind: 'task-ended'; taskId: string; toolUseId: string; status: SubagentEnd; summary: string; toolUses: number | null; durationMs: number | null }
   | { kind: 'local-output'; text: string } // 로컬 명령(/model 등) 출력 에코
@@ -95,7 +105,8 @@ export type HistoryPart = { type: 'text'; text: string } | { type: 'image'; medi
 export type HistoryItem = { t: number } & (
   | { kind: 'user'; source: 'human' | 'relay'; parts: HistoryPart[]; messageId?: string }
   | { kind: 'assistant'; blocks: AssistantBlock[]; parent?: string }
-  | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; viaApproval: boolean; parent?: string }
+  // patch = 수정(Edit·MultiEdit·NotebookEdit)의 바뀐 줄 — 모두 합쳐 앞 400줄·줄마다 500자, 잘랐으면 patchCut
+  | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; viaApproval: boolean; parent?: string; patch?: DiffHunk[]; patchCut?: true }
   | { kind: 'subagent-start'; toolUseId: string; taskId: string; description: string; subagentType: string | null; parentTaskId: string | null }
   | { kind: 'subagent-end'; toolUseId: string; taskId: string; status: SubagentEnd; summary: string; toolUses: number | null; durationMs: number | null }
   | { kind: 'local-output'; text: string }

@@ -1,4 +1,4 @@
-import type { AssistantBlock, HistoryItem } from '../../engine/types'
+import type { AssistantBlock, DiffHunk, HistoryItem } from '../../engine/types'
 import { DENY_TEXTS } from '../../shared/denyTexts'
 import { subagentStatus, userText } from './subagents'
 import { toolSummary, type ToolIcon } from '../lib/toolSummary'
@@ -14,6 +14,10 @@ export interface ActionLine {
   pending?: boolean
   /** 출력이 길어 앞 2000자만 남겼다 — 잘렸을 때만 true */
   truncated?: boolean
+  /** '수정'의 바뀐 줄 — 거절·오류가 아니고 엔진이 남겼을 때만. 있으면 펼침이 결과 글 대신 이것을 보인다 */
+  patch?: DiffHunk[]
+  /** 바뀐 줄이 길어 앞 400줄만 남겼다 — 잘렸을 때만 */
+  patchCut?: true
 }
 
 /** Claude 답 안의 한 조각 — 글, 또는 이어진 하는 일 한 상자. 일어난 차례대로 놓는다 */
@@ -57,6 +61,8 @@ export function actionFor(b: ToolUse, results: Map<string, ToolResult>): ActionL
   const s = toolSummary(b.name, b.input)
   const r = results.get(b.id)
   if (!r) return { id: b.id, ...s, allowed: false, denied: false, output: '', pending: true }
+  // 바뀐 줄은 '수정'의 성공한 결과에만 — 거절·오류면 지금처럼 결과 글
+  const diff = s.verb === '수정' && !r.isError && r.patch && r.patch.length > 0 ? r.patch : null
   return {
     id: b.id,
     ...s,
@@ -64,6 +70,7 @@ export function actionFor(b: ToolUse, results: Map<string, ToolResult>): ActionL
     denied: r.isError && DENY_TEXTS.includes(r.text),
     output: r.text.slice(0, OUTPUT_MAX),
     ...(r.text.length > OUTPUT_MAX ? { truncated: true } : {}),
+    ...(diff ? { patch: diff, ...(r.patchCut ? { patchCut: true as const } : {}) } : {}),
   }
 }
 

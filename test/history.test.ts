@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { openHistory, trimToolInput } from '../src/engine/history';
+import { capPatch, openHistory, patchFromInput, trimToolInput } from '../src/engine/history';
 import { toolSummary } from '../src/renderer/lib/toolSummary';
 import { buildTranscript } from '../src/renderer/state/transcript';
 import type { HistoryItem } from '../src/engine/types';
@@ -157,4 +157,51 @@ test('history: 하는 일 입력을 통째로 담은 옛 기록 파일도 그대
   expect(h.read('a').map((x) => x.kind)).toEqual(['assistant', 'tool-result', 'notice']);
   const { lines } = buildTranscript(h.read('a'), undefined);
   expect(lines[0]).toMatchObject({ kind: 'claude', text: '고칠게요', actions: [{ verb: '만듦', target: 'big.ts', output: 'ok' }] });
+});
+
+test('capPatch: 모두 합쳐 앞 400줄 · 줄마다 500자 — 잘랐을 때만 cut', () => {
+  const small = [{ oldStart: 1, newStart: 1, lines: [' a', '-b', '+B'] }];
+  expect(capPatch(small)).toEqual({ patch: small, cut: false });
+  // 400줄 딱 — 자르지 않는다
+  const plus = (n: number, from = 0) => Array.from({ length: n }, (_, i) => `+줄 ${from + i}`);
+  expect(capPatch([{ oldStart: 1, newStart: 1, lines: plus(400) }])).toEqual({ patch: [{ oldStart: 1, newStart: 1, lines: plus(400) }], cut: false });
+  // 401줄 — 앞 400줄
+  expect(capPatch([{ oldStart: 1, newStart: 1, lines: plus(401) }])).toEqual({ patch: [{ oldStart: 1, newStart: 1, lines: plus(400) }], cut: true });
+  // 묶음을 넘어 센다 — 넘친 묶음은 앞만, 그 뒤 묶음은 버린다
+  const capped = capPatch([
+    { oldStart: 1, newStart: 1, lines: plus(300) },
+    { oldStart: 500, newStart: 600, lines: plus(150, 300) },
+    { oldStart: 900, newStart: 900, lines: ['-z'] },
+  ]);
+  expect(capped.cut).toBe(true);
+  expect(capped.patch.map((h) => [h.oldStart, h.lines.length])).toEqual([[1, 300], [500, 100]]);
+  expect(capped.patch[1].lines.at(-1)).toBe('+줄 399');
+  // 줄당 500자(앞 기호 포함)
+  const long = `+${'ㄱ'.repeat(800)}`;
+  expect(capPatch([{ oldStart: null, newStart: null, lines: [' a', long] }])).toEqual({
+    patch: [{ oldStart: null, newStart: null, lines: [' a', long.slice(0, 500)] }], cut: true,
+  });
+  // 빈 묶음은 남기지 않는다
+  expect(capPatch([{ oldStart: 1, newStart: 1, lines: [] }])).toEqual({ patch: [], cut: false });
+});
+
+test('patchFromInput: Edit 은 옛 줄 전부 - · 새 줄 전부 + 한 묶음, MultiEdit 은 edits 마다 — 줄 번호는 모른다(null)', () => {
+  expect(patchFromInput('Edit', { file_path: 'a.ts', old_string: 'old 1\nold 2', new_string: 'new 1\r\nnew 2\nnew 3' })).toEqual([
+    { oldStart: null, newStart: null, lines: ['-old 1', '-old 2', '+new 1', '+new 2', '+new 3'] },
+  ]);
+  // 끝 줄바꿈은 빈 줄이 아니다 · 빈 글은 줄이 없다(넣기만·지우기만)
+  expect(patchFromInput('Edit', { old_string: 'a\n', new_string: '' })).toEqual([{ oldStart: null, newStart: null, lines: ['-a'] }]);
+  expect(patchFromInput('Edit', { old_string: '', new_string: 'b\n\n' })).toEqual([{ oldStart: null, newStart: null, lines: ['+b', '+'] }]);
+  expect(patchFromInput('MultiEdit', { file_path: 'b.ts', edits: [{ old_string: 'a', new_string: 'A' }, null, { old_string: 'b\nc', new_string: 'B' }] })).toEqual([
+    { oldStart: null, newStart: null, lines: ['-a', '+A'] },
+    { oldStart: null, newStart: null, lines: ['-b', '-c', '+B'] },
+  ]);
+  // 만들 수 없으면 null — 고치는 일이 아니거나, 글이 아니거나, 바뀐 줄이 없거나
+  expect(patchFromInput('Write', { file_path: 'a.ts', content: 'x' })).toBeNull();
+  expect(patchFromInput('NotebookEdit', { notebook_path: 'n.ipynb', new_source: 'x' })).toBeNull();
+  expect(patchFromInput('Edit', { old_string: 5, new_string: 'x' })).toBeNull();
+  expect(patchFromInput('Edit', { old_string: '', new_string: '' })).toBeNull();
+  expect(patchFromInput('Edit', null)).toBeNull();
+  expect(patchFromInput('MultiEdit', { edits: 'x' })).toBeNull();
+  expect(patchFromInput('MultiEdit', { edits: [{ old_string: 1 }] })).toBeNull();
 });

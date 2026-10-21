@@ -156,6 +156,59 @@ describe('parseLine — 서브에이전트', () => {
   });
 });
 
+describe('parseLine — 수정의 바뀐 줄(tool_use_result.structuredPatch)', () => {
+  // Claude Code 가 Edit 결과에 싣는 모양 — originalFile 같은 큰 칸은 읽지 않는다
+  const editResult = (toolUseResult: unknown) =>
+    JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_E', content: 'The file a.ts has been updated successfully.' }] },
+      tool_use_result: toolUseResult,
+    });
+  const hunk = { oldStart: 3, oldLines: 3, newStart: 3, newLines: 4, lines: [' a', '-b', '+B', '+C', ' d'] };
+
+  test('structuredPatch → patch: 묶음마다 oldStart·newStart·lines(그대로)만', () => {
+    const second = { oldStart: 20, oldLines: 1, newStart: 21, newLines: 1, lines: ['-x', '+y', '\\ No newline at end of file'] };
+    expect(
+      parseLine(editResult({ filePath: 'a.ts', oldString: 'b', newString: 'B\nC', originalFile: 'a\nb\nd\n'.repeat(100), structuredPatch: [hunk, second], userModified: false, replaceAll: false })),
+    ).toEqual({
+      kind: 'tool-result',
+      toolUseId: 'toolu_E',
+      isError: false,
+      text: 'The file a.ts has been updated successfully.',
+      patch: [
+        { oldStart: 3, newStart: 3, lines: [' a', '-b', '+B', '+C', ' d'] },
+        { oldStart: 20, newStart: 21, lines: ['-x', '+y', '\\ No newline at end of file'] },
+      ],
+    });
+  });
+
+  test('서브에이전트 줄이어도 — parent 와 patch 둘 다', () => {
+    const line = JSON.parse(editResult({ structuredPatch: [hunk] }));
+    expect(parseLine(JSON.stringify({ ...line, parent_tool_use_id: 'toolu_A' }))).toMatchObject({
+      kind: 'tool-result', parent: 'toolu_A', patch: [{ oldStart: 3, newStart: 3, lines: hunk.lines }],
+    });
+  });
+
+  test('모양이 이상하면 patch 칸이 없다 — 결과 글은 그대로', () => {
+    const odd: unknown[] = [
+      undefined,
+      'Error: String to replace not found in file.',
+      { filePath: 'a.ts' },
+      { structuredPatch: 'x' },
+      { structuredPatch: [] },
+      { structuredPatch: [null] },
+      { structuredPatch: [{ ...hunk, lines: 'x' }] },
+      { structuredPatch: [{ ...hunk, lines: [' a', 5] }] },
+      { structuredPatch: [{ ...hunk, oldStart: '3' }] },
+      { structuredPatch: [hunk, { newStart: 9, lines: ['+z'] }] },
+    ];
+    for (const r of odd) {
+      const ev = parseLine(editResult(r));
+      expect(ev).toEqual({ kind: 'tool-result', toolUseId: 'toolu_E', isError: false, text: 'The file a.ts has been updated successfully.' });
+    }
+  });
+});
+
 describe('encode', () => {
   test('encodeUser: 텍스트·이미지, 특수문자 왕복', () => {
     const text = '줄1\n"따옴표" \\ 백슬래시 🎉 한글';

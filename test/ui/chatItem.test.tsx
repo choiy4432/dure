@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import '@testing-library/jest-dom/vitest'
-import { render, screen, within, cleanup } from '@testing-library/react'
+import { render, screen, within, cleanup, fireEvent } from '@testing-library/react'
 import { ChatItem } from '../../src/renderer/panel/ChatItem'
-import type { ChatLine, ClaudePart } from '../../src/renderer/state/transcript'
+import type { ActionLine, ChatLine, ClaudePart } from '../../src/renderer/state/transcript'
 
 const act = (id: string) => ({ id, verb: '읽음', target: `${id}.ts`, icon: 'file' as const, allowed: true, denied: false, output: 'x' })
 
@@ -97,5 +97,75 @@ describe('ChatItem — 서브에이전트 요약 줄', () => {
   it('어느 에이전트의 대화인지 모르면 누를 수 없다', () => {
     render(<ChatItem line={answer(subs())} index={0} />)
     expect(screen.getByRole('button', { name: /서브에이전트 3개에게 맡김/ })).toBeDisabled()
+  })
+})
+
+describe('ChatItem — 하는 일 "수정"을 펼치면 바뀐 줄(diff)', () => {
+  const HUNK = { oldStart: 10, newStart: 10, lines: [' const a = 1', '-const b = 2', '+const b = 3', '+const c = 4', ' const d = 5'] }
+  const DONE = 'The file a.ts has been updated successfully.'
+  const edit = (over: Partial<ActionLine> = {}): ActionLine => ({
+    id: 'e', verb: '수정', target: 'a.ts', icon: 'edit', allowed: false, denied: false, output: DONE, patch: [HUNK], ...over,
+  })
+  const line = (a: ActionLine): ChatLine => ({ kind: 'claude', text: '', actions: [a], at: 1, parts: [{ type: 'acts', actions: [a] }] })
+  const open = (a: ActionLine) => {
+    const r = render(<ChatItem line={line(a)} index={0} />)
+    fireEvent.click(screen.getByRole('button', { name: /수정/ }))
+    return r
+  }
+  const rows = (c: HTMLElement) => [...c.querySelectorAll('.act-out .df-l')] as HTMLElement[]
+
+  it('앞뒤 줄 · - 줄 · + 줄이 차례대로, 옛/새 줄 번호와 함께 — 결과 글은 안 보인다', () => {
+    const { container } = open(edit())
+    const r = rows(container)
+    expect(r.map(x => x.className)).toEqual(['df-l ctx', 'df-l del', 'df-l add', 'df-l add', 'df-l ctx'])
+    // 앞 기호(-·+·빈칸)는 고정폭 글에 그대로 보인다(통합 diff 처럼)
+    expect(r.map(x => x.querySelector('.df-t')!.textContent)).toEqual(HUNK.lines)
+    // 앞뒤 줄은 둘 다 늘고, - 는 옛 줄만, + 는 새 줄만
+    expect(r.map(x => [...x.querySelectorAll('.df-n')].map(n => n.textContent))).toEqual([
+      ['10', '10'], ['11', ''], ['', '11'], ['', '12'], ['12', '13'],
+    ])
+    expect(screen.queryByText(DONE)).toBeNull()
+    expect(container.querySelector('.act-out pre')).toBeNull()
+    expect(screen.queryByText('전체는 길어서 생략')).toBeNull()
+  })
+
+  it('바뀐 종류는 색만이 아니라 읽는 말로도 — 지운 줄 · 더한 줄(앞뒤 줄엔 없음)', () => {
+    const { container } = open(edit())
+    const r = rows(container)
+    expect(r.map(x => x.querySelector('.df-hid')?.textContent?.trim() ?? null)).toEqual([null, '지운 줄', '더한 줄', '더한 줄', null])
+    // 줄 전체로 읽으면 종류 · 글 차례(번호 다음)
+    expect(r[1].textContent).toBe('11지운 줄 -const b = 2')
+  })
+
+  it('묶음이 여럿이면 묶음마다 따로(사이에 나눔 줄) — 줄 번호는 묶음마다 처음부터', () => {
+    const second = { oldStart: 40, newStart: 41, lines: ['-x', '+y'] }
+    const { container } = open(edit({ patch: [HUNK, second] }))
+    const groups = [...container.querySelectorAll('.act-out .df-h')]
+    expect(groups).toHaveLength(2)
+    expect([...groups[1].querySelectorAll('.df-n')].map(n => n.textContent)).toEqual(['40', '', '', '41'])
+  })
+
+  it('입력으로 만든 묶음(줄 번호 모름)엔 번호 칸이 없다', () => {
+    const { container } = open(edit({ patch: [{ oldStart: null, newStart: null, lines: ['-old', '+new'] }] }))
+    expect(rows(container).map(x => x.querySelector('.df-t')!.textContent)).toEqual(['-old', '+new'])
+    expect(container.querySelectorAll('.act-out .df-n')).toHaveLength(0)
+  })
+
+  it('patchCut 이면 "전체는 길어서 생략"', () => {
+    open(edit({ patchCut: true }))
+    expect(screen.getByText('전체는 길어서 생략')).toBeInTheDocument()
+  })
+
+  it('거절된 수정은 지금처럼 결과 글', () => {
+    const { container } = open(edit({ denied: true, output: '사용자가 거절했습니다.' }))
+    expect(container.querySelector('.act-out .df')).toBeNull()
+    expect(container.querySelector('.act-out pre')).toHaveTextContent('사용자가 거절했습니다.')
+  })
+
+  it('바뀐 줄이 나중에 실려도 다시 그린다(같은 결과 글 · 새 줄 객체)', () => {
+    const { container, rerender } = open(edit({ patch: undefined }))
+    expect(container.querySelector('.act-out pre')).toHaveTextContent(DONE)
+    rerender(<ChatItem line={line(edit())} index={0} />)
+    expect(container.querySelector('.act-out .df')).not.toBeNull()
   })
 })

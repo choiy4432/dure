@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { AgentId, HistoryItem } from './types';
+import type { AgentId, DiffHunk, HistoryItem } from './types';
 
 /**
  * 기록에 남기는 하는 일 입력의 칸 — 화면(renderer lib/toolSummary.ts)이 읽는 것만. 거기서 새 칸을 읽으면 여기도 더한다.
@@ -21,6 +21,63 @@ export function trimToolInput(input: unknown): Record<string, string> {
     out[key] = v.length <= INPUT_TEXT_MAX ? v : PATH_INPUT.has(key) ? v.slice(-INPUT_TEXT_MAX) : v.slice(0, INPUT_TEXT_MAX);
   }
   return out;
+}
+
+/** 기록에 남기는 바뀐 줄 — 모두 합쳐 이만큼, 줄마다 이만큼(앞 기호 포함) */
+const PATCH_LINES_MAX = 400;
+const PATCH_LINE_MAX = 500;
+
+/** 바뀐 줄을 기록용으로 줄인다 — 모두 합쳐 앞 400줄, 줄마다 500자. 넘친 묶음은 앞만, 그 뒤 묶음·빈 묶음은 버린다. 잘랐으면 cut */
+export function capPatch(hunks: DiffHunk[]): { patch: DiffHunk[]; cut: boolean } {
+  const patch: DiffHunk[] = [];
+  let left = PATCH_LINES_MAX;
+  let cut = false;
+  for (const h of hunks) {
+    if (h.lines.length === 0) continue;
+    if (left === 0) {
+      cut = true;
+      break;
+    }
+    if (h.lines.length > left) cut = true;
+    const lines = h.lines.slice(0, left).map((l) => {
+      if (l.length <= PATCH_LINE_MAX) return l;
+      cut = true;
+      return l.slice(0, PATCH_LINE_MAX);
+    });
+    left -= lines.length;
+    patch.push({ oldStart: h.oldStart, newStart: h.newStart, lines });
+  }
+  return { patch, cut };
+}
+
+/** 글을 줄로 — 빈 글은 줄이 없고, 끝 줄바꿈 하나는 빈 줄이 아니다 */
+function linesOf(s: string): string[] {
+  return s === '' ? [] : s.replace(/\r?\n$/, '').split(/\r?\n/);
+}
+
+/** old_string·new_string 한 쌍 → 옛 줄 전부 '-', 새 줄 전부 '+' 한 묶음(줄 번호 모름). 글이 아니거나 바뀐 줄이 없으면 null */
+function hunkOf(e: unknown): DiffHunk | null {
+  if (!e || typeof e !== 'object') return null;
+  const { old_string: o, new_string: n } = e as Record<string, unknown>;
+  if (typeof o !== 'string' || typeof n !== 'string') return null;
+  const lines = [...linesOf(o).map((l) => `-${l}`), ...linesOf(n).map((l) => `+${l}`)];
+  return lines.length > 0 ? { oldStart: null, newStart: null, lines } : null;
+}
+
+/**
+ * 결과에 바뀐 줄이 없을 때(서브에이전트 줄 등) 하는 일 입력으로 만든 바뀐 줄 — Edit 은 old_string·new_string 한 묶음,
+ * MultiEdit 은 edits 마다 한 묶음(못 읽는 것은 건너뛴다). 만들 수 없으면 null
+ */
+export function patchFromInput(name: string, input: unknown): DiffHunk[] | null {
+  if (!input || typeof input !== 'object') return null;
+  let hunks: (DiffHunk | null)[];
+  if (name === 'Edit') hunks = [hunkOf(input)];
+  else if (name === 'MultiEdit') {
+    const edits = (input as Record<string, unknown>).edits;
+    hunks = Array.isArray(edits) ? edits.map(hunkOf) : [];
+  } else return null;
+  const kept = hunks.filter((h): h is DiffHunk => h !== null);
+  return kept.length > 0 ? kept : null;
 }
 
 /** 파일이 줄바꿈으로 끝나지 않는가 — 크기와 마지막 한 바이트만 본다(없으면 false) */

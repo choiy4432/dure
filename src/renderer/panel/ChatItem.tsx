@@ -13,6 +13,7 @@ import { Clamp } from '../lib/Clamp'
 import { ExpandBox } from '../lib/ExpandBox'
 import { Presence } from '../lib/presence'
 import { firstLine, localSummary } from '../lib/words'
+import { DiffView } from './DiffView'
 
 const ICONS: Record<ToolIcon, ComponentType<LucideProps>> = {
   file: File,
@@ -84,12 +85,19 @@ export function Action({ a }: { a: ActionLine }) {
       </button>
       <Presence show={open}>
         <ExpandBox as="div" className="act-out">
-          {a.output ? (
-            <Clamp className="clamp-mono">
-              <pre>{a.output}</pre>
-            </Clamp>
-          ) : <p className="act-none">보여 줄 내용이 없어요</p>}
-          {a.truncated && <p className="act-cut">전체는 길어서 생략</p>}
+          {/* '수정'은 결과 글("… updated successfully.") 대신 바뀐 줄 — 거절이면 지금처럼 결과 글 */}
+          {a.patch && !a.denied ? (
+            <DiffView hunks={a.patch} cut={a.patchCut} />
+          ) : (
+            <>
+              {a.output ? (
+                <Clamp className="clamp-mono">
+                  <pre>{a.output}</pre>
+                </Clamp>
+              ) : <p className="act-none">보여 줄 내용이 없어요</p>}
+              {a.truncated && <p className="act-cut">전체는 길어서 생략</p>}
+            </>
+          )}
         </ExpandBox>
       </Presence>
     </li>
@@ -244,7 +252,8 @@ function ChatItemView({ line, folded = false, index, agentId }: Props) {
 
 const sameAction = (a: ActionLine, b: ActionLine) =>
   a.id === b.id && a.verb === b.verb && a.target === b.target && a.icon === b.icon && a.allowed === b.allowed &&
-  a.denied === b.denied && a.output === b.output && a.pending === b.pending && a.truncated === b.truncated
+  a.denied === b.denied && a.output === b.output && a.pending === b.pending && a.truncated === b.truncated &&
+  a.patch === b.patch && a.patchCut === b.patchCut // 바뀐 줄은 기록 항목의 그 배열 그대로 — 같은 결과면 같은 참조
 
 /** 같은 종류의 조각 둘이 같은가 — 글은 내용, 하는 일은 개수, 서브에이전트 요약은 key·id·설명·개수 */
 function samePart(p: ClaudePart, q: ClaudePart): boolean {

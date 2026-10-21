@@ -96,6 +96,44 @@ describe('buildTranscript', () => {
     const { lines } = buildTranscript([asst([{ type: 'tool_use', id: 'q', name: 'Bash', input: {} }]), res('q', 'x'.repeat(2000))], undefined)
     expect((lines[0] as any).actions[0].truncated).toBeUndefined()
   })
+  it("'수정'의 결과에 바뀐 줄이 있으면 patch·patchCut 이 하는 일 줄로 — 없으면 칸도 없다", () => {
+    const hunks = [{ oldStart: 3, newStart: 3, lines: [' a', '-b', '+B'] }]
+    const edit = (id: string, name = 'Edit') => ({ type: 'tool_use', id, name, input: { file_path: `/x/${id}.ts` } })
+    const { lines } = buildTranscript(
+      [
+        asst([edit('e'), edit('m', 'MultiEdit'), edit('n')]),
+        { ...res('e', 'The file /x/e.ts has been updated successfully.'), patch: hunks } as HistoryItem,
+        { ...res('m', 'ok'), patch: hunks, patchCut: true } as HistoryItem,
+        res('n', 'ok'),
+      ],
+      undefined,
+    )
+    const [e, m, n] = (lines[0] as any).actions
+    expect(e).toEqual({ id: 'e', verb: '수정', target: 'e.ts', icon: 'edit', allowed: true, denied: false, output: 'The file /x/e.ts has been updated successfully.', patch: hunks })
+    expect(m).toMatchObject({ verb: '수정', patch: hunks, patchCut: true })
+    expect(n).not.toHaveProperty('patch')
+    expect(n).not.toHaveProperty('patchCut')
+  })
+  it('거절·오류인 수정, 수정이 아닌 일(만듦)엔 patch 를 싣지 않는다 — 결과 글로', () => {
+    const hunks = [{ oldStart: null, newStart: null, lines: ['-b', '+B'] }]
+    const { lines } = buildTranscript(
+      [
+        asst([
+          { type: 'tool_use', id: 'd', name: 'Edit', input: {} },
+          { type: 'tool_use', id: 'x', name: 'Edit', input: {} },
+          { type: 'tool_use', id: 'w', name: 'Write', input: {} },
+        ]),
+        { ...res('d', DENY.userDenied, true, true), patch: hunks } as HistoryItem,
+        { ...res('x', 'boom', true), patch: hunks, patchCut: true } as HistoryItem,
+        { ...res('w', 'ok'), patch: hunks } as HistoryItem,
+      ],
+      undefined,
+    )
+    for (const a of (lines[0] as any).actions) {
+      expect(a).not.toHaveProperty('patch')
+      expect(a).not.toHaveProperty('patchCut')
+    }
+  })
   it('전달 머리를 떼고 보낸 이름만 남긴다', () => {
     const it: HistoryItem = {
       t: 5, kind: 'user', source: 'relay',
