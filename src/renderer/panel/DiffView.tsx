@@ -32,10 +32,13 @@ function rowsOf(h: DiffHunk): Row[] {
 /** 읽는 말 — 바뀐 종류를 색만으로 알리지 않는다(보이는 '-'·'+' 앞 기호와 함께) */
 const SPOKEN: Partial<Record<RowKind, string>> = { del: '지운 줄 ', add: '더한 줄 ' }
 
+/** diff 가 접히기 전 보이는 줄 수 — 출력(3줄)보다 넉넉하게: 짧은 수정은 펼친 그대로 다 보인다(묶음 사이 나눔 줄 몫도 이 안에) */
+const DIFF_LINES = 12
+
 /**
  * 수정의 바뀐 줄 — 통합 diff 한 덩어리. 줄마다 옛/새 줄 번호(알면) · 앞 기호 그대로의 고정폭 글,
  * '-' 줄은 danger-bg · '+' 줄은 ok-bg · 앞뒤 줄은 muted, 묶음 사이는 얇은 나눔 줄.
- * 하는 일 출력처럼 길면 3줄로 접히고(Clamp), 엔진이 앞 400줄만 남겼으면(cut) "전체는 길어서 생략"
+ * 12줄 넘게 길면 접히고(Clamp), 엔진이 앞 400줄만 남겼으면(cut) "전체는 길어서 생략"
  */
 export function DiffView({ hunks, cut }: { hunks: DiffHunk[]; cut?: boolean }) {
   const rows = hunks.map(rowsOf)
@@ -45,7 +48,7 @@ export function DiffView({ hunks, cut }: { hunks: DiffHunk[]; cut?: boolean }) {
   const style = { '--df-w': `${String(top).length}ch` } as CSSProperties
   return (
     <>
-      <Clamp className="clamp-mono">
+      <Clamp className="clamp-mono" lines={DIFF_LINES}>
         <div className="df" style={style}>
           {rows.map((rs, i) => (
             <div key={i} className="df-h">

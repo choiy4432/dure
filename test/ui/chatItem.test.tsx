@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 import { render, screen, within, cleanup, fireEvent } from '@testing-library/react'
 import { ChatItem } from '../../src/renderer/panel/ChatItem'
@@ -160,6 +160,40 @@ describe('ChatItem — 하는 일 "수정"을 펼치면 바뀐 줄(diff)', () =>
     const { container } = open(edit({ denied: true, output: '사용자가 거절했습니다.' }))
     expect(container.querySelector('.act-out .df')).toBeNull()
     expect(container.querySelector('.act-out pre')).toHaveTextContent('사용자가 거절했습니다.')
+  })
+
+  describe('접기 — 12줄 넘을 때만', () => {
+    // jsdom 은 배치를 하지 않는다 — 줄 높이 18px · 묶음 사이 9px(위아래 4px + 1px 나눔 줄)로 상자 높이를 흉내 낸다.
+    // 접힌 상자(lim)는 --clamp-lines 줄까지만 보인다
+    const full = (el: HTMLElement) => el.querySelectorAll('.df-l').length * 18 + Math.max(0, el.querySelectorAll('.df-h').length - 1) * 9
+    beforeEach(() => {
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('clamp-box') ? full(this) : 0
+      })
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+        if (!this.classList.contains('clamp-box')) return 0
+        const lim = this.classList.contains('lim') ? Number(this.style.getPropertyValue('--clamp-lines')) * 18 : Infinity
+        return Math.min(full(this), lim)
+      })
+    })
+    afterEach(() => vi.restoreAllMocks())
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => `+줄 ${i + 1}`)
+
+    it('4줄 diff 는 접지 않는다 — 더 보기 없음', () => {
+      open(edit({ patch: [{ oldStart: 1, newStart: 1, lines: [' a', '-b', '+c', ' d'] }] }))
+      expect(screen.queryByRole('button', { name: '더 보기' })).toBeNull()
+    })
+
+    it('묶음 둘(모두 3줄)도 나눔 줄 몫까지 접지 않는다', () => {
+      open(edit({ patch: [{ oldStart: 1, newStart: 1, lines: ['-a', '+b'] }, { oldStart: 9, newStart: 9, lines: ['+c'] }] }))
+      expect(screen.queryByRole('button', { name: '더 보기' })).toBeNull()
+    })
+
+    it('13줄이면 12줄로 접히고 더 보기', () => {
+      const { container } = open(edit({ patch: [{ oldStart: 1, newStart: 1, lines: lines(13) }] }))
+      expect(screen.getByRole('button', { name: '더 보기' })).toBeInTheDocument()
+      expect((container.querySelector('.act-out .clamp-box') as HTMLElement).style.getPropertyValue('--clamp-lines')).toBe('12')
+    })
   })
 
   it('바뀐 줄이 나중에 실려도 다시 그린다(같은 결과 글 · 새 줄 객체)', () => {
