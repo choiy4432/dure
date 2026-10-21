@@ -1051,6 +1051,22 @@ test('수정: 401줄이면 앞 400줄 + patchCut', async () => {
   expect(r.patchCut).toBe(true);
 });
 
+test('수정: 살아 있는 agent-event 의 결과엔 바뀐 줄(patch)을 싣지 않는다 — 렌더러는 기록(줄인 것)만 읽는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const events: AgentEvent[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === a.id && events.push(x));
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('EDIT big.txt 401'));
+  await done;
+  const live = events.find((x) => x.event.kind === 'tool-result')!;
+  expect(live.event).toMatchObject({ kind: 'tool-result', text: 'The file big.txt has been updated successfully.' });
+  expect(live.event).not.toHaveProperty('patch');
+  // 기록은 그대로 줄인 바뀐 줄을 남긴다
+  const r = e.history(a.id).find((x) => x.kind === 'tool-result')!;
+  expect(r.kind === 'tool-result' && r.patch!.flatMap((h) => h.lines)).toHaveLength(400);
+});
+
 test('수정이 아닌 일(만듦)엔 structuredPatch 가 와도 바뀐 줄을 남기지 않는다', async () => {
   const { r, file } = await editResult({ FAKE_EDIT_TOOL: 'Write' }, 'EDIT src/a.ts');
   expect(r).toMatchObject({ kind: 'tool-result', text: 'The file src/a.ts has been updated successfully.' });
@@ -1903,6 +1919,19 @@ test('usage: 차례가 끝나면 살아 있는 에이전트 세션에 묻는다 
   e.refreshUsage();
   await sleep(300);
   expect(controlRequests('get_usage')).toHaveLength(1);
+});
+
+test('usage: 서브에이전트만 돌아도(부모 차례는 끝나 세션은 쉼) 일하는 중으로 쳐 주기마다 묻는다', async () => {
+  const gate = path.join(dir, 'gate'); // 만들지 않는다 — 서브에이전트는 끝나지 않는다
+  const e = await start({ FAKE_SUB_GATE: gate }, { startDelayMs: 60_000, pollMs: 150 });
+  const { a } = setup(e);
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 조사'));
+  await launched;
+  expect(e.subagentsRunning(a.id)).toHaveLength(1);
+  await until('차례 끝에 묻기', () => controlRequests('get_usage').length >= 1);
+  const before = controlRequests('get_usage').length;
+  await until('서브에이전트만 도는 동안 주기 묻기', () => controlRequests('get_usage').length >= before + 2, 3000);
 });
 
 test('usage: false 면 묻지 않는다 — usage() 는 null, refreshUsage 는 아무 일도 안 한다', async () => {
@@ -3017,6 +3046,42 @@ test('subagent: 도는 서브에이전트가 없으면 서브에이전트 것으
   expect(await leftover).toEqual({ behavior: 'deny', message: DENY.turnEnded });
   expect(e.pendingRequests()).toEqual([]);
   expect(e.status(a.id)).toBe('idle');
+});
+
+test('subagent: 늘 허용한 도구는 못 본 id 라도 기다리지 않고 허용 — 부른 쪽을 가를 필요가 없다', async () => {
+  const e = await start({}, false, { seenWaitMs: 3_000 });
+  const { a } = setup(e);
+  const first = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나')); // 세션을 띄운다
+  await first;
+  // 늘 허용 — 카드에서 '늘 허용'으로 답한다(id 없는 부르기는 부모 것이라 기다리지 않는다)
+  const askReq = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id);
+  const ask = approveDirect(a.id, 'Edit');
+  e.answerRequest((await askReq).id, { type: 'allow-always' });
+  expect(await ask).toEqual({ behavior: 'allow', updatedInput: {} });
+  expect(agentOf(e, a.id).alwaysAllow).toEqual(['Edit']);
+  const requests: PendingRequest[] = [];
+  e.on('request', (r: PendingRequest) => requests.push(r));
+  const t0 = Date.now();
+  expect(await approveDirect(a.id, 'Edit', undefined, 'toolu_nowhere')).toEqual({ behavior: 'allow', updatedInput: {} });
+  expect(Date.now() - t0).toBeLessThan(1_500);
+  expect(requests).toEqual([]);
+});
+
+test('subagent: 못 본 id 를 기다리는 사이 세션이 끝나면(새 대화) 카드를 만들지 않는다 — 서브에이전트로도 치지 않는다', async () => {
+  const e = await start({}, false, { seenWaitMs: 30_000 });
+  const { a } = setup(e);
+  const first = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나')); // 세션을 띄운다
+  await first;
+  const requests: PendingRequest[] = [];
+  e.on('request', (r: PendingRequest) => requests.push(r));
+  const call = approveDirect(a.id, 'Write', undefined, 'toolu_nowhere'); // 기다리기 시작
+  await new Promise((r) => setTimeout(r, 200));
+  await e.newConversation(a.id);
+  expect(await call).toEqual({ behavior: 'deny', message: DENY.claudeExited });
+  expect(requests).toEqual([]);
+  expect(e.pendingRequests()).toEqual([]);
 });
 
 test('subagent: SUBSEND — 서브에이전트의 send_message 는 실행하지 않고 오류로 · 부모의 SEND 는 카드 없이 지금처럼(기다림이 길어도 바로)', async () => {

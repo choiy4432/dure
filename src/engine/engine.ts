@@ -47,7 +47,7 @@ export interface EngineOptions {
 }
 
 // 이벤트:
-//  'agent-event' { agentId; event: StreamEvent; viaApproval?: boolean }  (tool-result 일 때 viaApproval = permissions.wasAsked)
+//  'agent-event' { agentId; event: StreamEvent; viaApproval?: boolean }  (tool-result 일 때 viaApproval = permissions.wasAsked, patch 는 빼고 — 기록에만)
 //  'status'      { agentId; status: AgentStatus; errorText: string | null }
 //  'message'     RelayMessage     'held' { roomId }
 //  'request'     PendingRequest   'request-resolved' { id; agentId }
@@ -301,7 +301,8 @@ class EngineImpl extends EventEmitter implements Engine {
         : new UsageWatcher({
             liveSession: () => [...this.sessions.values()].find((s) => s.status === 'idle' || s.status === 'working') ?? null,
             spawnProbe: () => this.spawnUsageProbe(),
-            anyWorking: () => [...this.sessions.values()].some((s) => s.status === 'working'),
+            // 서브에이전트만 돌아도(부모 차례는 끝남) 일하는 중 — 사용량이 그동안에도 는다
+            anyWorking: () => [...this.sessions.values()].some((s) => s.status === 'working') || this.subagents.size > 0,
             now: () => Date.now(),
             emit: (u) => this.guard(null, () => this.emit('usage', u)),
             timing: { ...USAGE_TIMING, ...o.usage },
@@ -346,8 +347,12 @@ class EngineImpl extends EventEmitter implements Engine {
       approve: async (agentId, args, signal) => {
         if (String(args.tool_name).startsWith(DURE_TOOL_PREFIX)) return { behavior: 'deny', message: DURE_TOOL_DENIED };
         if (this.closed || this.removing.has(agentId)) return { behavior: 'deny', message: EXITED };
+        // 늘 허용한 도구는 부른 쪽과 상관없이 허용 — 못 본 id 라고 기다리지 않는다(질문은 늘 묻는다)
+        if (this.perms.allowsAlways(agentId, args.tool_name)) return { behavior: 'allow', updatedInput: args.input };
+        const s = this.sessions.get(agentId);
         const fromSubagent = (await this.origin(agentId, args.tool_use_id)) === 'subagent';
-        if (this.closed || this.removing.has(agentId)) return { behavior: 'deny', message: EXITED }; // 기다리는 사이 끝났다
+        // 기다리는 사이 끝났다 — 세션이 끝났으면 endSession 이 대기를 이미 정리했다: 그 뒤에 카드를 만들지 않는다
+        if (this.closed || this.removing.has(agentId) || (s && this.sessions.get(agentId) !== s)) return { behavior: 'deny', message: EXITED };
         return this.perms.request(agentId, args, signal, { fromSubagent }); // 부른 프로세스가 끊기면 카드도 사라진다
       },
     });
@@ -699,7 +704,8 @@ class EngineImpl extends EventEmitter implements Engine {
    * 승인·두레 도구를 부른 쪽(spec §4.4) — tool_use id 가 없으면 부모(지금처럼). 이 세션 스트림에서 본 id 면 그 줄에 parent 가 있었는지.
    * 못 본 id 는 seenWaitMs 동안 기다렸다 다시 보고, 끝내 못 보면 서브에이전트: 부모와 바로 아래 서브에이전트의 줄은 부르기보다 먼저 오고
    * (probe13·14), 끝내 안 오는 건 안쪽 서브에이전트의 줄뿐이다(probe14 A). 그래서 보통 부모의 부르기는 기다리지 않는다.
-   * 살아 있는 세션이 없으면 가를 스트림이 없다 — 부모(지금처럼 세션 끝 정리를 따른다)
+   * 살아 있는 세션이 없으면 가를 스트림이 없다 — 부모(지금처럼 세션 끝 정리를 따른다). 기다리는 사이 그 세션이 끝났어도(못 본 채 깨어남)
+   * 서브에이전트로 치지 않고 부모 — 끝난 세션의 부르기다
    */
   private async origin(id: AgentId, toolUseId: string | undefined): Promise<'parent' | 'subagent'> {
     if (!toolUseId) return 'parent';
@@ -707,6 +713,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const seen = s && this.seen.get(s);
     if (!seen) return 'parent';
     const parent = await seen.lookup(toolUseId, this.o.seenWaitMs ?? SEEN_WAIT_MS);
+    if (this.sessions.get(id) !== s) return 'parent';
     return parent === null ? 'parent' : 'subagent';
   }
 
@@ -1297,8 +1304,10 @@ class EngineImpl extends EventEmitter implements Engine {
     if (ev.kind === 'init') this.noteInit(id, ev);
     if (ev.kind === 'tool-result' && !ev.parent) this.noteLaunched(id, ev.toolUseId);
     if (ev.kind === 'tool-result') {
+      // 바뀐 줄(patch)은 싣지 않는다 — 자르지 않은 것(만듦이면 파일 통째)이 IPC 로 가지 않게. 화면은 기록(줄인 것)에서 읽는다
+      const { patch: _patch, ...shown } = ev;
       this.guard(id, () =>
-        this.emit('agent-event', { agentId: id, event: ev, viaApproval: this.perms.wasAsked(id, ev.toolUseId) }),
+        this.emit('agent-event', { agentId: id, event: shown, viaApproval: this.perms.wasAsked(id, ev.toolUseId) }),
       );
     } else {
       this.guard(id, () => this.emit('agent-event', { agentId: id, event: ev }));

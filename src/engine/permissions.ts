@@ -38,9 +38,7 @@ export class Permissions extends EventEmitter {
     const agent = this.store.agent(agentId);
     if (!agent) return Promise.resolve({ behavior: 'deny', message: '에이전트를 찾을 수 없습니다.' });
     const isQuestion = args.tool_name === QUESTION_TOOL;
-    if (!isQuestion && agent.alwaysAllow.includes(args.tool_name)) {
-      return Promise.resolve({ behavior: 'allow', updatedInput: args.input });
-    }
+    if (this.allowsAlways(agentId, args.tool_name)) return Promise.resolve({ behavior: 'allow', updatedInput: args.input });
     if (signal?.aborted) return Promise.resolve({ behavior: 'deny', message: CANCELLED });
     const req: PendingRequest = {
       id: crypto.randomUUID(),
@@ -73,6 +71,11 @@ export class Permissions extends EventEmitter {
       /* 듣는 쪽 오류로 요청을 잃지 않는다 */
     }
     return result;
+  }
+
+  /** 묻지 않고 허용할 도구인가 — 그 에이전트가 늘 허용한 도구(질문은 늘 묻는다). 엔진은 부른 쪽을 가르기 전에 본다 */
+  allowsAlways(agentId: AgentId, toolName: string): boolean {
+    return toolName !== QUESTION_TOOL && !!this.store.agent(agentId)?.alwaysAllow.includes(toolName);
   }
 
   answer(requestId: string, d: Decision): void {
