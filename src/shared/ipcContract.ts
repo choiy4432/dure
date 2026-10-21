@@ -5,7 +5,10 @@ import type {
 export interface AgentView extends Agent {
   status: AgentStatus
   errorText: string | null
+  /** 지금 묻지 않고 실행하는가(두레 스위치 또는 Claude 설정) */
   bypass: boolean
+  /** 묻지 않음이 내 Claude 설정 때문인가 — 그러면 두레 스위치로 끌 수 없다 */
+  bypassBySettings: boolean
   heldInput: number
   /** Claude 에게 마지막으로 읽은 지금 effort — 모르면 null */
   effortNow: EffortLevel | null
@@ -20,6 +23,8 @@ export interface Snapshot {
   messages: RelayMessage[]
   requests: PendingRequest[]
   autoChainLimit: number
+  /** 묻지 않고 실행 허용 — 꺼져 있으면 에이전트 스위치를 못 켠다 */
+  allowBypass: boolean
   /** 플랜 사용량 — claude 가 없거나 아직 모르면 null */
   usage: PlanUsage | null
 }
@@ -48,6 +53,8 @@ export interface DureApi {
   continueHeld(roomId: RoomId): Promise<void>
   answerRequest(id: string, d: Decision): Promise<void>
   setAutoChainLimit(n: number): Promise<void>
+  setAllowBypass(on: boolean): Promise<void>
+  setBypass(id: AgentId, on: boolean): Promise<void>
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
   /** 해제 함수를 돌려준다 */
@@ -61,6 +68,7 @@ export const METHODS = [
   'snapshot', 'addRoom', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
   'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
+  'setAllowBypass', 'setBypass',
   'pickFolder', 'openFolder',
 ] as const satisfies readonly Exclude<keyof DureApi, 'on'>[]
 

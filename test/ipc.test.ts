@@ -19,10 +19,11 @@ function fakeEngine() {
   }
   Object.assign(e, {
     rooms: () => [{ id: 'r1', name: '방', createdAt: 1 }],
-    agents: () => [agent],
+    agents: () => [{ ...agent, bypassOn: true }],
     status: () => 'idle',
     errorText: () => null,
-    flags: () => ({ bypass: true }),
+    flags: () => ({ bypass: true, bySettings: false }),
+    allowBypass: () => true,
     heldInput: () => 2,
     messages: () => [],
     pendingRequests: () => [],
@@ -49,6 +50,8 @@ function fakeEngine() {
     continueHeld: rec('continueHeld'),
     answerRequest: rec('answerRequest'),
     setAutoChainLimit: rec('setAutoChainLimit'),
+    setAllowBypass: rec('setAllowBypass', Promise.resolve()),
+    setBypass: rec('setBypass', Promise.resolve()),
   })
   return { engine: e as Engine & EventEmitter, calls }
 }
@@ -100,7 +103,7 @@ describe('registerIpc', () => {
       newConversation: ['a1'], setModel: ['a1', null], describe: ['a1'], history: ['a1', { all: true }],
       approveMessage: ['m1'], dismissMessage: ['m1'], continueHeld: ['r1'],
       answerRequest: ['q1', { type: 'allow' }], setAutoChainLimit: [5],
-      setEffort: ['a1', 'high'], refreshUsage: [],
+      setEffort: ['a1', 'high'], refreshUsage: [], setAllowBypass: [true], setBypass: ['a1', false],
     }
     for (const [m, a] of Object.entries(args)) {
       const r = await call(m, ...a)
@@ -124,8 +127,9 @@ describe('registerIpc', () => {
     expect(r.value).toMatchObject({
       claudeMissing: false,
       autoChainLimit: 8,
+      allowBypass: true,
       rooms: [{ id: 'r1' }],
-      agents: [{ id: 'a1', status: 'idle', errorText: null, bypass: true, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5' }],
+      agents: [{ id: 'a1', status: 'idle', errorText: null, bypassOn: true, bypass: true, bypassBySettings: false, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5' }],
       usage: { windows: [{ key: 'session', percent: 40 }] },
     })
   })
@@ -149,7 +153,7 @@ describe('registerIpc', () => {
     const { call, sent } = setup(false)
     const s = await call('snapshot')
     expect(s.value).toEqual({
-      claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, usage: null,
+      claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, usage: null,
     })
     expect(await call('addRoom', 'x')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })
     expect(await call('pickFolder')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })
@@ -162,6 +166,15 @@ describe('registerIpc', () => {
     expect(deps.openFolder).not.toHaveBeenCalled()
     expect((await call('openFolder', 'C:/work/a')).ok).toBe(true)
     expect(deps.openFolder).toHaveBeenCalledWith('C:/work/a')
+  })
+
+  it('setAllowBypass · setBypass 는 인자 그대로 엔진으로 가고 엔진 오류 문구가 그대로 돌아온다', async () => {
+    const { call, calls, engine } = setup()
+    expect(await call('setAllowBypass', false)).toEqual({ ok: true, value: null })
+    expect(await call('setBypass', 'a1', true)).toEqual({ ok: true, value: null })
+    expect(calls).toEqual([['setAllowBypass', [false]], ['setBypass', ['a1', true]]])
+    ;(engine as any).setBypass = async () => { throw new Error('먼저 허용을 켜 주세요') }
+    expect(await call('setBypass', 'a1', true)).toEqual({ ok: false, error: '먼저 허용을 켜 주세요' })
   })
 
   it('pickFolder returns the dialog result', async () => {

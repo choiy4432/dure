@@ -5,13 +5,13 @@ import type { AgentView, DureApi, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, roomId = 'r1', over: Partial<AgentView> = {}): AgentView => ({
   id, roomId, name: id, role: '', folder: '/x', sessionId: '', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, heldInput: 0, ...over,
 })
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   claudeMissing: false,
   rooms: [{ id: 'r1', name: '첫 방', createdAt: 2 }, { id: 'r2', name: '둘째', createdAt: 1 }],
   agents: [agent('a'), agent('b'), agent('c', 'r2')],
-  messages: [], requests: [], autoChainLimit: 5, usage: null, ...over,
+  messages: [], requests: [], autoChainLimit: 5, allowBypass: false, usage: null, ...over,
 })
 const note = (text: string, t = 1): HistoryItem => ({ t, kind: 'notice', text })
 
@@ -251,6 +251,15 @@ describe('store selection', () => {
     api.snapshot.mockResolvedValueOnce(snap({ rooms: [], agents: [] }))
     await s.refresh()
     expect(s.getState().roomId).toBeNull()
+  })
+
+  it('flags 사건이 그 에이전트의 bypass·bypassBySettings 를 바꾼다', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('flags', { agentId: 'a', bypass: true, bySettings: true })
+    expect(s.getState().agents.find(a => a.id === 'a')).toMatchObject({ bypass: true, bypassBySettings: true })
+    expect(s.getState().agents.find(a => a.id === 'b')).toMatchObject({ bypass: false, bypassBySettings: false })
   })
 
   it('subscribe 는 변경을 알리고 해제할 수 있다', async () => {

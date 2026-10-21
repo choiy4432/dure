@@ -49,7 +49,7 @@ function assistantText(item: HistoryItem): string {
 
 export function createStore(api: DureApi): Store {
   let state: UiState = {
-    claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, usage: null,
+    claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, lastText: {}, lastDelivered: {},
     statusSince: {}, loadError: null,
   }
@@ -95,7 +95,7 @@ export function createStore(api: DureApi): Store {
       }
       case 'flags': {
         const p = ev.payload
-        state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, bypass: p.bypass } : a)) }
+        state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, bypass: p.bypass, bypassBySettings: p.bySettings } : a)) }
         break
       }
       case 'held-input': {

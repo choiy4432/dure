@@ -18,20 +18,24 @@ const NOT_ALLOWED = '허용되지 않은 요청이에요'
 const FOLDER_NOT_ALLOWED = '등록된 에이전트의 폴더만 열 수 있어요'
 
 function agentViews(engine: Engine): AgentView[] {
-  return engine.agents().map((a) => ({
-    ...a,
-    status: engine.status(a.id),
-    errorText: engine.errorText(a.id),
-    bypass: engine.flags(a.id).bypass,
-    heldInput: engine.heldInput(a.id),
-    effortNow: engine.effortNow(a.id),
-    modelNow: engine.modelNow(a.id),
-  }))
+  return engine.agents().map((a) => {
+    const flags = engine.flags(a.id)
+    return {
+      ...a,
+      status: engine.status(a.id),
+      errorText: engine.errorText(a.id),
+      bypass: flags.bypass,
+      bypassBySettings: flags.bySettings,
+      heldInput: engine.heldInput(a.id),
+      effortNow: engine.effortNow(a.id),
+      modelNow: engine.modelNow(a.id),
+    }
+  })
 }
 
 function snapshot(engine: Engine | null): Snapshot {
   if (!engine) {
-    return { claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, usage: null }
+    return { claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, usage: null }
   }
   return {
     claudeMissing: false,
@@ -40,6 +44,7 @@ function snapshot(engine: Engine | null): Snapshot {
     messages: engine.messages(),
     requests: engine.pendingRequests(),
     autoChainLimit: engine.autoChainLimit(),
+    allowBypass: engine.allowBypass(),
     usage: engine.usage(),
   }
 }
@@ -66,6 +71,8 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   continueHeld: (e, _d, roomId) => e.continueHeld(roomId),
   answerRequest: (e, _d, id, d) => e.answerRequest(id, d),
   setAutoChainLimit: (e, _d, n) => e.setAutoChainLimit(n),
+  setAllowBypass: (e, _d, on) => e.setAllowBypass(on),
+  setBypass: (e, _d, id, on) => e.setBypass(id, on),
   pickFolder: (_e, d) => d.pickFolder(),
   openFolder: (e, d, path) => {
     // renderer 가 임의 경로를 열지 못하게 — 등록된 에이전트의 폴더만

@@ -5,7 +5,7 @@ import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:/w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, heldInput: 0, ...over,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, heldInput: 0, ...over,
 })
 const msg = (id: string, from: string, to: string, state: RelayMessage['state'], createdAt: number, text = '본문'): RelayMessage => ({
   id, roomId: 'r1', from, to, text, createdAt, state, updatedAt: createdAt,
@@ -17,7 +17,7 @@ beforeEach(() => {
   vi.resetModules()
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }, { id: 'r2', name: '다른 방', createdAt: 2 }],
-    agents: [], messages: [], requests: [], autoChainLimit: 3, usage: null,
+    agents: [], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
   }
   // 엔진처럼 — 자리를 저장하면 다음 스냅샷에 그 자리가 들어 있다
   updateAgent = vi.fn(async (id: string, p: { pos?: { x: number; y: number } }) => {
