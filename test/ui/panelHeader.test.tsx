@@ -617,6 +617,29 @@ describe('PanelHeader — 맡기는 정도 스위치', () => {
     expect(document.querySelector('.band.warn')!.textContent).toBe('이 에이전트는 묻지 않고 실행해요 (Claude 설정의 전부 허용)')
   })
 
+  it('bypassBySettings 에서 끔일 때 오른쪽 칸을 눌러도 아무것도 안 부르고 끔 그대로', async () => {
+    withAllow({ auto: false, bypassBySettings: true })
+    await renderPanel()
+    await clickAt(185)
+    expect(api.updateAgent).not.toHaveBeenCalled()
+    expect(api.setBypass).not.toHaveBeenCalled()
+    expect(text()).toBe('끔')
+  })
+
+  it('옮긴 뒤 refresh 가 실패해도 옮기기 오류로 보이지 않는다', async () => {
+    withAllow({ auto: false })
+    const { getStore } = await import('../../src/renderer/state/store')
+    const store = getStore()
+    const real = store.refresh
+    store.refresh = vi.fn(async () => { throw new Error('새로고침 실패') }) as any
+    await renderPanel()
+    await press('ArrowRight')
+    expect(api.updateAgent).toHaveBeenCalledWith('w', { auto: true })
+    expect(store.refresh).toHaveBeenCalled()
+    expect(document.querySelector('.ph-msg')).toBeNull()
+    store.refresh = real
+  })
+
   it('setBypass 가 거절되면(그새 다른 창에서 허용을 끔) 패널 오류 줄에 엔진 문구', async () => {
     withAllow({ auto: true })
     api.setBypass.mockRejectedValueOnce(new Error('설정에서 묻지 않고 실행을 허용해야 켤 수 있어요.'))

@@ -53,10 +53,15 @@ export function LevelSwitch({ agent, onError }: Props) {
       } else {
         await window.dure.updateAgent(agent.id, { auto: to === 1 })
       }
-      await getStore().refresh()
     } catch (e) {
       onError(errorMessage(e))
     } finally {
+      // 절반만 적용됐어도 화면은 실제 값을 따른다 — 새로고침 실패는 옮기기 오류가 아니다
+      try {
+        await getStore().refresh()
+      } catch {
+        /* 다음 갱신이 바로잡는다 */
+      }
       saving.current = false
       setBusy(false)
     }
@@ -90,7 +95,9 @@ export function LevelSwitch({ agent, onError }: Props) {
   const onClick = (e: MouseEvent<HTMLDivElement>) => {
     const r = e.currentTarget.getBoundingClientRect()
     if (!(r.width > 0)) return
-    void move(Math.floor(((e.clientX - r.left) / r.width) * 3))
+    const zone = Math.floor(((e.clientX - r.left) / r.width) * 3)
+    if (locked && zone >= 2) return // 잠김이면 묻지 않음 칸은 무시 — 끝 칸으로 끌어내리지 않는다
+    void move(zone)
   }
 
   return (
