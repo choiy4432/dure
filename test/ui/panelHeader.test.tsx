@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react'
+import { render, screen, act, fireEvent, cleanup, within, waitFor } from '@testing-library/react'
+import { allowMotion, fastMotion } from './motion'
 import type { AgentDescription, PendingRequest } from '../../src/engine/types'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 
@@ -662,6 +663,23 @@ describe('PanelHeader — 맡기는 정도 스위치', () => {
     expect(api.updateAgent).toHaveBeenCalledWith('w', { bypassNoticeClosed: true })
     expect(document.querySelector('.band.warn')).toBeNull()
     expect(lv().getAttribute('aria-valuetext')).toBe('묻지 않음')
+  })
+
+  it('움직임이 켜져 있으면 닫을 때 띠가 높이로 접히며 사라진다 — 그동안 눌리지 않는다', async () => {
+    allowMotion()
+    const restore = fastMotion(4)
+    try {
+      withAllow({ bypassOn: true, bypass: true })
+      await renderPanel()
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '경고 닫기' })) })
+      const band = document.querySelector('.band.warn')
+      expect(band).not.toBeNull() // 바로 사라지지 않고 접히는 중
+      const box = band!.closest('.xp') as HTMLElement
+      expect(box.inert).toBe(true)
+      await waitFor(() => expect(document.querySelector('.band.warn')).toBeNull())
+    } finally {
+      restore()
+    }
   })
 
   it('한 번 닫은 에이전트는 묻지 않음이어도 띠가 다시 뜨지 않는다(내 Claude 설정 때문이어도)', async () => {

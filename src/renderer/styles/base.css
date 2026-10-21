@@ -219,7 +219,8 @@ code {
 @media (prefers-reduced-motion: reduce) {
   .btn,
   .tg,
-  .tg::after {
+  .tg::after,
+  .nd {
     transition: none;
   }
 }
@@ -694,6 +695,8 @@ code {
   border: 1px solid var(--border);
   border-radius: var(--radius-node);
   box-shadow: var(--shadow-node);
+  /* 고르기·묻지 않음·승인 기다림으로 테두리와 고리 색이 바뀔 때 부드럽게(움직임 줄이기면 바로) */
+  transition: border-color 0.26s ease-out, box-shadow 0.26s ease-out;
 }
 
 /* 묻지 않고 실행하는 에이전트 — 패널 스위치·띠와 같은 주황. 승인 기다림(.pend)이 함께면 노랑이 앞선다(할 일이 먼저) */
@@ -1443,6 +1446,11 @@ code {
 
 .band.warn .i {
   color: var(--warn-text);
+}
+
+/* 묻지 않음 경고 띠를 감싼 접기 상자 — 패널 세로 줄에서 띠처럼 줄어들지 않게 */
+.band-xp {
+  flex: none;
 }
 
 /* 띠 오른쪽 끝 닫기(묻지 않음 경고) — 띠 높이를 늘리지 않게 위아래를 당긴다 */

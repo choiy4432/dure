@@ -9,6 +9,8 @@ import { ModelPicker, type Described } from './ModelPicker'
 import { EffortControl } from './EffortControl'
 import { AgentMenu } from './AgentMenu'
 import { LevelSwitch } from './LevelSwitch'
+import { Presence } from '../lib/presence'
+import { ExpandBox } from '../lib/ExpandBox'
 
 // 상태 알약 — 작업 중 초록 · 승인 기다림 앰버 · 대기 회색 · 멈춤 빨강
 const PILL: Record<DisplayStatus, { tone: string; dot: string }> = {
@@ -185,8 +187,9 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
           </div>
         </div>
       )}
-      {agent.bypass && !agent.bypassNoticeClosed && (
-        <div className="band warn">
+      {/* 닫거나 묻지 않음이 꺼지면 높이로 접히며 사라지고, 켜지면 펼쳐진다(움직임 줄이기면 바로) */}
+      <Presence show={agent.bypass && !agent.bypassNoticeClosed}>
+        <ExpandBox as="div" outer="band-xp" className="band warn">
           <ShieldAlert className="i" aria-hidden="true" />
           <span className="band-t">
             {agent.bypassBySettings ? '이 에이전트는 묻지 않고 실행해요 (Claude 설정의 전부 허용)' : '이 에이전트는 묻지 않고 실행해요'}
@@ -194,8 +197,8 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
           <button type="button" className="ib band-x" aria-label="경고 닫기" title="닫으면 이 에이전트에선 다시 뜨지 않아요" onClick={closeNotice}>
             <X className="i" size={14} aria-hidden="true" />
           </button>
-        </div>
-      )}
+        </ExpandBox>
+      </Presence>
     </>
   )
 }
