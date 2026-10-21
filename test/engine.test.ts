@@ -2534,3 +2534,49 @@ test('bypass: 다시 띄우기를 기다리는 중에 끄거나 허용을 끄면
   expect(spawnsOf('A')).toHaveLength(1);
   expect(controlRequests('set_permission_mode')).toEqual([]);
 });
+
+test('bypass: 띄운 직후 모드 답이 오기 전에도 flags() 는 마지막 사건과 같다 — 기록된 모드가 없고 띄울 때 보낸 켜기가 가는 중이면 다음 모드', async () => {
+  const e = await start({ FAKE_SET_MODE_LATE_MS: '800' }); // 띄울 때 보낸 켜기는 0.8 초 뒤에 답한다(한도 안)
+  const { a } = setup(e);
+  await e.setAllowBypass(true);
+  const got = flagEvents(e);
+  await e.setBypass(a.id, true); // 세션 없음 — 다음 모드(켜짐)
+  expect(got.at(-1)).toEqual({ agentId: a.id, bypass: true, bySettings: false, pending: false });
+  await e.describe(a.id); // 띄운다(입력 없음)
+  await until('내 설정을 읽음', () => controlRequests('get_settings').length === 1);
+  await sleep(100);
+  // 스냅샷을 다시 받아도 스위치가 꺼졌다 켜지지 않는다
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false, pending: false });
+  expect(got.filter((f) => f.agentId === a.id).every((f) => f.bypass)).toBe(true);
+  const answered = waitFor<FlagsEvent>(e, 'flags', (f) => f.agentId === a.id, 3000);
+  expect(await answered).toEqual({ agentId: a.id, bypass: true, bySettings: false, pending: false }); // 켜기의 답(실제 모드)
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false, pending: false });
+});
+
+test('bypass: 내 Claude 설정이 전부 허용이면 세션이 끝나도 경고 띠가 남는다 — 내 기본 모드를 에이전트마다 기억해 다음 모드 예측에', async () => {
+  const e = await start({ FAKE_PERMISSION_MODE: 'bypassPermissions' });
+  const { a, b } = setup(e);
+  await turn(e, a.id, 'echo 하나'); // 허용은 꺼짐 — 내 설정 때문에 묻지 않는다
+  await until('내 설정을 읽음', () => e.flags(a.id).bySettings);
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: true, pending: false });
+  const got = flagEvents(e);
+  await e.newConversation(a.id); // 세션이 끝난다
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: true, pending: false });
+  expect(got.filter((f) => f.agentId === a.id)).toEqual([{ agentId: a.id, bypass: true, bySettings: true, pending: false }]);
+  // 비정상 종료 뒤에도
+  await turn(e, a.id, 'echo 둘');
+  const crashed = waitFor<StatusEvent>(e, 'status', (s) => s.agentId === a.id && s.status === 'error');
+  await e.sendUser(a.id, text('CRASH'));
+  await crashed;
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: true, pending: false });
+  expect(got.filter((f) => f.agentId === a.id).at(-1)).toEqual({ agentId: a.id, bypass: true, bySettings: true, pending: false });
+  // 허용 + 두레 스위치를 켜면 원인은 두레 스위치(끌 수 있게), 다시 끄면 내 설정
+  await e.setAllowBypass(true);
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: true, pending: false });
+  await e.setBypass(a.id, true);
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false, pending: false });
+  await e.setBypass(a.id, false);
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: true, pending: false });
+  // 내 설정을 읽은 적 없는 에이전트는 모른다 — 다음 모드는 두레 스위치만으로
+  expect(e.flags(b.id)).toEqual({ bypass: false, bySettings: false, pending: false });
+});
