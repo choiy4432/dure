@@ -3274,7 +3274,82 @@ code {
   cursor: default;
 }
 
-/* 패널 머리의 스위치 둘 — 자동이 오른쪽으로 밀고, 뒤따르는 스위치는 그 옆에 */
-.ph .sw + .sw {
-  margin-left: 12px;
+/* 맡기는 정도 — 끔 · 자동 · 묻지 않음 세 칸 스위치. 앞 글자 + 트랙(role=slider) + 손잡이 */
+.lvl-n {
+  min-width: 4.5em;
+  text-align: right;
+}
+
+.lvl-tr {
+  position: relative;
+  width: 52px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.lvl.s1 .lvl-tr {
+  background: var(--primary);
+}
+
+.lvl.s2 .lvl-tr {
+  background: var(--warn);
+}
+
+/* 멈추는 자리 셋 */
+.lvl-t {
+  position: absolute;
+  top: 8px;
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  opacity: 0.55;
+}
+
+.lvl-t:nth-of-type(1) {
+  left: 8px;
+}
+
+.lvl-t:nth-of-type(2) {
+  left: 24px;
+}
+
+.lvl-t:nth-of-type(3) {
+  left: 40px;
+}
+
+.lvl-k {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  box-shadow: var(--shadow-knob);
+  transition: left 0.15s;
+}
+
+.lvl.s1 .lvl-k {
+  left: 18px;
+}
+
+.lvl.s2 .lvl-k {
+  left: 34px;
+}
+
+.lvl-tr[aria-busy="true"] {
+  opacity: 0.6;
+}
+
+.lvl-hid {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

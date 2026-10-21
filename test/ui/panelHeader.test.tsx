@@ -455,91 +455,181 @@ describe('PanelHeader — 띠', () => {
   })
 })
 
-describe('PanelHeader — 묻지 않음 스위치', () => {
-  const sw = () => screen.getByRole('switch', { name: /묻지 않음/ })
+describe('PanelHeader — 맡기는 정도 스위치', () => {
+  const lv = () => screen.getByRole('slider', { name: '맡기는 정도' })
+  const text = () => lv().getAttribute('aria-valuetext')
+  const LOCK = 'Claude 설정이 전부 허용이라 이미 묻지 않아요'
+  const press = async (key: string) => { await act(async () => { fireEvent.keyDown(lv(), { key }) }); await settle() }
+  const withAllow = (over: Partial<AgentView> = {}) => {
+    snapshot.allowBypass = true
+    snapshot.agents = [agent('w', { name: '웹 화면', ...over })]
+  }
+  const clickAt = async (x: number) => {
+    const el = lv()
+    el.getBoundingClientRect = () => ({ left: 100, width: 90, right: 190, top: 0, bottom: 20, height: 20, x: 100, y: 0, toJSON: () => ({}) }) as DOMRect
+    await act(async () => { fireEvent.click(el, { clientX: x }) })
+    await settle()
+  }
 
-  it('허용이 꺼져 있으면 "묻지 않음" 스위치가 없다 · 켜져 있으면 자동 옆에 있다', async () => {
+  it('허용이 꺼져 있으면 slider 가 없고 자동 switch 만 · 켜져 있으면 slider 만 있고 자동·묻지 않음 switch 는 없다', async () => {
     await renderPanel()
-    expect(screen.queryByRole('switch', { name: /묻지 않음/ })).toBeNull()
+    expect(screen.queryByRole('slider')).toBeNull()
+    expect(screen.getByRole('switch', { name: '자동' }).getAttribute('title')).toBe('받은 메시지를 바로 시작해요')
     cleanup()
     vi.resetModules()
     snapshot.allowBypass = true
     await renderPanel()
-    const auto = screen.getByRole('switch', { name: /^자동/ })
-    expect(auto.nextElementSibling).toBe(sw())
-    expect(sw().getAttribute('aria-checked')).toBe('false')
+    expect(lv().getAttribute('aria-valuemin')).toBe('0')
+    expect(lv().getAttribute('aria-valuemax')).toBe('2')
+    expect(lv().getAttribute('tabindex')).toBe('0')
+    expect(screen.queryByRole('switch')).toBeNull()
   })
 
-  it('누르면 setBypass(id, true) · 응답 전엔 aria-busy · 두 번 눌러도 한 번만 부른다', async () => {
-    snapshot.allowBypass = true
+  it.each([
+    ['끔', { auto: false, bypass: false }, '0', '받은 메시지는 내가 시키고, 권한도 물어요'],
+    ['자동', { auto: true }, '1', '받은 메시지는 바로 시작하고, 권한은 물어요'],
+    ['묻지 않음', { bypass: true }, '2', '바로 시작하고, 권한도 안 물어요'],
+    ['묻지 않음', { bypassPending: true }, '2', '바로 시작하고, 권한도 안 물어요'],
+    ['묻지 않음', { auto: false, bypass: true }, '2', '바로 시작하고, 권한도 안 물어요'],
+  ] as const)('보이는 단계 %s (%j)', async (word, over, now, title) => {
+    withAllow(over)
+    await renderPanel()
+    expect(text()).toBe(word)
+    expect(lv().getAttribute('aria-valuenow')).toBe(now)
+    expect(lv().getAttribute('title')).toBe(title)
+  })
+
+  it('0 → 2: updateAgent(auto:true) 다음 setBypass(true)', async () => {
+    withAllow({ auto: false })
+    await renderPanel()
+    await press('End')
+    expect(api.updateAgent).toHaveBeenCalledWith('w', { auto: true })
+    expect(api.setBypass).toHaveBeenCalledWith('w', true)
+    expect(api.updateAgent.mock.invocationCallOrder[0]).toBeLessThan(api.setBypass.mock.invocationCallOrder[0])
+  })
+
+  it('1 → 2: setBypass(true) 만 (auto 는 이미 켜짐)', async () => {
+    withAllow({ auto: true })
+    await renderPanel()
+    await press('End')
+    expect(api.updateAgent).not.toHaveBeenCalled()
+    expect(api.setBypass).toHaveBeenCalledWith('w', true)
+  })
+
+  it('2 → 1: setBypass(false) 만 · 옛 상태(auto 꺼짐)면 updateAgent(auto:true) 도', async () => {
+    withAllow({ auto: true, bypassOn: true, bypass: true })
+    await renderPanel()
+    await press('ArrowLeft')
+    expect(api.setBypass).toHaveBeenCalledWith('w', false)
+    expect(api.updateAgent).not.toHaveBeenCalled()
+    cleanup()
+    vi.resetModules()
+    api.setBypass.mockClear()
+    withAllow({ auto: false, bypassOn: true, bypass: true })
+    await renderPanel()
+    await press('ArrowLeft')
+    expect(api.setBypass).toHaveBeenCalledWith('w', false)
+    expect(api.updateAgent).toHaveBeenCalledWith('w', { auto: true })
+  })
+
+  it('2 → 0: setBypass(false) 와 updateAgent(auto:false)', async () => {
+    withAllow({ auto: true, bypassOn: true, bypass: true })
+    await renderPanel()
+    await press('Home')
+    expect(api.setBypass).toHaveBeenCalledWith('w', false)
+    expect(api.updateAgent).toHaveBeenCalledWith('w', { auto: false })
+  })
+
+  it('0 ↔ 1 은 updateAgent 만 · 같은 단계로는 아무것도 안 부른다', async () => {
+    withAllow({ auto: false })
+    await renderPanel()
+    await press('Home')
+    await press('ArrowLeft')
+    expect(api.updateAgent).not.toHaveBeenCalled()
+    await press('ArrowRight')
+    expect(api.updateAgent).toHaveBeenLastCalledWith('w', { auto: true })
+    expect(text()).toBe('자동')
+    await press('ArrowDown')
+    expect(api.updateAgent).toHaveBeenLastCalledWith('w', { auto: false })
+    expect(api.setBypass).not.toHaveBeenCalled()
+  })
+
+  it('키: ↑ 오른쪽 한 칸 · 자동에서 → 는 묻지 않음', async () => {
+    withAllow({ auto: false })
+    await renderPanel()
+    await press('ArrowUp')
+    expect(text()).toBe('자동')
+    await press('ArrowRight')
+    expect(api.setBypass).toHaveBeenCalledWith('w', true)
+  })
+
+  it('트랙 클릭은 누른 x 위치를 3등분한 칸으로', async () => {
+    withAllow({ auto: false })
+    await renderPanel()
+    await clickAt(150) // 가운데 칸 → 자동
+    expect(api.updateAgent).toHaveBeenLastCalledWith('w', { auto: true })
+    await clickAt(110) // 왼쪽 칸 → 끔
+    expect(api.updateAgent).toHaveBeenLastCalledWith('w', { auto: false })
+    await clickAt(185) // 오른쪽 칸 → 묻지 않음
+    expect(api.setBypass).toHaveBeenCalledWith('w', true)
+  })
+
+  it('바뀌는 중엔 aria-busy · 응답 전 두 번 눌러도 setBypass 는 한 번', async () => {
+    withAllow({ auto: true })
     let release!: () => void
     api.setBypass.mockImplementationOnce(() => new Promise<void>(r => { release = () => { patch('w', { bypass: true }); r() } }))
     await renderPanel()
-    fireEvent.click(sw())
-    fireEvent.click(sw())
+    fireEvent.keyDown(lv(), { key: 'End' })
+    fireEvent.keyDown(lv(), { key: 'End' })
     expect(api.setBypass).toHaveBeenCalledTimes(1)
-    expect(api.setBypass).toHaveBeenCalledWith('w', true)
-    expect(sw().getAttribute('aria-busy')).toBe('true')
-    expect(sw().getAttribute('aria-checked')).toBe('false') // 실제 모드는 아직 그대로
+    expect(lv().getAttribute('aria-busy')).toBe('true')
+    expect(text()).toBe('자동') // 실제 모드는 아직 그대로
     await act(async () => { release() })
     await settle()
-    expect(sw().getAttribute('aria-busy')).toBeNull()
+    expect(lv().getAttribute('aria-busy')).toBeNull()
+    expect(text()).toBe('묻지 않음')
   })
 
-  it('bypassBySettings 면 켜진 채 aria-disabled 와 잠김 안내 · 띠 문구는 Claude 설정 쪽', async () => {
-    snapshot.allowBypass = true
-    snapshot.agents = [agent('w', { name: '웹 화면', bypass: true, bypassBySettings: true })]
+  it('bypassPending 이면 흐리게 · 1 로 옮기면 setBypass(false) 로 미뤄 둔 켜기를 거둔다', async () => {
+    withAllow({ status: 'working', bypassOn: true, bypass: false, bypassPending: true, auto: true })
     await renderPanel()
-    expect(sw().getAttribute('aria-checked')).toBe('true')
-    expect(sw().getAttribute('aria-disabled')).toBe('true')
-    expect(sw().getAttribute('title')).toBe('Claude 설정이 전부 허용이라 끌 수 없어요')
-    fireEvent.click(sw())
+    expect(lv().getAttribute('aria-busy')).toBe('true')
+    expect(document.querySelector('.band.warn')).toBeNull()
+    await press('ArrowLeft')
+    expect(api.setBypass).toHaveBeenCalledTimes(1)
+    expect(api.setBypass).toHaveBeenCalledWith('w', false)
+  })
+
+  it('bypassBySettings: 2 는 못 고른다 · 잠김 안내가 title 과 aria-describedby 에 · 0↔1 은 auto 만', async () => {
+    withAllow({ auto: true, bypass: true, bypassBySettings: true })
+    await renderPanel()
+    expect(text()).toBe('자동')
+    expect(lv().getAttribute('title')).toBe(LOCK)
+    const d = document.getElementById(lv().getAttribute('aria-describedby')!)!
+    expect(d.textContent).toBe(LOCK)
+    await press('End')
+    await clickAt(185)
+    expect(api.setBypass).not.toHaveBeenCalled()
+    expect(api.updateAgent).not.toHaveBeenCalled()
+    await press('Home')
+    expect(api.updateAgent).toHaveBeenLastCalledWith('w', { auto: false })
     expect(api.setBypass).not.toHaveBeenCalled()
     expect(document.querySelector('.band.warn')!.textContent).toBe('이 에이전트는 묻지 않고 실행해요 (Claude 설정의 전부 허용)')
   })
 
-  it('두레 스위치로 켜졌으면 띠 문구가 "이 에이전트는 묻지 않고 실행해요"', async () => {
-    snapshot.allowBypass = true
-    snapshot.agents = [agent('w', { name: '웹 화면', bypassOn: true, bypass: true })]
-    await renderPanel()
-    expect(sw().getAttribute('aria-checked')).toBe('true')
-    expect(sw().getAttribute('aria-disabled')).toBeNull()
-    expect(document.querySelector('.band.warn')!.textContent).toBe('이 에이전트는 묻지 않고 실행해요')
-    fireEvent.click(sw())
-    expect(api.setBypass).toHaveBeenCalledWith('w', false)
-  })
-
-  it('세션 없이 bypassOn 이 저장된 에이전트(예측 bypass:true)는 켜진 스위치 · 누르면 setBypass(id,false)', async () => {
-    snapshot.allowBypass = true
-    snapshot.agents = [agent('w', { name: '웹 화면', started: false, bypassOn: true, bypass: true })]
-    await renderPanel()
-    expect(sw().getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(sw())
-    expect(api.setBypass).toHaveBeenCalledWith('w', false)
-  })
-
-  it('다시 띄우기를 기다리는 중(bypassPending)이면 꺼진 채 바뀌는 중으로 보이고, 다시 누르면 setBypass(id,false) 로 거둔다', async () => {
-    snapshot.allowBypass = true
-    snapshot.agents = [agent('w', { name: '웹 화면', status: 'working', bypassOn: true, bypass: false, bypassPending: true })]
-    await renderPanel()
-    expect(sw().getAttribute('aria-checked')).toBe('false') // 실제 모드는 아직 그대로
-    expect(sw().getAttribute('aria-busy')).toBe('true')
-    expect(document.querySelector('.band.warn')).toBeNull()
-    await act(async () => { fireEvent.click(sw()) })
-    await settle()
-    expect(api.setBypass).toHaveBeenCalledTimes(1)
-    expect(api.setBypass).toHaveBeenCalledWith('w', false)
-  })
-
   it('setBypass 가 거절되면(그새 다른 창에서 허용을 끔) 패널 오류 줄에 엔진 문구', async () => {
-    snapshot.allowBypass = true
-    // 엔진(engine.ts BYPASS_NOT_ALLOWED)이 실제로 던지는 문구 — 모드 바꾸기 실패는 던지지 않고 대화 안내 한 줄로 알린다
+    withAllow({ auto: true })
     api.setBypass.mockRejectedValueOnce(new Error('설정에서 묻지 않고 실행을 허용해야 켤 수 있어요.'))
     await renderPanel()
-    await act(async () => { fireEvent.click(sw()) })
-    await settle()
+    await press('End')
     expect(document.querySelector('.ph-msg')!.textContent).toBe('설정에서 묻지 않고 실행을 허용해야 켤 수 있어요.')
-    expect(sw().getAttribute('aria-busy')).toBeNull()
+    expect(lv().getAttribute('aria-busy')).toBeNull()
+  })
+
+  it('두레 스위치로 켜졌으면 띠 문구가 "이 에이전트는 묻지 않고 실행해요"', async () => {
+    withAllow({ bypassOn: true, bypass: true })
+    await renderPanel()
+    expect(document.querySelector('.band.warn')!.textContent).toBe('이 에이전트는 묻지 않고 실행해요')
   })
 })
 

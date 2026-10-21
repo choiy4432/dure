@@ -8,6 +8,7 @@ import { errorMessage, fieldError, initial, STATUS_WORD } from '../lib/words'
 import { ModelPicker, type Described } from './ModelPicker'
 import { EffortControl } from './EffortControl'
 import { AgentMenu } from './AgentMenu'
+import { LevelSwitch } from './LevelSwitch'
 
 // 상태 알약 — 작업 중 초록 · 승인 기다림 앰버 · 대기 회색 · 멈춤 빨강
 const PILL: Record<DisplayStatus, { tone: string; dot: string }> = {
@@ -29,7 +30,7 @@ interface Props {
   onModelOpenChange?: (open: boolean) => void
 }
 
-/** 패널 머리(시안 .ph) — 아바타·이름·역할·멈추기·메뉴 / 상태 알약·모델 칩·자동 스위치 + 오류·묻지 않음 띠 */
+/** 패널 머리(시안 .ph) — 아바타·이름·역할·멈추기·메뉴 / 상태 알약·모델 칩·자동 스위치(허용이 켜져 있으면 끔·자동·묻지 않음 세 칸) + 오류·묻지 않음 띠 */
 export function PanelHeader({ agentId, description, onLoadDescription, onRetryDescribe, modelOpen, onModelOpenChange }: Props) {
   const v = useDure(s => {
     const agent = s.agents.find(a => a.id === agentId)
@@ -37,11 +38,9 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
   })
   const allowBypass = useDure(s => s.allowBypass)
   const [editing, setEditing] = useState(false)
-  const [settingBypass, setSettingBypass] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [stopping, setStopping] = useState(false)
   const savingAuto = useRef(false)
-  const savingBypass = useRef(false)
   const menuButton = useRef<HTMLButtonElement>(null)
   const refocus = useRef(false)
 
@@ -80,23 +79,6 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
       setError(errorMessage(e))
     } finally {
       savingAuto.current = false
-    }
-  }
-
-  // 묻지 않음 — 보이는 값은 실제 모드(agent.bypass). 응답이 올 때까지, 그리고 켜려고 그 차례 뒤의 다시 띄우기를 기다리는 동안
-  // (bypassPending) 흐리게. 응답 전 두 번 누르기는 막고, 다시 띄우기를 기다리는 중에 누르면 끄기로 보내 미뤄 둔 켜기를 거둔다
-  const toggleBypass = async () => {
-    if (savingBypass.current || agent.bypassBySettings) return
-    savingBypass.current = true
-    setSettingBypass(true)
-    setError(null)
-    try {
-      await window.dure.setBypass(agent.id, !(agent.bypass || agent.bypassPending))
-    } catch (e) {
-      setError(errorMessage(e))
-    } finally {
-      savingBypass.current = false
-      setSettingBypass(false)
     }
   }
 
@@ -161,29 +143,18 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
             onRetry={onRetryDescribe}
             onError={setError}
           />
-          <button
-            type="button"
-            className="sw"
-            role="switch"
-            aria-checked={agent.auto}
-            title="받은 메시지를 바로 시작해요"
-            onClick={toggleAuto}
-          >
-            자동
-            <span className="tg" aria-hidden="true" />
-          </button>
-          {allowBypass && (
+          {allowBypass ? (
+            <LevelSwitch agent={agent} onError={setError} />
+          ) : (
             <button
               type="button"
               className="sw"
               role="switch"
-              aria-checked={agent.bypass}
-              aria-busy={settingBypass || agent.bypassPending || undefined}
-              aria-disabled={agent.bypassBySettings || undefined}
-              title={agent.bypassBySettings ? 'Claude 설정이 전부 허용이라 끌 수 없어요' : undefined}
-              onClick={toggleBypass}
+              aria-checked={agent.auto}
+              title="받은 메시지를 바로 시작해요"
+              onClick={toggleAuto}
             >
-              묻지 않음
+              자동
               <span className="tg" aria-hidden="true" />
             </button>
           )}
