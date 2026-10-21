@@ -696,7 +696,10 @@ class EngineImpl extends EventEmitter implements Engine {
    */
   private async dureCaller(agentId: AgentId, toolUseId: string | undefined): Promise<Agent> {
     this.caller(agentId); // 모르는 에이전트면 기다리지 않고
+    const s = this.sessions.get(agentId);
     if ((await this.origin(agentId, toolUseId)) === 'subagent') throw new Error(SUBAGENT_DURE_TOOL);
+    // 기다리는 사이 세션이 끝났다(origin 은 부모로 돌려준다) — 끝난 세션의 부르기는 실행하지 않는다(승인과 같은 거절 문구)
+    if (s && this.sessions.get(agentId) !== s) throw new Error(EXITED);
     return this.caller(agentId); // 기다리는 사이 지워졌을 수 있다
   }
 

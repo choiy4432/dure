@@ -3084,6 +3084,21 @@ test('subagent: 못 본 id 를 기다리는 사이 세션이 끝나면(새 대�
   expect(e.pendingRequests()).toEqual([]);
 });
 
+test('subagent: 못 본 id 의 send_message·list_agents 를 기다리는 사이 세션이 끝나면(새 대화) 실행하지 않는다 — 승인과 같은 거절 문구', async () => {
+  const e = await start({}, false, { seenWaitMs: 30_000 });
+  const { a } = setup(e);
+  const first = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나')); // 세션을 띄운다
+  await first;
+  const send = toolDirect(a.id, 'send_message', { to: 'B', text: '늦게' }, 'toolu_nowhere'); // 기다리기 시작
+  const list = toolDirect(a.id, 'list_agents', {}, 'toolu_nowhere2');
+  await new Promise((r) => setTimeout(r, 200));
+  await e.newConversation(a.id);
+  expect(await send).toEqual({ text: DENY.claudeExited, isError: true });
+  expect(await list).toEqual({ text: DENY.claudeExited, isError: true });
+  expect(e.messages()).toEqual([]); // 넘기지 않았다
+});
+
 test('subagent: SUBSEND — 서브에이전트의 send_message 는 실행하지 않고 오류로 · 부모의 SEND 는 카드 없이 지금처럼(기다림이 길어도 바로)', async () => {
   const e = await start({ FAKE_SUB_MS: '50' }, false, { seenWaitMs: 30_000 }); // 부모·서브에이전트 모두 스트림에서 본 id — 기다리면 시간 초과
   const { room, a } = setup(e);
