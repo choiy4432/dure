@@ -373,16 +373,21 @@ describe('서브에이전트 지도', () => {
       expect(subTab()).toHaveAttribute('aria-selected', 'true')
       const turn = screen.getByRole('group', { name: /자료 부탁/ })
       expect(seen).toEqual([turn])
+      expect(document.activeElement).toBe(turn) // 키보드 초점도 그 묶음으로(차례 머리가 이름)
+      expect(turn).toHaveAttribute('tabindex', '-1')
       expect(document.querySelector('.sa-map')!.scrollTop).toBe(0) // 맨 아래로 끌어 내리지 않는다
 
       // 열린 채 다시 — 다른 차례로
       await act(async () => { store.showSubagents('w', 'C') })
-      expect(seen).toEqual([turn, screen.getByRole('group', { name: '서브에이전트가 끝난 뒤 이어서' })])
+      const auto = screen.getByRole('group', { name: '서브에이전트가 끝난 뒤 이어서' })
+      expect(seen).toEqual([turn, auto])
+      expect(document.activeElement).toBe(auto)
 
-      // 대화로 갔다가 탭만 다시 열면 맨 아래로 — 지난 focus 로 다시 스크롤하지 않는다
+      // 대화로 갔다가 탭만 다시 열면 맨 아래로 — 지난 focus 로 다시 스크롤하지도, 초점을 옮기지도 않는다
       fireEvent.click(chatTab())
       openMap()
       expect(seen).toHaveLength(2)
+      expect(document.activeElement).toBe(document.body)
       expect(document.querySelector('.sa-map')!.scrollTop).toBe(640)
     } finally {
       delete (HTMLElement.prototype as any).scrollIntoView

@@ -593,6 +593,37 @@ describe('ChatList — 서브에이전트 요약 줄', () => {
     expect(store.getState().subagentFocus).toMatchObject({ agentId: 'w', key: 'A' })
     expect(within(screen.getByRole('tabpanel')).getByRole('group', { name: /세 곳 조사해 줘/ })).toBeInTheDocument()
   })
+
+  it('키보드로 누르면 초점이 그 차례 묶음으로 간다 — 누른 줄이 대화와 함께 사라져도 body 로 떨어지지 않는다', async () => {
+    snapshot.agents[0] = agent('w', { name: '웹 화면', role: '화면 구현', subagentsRunning: ['A'] })
+    history.mockResolvedValueOnce(THREE)
+    await renderPanel()
+    const row = within(conv()).getByRole('button', { name: /서브에이전트 3개에게 맡김/ })
+    row.focus()
+    expect(document.activeElement).toBe(row)
+    fireEvent.click(row) // 버튼에서 Enter·Space 는 click 으로 온다(jsdom 은 키를 click 으로 바꾸지 않는다)
+    expect(row.isConnected).toBe(false)
+    const turn = within(screen.getByRole('tabpanel')).getByRole('group', { name: /세 곳 조사해 줘/ })
+    expect(document.activeElement).toBe(turn)
+    expect(turn).toHaveAttribute('tabindex', '-1') // 초점을 받을 수 있지만 Tab 순서에는 없다
+  })
+
+  it('끝 기록 없이 도는 목록에서만 빠지면(세션이 죽음) 끊김 — 빨간 묶음으로 다시 그려진다', async () => {
+    snapshot.agents[0] = agent('w', { name: '웹 화면', role: '화면 구현', subagentsRunning: ['A'] })
+    history.mockResolvedValueOnce([
+      { t: 1, kind: 'user', source: 'human', parts: [{ type: 'text', text: '조사해 줘' }] },
+      { t: 2, kind: 'assistant', blocks: [{ type: 'tool_use', id: 'A', name: 'Agent', input: { description: 'A사 조사', prompt: 'p' } }] },
+      { t: 3, kind: 'subagent-start', toolUseId: 'A', taskId: 'task-A', description: 'A사 조사', subagentType: null, parentTaskId: null },
+      { t: 4, kind: 'tool-result', toolUseId: 'A', isError: false, text: 'Async agent launched successfully.', viaApproval: false },
+    ] satisfies HistoryItem[])
+    await renderPanel()
+    const counts = () => within(conv()).getByRole('button', { name: /A사 조사 서브에이전트에게 맡김/ }).querySelector('[role="img"]')
+    expect(counts()).toHaveAccessibleName('도는 중 1')
+    await emit('subagents', { agentId: 'w', running: [] }) // 끝 기록은 오지 않는다
+    expect(counts()).toHaveAccessibleName('실패 1')
+    expect(counts()!.querySelector('.dot.g')).toBeNull()
+    expect(counts()!.querySelector('.dot.r')).not.toBeNull()
+  })
 })
 
 describe('ChatList — 명령 출력', () => {

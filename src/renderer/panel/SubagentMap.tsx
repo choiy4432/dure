@@ -169,6 +169,7 @@ export function SubagentMap({ name, turns, focus, seen }: {
   }
 
   // 새 focus — 그 노드가 든 차례로(열 때든 열린 채든). 맨 아래에 붙지 않게 해 아래 효과가 끌어 내리지 않는다.
+  // 키보드 초점도 그 묶음으로 — 누른 요약 줄은 대화 목록과 함께 사라져 초점이 body 로 떨어진다(묶음 이름 = 차례 머리로 읽힌다).
   // turns 는 그 순간의 것을 읽을 뿐 — 차례가 늘 때 다시 돌지 않는다
   useLayoutEffect(() => {
     if (!focus || focus.n <= seen.current) return
@@ -178,6 +179,7 @@ export function SubagentMap({ name, turns, focus, seen }: {
     if (!group) return
     stick.current = false
     group.scrollIntoView?.({ block: 'start' })
+    group.focus({ preventScroll: true })
     if (!reducedMotion()) playEnter(group, MOTION.line.enter)
   }, [focus?.n])
 
@@ -200,6 +202,8 @@ export function SubagentMap({ name, turns, focus, seen }: {
             className="sa-turn"
             role="group"
             aria-labelledby={`${base}-${i}`}
+            // 요약 줄에서 올 때 초점을 받는 자리 — Tab 순서에는 넣지 않는다
+            tabIndex={-1}
           >
             <TurnHead id={`${base}-${i}`} opener={turn.opener} />
             <div className="sa-root">
