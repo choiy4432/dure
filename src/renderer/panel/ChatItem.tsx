@@ -169,13 +169,17 @@ function ChatItemView({ line, folded = false, index }: Props) {
       return (
         <div className="ci-claude" data-line={index}>
           <div className="who">Claude</div>
-          {line.text && <Markdown text={line.text} />}
-          {line.actions.length > 0 && (
-            <ul className="acts">
-              {line.actions.map(a => (
-                <Action key={a.id} a={a} />
-              ))}
-            </ul>
+          {/* 글과 하는 일 상자를 일어난 차례대로 — 흐르는 동안 보던 차례가 차례가 끝나도 그대로 */}
+          {line.parts.map((p, i) =>
+            p.type === 'text' ? (
+              <Markdown key={i} text={p.text} />
+            ) : (
+              <ul key={i} className="acts">
+                {p.actions.map(a => (
+                  <Action key={a.id} a={a} />
+                ))}
+              </ul>
+            ),
           )}
         </div>
       )
@@ -206,7 +210,10 @@ function sameLine(prev: Props, next: Props): boolean {
       return a.from === (b as typeof a).from && a.at === (b as typeof a).at && a.messageId === (b as typeof a).messageId
     case 'claude': {
       const x = (b as typeof a).actions
-      return a.at === (b as typeof a).at && a.actions.length === x.length && a.actions.every((act, i) => sameAction(act, x[i]))
+      const y = (b as typeof a).parts
+      // 조각의 차례·나뉨도 같아야 — 글과 하는 일이 같아도 놓인 차례가 다르면 다시 그린다
+      const sameParts = a.parts.length === y.length && a.parts.every((p, i) => p.type === y[i].type && (p.type === 'text' ? p.text === (y[i] as typeof p).text : p.actions.length === (y[i] as typeof p).actions.length))
+      return a.at === (b as typeof a).at && a.actions.length === x.length && a.actions.every((act, i) => sameAction(act, x[i])) && sameParts
     }
     case 'notice':
     case 'local':

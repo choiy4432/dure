@@ -15,10 +15,13 @@ export interface ActionLine {
   truncated?: boolean
 }
 
+/** Claude 답 안의 한 조각 — 글, 또는 이어진 하는 일 한 상자. 일어난 차례대로 놓는다 */
+export type ClaudePart = { type: 'text'; text: string } | { type: 'acts'; actions: ActionLine[] }
+
 export type ChatLine =
   | { kind: 'me'; text: string; images: number; at: number }
   | { kind: 'relay'; from: string; text: string; at: number; messageId?: string }
-  | { kind: 'claude'; text: string; actions: ActionLine[]; at: number }
+  | { kind: 'claude'; text: string; actions: ActionLine[]; parts: ClaudePart[]; at: number }
   | { kind: 'notice'; text: string; at: number }
   | { kind: 'local'; text: string; at: number }
   | { kind: 'streaming'; text: string }
@@ -62,25 +65,37 @@ export function buildTranscript(
   for (const it of items) {
     switch (it.kind) {
       case 'assistant': {
-        if (!cur) cur = { kind: 'claude', text: '', actions: [], at: it.t }
+        if (!cur) cur = { kind: 'claude', text: '', actions: [], parts: [], at: it.t }
+        const parts = cur.parts
         for (const b of it.blocks) {
           if (b.type === 'text') {
-            if (b.text !== '') texts.push(b.text)
+            if (b.text === '') continue
+            texts.push(b.text)
+            // 글은 바로 앞 조각이 글이면 이어 붙이고, 하는 일 상자 뒤면 새 조각 — 화면은 일어난 차례대로(흐르는 동안 보던 차례 그대로)
+            const last = parts[parts.length - 1]
+            if (last?.type === 'text') last.text += `\n\n${b.text}`
+            else parts.push({ type: 'text', text: b.text })
           } else {
             const s = toolSummary(b.name, b.input)
             const r = results.get(b.id)
+            let action: ActionLine
             if (!r) {
-              cur.actions.push({ id: b.id, ...s, allowed: false, denied: false, output: '', pending: true })
+              action = { id: b.id, ...s, allowed: false, denied: false, output: '', pending: true }
             } else {
-              cur.actions.push({
+              action = {
                 id: b.id,
                 ...s,
                 allowed: !r.viaApproval && !r.isError,
                 denied: r.isError && DENY_TEXTS.includes(r.text),
                 output: r.text.slice(0, OUTPUT_MAX),
                 ...(r.text.length > OUTPUT_MAX ? { truncated: true } : {}),
-              })
+              }
             }
+            cur.actions.push(action)
+            // 이어진 하는 일은 한 상자에
+            const last = parts[parts.length - 1]
+            if (last?.type === 'acts') last.actions.push(action)
+            else parts.push({ type: 'acts', actions: [action] })
           }
         }
         break

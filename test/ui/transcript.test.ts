@@ -27,6 +27,35 @@ describe('buildTranscript', () => {
       { id: 'a', verb: '읽음', target: 'f.ts', icon: 'file', allowed: true, denied: false, output: 'content' },
     ])
   })
+  it('Claude 답 안의 글과 하는 일은 일어난 차례대로 parts 에 — 이어진 하는 일은 한 상자, 글은 그 사이사이', () => {
+    const read = (id: string) => ({ type: 'tool_use', id, name: 'Read', input: { file_path: `/x/${id}.ts` } })
+    const { lines } = buildTranscript(
+      [
+        human('hi'),
+        asst([{ type: 'text', text: '봅니다' }, read('a')]),
+        res('a', 'A'),
+        asst([read('b')]),
+        res('b', 'B'),
+        asst([{ type: 'text', text: '끝' }]),
+      ],
+      undefined,
+    )
+    const c = lines[1] as any
+    expect(c.parts.map((p: any) => (p.type === 'text' ? `글:${p.text}` : `일:${p.actions.map((a: any) => a.id).join(',')}`))).toEqual([
+      '글:봅니다',
+      '일:a,b',
+      '글:끝',
+    ])
+  })
+
+  it('하는 일만 먼저 오고 마지막에 글이면 — 차례가 끝나도 하는 일 상자가 글 위에 남는다', () => {
+    const { lines } = buildTranscript(
+      [human('hi'), asst([{ type: 'tool_use', id: 'a', name: 'Read', input: { file_path: '/x/a.ts' } }]), res('a', 'A'), asst([{ type: 'text', text: '다 했어요' }])],
+      undefined,
+    )
+    expect((lines[1] as any).parts.map((p: any) => p.type)).toEqual(['acts', 'text'])
+  })
+
   it('boundary(새 대화)를 만나면 그 앞 줄은 버린다 — 다시 켠 뒤의 기록과 같은 화면', () => {
     const { lines } = buildTranscript(
       [human('옛 말', 1), asst([{ type: 'text', text: '옛 답' }], 2), { t: 3, kind: 'boundary' }, human('새 말', 4)],

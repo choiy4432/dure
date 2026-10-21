@@ -2144,6 +2144,15 @@ code {
   border-top: 1px solid var(--border-soft);
 }
 
+/* Claude 답의 조각은 일어난 차례대로 — 이름 바로 밑 상자는 글처럼 붙고, 상자 뒤 글은 상자 위 간격만큼 띄운다 */
+.who + .acts {
+  margin-top: 0;
+}
+
+.acts + .md {
+  margin-top: 12px;
+}
+
 .act {
   width: 100%;
   display: flex;
