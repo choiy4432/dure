@@ -2753,6 +2753,72 @@ test('subagent: 서브에이전트만 도는 동안 사람 입력은 기다리�
   expect(e.status(a.id)).toBe('working'); // 서브에이전트는 아직 돈다
 });
 
+test('subagent: 서브에이전트가 아닌 일(백그라운드 명령)의 끝 알림은 버린다 — 끝 기록·subagents 사건·agent-event 없고 도는 목록은 그대로', async () => {
+  const gate = path.join(dir, 'gate'); // 서브에이전트 하나를 돌려 둔 채
+  const e = await start({ FAKE_SUB_GATE: gate });
+  const { a } = setup(e);
+  const runs: SubagentsEvent[] = [];
+  e.on('subagents', (x: SubagentsEvent) => runs.push(x));
+  const taskEvents: StreamEvent[] = [];
+  e.on('agent-event', (x: AgentEvent) => {
+    if (x.agentId === a.id && (x.event.kind === 'task-started' || x.event.kind === 'task-ended')) taskEvents.push(x.event);
+  });
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 조사'));
+  await launched;
+  const tool = agentToolId(e, a.id);
+
+  const done = resultTextIs(e, a.id, 'BG DONE');
+  await e.sendUser(a.id, text('BGTASK npm run build')); // 시작(local_bash)은 파서가 버리고 끝 알림만 온다
+  await done;
+  expect(runs).toEqual([{ agentId: a.id, running: [tool] }]); // 서브에이전트 시작 때 하나뿐
+  expect(taskEvents).toEqual([expect.objectContaining({ kind: 'task-started', toolUseId: tool })]);
+  expect(e.history(a.id).filter((x) => x.kind === 'subagent-end')).toEqual([]);
+  const bash = e.history(a.id).filter((x) => !hasParent(x)).slice(-4);
+  expect(bash.map((x) => x.kind)).toEqual(['assistant', 'tool-result', 'assistant', 'result']); // 그 차례엔 하는 일·결과·글만
+  expect(e.subagentsRunning(a.id)).toEqual([tool]);
+  expect(e.status(a.id)).toBe('working'); // 서브에이전트는 아직 돈다
+});
+
+test('subagent: 둘이 돌면 시작 순 [A, B] — A 가 끝나면 [B], 둘 다 끝나면 []', async () => {
+  const e = await start({ FAKE_SUB_MS: '400' }); // 둘 다 띄운 뒤에 일을 시작한다 — 먼저 띄운 A 가 먼저 끝난다
+  const { a } = setup(e);
+  const runs: string[][] = [];
+  e.on('subagents', (x: SubagentsEvent) => x.agentId === a.id && runs.push(x.running));
+  let launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 하나'));
+  await launched;
+  launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 둘'));
+  await launched;
+  const [first, second] = e
+    .history(a.id)
+    .flatMap((h) => (h.kind === 'subagent-start' ? [h.toolUseId] : []));
+  expect(e.subagentsRunning(a.id)).toEqual([first, second]);
+  const both = Promise.all([resultTextIs(e, a.id, '전달: 보고: 하나'), resultTextIs(e, a.id, '전달: 보고: 둘')]);
+  await both;
+  expect(runs).toEqual([[first], [first, second], [second], []]);
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('subagent: 서브에이전트가 돌아도 승인 대기가 앞선다 — 답하면 다시 작업 중', async () => {
+  const gate = path.join(dir, 'gate');
+  const e = await start({ FAKE_SUB_GATE: gate });
+  const { a } = setup(e);
+  const launched = resultTextIs(e, a.id, 'LAUNCHED');
+  await e.sendUser(a.id, text('SUB 조사'));
+  await launched;
+  const req = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === a.id);
+  await e.sendUser(a.id, text('ASK Write'));
+  const r = await req;
+  expect(e.subagentsRunning(a.id)).toHaveLength(1);
+  expect(e.status(a.id)).toBe('awaiting');
+  const done = resultTextIs(e, a.id, 'ok');
+  e.answerRequest(r.id, { type: 'allow' });
+  await done;
+  expect(e.status(a.id)).toBe('working'); // 부모 차례는 끝났고 서브에이전트는 돈다
+});
+
 test('subagent: 서브에이전트 줄·시작·끝은 보낸 줄을 읽었다는 뜻이 아니다 — 읽기 전에 죽으면 그 입력을 다시 보낸다', async () => {
   const gate = path.join(dir, 'gate');
   const mute = path.join(dir, 'mute');

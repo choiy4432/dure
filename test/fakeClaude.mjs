@@ -13,6 +13,9 @@
 //                       (init → 글 "전달: 보고: <설명>" → result — 진행 중인 차례가 있으면 그 뒤에, probe14 B)
 //   SUBFG <설명>        같은 서브에이전트를 차례 안에서(is_backgrounded:false, probe14 A) — 끝 알림 뒤 부모 tool_result
 //                       "[Subagent hand-back] …" → 글 "정리: 보고: <설명>" → result. 스스로 시작한 차례는 없다
+//   BGTASK <명령>       서브에이전트가 아닌 일(백그라운드 명령) — Bash tool_use(run_in_background) → task_started(task_<n>,
+//                       task_type:'local_bash' — 파서가 버린다) → tool_result → task_notification(completed — 같은 모양, 엔진엔 모르는 끝으로 온다)
+//                       → 글 "BG DONE" → result. 끝 알림까지 차례 안에서(시험이 result 로 기다릴 수 있게)
 //   그 밖               글 "받음: <글>"
 // 서브에이전트 손잡이:
 //   FAKE_SUB_GATE=<파일>   서브에이전트가 그 파일이 생길 때까지 일을 시작하지 않는다(20ms 간격)
@@ -291,6 +294,23 @@ async function turn(text) {
     const said = `정리: ${report}`;
     await assistant([{ type: 'text', text: said }]);
     await finish(said);
+    return;
+  }
+  const bg = /^BGTASK ([\s\S]+)$/.exec(text);
+  if (bg) {
+    const n = ++sequence;
+    const toolUseId = `toolu_${n}`;
+    const taskId = `task_${n}`;
+    const command = bg[1];
+    await assistant([{ type: 'tool_use', id: toolUseId, name: 'Bash', input: { command, run_in_background: true } }]);
+    await system('task_started', { task_id: taskId, tool_use_id: toolUseId, description: command, task_type: 'local_bash' });
+    await toolResult(toolUseId, `Command running in background with ID: ${taskId}`);
+    await system('task_notification', {
+      task_id: taskId, tool_use_id: toolUseId, status: 'completed', summary: `Background command "${command}" completed (exit code 0)`,
+      output_file: `${taskId}.output`,
+    });
+    await assistant([{ type: 'text', text: 'BG DONE' }]);
+    await finish('BG DONE');
     return;
   }
   const send = /^SEND ([^:]+): ([\s\S]*)$/.exec(text);
