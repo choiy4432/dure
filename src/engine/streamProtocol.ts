@@ -1,4 +1,4 @@
-import type { AssistantBlock, ControlRequest, StreamEvent, UserPart } from './types.js';
+import type { AssistantBlock, ControlRequest, StreamEvent, SubagentEnd, UserPart } from './types.js';
 
 const ignored = (type: string): StreamEvent => ({ kind: 'ignored', type });
 
@@ -12,6 +12,13 @@ function toolResultText(content: unknown): string {
   }
   return '';
 }
+
+/** 서브에이전트 줄이면 부모의 Agent tool_use id */
+const parentOf = (obj: any): { parent?: string } =>
+  typeof obj.parent_tool_use_id === 'string' && obj.parent_tool_use_id !== '' ? { parent: obj.parent_tool_use_id } : {};
+
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const END_STATUS: readonly string[] = ['completed', 'failed', 'stopped'];
 
 const LOCAL_OUT = /^<local-command-stdout>([\s\S]*)<\/local-command-stdout>$/;
 
@@ -30,6 +37,7 @@ function parseUser(obj: any): StreamEvent {
         toolUseId: String(tr.tool_use_id ?? ''),
         isError: tr.is_error === true,
         text: toolResultText(tr.content),
+        ...parentOf(obj),
       };
     }
   }
@@ -45,7 +53,7 @@ function parseAssistant(obj: any): StreamEvent {
       else if (c?.type === 'tool_use') blocks.push({ type: 'tool_use', id: c.id, name: c.name, input: c.input });
     }
   }
-  return { kind: 'assistant', blocks };
+  return { kind: 'assistant', blocks, ...parentOf(obj) };
 }
 
 /** 한 줄을 이벤트로 — 던지지 않는다(모양이 이상하면 ignored parse-error) */
@@ -78,6 +86,29 @@ function parseObject(obj: any): StreamEvent {
         };
       }
       if (obj.subtype === 'compact_boundary') return { kind: 'compacted' };
+      if (obj.subtype === 'task_started') {
+        // task_type 이 없으면 서브에이전트로 친다. 그 밖(local_bash 등)은 무시
+        if (obj.task_type !== undefined && obj.task_type !== 'local_agent') return ignored('system/task_started');
+        return {
+          kind: 'task-started',
+          taskId: String(obj.task_id ?? ''),
+          toolUseId: String(obj.tool_use_id ?? ''),
+          description: typeof obj.description === 'string' ? obj.description : '',
+          subagentType: typeof obj.subagent_type === 'string' ? obj.subagent_type : null,
+          parentTaskId: typeof obj.parent_task_id === 'string' ? obj.parent_task_id : null,
+        };
+      }
+      if (obj.subtype === 'task_notification') {
+        return {
+          kind: 'task-ended',
+          taskId: String(obj.task_id ?? ''),
+          toolUseId: String(obj.tool_use_id ?? ''),
+          status: (END_STATUS.includes(obj.status) ? obj.status : 'failed') as SubagentEnd,
+          summary: typeof obj.summary === 'string' ? obj.summary : '',
+          toolUses: num(obj.usage?.tool_uses),
+          durationMs: num(obj.usage?.duration_ms),
+        };
+      }
       return ignored(`system/${obj.subtype}`);
     case 'stream_event': {
       const d = obj.event?.delta;

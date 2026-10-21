@@ -76,11 +76,14 @@ export type ControlRequest =
   | { subtype: 'get_usage'; skip_behaviors: true }
   | { subtype: 'get_context_usage'; detail: 'summary' };
 export type AssistantBlock = { type: 'text'; text: string } | { type: 'tool_use'; id: string; name: string; input: unknown };
+export type SubagentEnd = 'completed' | 'failed' | 'stopped';
 export type StreamEvent =
   | { kind: 'init'; sessionId: string; model: string; permissionMode: string; slashCommands: string[] }
   | { kind: 'text-delta'; text: string }
-  | { kind: 'assistant'; blocks: AssistantBlock[] } // thinking 블록은 버린다
-  | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string }
+  | { kind: 'assistant'; blocks: AssistantBlock[]; parent?: string } // thinking 블록은 버린다. parent = 서브에이전트 줄이면 부모의 Agent tool_use id
+  | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; parent?: string }
+  | { kind: 'task-started'; taskId: string; toolUseId: string; description: string; subagentType: string | null; parentTaskId: string | null }
+  | { kind: 'task-ended'; taskId: string; toolUseId: string; status: SubagentEnd; summary: string; toolUses: number | null; durationMs: number | null }
   | { kind: 'local-output'; text: string } // 로컬 명령(/model 등) 출력 에코
   | { kind: 'result'; ok: boolean; subtype: string; text: string; denials: { toolName: string; toolUseId: string }[] }
   | { kind: 'control-response'; requestId: string; ok: boolean; payload: any }
@@ -91,8 +94,10 @@ export type StreamEvent =
 export type HistoryPart = { type: 'text'; text: string } | { type: 'image'; mediaType: string; bytes: number };
 export type HistoryItem = { t: number } & (
   | { kind: 'user'; source: 'human' | 'relay'; parts: HistoryPart[]; messageId?: string }
-  | { kind: 'assistant'; blocks: AssistantBlock[] }
-  | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; viaApproval: boolean }
+  | { kind: 'assistant'; blocks: AssistantBlock[]; parent?: string }
+  | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; viaApproval: boolean; parent?: string }
+  | { kind: 'subagent-start'; toolUseId: string; taskId: string; description: string; subagentType: string | null; parentTaskId: string | null }
+  | { kind: 'subagent-end'; toolUseId: string; taskId: string; status: SubagentEnd; summary: string; toolUses: number | null; durationMs: number | null }
   | { kind: 'local-output'; text: string }
   | { kind: 'result'; ok: boolean; subtype: string }
   | { kind: 'notice'; text: string } // 멈춤·오류·종료 같은 알림

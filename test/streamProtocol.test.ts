@@ -112,6 +112,50 @@ describe('parseLine', () => {
   });
 });
 
+describe('parseLine — 서브에이전트', () => {
+  const tu = { type: 'tool_use', id: 'toolu_R', name: 'Read', input: {} };
+  test('assistant 의 parent_tool_use_id → parent, null 이면 칸 없음', () => {
+    const mk = (p: unknown) => parseLine(JSON.stringify({ type: 'assistant', parent_tool_use_id: p, message: { content: [tu] } }));
+    expect(mk('toolu_A')).toEqual({ kind: 'assistant', blocks: [tu], parent: 'toolu_A' });
+    expect(mk(null)).toEqual({ kind: 'assistant', blocks: [tu] });
+  });
+
+  test('tool_result 줄의 parent_tool_use_id → parent', () => {
+    const line = JSON.stringify({
+      type: 'user',
+      parent_tool_use_id: 'toolu_A',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_R', content: 'ok' }] },
+    });
+    expect(parseLine(line)).toEqual({ kind: 'tool-result', toolUseId: 'toolu_R', isError: false, text: 'ok', parent: 'toolu_A' });
+  });
+
+  const started = { type: 'system', subtype: 'task_started', task_id: 't1', tool_use_id: 'toolu_A', description: 'outer', subagent_type: 'general-purpose', task_type: 'local_agent', spawn_depth: 1 };
+  test('task_started → task-started', () => {
+    expect(parseLine(JSON.stringify(started))).toEqual({ kind: 'task-started', taskId: 't1', toolUseId: 'toolu_A', description: 'outer', subagentType: 'general-purpose', parentTaskId: null });
+    expect(parseLine(JSON.stringify({ ...started, parent_task_id: 't0' }))).toMatchObject({ kind: 'task-started', parentTaskId: 't0' });
+  });
+  test('task_started: local_bash 는 무시, task_type 없으면 서브에이전트', () => {
+    expect(parseLine(JSON.stringify({ ...started, task_type: 'local_bash' }))).toEqual({ kind: 'ignored', type: 'system/task_started' });
+    const { task_type, ...noType } = started;
+    expect(parseLine(JSON.stringify(noType))).toMatchObject({ kind: 'task-started', taskId: 't1' });
+  });
+
+  const note = { type: 'system', subtype: 'task_notification', task_id: 't1', tool_use_id: 'toolu_A', status: 'stopped', summary: 'x', usage: { total_tokens: 9, tool_uses: 3, duration_ms: 8007 } };
+  test('task_notification → task-ended', () => {
+    expect(parseLine(JSON.stringify(note))).toEqual({ kind: 'task-ended', taskId: 't1', toolUseId: 'toolu_A', status: 'stopped', summary: 'x', toolUses: 3, durationMs: 8007 });
+  });
+  test('task_notification: 모르는 status → failed, usage·summary 없으면 null·빈 글', () => {
+    const { usage, summary, ...bare } = note;
+    expect(parseLine(JSON.stringify({ ...bare, status: 'weird' }))).toEqual({ kind: 'task-ended', taskId: 't1', toolUseId: 'toolu_A', status: 'failed', summary: '', toolUses: null, durationMs: null });
+  });
+
+  test('task_progress·task_updated·background_tasks_changed → ignored', () => {
+    for (const subtype of ['task_progress', 'task_updated', 'background_tasks_changed']) {
+      expect(parseLine(JSON.stringify({ type: 'system', subtype }))).toEqual({ kind: 'ignored', type: `system/${subtype}` });
+    }
+  });
+});
+
 describe('encode', () => {
   test('encodeUser: 텍스트·이미지, 특수문자 왕복', () => {
     const text = '줄1\n"따옴표" \\ 백슬래시 🎉 한글';
