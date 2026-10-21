@@ -188,6 +188,14 @@ describe('AgentNode — 카드 내용', () => {
     expect(screen.getByRole('img', { name: '묻지 않고 실행해요' })).toBeTruthy()
   })
 
+  it('묻지 않음이면 카드에 byp — 테두리·고른 고리가 주황, 아니면 없다', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', bypass: true }), agent('w', { name: '웹' })]
+    const on = await renderCard('d')
+    expect(on.card.classList.contains('byp')).toBe(true)
+    const off = await renderCard('w')
+    expect(off.card.classList.contains('byp')).toBe(false)
+  })
+
   it('오류면 바닥에 빨간 "멈춤" + errorText 앞 30자', async () => {
     const errorText = '가'.repeat(30) + '나'.repeat(10)
     snapshot.agents = [agent('d', { name: '디자인', status: 'error', errorText })]

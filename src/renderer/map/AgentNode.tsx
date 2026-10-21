@@ -158,7 +158,7 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
     // 권한 요청 칸이 있으면 시안처럼 넓게(304px) — [허용][거절]·링크가 한 줄에 들어가 카드가 격자 한 칸(layout.ts CELL, 높이 217) 안에 머문다
     <div
       ref={card}
-      className={`nd${selected ? ' sel' : ''}${request ? ' pend' : ''}${request?.kind === 'permission' ? ' wide' : ''}`}
+      className={`nd${selected ? ' sel' : ''}${agent.bypass ? ' byp' : ''}${request ? ' pend' : ''}${request?.kind === 'permission' ? ' wide' : ''}`}
       data-status={status}
     >
       <div className="nh">
