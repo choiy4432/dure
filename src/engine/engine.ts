@@ -84,7 +84,8 @@ export interface Engine extends EventEmitter {
   setAllowBypass(on: boolean): Promise<void>;
   /**
    * 에이전트의 '묻지 않음' — 저장하고 살아 있는 세션에 적용한다. 허용이 꺼져 있으면 켜기는 던진다.
-   * 켜기: 옵션으로 떠 있으면 바로 set_permission_mode, 옵션 없이 떠 있으면 쉬는 때 --resume 으로 다시 띄운다(일하는 중이면 그 차례 뒤).
+   * 켜기: 옵션으로 떠 있으면 바로 set_permission_mode, 옵션 없이 떠 있으면 쉴 때 --resume 으로 다시 띄운다(일하는·승인 기다리는 중이면
+   * 그 차례 뒤 — 그동안 flags.pending · 대화 안내 한 줄, 끄면 거둔다).
    * 끄기: 내 Claude 설정의 기본 모드로. 실패는 던지지 않는다 — engine-error · 대화 안내 한 줄 · flags(실제 모드)로 알린다
    */
   setBypass(id: AgentId, on: boolean): Promise<void>;
@@ -151,7 +152,7 @@ const BYPASS_VALUE_INVALID = '켜기·끄기 값이 올바르지 않아요.';
 const BYPASS_ON_FAILED = "'묻지 않음'을 켜지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.";
 const BYPASS_ON_FAILED_NOTICE = "'묻지 않음'을 켜지 못해 평소처럼 승인을 물어요";
 const BYPASS_OFF_FAILED = "'묻지 않음'을 끄지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.";
-const BYPASS_OFF_FAILED_NOTICE = "'묻지 않음'을 끄지 못해 쉬는 때 다시 띄워 평소처럼 승인을 물어요";
+const BYPASS_OFF_FAILED_NOTICE = "'묻지 않음'을 끄지 못해 쉴 때 다시 띄워 평소처럼 승인을 물어요";
 /** 옵션 없이 떠 일하는·승인 기다리는 세션을 켰다 — 그 차례가 끝나면 다시 띄운다(거두면 더하지 않는다) */
 const BYPASS_RESTART_QUEUED_NOTICE = "이 차례가 끝나면 다시 시작해 '묻지 않음'을 켜요";
 
@@ -175,7 +176,9 @@ class EngineImpl extends EventEmitter implements Engine {
   private modes = new WeakMap<ClaudeSession, boolean>(); // 그 세션의 실제 권한 모드(bypass 인가) — 마지막 init · set_permission_mode 응답
   // 묻지 않음: 허용이면 --allow-dangerously-skip-permissions 로 띄우고(그것만으론 평소 모드), 켠 에이전트만 set_permission_mode 로 켠다(probe10·11)
   private optioned = new WeakSet<ClaudeSession>(); // 그 옵션으로 뜬 세션 — 실행 중에 bypass 로 바꿀 수 있다
-  private restartWant = new WeakSet<ClaudeSession>(); // 옵션 없이 떠서 켜려면 다시 띄워야 함 — 쉬는 때(pump) --resume 으로
+  // 권한 모드 때문에 다시 띄울 세션 — 쉴 때(pump) --resume 으로. 둘 중 하나: 옵션 없이 떠서 켜려면 다시 띄워야 한다(flags.pending),
+  // 또는 끄기에 실패해 두레가 켠 bypass 가 남았다(옵션으로 뜬 세션 — 스위치가 꺼져 있어 새 세션엔 켜기를 보내지 않는다)
+  private restartWant = new WeakSet<ClaudeSession>();
   private modeApplying = new WeakMap<ClaudeSession, Promise<void>>(); // 띄울 때 보낸 set_permission_mode(답·실패 처리까지) — 다시 띄운 쪽이 기다린다
   private modeSeq = new Map<AgentId, number>(); // 모드 바꾸기 차례 번호 — 그새 다시 바뀌었으면 옛 요청의 실패는 되돌리지 않는다
   private settingsDefaults = new WeakMap<ClaudeSession, string>(); // 그 세션이 읽은 내 기본 권한 모드(get_settings) — bySettings 의 근거
@@ -594,8 +597,8 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /**
-   * 한가하면 — 묻지 않음을 켜려고 다시 띄울 세션이면 그것부터(기다리던 입력은 새 세션이 받는다), 다음은 줄에 선 /effort,
-   * 다음은 사람 입력, 없으면 다른 에이전트가 보낸 대기 메시지 — 한 번에 한 줄
+   * 한가하면 — 권한 모드 때문에 다시 띄울 세션이면(묻지 않음을 켜려고, 또는 끄기에 실패해 남은 bypass 를 걷으려고) 그것부터
+   * (기다리던 입력은 새 세션이 받는다), 다음은 줄에 선 /effort, 다음은 사람 입력, 없으면 다른 에이전트가 보낸 대기 메시지 — 한 번에 한 줄
    */
   private pump(id: AgentId): void {
     const s = this.sessions.get(id);
@@ -997,7 +1000,7 @@ class EngineImpl extends EventEmitter implements Engine {
    * 모드를 바꾸지 못했다(오류 응답·답 없음). flags 는 마지막 실제 모드 그대로.
    * 켜기: 스위치를 되돌리고(다음 실행에 몰래 켜지지 않게) 오류 한 줄 · 대화 안내 한 줄. 답 없이 지난 요청은 아직 claude 의 줄에 있어
    *   늦게 적용될 수 있다 — 끄기(내 기본 모드)를 이어 보내 덮는다(제어 요청은 차례대로 처리된다).
-   * 끄기: 두레가 켠 bypass 가 남았다 — 쉬는 때 다시 띄운다(--resume 이라 대화 그대로, 차례는 끊지 않는다. 스위치가 꺼져 있어 새 세션엔
+   * 끄기: 두레가 켠 bypass 가 남았다 — 쉴 때 다시 띄운다(--resume 이라 대화 그대로, 차례는 끊지 않는다. 스위치가 꺼져 있어 새 세션엔
    *   bypass 를 보내지 않는다). quiet 면 알리지 않는다(엔진이 바로잡던 끄기).
    */
   private async modeFailed(id: AgentId, s: ClaudeSession, on: boolean, quiet: boolean): Promise<void> {

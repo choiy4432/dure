@@ -2129,7 +2129,7 @@ test('bypass: set_permission_mode 실패(FAKE_SET_MODE_FAIL) · 응답 없음(FA
 
 // ── 묻지 않음: 실패 뒤 바로잡기(fix 1) ──
 const OFF_FAILED = "'묻지 않음'을 끄지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.";
-const OFF_FAILED_NOTICE = "'묻지 않음'을 끄지 못해 쉬는 때 다시 띄워 평소처럼 승인을 물어요";
+const OFF_FAILED_NOTICE = "'묻지 않음'을 끄지 못해 쉴 때 다시 띄워 평소처럼 승인을 물어요";
 const initModes = (e: Engine, id: string) => {
   const got: string[] = [];
   e.on('agent-event', (x: AgentEvent) => x.agentId === id && x.event.kind === 'init' && got.push(x.event.permissionMode));
@@ -2182,7 +2182,7 @@ test('bypass: 옵션으로 뜬 세션이 스위치가 꺼진 채 bypass 로 알�
   expect(e2.flags(x.id)).toEqual({ bypass: true, bySettings: true, pending: false });
 });
 
-test('bypass: 끄기에 실패하면 쉬는 때 다시 띄워(--resume) 평소 모드로 — 차례는 끊지 않고 대화는 그대로', async () => {
+test('bypass: 끄기에 실패하면 쉴 때 다시 띄워(--resume) 평소 모드로 — 차례는 끊지 않고 대화는 그대로', async () => {
   const e = await start({ FAKE_SET_MODE_FAIL: 'default' });
   const { a, b } = setup(e);
   await e.setAllowBypass(true);
