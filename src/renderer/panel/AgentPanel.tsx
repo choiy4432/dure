@@ -1,7 +1,8 @@
-import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react'
-import type { AgentId, RelayMessage } from '../../engine/types'
-import { useDure } from '../state/store'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import type { AgentId, HistoryItem, RelayMessage } from '../../engine/types'
+import { getStore, useDure } from '../state/store'
 import { latestDelivered } from '../state/selectors'
+import { buildSubagentTree } from '../state/subagents'
 import { errorMessage } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { PanelHeader } from './PanelHeader'
@@ -13,6 +14,8 @@ import { HeldChainCard } from './cards/HeldChainCard'
 import { PresenceList } from '../lib/presence'
 import { ChatList } from './ChatList'
 import { Composer } from './Composer'
+import { PanelTabs, tabId } from './PanelTabs'
+import { SubagentMap } from './SubagentMap'
 
 const IDLE: Described = { state: 'idle' }
 
@@ -109,9 +112,67 @@ function Pins({ agentId, open, onOpenChange }: {
   )
 }
 
+const NO_ITEMS: HistoryItem[] = []
+const NO_IDS: string[] = []
+
+/**
+ * 머리와 입력창 사이 — [대화 | 서브에이전트 N] 탭(지금 대화에 서브에이전트가 하나라도 있었을 때만) → 고정 카드 → 대화 목록 또는 서브에이전트 지도.
+ * pins·chat 은 AgentPanel 이 만든 요소 그대로 받는다 — 기록이 늘어 이 칸이 다시 그려져도 둘은 다시 그리지 않는다(제 구독으로 그린다).
+ * 탭 아래 칸은 탭이 생기고 사라져도 같은 요소라 대화 목록이 다시 붙지 않는다.
+ */
+function PanelBody({ agentId, name, pins, chat, seen }: {
+  agentId: AgentId
+  name: string
+  pins: ReactNode
+  chat: ReactNode
+  /** 지도가 이미 간 focus 의 n — 패널이 들고 있어 지도가 다시 열려도 지난 focus 로 다시 가지 않는다 */
+  seen: RefObject<number>
+}) {
+  const v = useDure(s => {
+    const f = s.subagentFocus
+    return {
+      items: s.history[agentId] ?? NO_ITEMS,
+      ready: s.historyStatus[agentId]?.state === 'ready',
+      running: s.agents.find(a => a.id === agentId)?.subagentsRunning ?? NO_IDS,
+      tab: s.panelTab[agentId] ?? 'chat',
+      focus: f && f.agentId === agentId ? f : null,
+    }
+  })
+  // 지금 대화(마지막 새 대화 경계 뒤)의 나무 — 탭 숫자(안쪽 포함)와 지도가 같은 것을 쓴다
+  const tree = useMemo(() => buildSubagentTree(v.items, new Set(v.running)), [v.items, v.running])
+  const tabs = tree.total > 0
+  const tab = tabs ? v.tab : 'chat'
+  const base = useId()
+  const panelId = `${base}-panel`
+
+  // 새 대화로 서브에이전트가 0 이 되면 대화 탭으로 — 다음에 서브에이전트가 생겨도 대화를 보던 그대로
+  useEffect(() => {
+    if (!tabs && v.ready && v.tab === 'subagents') getStore().setPanelTab(agentId, 'chat')
+  }, [tabs, v.ready, v.tab, agentId])
+
+  return (
+    <>
+      {tabs && (
+        <PanelTabs
+          tab={tab}
+          total={tree.total}
+          running={tree.running > 0 || v.running.length > 0}
+          base={base}
+          panelId={panelId}
+          onChange={t => getStore().setPanelTab(agentId, t)}
+        />
+      )}
+      {pins}
+      <div className="pnl-view" {...(tabs ? { role: 'tabpanel', id: panelId, 'aria-labelledby': tabId(base, tab) } : {})}>
+        {tab === 'chat' ? chat : <SubagentMap key={agentId} name={name} turns={tree.turns} focus={v.focus} seen={seen} />}
+      </div>
+    </>
+  )
+}
+
 /**
  * 오른쪽 패널 — 고른 에이전트 하나.
- * 위에서부터: 머리(PanelHeader) → 고정 카드 자리(.pnl-pins) → 대화 목록(ChatList) → 입력창(Composer).
+ * 위에서부터: 머리(PanelHeader) → 탭(서브에이전트가 있을 때) → 고정 카드 자리(.pnl-pins) → 대화 목록(ChatList) 또는 서브에이전트 지도 → 입력창(Composer).
  */
 export function AgentPanel() {
   const sel = useDure(s => {
@@ -154,6 +215,9 @@ export function AgentPanel() {
   const [sent, setSent] = useState<{ agentId: AgentId | null; n: number }>({ agentId: null, n: 0 })
   const onSent = useCallback((agentId: AgentId) => setSent(s => ({ agentId, n: s.n + 1 })), [])
 
+  // 서브에이전트 지도가 이미 간 focus 의 n(store.showSubagents 가 올린다)
+  const seenFocus = useRef(0)
+
   if (!sel) {
     return (
       <aside className="pnl" aria-label="에이전트">
@@ -173,8 +237,13 @@ export function AgentPanel() {
         modelOpen={modelOpenFor === sel.id}
         onModelOpenChange={open => setModelOpenFor(open ? sel.id : null)}
       />
-      <Pins agentId={sel.id} open={cardOpen} onOpenChange={setOpen} />
-      <ChatList key={`c-${sel.id}`} agentId={sel.id} pin={sent.agentId === sel.id ? sent.n : 0} cardOpen={cardOpen} />
+      <PanelBody
+        agentId={sel.id}
+        name={sel.name}
+        seen={seenFocus}
+        pins={<Pins agentId={sel.id} open={cardOpen} onOpenChange={setOpen} />}
+        chat={<ChatList key={`c-${sel.id}`} agentId={sel.id} pin={sent.agentId === sel.id ? sent.n : 0} cardOpen={cardOpen} />}
+      />
       <Composer
         key={`i-${sel.id}`}
         agentId={sel.id}

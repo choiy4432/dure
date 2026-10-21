@@ -10,7 +10,7 @@ import { useFrameValue } from '../lib/useFrameValue'
 import { Clamp } from '../lib/Clamp'
 import { ExpandBox } from '../lib/ExpandBox'
 import { Presence } from '../lib/presence'
-import { localSummary } from '../lib/words'
+import { firstLine, localSummary } from '../lib/words'
 
 const ICONS: Record<ToolIcon, ComponentType<LucideProps>> = {
   file: File,
@@ -58,7 +58,8 @@ function LocalLine({ text, index }: { text: string; index?: number }) {
   )
 }
 
-function Action({ a }: { a: ActionLine }) {
+/** 하는 일 한 줄 — 누르면 출력이 펼쳐진다. 대화의 하는 일 상자와 서브에이전트 지도의 한 일 목록이 같이 쓴다 */
+export function Action({ a }: { a: ActionLine }) {
   const [open, setOpen] = useState(false)
   const tagged = a.allowed && ASKS_FIRST.has(a.verb)
   const Icon = tagged ? ShieldCheck : ICONS[a.icon]
@@ -91,12 +92,6 @@ function Action({ a }: { a: ActionLine }) {
       </Presence>
     </li>
   )
-}
-
-/** 접힌 전달 메시지의 한 줄 — 첫 글 줄, 마크다운 머리표·강조 기호는 걷는다 */
-function firstLine(text: string): string {
-  const line = text.split('\n').find(l => l.trim() !== '') ?? ''
-  return line.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, '').replace(/[`*]/g, '').trim()
 }
 
 /** 흐르는 글 — 마크다운으로, 한 장에 한 번만 다시 읽는다 */

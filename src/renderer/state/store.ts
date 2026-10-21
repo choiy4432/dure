@@ -20,7 +20,13 @@ export type UiState = Snapshot & {
   statusSince: Record<AgentId, number>
   /** 처음 상태를 한 번도 못 받았을 때 그 까닭(오류 문구) — 받으면 null. 받은 뒤의 실패는 여기 오지 않는다 */
   loadError: string | null
+  /** 패널에서 고른 탭 — 에이전트마다, 앱을 끄면 잊는다. 없으면 대화 */
+  panelTab: Record<AgentId, PanelTab>
+  /** 대화의 서브에이전트 요약 줄을 눌렀다 — 지도가 key(노드 id)가 든 차례로 간다. n 은 누를 때마다 오른다 */
+  subagentFocus: { agentId: AgentId; key: string; n: number } | null
 }
+
+export type PanelTab = 'chat' | 'subagents'
 
 export interface Store {
   getState(): UiState
@@ -30,20 +36,23 @@ export interface Store {
   refresh(): Promise<void>
   selectAgent(id: AgentId | null): void
   selectRoom(id: RoomId): void
+  setPanelTab(id: AgentId, tab: PanelTab): void
+  /** 서브에이전트 탭으로 바꾸고 key(노드 id)가 든 차례를 보이게 한다 */
+  showSubagents(id: AgentId, key: string): void
 }
 
 type Ev = { [K in keyof EngineEventMap]: { name: K; payload: EngineEventMap[K] } }[keyof EngineEventMap]
 
 const EVENTS: (keyof EngineEventMap)[] = [
   'agent-event', 'status', 'message', 'request', 'request-resolved', 'flags', 'history', 'held-input',
-  'usage', 'context', 'effort', 'model-now',
+  'usage', 'context', 'effort', 'model-now', 'subagents',
 ]
 
 const sameItem = (a: HistoryItem, b: HistoryItem) => JSON.stringify(a) === JSON.stringify(b)
 
-/** assistant 항목의 글(하는 일 블록은 뺀다) — 글이 없으면 '' */
+/** 부모의 assistant 항목의 글(하는 일 블록은 뺀다) — 글이 없거나 서브에이전트의 줄이면 '' */
 function assistantText(item: HistoryItem): string {
-  if (item.kind !== 'assistant') return ''
+  if (item.kind !== 'assistant' || item.parent) return ''
   return item.blocks.flatMap(b => (b.type === 'text' && b.text.trim() !== '' ? [b.text] : [])).join('\n\n')
 }
 
@@ -51,7 +60,7 @@ export function createStore(api: DureApi): Store {
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, lastText: {}, lastDelivered: {},
-    statusSince: {}, loadError: null,
+    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null,
   }
   const listeners = new Set<() => void>()
   let buffer: { ev: Ev; at: number }[] | null = null // 스냅샷을 기다리는 동안 온 이벤트(받은 시각과 함께)
@@ -129,6 +138,11 @@ export function createStore(api: DureApi): Store {
         state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, modelNow: p.modelNow } : a)) }
         break
       }
+      case 'subagents': {
+        const p = ev.payload
+        state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, subagentsRunning: p.running } : a)) }
+        break
+      }
       case 'message': {
         const m = ev.payload
         const cur = state.messages.find(x => x.id === m.id)
@@ -156,6 +170,8 @@ export function createStore(api: DureApi): Store {
         const { agentId, item } = ev.payload
         // 새 대화(boundary) — 앞 대화는 버린다. 다시 켜면 엔진의 history() 도 경계 뒤만 주니 같은 화면이 된다(알림 줄 없음)
         const boundary = item.kind === 'boundary'
+        // 서브에이전트의 줄·시작·끝 — 부모의 차례와 따로 온다(부모 차례 중에도 섞여 온다). 부모의 흐르는 글·마지막 글과 상관없다
+        const sub = ('parent' in item && !!item.parent) || item.kind === 'subagent-start' || item.kind === 'subagent-end'
         // 흐르는 글·마지막 글은 기록을 불러왔든 아니든 — 안 비우면 다음 차례 글이 앞 차례 뒤에 붙는다
         const text = assistantText(item)
         let lastText = state.lastText
@@ -166,7 +182,7 @@ export function createStore(api: DureApi): Store {
         }
         state = {
           ...state,
-          streaming: state.streaming[agentId] ? { ...state.streaming, [agentId]: '' } : state.streaming,
+          streaming: state.streaming[agentId] && !sub ? { ...state.streaming, [agentId]: '' } : state.streaming,
           lastText,
         }
         const pending = loading.get(agentId)
@@ -298,6 +314,17 @@ export function createStore(api: DureApi): Store {
     selectRoom(id) {
       if (!state.rooms.some(r => r.id === id)) return
       set({ ...state, roomId: id, selectedAgentId: null })
+    },
+    setPanelTab(id, tab) {
+      if (state.panelTab[id] === tab) return
+      set({ ...state, panelTab: { ...state.panelTab, [id]: tab } })
+    },
+    showSubagents(id, key) {
+      set({
+        ...state,
+        panelTab: { ...state.panelTab, [id]: 'subagents' },
+        subagentFocus: { agentId: id, key, n: (state.subagentFocus?.n ?? 0) + 1 },
+      })
     },
   }
 }

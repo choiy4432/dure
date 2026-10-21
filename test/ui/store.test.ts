@@ -529,3 +529,91 @@ describe('usage · context · effort events', () => {
     expect([a.effort, a.effortNow]).toEqual(['low', 'low'])
   })
 })
+
+describe('store 서브에이전트', () => {
+  const said = (text: string, t: number, parent?: string): HistoryItem => ({
+    t, kind: 'assistant', blocks: [{ type: 'text', text }], ...(parent ? { parent } : {}),
+  })
+
+  it('subagents 사건은 그 에이전트의 subagentsRunning 만 바꾼다', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('subagents', { agentId: 'a', running: ['toolu_A', 'toolu_B'] })
+    expect(s.getState().agents.find(x => x.id === 'a')!.subagentsRunning).toEqual(['toolu_A', 'toolu_B'])
+    expect(s.getState().agents.find(x => x.id === 'b')!.subagentsRunning).toEqual([])
+    emit('subagents', { agentId: 'a', running: [] })
+    expect(s.getState().agents.find(x => x.id === 'a')!.subagentsRunning).toEqual([])
+  })
+
+  it('스냅샷을 기다리는 동안 온 subagents 사건도 스냅샷 뒤에 적용된다', async () => {
+    let release!: (s: Snapshot) => void
+    const { api, emit } = fake({ snapshot: () => new Promise<Snapshot>(r => { release = r }) })
+    const s = createStore(api)
+    const p = s.init()
+    emit('subagents', { agentId: 'a', running: ['toolu_A'] })
+    release(snap())
+    await p
+    expect(s.getState().agents.find(x => x.id === 'a')!.subagentsRunning).toEqual(['toolu_A'])
+  })
+
+  it('부모 차례가 끝난 뒤 온 서브에이전트의 글(parent)은 lastText 를 바꾸지 않는다', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('history', { agentId: 'b', item: said('셋에게 나눠 맡겼어요', 5) })
+    emit('history', { agentId: 'b', item: { t: 6, kind: 'result', ok: true, subtype: 'success' } })
+    emit('history', { agentId: 'b', item: said('b.html 을 읽어 볼게요', 7, 'toolu_A') })
+    expect(s.getState().lastText.b).toEqual({ text: '셋에게 나눠 맡겼어요', at: 5 })
+  })
+
+  it('기록을 불러올 때도 서브에이전트의 글은 lastText 로 채우지 않는다', async () => {
+    const { api } = fake({ history: async () => [said('부모 답', 1), said('서브에이전트 글', 3, 'toolu_A')] })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    await vi.waitFor(() => expect(s.getState().history.a).toBeDefined())
+    expect(s.getState().lastText.a).toEqual({ text: '부모 답', at: 1 })
+  })
+
+  it('서브에이전트 기록(줄·시작·끝)은 부모의 흐르는 글을 비우지 않는다 — 부모 답이 기록되면 비운다', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('agent-event', { agentId: 'b', event: { kind: 'text-delta', text: '정리하는 ' } })
+    emit('history', { agentId: 'b', item: said('중간 글', 2, 'toolu_A') })
+    emit('history', { agentId: 'b', item: { t: 3, kind: 'tool-result', toolUseId: 'r1', isError: false, text: 'x', viaApproval: false, parent: 'toolu_A' } })
+    emit('history', { agentId: 'b', item: { t: 4, kind: 'subagent-end', toolUseId: 'toolu_A', taskId: 't1', status: 'completed', summary: '보고', toolUses: 1, durationMs: 10 } })
+    emit('agent-event', { agentId: 'b', event: { kind: 'text-delta', text: '중이에요' } })
+    expect(s.getState().streaming.b).toBe('정리하는 중이에요')
+    emit('history', { agentId: 'b', item: said('정리하는 중이에요', 5) })
+    expect(s.getState().streaming.b).toBe('')
+  })
+
+  it('패널 탭은 에이전트마다 — 처음엔 없고(대화), setPanelTab 으로 바꾼다', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().panelTab).toEqual({})
+    s.setPanelTab('a', 'subagents')
+    expect(s.getState().panelTab).toEqual({ a: 'subagents' })
+    s.setPanelTab('b', 'chat')
+    expect(s.getState().panelTab).toEqual({ a: 'subagents', b: 'chat' })
+  })
+
+  it('showSubagents 는 그 에이전트를 서브에이전트 탭으로 바꾸고 focus 의 n 을 올린다', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().subagentFocus).toBeNull()
+    s.showSubagents('a', 'toolu_A')
+    expect(s.getState().panelTab.a).toBe('subagents')
+    expect(s.getState().subagentFocus).toEqual({ agentId: 'a', key: 'toolu_A', n: 1 })
+    s.setPanelTab('a', 'chat')
+    s.showSubagents('a', 'toolu_A')
+    expect(s.getState().panelTab.a).toBe('subagents')
+    expect(s.getState().subagentFocus).toEqual({ agentId: 'a', key: 'toolu_A', n: 2 })
+    s.showSubagents('b', 'toolu_X')
+    expect(s.getState().subagentFocus).toEqual({ agentId: 'b', key: 'toolu_X', n: 3 })
+  })
+})

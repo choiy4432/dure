@@ -138,6 +138,12 @@ export function localSummary(text: string): string | null {
   return null
 }
 
+/** 글의 첫 줄 — 마크다운 머리표·강조 기호는 걷는다(접힌 전달 메시지 · 서브에이전트 지도의 차례 머리·실패 줄) */
+export function firstLine(text: string): string {
+  const line = text.split('\n').find(l => l.trim() !== '') ?? ''
+  return line.replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, '').replace(/[`*]/g, '').trim()
+}
+
 /** 지난 시간(초까지) — 대화 맨 아래 '작업 중…' 줄이 1초마다 센다: N초 · N분 N초 · N분 · N시간 N분 */
 export function elapsed(since: number, now: number): string {
   const s = Math.max(0, Math.floor((now - since) / 1000))

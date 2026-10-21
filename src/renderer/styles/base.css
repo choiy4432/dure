@@ -1517,6 +1517,76 @@ code {
   background-clip: padding-box;
 }
 
+/* 패널 탭 [대화 | 서브에이전트 N](시안 2안) — 머리 바로 아래면 머리의 아래 줄 대신 탭 줄이 경계가 된다 */
+.ph:has(+ .ptabs) {
+  padding-bottom: 8px;
+  border-bottom: 0;
+}
+
+.ptabs {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ptab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 10px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.ptab:hover {
+  color: var(--text-2);
+}
+
+.ptab[aria-selected='true'] {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+
+.ptab:focus-visible {
+  outline-offset: -2px;
+}
+
+/* 서브에이전트 수(안쪽 포함) — 자리가 흔들리지 않게 고정폭 숫자 */
+.ptab-n {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  text-align: center;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.ptab .wk-dot,
+.sa-st .wk-dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* 탭 아래 칸 — 대화 목록 또는 서브에이전트 지도. 탭이 없어도 같은 칸(대화 목록이 다시 붙지 않게) */
+.pnl-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* 받은 메시지 카드(시안 .pin) */
 .pin {
   margin: 16px 20px 0;
@@ -2365,6 +2435,275 @@ code {
 .wk-time {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* ── 서브에이전트 지도(시안 2안) ─────────────────── */
+/* 차례 묶음이 위에서 아래로 — 스크롤은 대화 목록과 같은 모양(위 끝 흐림은 바깥 .conv-wrap) */
+.sa-map {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.sa-map > * {
+  flex-shrink: 0;
+}
+
+.sa-map::-webkit-scrollbar {
+  width: 10px;
+}
+
+.sa-map::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-box);
+  border: 3px solid var(--bg);
+}
+
+/* 차례 묶음 — 머리 · 부모 · 갈라지는 노드. 요약 줄에서 오면 머리가 위 끝 흐림 아래에 오게 */
+.sa-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  scroll-margin-top: 24px;
+}
+
+/* '차례 · “첫 줄”' — 뒤로 옅은 줄 */
+.sa-turn-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.sa-turn-h b {
+  font-weight: 500;
+  color: var(--text-2);
+}
+
+.sa-turn-ln {
+  flex: 1 0 16px;
+  height: 1px;
+  background: var(--border-soft);
+}
+
+/* 부모 — 에이전트 아바타·이름 */
+.sa-root {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.sa-root .av {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+/*
+ * 나무 줄 — 노드마다 가로 가지(::before)와 세로 줄(::after). 세로 줄은 위 형제(또는 부모)의 바닥에서 내려와
+ * 마지막 노드면 제 가지에서 멈추고, 아니면 다음 형제까지 이어진다(사이 간격 8px 포함).
+ */
+.sa-kids {
+  list-style: none;
+  margin: 0 0 0 11px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sa-kids > li {
+  position: relative;
+  padding-left: 18px;
+}
+
+.sa-kids > li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 19px;
+  width: 14px;
+  height: 2px;
+  background: var(--border);
+}
+
+.sa-kids > li::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: -8px;
+  bottom: 0;
+  width: 2px;
+  background: var(--border);
+}
+
+.sa-kids > li:last-child::after {
+  bottom: auto;
+  height: 29px;
+}
+
+/* 서브에이전트가 띄운 서브에이전트 — 띄운 노드의 아이콘 아래에서 한 칸 들여 갈라진다 */
+.sa-node + .sa-kids {
+  margin: 8px 0 0 20px;
+}
+
+/* 노드 — Bot · 설명 · 상태 칩 / 둘째 줄. 누르면 그 자리에서 한 일·보고가 펼쳐진다 */
+.sa-node {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  background: var(--bg);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.sa-node.open {
+  border-color: var(--border-strong);
+}
+
+.sa-node.bad {
+  border-color: var(--danger-border);
+}
+
+.sa-head {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.sa-head:hover {
+  background: var(--subtle);
+}
+
+.sa-head:focus-visible {
+  outline-offset: -2px;
+}
+
+.sa-t {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.sa-t .i {
+  color: var(--muted);
+}
+
+.sa-n {
+  flex: 1;
+}
+
+/* 상태 칩 — 도는 중 초록 · 끝 회색 · 실패·멈춤·끊김 빨강 */
+.sa-st {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 500;
+}
+
+.sa-st.run {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.sa-st.done {
+  background: var(--hover);
+  color: var(--text-3);
+}
+
+.sa-st.bad {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
+/* 둘째 줄 — 아이콘 너비만큼 들여 설명과 맞춘다 */
+.sa-m {
+  padding-left: 24px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+/* 펼친 몸 — 한 일 목록(하는 일 줄을 작게) · 서브에이전트의 글 · 보고. 위 나눔 줄과 여백은 펼침 상자(.xp) 안에 */
+.sa-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.sa-body .acts {
+  margin: 0;
+}
+
+.sa-body .act {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.sa-body .act-out {
+  padding: 8px 10px 10px 32px;
+}
+
+/* 서브에이전트의 글 — 작은 글, 길면 3줄로 접힌다(줄 높이는 .sa-body 에서 물려받는다 — .clamp-box 가 inherit) */
+.sa-say {
+  color: var(--text-3);
+}
+
+.sa-none {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.sa-rep {
+  color: var(--text-2);
+}
+
+.sa-rep-h {
+  margin: 0 0 2px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ptab,
+  .sa-node {
+    transition: none;
+  }
 }
 
 /* ── 입력창(시안 .cmp/.box) ─────────────────────── */
