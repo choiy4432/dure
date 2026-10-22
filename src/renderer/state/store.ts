@@ -42,6 +42,13 @@ export type UiState = Snapshot & {
    * 앱을 끄면 잊는다 — 사건을 놓친 새 에이전트(다시 켬)는 지금처럼 첫 빈 칸
    */
   placeNear: Record<AgentId, AgentId>
+  /**
+   * 끝났고 아직 안 본 에이전트 → 끝난 시각(result 기록의 t). 고르지 않은 에이전트(또는 창에 초점이 없을 때 고른 것)의 차례가 끝나면 생기고,
+   * 그 에이전트를 고름 · 다시 작업 중(승인 기다림 포함) · 새 대화에서 지운다. 앱을 끄면 잊는다
+   */
+  fresh: Record<AgentId, number>
+  /** 방 목록을 열어 달라는 요청 횟수 — 흘끗 보기 창 등 바깥에서 요청하면 오른다(0 부터). 값이 바뀔 때마다 방 목록을 연다 */
+  roomMenuRequest: number
 }
 
 export type PanelTab = 'chat' | 'subagents'
@@ -57,6 +64,10 @@ export interface Store {
   setPanelTab(id: AgentId, tab: PanelTab): void
   /** 서브에이전트 탭으로 바꾸고 key(노드 id)가 든 차례를 보이게 한다 */
   showSubagents(id: AgentId, key: string): void
+  /** 그 에이전트의 방으로 바꾸고(다르면) 고른다 — 기록도 불러온다. 모르는 id 면 아무것도 안 한다 */
+  focusAgent(id: AgentId): void
+  /** 방 목록을 열어 달라고 요청한다 — roomMenuRequest 가 하나 오른다 */
+  requestRoomMenu(): void
 }
 
 type Ev = { [K in keyof EngineEventMap]: { name: K; payload: EngineEventMap[K] } }[keyof EngineEventMap]
@@ -91,11 +102,13 @@ function assistantText(item: HistoryItem): string {
   return item.blocks.flatMap(b => (b.type === 'text' && b.text.trim() !== '' ? [b.text] : [])).join('\n\n')
 }
 
-export function createStore(api: DureApi): Store {
+export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {}): Store {
+  // 창에 초점이 있는가 — 초점이 없으면 고른 에이전트의 결과도 못 본 것이다. document.hasFocus 가 없는 환경에선 본 것으로 친다
+  const hasFocus = opts.hasFocus ?? (() => (typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true))
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
-    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, placeNear: {},
+    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, placeNear: {}, fresh: {}, roomMenuRequest: 0,
   }
   const listeners = new Set<() => void>()
   let buffer: { ev: Ev; at: number }[] | null = null // 스냅샷을 기다리는 동안 온 이벤트(받은 시각과 함께)
@@ -140,6 +153,8 @@ export function createStore(api: DureApi): Store {
           statusSince: changed ? { ...state.statusSince, [p.agentId]: at } : state.statusSince,
           // 멈춤·차례 끝·세션이 죽음 — 생각 끝 신호 없이 끝나도 '생각하는 중'이 남지 않게
           thinking: busy(p.status) ? state.thinking : withoutThinking(state.thinking, p.agentId),
+          // 다시 일을 시작했다 — 앞 결과는 지나간 일이니 '끝남' 표시도 내린다
+          fresh: busy(p.status) ? without(state.fresh, p.agentId) : state.fresh,
           // 쉬다가 일하기 시작했는데 기다리는 입력이 있다 — 아직 Claude 에게 안 간 입력(띄울 때의 /effort 뒤에서 기다림)이니 준비.
           // 승인 기다림에서 돌아온 것은 이어지는 차례라 그대로
           phase: !busy(p.status) ? without(state.phase, p.agentId)
@@ -245,6 +260,10 @@ export function createStore(api: DureApi): Store {
           // 보낸 줄은 Claude 에게 쓴 순간 기록된다(working 알림과 어느 쪽이 먼저 와도 된다) — 요청이 나갈 때까지 준비. 같은 때에 생각도 끝난다
           phase: item.kind === 'user' ? withPhase(state.phase, agentId, 'preparing') : thoughtEnds ? without(state.phase, agentId) : state.phase,
           lastText,
+          // 못 본 결과 — 고르지 않았거나 창에 초점이 없다. 새 대화는 앞 결과를 지운다
+          fresh: item.kind === 'result' && (state.selectedAgentId !== agentId || !hasFocus()) ? { ...state.fresh, [agentId]: item.t }
+            : boundary ? without(state.fresh, agentId)
+            : state.fresh,
         }
         const pending = loading.get(agentId)
         if (pending) {
@@ -409,7 +428,7 @@ export function createStore(api: DureApi): Store {
       await fetchSnapshot()
     },
     selectAgent(id) {
-      set({ ...state, selectedAgentId: id })
+      set({ ...state, selectedAgentId: id, fresh: id ? without(state.fresh, id) : state.fresh })
       tellSelected(id)
       if (id) void loadHistory(id)
     },
@@ -417,6 +436,18 @@ export function createStore(api: DureApi): Store {
       if (!state.rooms.some(r => r.id === id)) return
       set({ ...state, roomId: id, selectedAgentId: null })
       tellSelected(null)
+    },
+    focusAgent(id) {
+      const a = state.agents.find(x => x.id === id)
+      if (!a) return
+      // 방을 바꾸면서 고르기 — selectRoom 은 고르기를 비우니 쓰지 않고 한 번에 바꾼다
+      const roomId = state.rooms.some(r => r.id === a.roomId) ? a.roomId : state.roomId
+      set({ ...state, roomId, selectedAgentId: id, fresh: without(state.fresh, id) })
+      tellSelected(id)
+      void loadHistory(id)
+    },
+    requestRoomMenu() {
+      set({ ...state, roomMenuRequest: state.roomMenuRequest + 1 })
     },
     setPanelTab(id, tab) {
       if (state.panelTab[id] === tab) return

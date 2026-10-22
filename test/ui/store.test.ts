@@ -916,3 +916,112 @@ describe('store 서브에이전트', () => {
     expect(s.getState().subagentFocus).toEqual({ agentId: 'b', key: 'toolu_X', n: 3 })
   })
 })
+
+describe('store 끝남 · 새 결과', () => {
+  const result = (t: number): HistoryItem => ({ t, kind: 'result', ok: true, subtype: 'success', text: '끝', denials: [] } as HistoryItem)
+  const send = (emit: ReturnType<typeof fake>['emit'], agentId: string, item: HistoryItem) => emit('history', { agentId, item })
+
+  it('고르지 않은 에이전트의 result → fresh[id] = t', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api, { hasFocus: () => true })
+    await s.init()
+    send(emit, 'a', result(42))
+    expect(s.getState().fresh).toEqual({ a: 42 })
+  })
+
+  it('고른 에이전트라도 창에 초점이 없으면 fresh', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api, { hasFocus: () => false })
+    await s.init()
+    s.selectAgent('a')
+    send(emit, 'a', result(7))
+    expect(s.getState().fresh).toEqual({ a: 7 })
+  })
+
+  it('고른 에이전트 + 초점 있음 → fresh 없음', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api, { hasFocus: () => true })
+    await s.init()
+    s.selectAgent('a')
+    send(emit, 'a', result(7))
+    expect(s.getState().fresh).toEqual({})
+  })
+
+  it('selectAgent(id)·working 상태·boundary 에서 지운다 — awaiting 도', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api, { hasFocus: () => true })
+    await s.init()
+    for (const id of ['a', 'b', 'c']) send(emit, id, result(1))
+    expect(Object.keys(s.getState().fresh).sort()).toEqual(['a', 'b', 'c'])
+    s.selectAgent('a')
+    expect(s.getState().fresh.a).toBeUndefined()
+    emit('status', { agentId: 'b', status: 'working', errorText: null })
+    expect(s.getState().fresh.b).toBeUndefined()
+    send(emit, 'b', result(2))
+    emit('status', { agentId: 'b', status: 'awaiting', errorText: null })
+    expect(s.getState().fresh.b).toBeUndefined()
+    send(emit, 'c', { t: 3, kind: 'boundary' })
+    expect(s.getState().fresh).toEqual({})
+  })
+
+  it('selectAgent(null) 은 지우지 않는다', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api, { hasFocus: () => true })
+    await s.init()
+    send(emit, 'a', result(1))
+    s.selectAgent(null)
+    expect(s.getState().fresh).toEqual({ a: 1 })
+  })
+
+  it('바뀌는 게 없으면 fresh 객체 그대로', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api, { hasFocus: () => true })
+    await s.init()
+    const before = s.getState().fresh
+    emit('status', { agentId: 'a', status: 'working', errorText: null })
+    send(emit, 'a', { t: 1, kind: 'boundary' })
+    s.selectAgent('a')
+    send(emit, 'a', result(1)) // 고른 + 초점 있음
+    expect(s.getState().fresh).toBe(before)
+  })
+
+  describe('focusAgent', () => {
+    it('다른 방의 에이전트면 roomId 를 바꾸고 고른다 — history 를 부른다', async () => {
+      const { api } = fake()
+      const s = createStore(api)
+      await s.init()
+      s.focusAgent('c')
+      expect(s.getState().roomId).toBe('r2')
+      expect(s.getState().selectedAgentId).toBe('c')
+      expect(api.history).toHaveBeenCalledWith('c')
+    })
+
+    it('같은 방이면 방은 그대로 고르기만', async () => {
+      const { api } = fake()
+      const s = createStore(api)
+      await s.init()
+      s.focusAgent('b')
+      expect(s.getState().roomId).toBe('r1')
+      expect(s.getState().selectedAgentId).toBe('b')
+    })
+
+    it('모르는 id 면 그대로', async () => {
+      const { api } = fake()
+      const s = createStore(api)
+      await s.init()
+      const before = s.getState()
+      s.focusAgent('nope')
+      expect(s.getState()).toBe(before)
+    })
+  })
+
+  it('requestRoomMenu 가 roomMenuRequest 를 하나씩 올린다', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().roomMenuRequest).toBe(0)
+    s.requestRoomMenu()
+    s.requestRoomMenu()
+    expect(s.getState().roomMenuRequest).toBe(2)
+  })
+})
