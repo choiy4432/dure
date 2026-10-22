@@ -45,6 +45,7 @@
 //   FAKE_SUB_MS=<ms>       FAKE_SUB_GATE 가 없으면 그만큼 뒤에 시작한다(기본 150)
 //   FAKE_MUTE_FILE=<파일>  그 파일이 있는 동안 사용자 줄을 읽지 않고(받은 줄을 기록만 한다) 스스로 시작한 차례도 미룬다
 //   FAKE_SELF_TURN_MS=<ms> 끝 알림 뒤 스스로 시작한 차례를 그만큼 늦게 연다(그사이 온 사용자 줄의 차례가 먼저)
+//   FAKE_STATUS_AFTER_RESULT=1  모든 result 뒤 차례 밖에 system/status requesting · null(부모 표시 없음)
 //   FAKE_PRE_INIT_SYSTEM=1 사용자 줄의 init 앞에 서브에이전트·백그라운드 system 줄(background_tasks_changed · task_progress — 부모 줄이 아니다)
 //   interrupt(제어 요청)   도는 서브에이전트마다 task_updated {status:'killed'} · task_notification {status:'stopped'} 를 내고
 //                          스스로 시작한 차례는 내지 않는다(probe14 C). 진행 중인 차례는 오류 result 로 끝낸다
@@ -110,8 +111,14 @@ async function emit(obj) {
 
 const init = () =>
   emit({ type: 'system', subtype: 'init', session_id: sessionId, model, permissionMode, slash_commands: ['compact'], tools: ['Bash'] });
-const result = (text, extra = {}) =>
-  emit({ type: 'result', subtype: 'success', is_error: false, result: text, permission_denials: [], ...extra });
+const result = async (text, extra = {}) => {
+  await emit({ type: 'result', subtype: 'success', is_error: false, result: text, permission_denials: [], ...extra });
+  // FAKE_STATUS_AFTER_RESULT=1 — result 뒤, 차례 밖에 부모 표시 없는 API 상태 줄(서브에이전트의 요청·늦게 온 끝 흉내)
+  if (process.env.FAKE_STATUS_AFTER_RESULT) {
+    await system('status', { status: 'requesting' });
+    await system('status', { status: null });
+  }
+};
 const assistant = (content, extra = {}) => emit({ type: 'assistant', message: { role: 'assistant', content }, ...extra });
 const toolResult = (id, text, isError = false, extra = {}) =>
   emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: text }] }, ...extra });

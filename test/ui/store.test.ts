@@ -713,7 +713,7 @@ describe('store 단계(준비·답 기다림·대화 정리)', () => {
     return { s, emit }
   }
 
-  it('보낸 줄(user 기록)이 오면 준비 — 상태 알림보다 먼저 와도(엔진은 기록 뒤에 working 을 알린다)', async () => {
+  it('보낸 줄(user 기록)이 오면 준비 — 상태 알림과 어느 쪽이 먼저 와도', async () => {
     const { s, emit } = await phaseStore()
     emit('history', { agentId: 'a', item: sent })
     expect(s.getState().phase).toEqual({ a: 'preparing' })
@@ -785,6 +785,29 @@ describe('store 단계(준비·답 기다림·대화 정리)', () => {
     emit('status', { agentId: 'a', status: 'awaiting', errorText: null })
     expect(s.getState().phase.a).toBe('preparing')
     emit('status', { agentId: 'a', status, errorText: status === 'error' ? '죽음' : null })
+    expect(s.getState().phase.a).toBeUndefined()
+  })
+
+  it('API 상태 null 은 준비를 지우지 않는다 — 요청·요약이 끝났다는 뜻일 뿐(다음 줄의 준비가 늦은 끝에 지워지지 않게)', async () => {
+    const { s, emit } = await phaseStore()
+    emit('history', { agentId: 'a', item: sent })
+    emit('status', working('a'))
+    emit('agent-event', apiStatus('a', null))
+    expect(s.getState().phase.a).toBe('preparing')
+  })
+
+  it('쉬다가 일하기 시작했는데 기다리는 입력이 있으면 준비 — 띄울 때의 /effort 뒤에서 기다리는 첫 입력', async () => {
+    const { s, emit } = await phaseStore()
+    emit('held-input', { agentId: 'a', count: 1 })
+    emit('status', working('a'))
+    expect(s.getState().phase.a).toBe('preparing')
+  })
+
+  it('승인 기다림에서 일로 돌아올 땐 기다리는 입력이 있어도 준비가 아니다 — 차례가 이어지는 중', async () => {
+    const { s, emit } = await phaseStore()
+    emit('status', { agentId: 'a', status: 'awaiting', errorText: null })
+    emit('held-input', { agentId: 'a', count: 1 })
+    emit('status', working('a'))
     expect(s.getState().phase.a).toBeUndefined()
   })
 

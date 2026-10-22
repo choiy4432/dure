@@ -580,7 +580,12 @@ class EngineImpl extends EventEmitter implements Engine {
     if (prev && prev !== id) this.armCool(prev);
     if (!id) return;
     this.disarmCool(id);
-    if (!this.store.agent(id) || this.removing.has(id) || this.sessions.has(id) || this.errors.has(id)) return;
+    this.prewarm(id);
+  }
+
+  /** 고른 에이전트에 세션이 없으면 미리 띄운다 — 오류로 멈춘 에이전트는 고르기만으로 띄우지 않는다. 던지지 않는다 */
+  private prewarm(id: AgentId): void {
+    if (this.closed || this.selected !== id || !this.store.agent(id) || this.removing.has(id) || this.sessions.has(id) || this.errors.has(id)) return;
     try {
       this.prewarmed.add(this.ensure(id));
     } catch {
@@ -588,13 +593,15 @@ class EngineImpl extends EventEmitter implements Engine {
     }
   }
 
-  /** 고르지 않게 된 에이전트 — 미리 띄운 뒤 아무 줄도 안 받은 세션이면 끄기를 잰다 */
+  /** 고르지 않게 된 에이전트 — 미리 띄운 뒤 아무 줄도 안 받은 세션이면 끄기를 잰다(울릴 때의 세션을 본다 — 그새 다시 띄웠어도) */
   private armCool(id: AgentId): void {
     const s = this.sessions.get(id);
     if (!s || !this.prewarmed.has(s) || this.coolTimers.has(id)) return;
     const timer = setTimeout(() => {
       this.coolTimers.delete(id);
-      void this.cool(id, s).catch((e) => this.guard(id, () => this.emit('engine-error', { agentId: id, message: e instanceof Error ? e.message : String(e) })));
+      const cur = this.sessions.get(id);
+      if (!cur) return;
+      void this.cool(id, cur).catch((e) => this.guard(id, () => this.emit('engine-error', { agentId: id, message: e instanceof Error ? e.message : String(e) })));
     }, this.o.prewarmIdleMs ?? PREWARM_IDLE_MS);
     timer.unref?.();
     this.coolTimers.set(id, timer);
@@ -607,10 +614,16 @@ class EngineImpl extends EventEmitter implements Engine {
     this.coolTimers.delete(id);
   }
 
-  /** 그 세션이 아직 미리 띄운 그대로(고르지 않음·줄 없음·쉬는 중·기다리는 입력 없음)면 끈다 — 다음에 고르거나 보낼 때 다시 띄운다 */
+  /**
+   * 그 세션이 아직 미리 띄운 그대로(고르지 않음·줄 없음·쉬는 중·기다리는 입력 없음)면 끈다 — 다음에 고르거나 보낼 때 다시 띄운다.
+   * 쉬지 않는 중(띄울 때의 /effort 차례 등)이면 다시 잰다
+   */
   private async cool(id: AgentId, s: ClaudeSession): Promise<void> {
     if (this.closed || this.selected === id || !this.live(id, s) || !this.prewarmed.has(s)) return;
-    if (!this.resting(id, s) || (this.held.get(id)?.length ?? 0) > 0 || this.subagents.has(id)) return;
+    if (!this.resting(id, s) || (this.held.get(id)?.length ?? 0) > 0 || this.subagents.has(id)) {
+      this.armCool(id);
+      return;
+    }
     await this.endSession(id);
     this.emitStatus(id);
   }
@@ -657,8 +670,12 @@ class EngineImpl extends EventEmitter implements Engine {
     this.guard(id, () => this.setContext(id, null));
     this.emitStatus(id);
     await ending;
-    // 끝낸 세션이 못 읽었거나 기다리던 사람 입력은 새 대화로 보낸다 — 두면 사람이 다시 칠 때까지 멈춰 있고 메시지도 쌓인다
-    if ((this.held.get(id)?.length ?? 0) === 0) return;
+    // 끝낸 세션이 못 읽었거나 기다리던 사람 입력은 새 대화로 보낸다 — 두면 사람이 다시 칠 때까지 멈춰 있고 메시지도 쌓인다.
+    // 없으면 고른 에이전트만 새 대화로 미리 띄운다(새 대화 다음엔 곧 입력이 온다)
+    if ((this.held.get(id)?.length ?? 0) === 0) {
+      this.prewarm(id);
+      return;
+    }
     try {
       this.ensure(id);
     } catch {
@@ -1177,6 +1194,7 @@ class EngineImpl extends EventEmitter implements Engine {
       const waiting = (this.held.get(id)?.length ?? 0) > 0 || this.log.list({ to: id, states: ['queued'] }).length > 0;
       // 그새 누가 띄웠으면 그 세션을 쓴다. 상태는 보내고 나서 한 번만 알린다(다시 띄우는 사이 대기로 깜박이지 않게)
       if (!this.sessions.has(id) && waiting) this.ensure(id, { quiet: true });
+      else this.prewarm(id); // 기다리는 것이 없으면 고른 에이전트만 다시 미리 띄운다
       this.pump(id);
       this.emitStatus(id);
     } catch (e) {
@@ -1368,10 +1386,14 @@ class EngineImpl extends EventEmitter implements Engine {
   private async restartForMode(id: AgentId, s: ClaudeSession): Promise<void> {
     try {
       if (this.closed || !this.restartWant.delete(s) || !this.live(id, s)) return;
+      const warm = this.prewarmed.has(s); // 미리 띄운 세션을 대신하면 새 세션도 미리 띄운 세션(줄을 받기 전까지 끌 수 있다)
       await this.endSession(id);
       if (this.closed || this.removing.has(id) || !this.store.agent(id)) return;
       // 그새 누가 띄웠으면(넘김 메시지 등) 그 세션을 쓴다. 상태는 보내고 나서 한 번만 알린다
-      if (!this.sessions.has(id)) this.ensure(id, { quiet: true });
+      if (!this.sessions.has(id)) {
+        const fresh = this.ensure(id, { quiet: true });
+        if (warm) this.prewarmed.add(fresh);
+      }
       const next = this.sessions.get(id);
       this.pump(id);
       this.emitStatus(id);
@@ -1443,6 +1465,8 @@ class EngineImpl extends EventEmitter implements Engine {
 
   private onEvent(id: AgentId, ev: StreamEvent): void {
     if (ev.kind === 'control-response') return; // 내부 응답 — initialize 의 account 같은 것이 밖으로 새지 않게
+    // 부모 차례 밖의 API 상태(서브에이전트만 도는 동안의 요청·result 뒤 늦게 온 끝) — 부모의 단계가 아니다
+    if (ev.kind === 'api-status' && this.sessions.get(id)?.status !== 'working') return;
     // 시작을 보지 못한 일의 끝 — 서브에이전트가 아닌 일(백그라운드 명령 등)이다. 기록도 사건도 없다
     if (ev.kind === 'task-ended' && !this.subagents.get(id)?.has(ev.taskId)) return;
     if (ev.kind === 'compacted') {

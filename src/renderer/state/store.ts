@@ -140,7 +140,11 @@ export function createStore(api: DureApi): Store {
           statusSince: changed ? { ...state.statusSince, [p.agentId]: at } : state.statusSince,
           // 멈춤·차례 끝·세션이 죽음 — 생각 끝 신호 없이 끝나도 '생각하는 중'이 남지 않게
           thinking: busy(p.status) ? state.thinking : withoutThinking(state.thinking, p.agentId),
-          phase: busy(p.status) ? state.phase : without(state.phase, p.agentId),
+          // 쉬다가 일하기 시작했는데 기다리는 입력이 있다 — 아직 Claude 에게 안 간 입력(띄울 때의 /effort 뒤에서 기다림)이니 준비.
+          // 승인 기다림에서 돌아온 것은 이어지는 차례라 그대로
+          phase: !busy(p.status) ? without(state.phase, p.agentId)
+            : p.status === 'working' && !busy(old?.status) && (next?.heldInput ?? 0) > 0 ? withPhase(state.phase, p.agentId, 'preparing')
+            : state.phase,
         }
         break
       }
@@ -238,7 +242,7 @@ export function createStore(api: DureApi): Store {
           ...state,
           streaming: state.streaming[agentId] && !sub ? { ...state.streaming, [agentId]: '' } : state.streaming,
           thinking: thoughtEnds ? withoutThinking(state.thinking, agentId) : state.thinking,
-          // 보낸 줄은 Claude 에게 쓴 순간 기록된다(엔진은 그 뒤에 working 을 알린다) — 요청이 나갈 때까지 준비. 같은 때에 생각도 끝난다
+          // 보낸 줄은 Claude 에게 쓴 순간 기록된다(working 알림과 어느 쪽이 먼저 와도 된다) — 요청이 나갈 때까지 준비. 같은 때에 생각도 끝난다
           phase: item.kind === 'user' ? withPhase(state.phase, agentId, 'preparing') : thoughtEnds ? without(state.phase, agentId) : state.phase,
           lastText,
         }
@@ -266,8 +270,10 @@ export function createStore(api: DureApi): Store {
         } else if (event.kind === 'api-status') {
           // 쉬는 에이전트에게 늦게 온 상태는 버린다 — 다음 차례가 그 단계로 시작하지 않게
           if (!busy(state.agents.find(a => a.id === agentId)?.status)) break
-          const phase = event.status === null ? without(state.phase, agentId)
-            : withPhase(state.phase, agentId, event.status === 'requesting' ? 'requesting' : 'compacting')
+          // null = 요청·요약이 끝났다 — 그 단계만 지운다(준비는 CLI 상태가 아니니 늦게 온 끝이 다음 줄의 준비를 지우지 않게)
+          const phase = event.status !== null ? withPhase(state.phase, agentId, event.status === 'requesting' ? 'requesting' : 'compacting')
+            : state.phase[agentId] === 'preparing' ? state.phase
+            : without(state.phase, agentId)
           if (phase !== state.phase) state = { ...state, phase }
         } else if (event.kind === 'thinking') {
           // 블록이 시작됐다(생각이든 글·하는 일이든) — 기다리던 답이 왔다

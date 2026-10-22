@@ -3955,3 +3955,50 @@ test('미리 띄우기: 폴더가 없으면 던지지 않고 보낼 때와 같�
   expect(() => e.setSelected('없는-에이전트')).not.toThrow();
   expect(spawns()).toHaveLength(0);
 });
+
+test('API 상태: 차례 밖(result 뒤)에 온 상태 줄은 버린다 — 서브에이전트만 도는 동안·늦게 온 끝이 단계를 바꾸지 않게', async () => {
+  const e = await start({ FAKE_STATUS_AFTER_RESULT: '1' });
+  const { a } = setup(e);
+  const events: StreamEvent[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === a.id && events.push(x.event));
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('THINK 답'));
+  await done;
+  await sleep(200); // 차례 밖 상태 줄 둘이 올 시간
+  expect(events.filter((x) => x.kind === 'api-status')).toEqual([{ kind: 'api-status', status: 'requesting' }]);
+});
+
+test('미리 띄우기: 고른 에이전트에서 새 대화를 시작하면 새 대화로 다시 미리 띄운다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  e.setSelected(a.id);
+  await until('A 가 뜸', () => spawnsOf('A').length === 1);
+  await e.newConversation(a.id);
+  await until('A 가 새 대화로 다시 뜸', () => spawnsOf('A').length === 2);
+  const [first, second] = spawnsOf('A');
+  expect(flagValue(second.argv, '--session-id')).toBeDefined();
+  expect(flagValue(second.argv, '--session-id')).not.toBe(flagValue(first.argv, '--session-id') ?? flagValue(first.argv, '--resume'));
+  expect(userTexts()).toEqual([]);
+});
+
+test('미리 띄우기: 고르지 않은 에이전트에서 새 대화를 시작해도 띄우지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await e.newConversation(a.id);
+  await sleep(150);
+  expect(spawnsOf('A')).toHaveLength(0);
+});
+
+test('미리 띄우기: 묻지 않음을 켜려고 다시 띄운 세션도 미리 띄운 세션 — 고르지 않게 되면 끈다', async () => {
+  const e = await start({}, false, { prewarmIdleMs: 300 });
+  const { a, b } = setup(e);
+  e.setSelected(a.id); // 허용이 꺼진 때 — 옵션 없이 뜬다
+  await until('A 가 뜸', () => spawnsOf('A').length === 1);
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true); // 옵션 없이 뜬 세션 — 쉬니 바로 --resume 으로 다시 띄운다
+  await until('A 가 옵션을 달고 다시 뜸', () => spawnsOf('A').length === 2);
+  const second = spawnsOf('A')[1];
+  expect(second.argv).toContain('--allow-dangerously-skip-permissions');
+  e.setSelected(b.id);
+  await until('다시 띄운 A 가 꺼짐', () => !isAlive(second.pid));
+});
