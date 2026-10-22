@@ -275,6 +275,38 @@ code {
   background: var(--hover);
 }
 
+.room-dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* 위 띠 '할 일 N' — 방 단추와 같은 키·hover, 눌린 모양(목록을 보는 중)은 Haze 바탕 */
+.todo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius-ctl);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.todo .dot {
+  width: 6px;
+  height: 6px;
+}
+
+.todo:hover,
+.todo[aria-pressed="true"] {
+  background: var(--hover);
+}
+
+.todo.muted {
+  color: var(--muted);
+}
+
 .room-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3390,6 +3422,21 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.rs-todo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.rs-todo .dot {
+  width: 6px;
+  height: 6px;
 }
 
 .rs-pick[aria-current="true"] .rs-n {

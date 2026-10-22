@@ -1,9 +1,10 @@
 import {
-  useCallback, useEffect, useId, useRef, useState, type CSSProperties, type FocusEvent, type FormEvent, type KeyboardEvent,
+  useCallback, useMemo, useEffect, useId, useRef, useState, type CSSProperties, type FocusEvent, type FormEvent, type KeyboardEvent,
 } from 'react'
 import { Check, ChevronDown, Ellipsis, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { Room, RoomId } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
+import { roomTotal, todoCounts } from '../state/attention'
 import { errorMessage, josa } from '../lib/words'
 import { moveMenuFocus, useDismiss } from '../lib/popover'
 import { MotionDiv, Presence } from '../lib/presence'
@@ -35,7 +36,12 @@ interface Ask {
 
 /** 위 띠의 방 버튼 + 방 목록(지금 방 표시 · 새 방 · 방마다 이름 바꾸기·지우기) */
 export function RoomSwitcher() {
-  const v = useDure(s => ({ roomId: s.roomId, rooms: s.rooms }))
+  const v = useDure(s => ({
+    roomId: s.roomId, rooms: s.rooms, agents: s.agents, requests: s.requests, messages: s.messages, menuRequest: s.roomMenuRequest,
+  }))
+  // 방마다 처리할 일 — 목록 줄의 수와, 다른 방에 있다는 방 단추의 점이 같은 셈을 쓴다
+  const todo = useMemo(() => todoCounts(v).rooms, [v.agents, v.requests, v.messages]) // eslint-disable-line react-hooks/exhaustive-deps
+  const elsewhere = v.rooms.some(r => r.id !== v.roomId && roomTotal(todo[r.id]) > 0)
   const current = v.rooms.find(r => r.id === v.roomId)
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Editing>(null)
@@ -54,6 +60,14 @@ export function RoomSwitcher() {
     setMenu(null)
   }, [])
   useDismiss(open, wrap, close)
+
+  // '다른 방에도 할 일' 줄이 목록을 열어 달라고 하면 연다 — 처음 마운트 때의 값은 요청이 아니다
+  const seenRequest = useRef(v.menuRequest)
+  useEffect(() => {
+    if (v.menuRequest === seenRequest.current) return
+    seenRequest.current = v.menuRequest
+    setOpen(true)
+  }, [v.menuRequest])
 
   const navItems = () => Array.from(list.current?.querySelectorAll<HTMLElement>('[data-nav]') ?? [])
 
@@ -206,6 +220,7 @@ export function RoomSwitcher() {
           onClick={() => (open ? closeToButton() : setOpen(true))}
         >
           <span className="room-name">{current?.name}</span>
+          {elsewhere && <span className="dot a room-dot" role="img" aria-label="다른 방에 할 일 있음" />}
           <ChevronDown className="i" aria-hidden="true" />
         </button>
         <Presence show={open}>
@@ -234,6 +249,7 @@ export function RoomSwitcher() {
                         onClick={() => pick(r.id)}
                       >
                         <span className="rs-n">{r.name}</span>
+                        <RoomTodo t={todo[r.id]} />
                         {r.id === v.roomId && <Check className="i mi-ck" aria-hidden="true" />}
                       </button>
                       <button
@@ -313,6 +329,28 @@ export function RoomSwitcher() {
         onConfirm={remove}
         onCancel={() => setAsk(null)}
       />
+    </>
+  )
+}
+
+/** 목록 줄 오른쪽의 할 일 수 — 승인·질문은 앰버, 메시지·묶음은 빨강, 0 인 쪽은 안 쓴다 */
+function RoomTodo({ t }: { t: { asks: number; messages: number; held: number } | undefined }) {
+  if (!t) return null
+  const unread = t.messages + t.held
+  return (
+    <>
+      {t.asks > 0 && (
+        <span className="rs-todo a">
+          <span className="dot a" aria-hidden="true" />
+          {t.asks}
+        </span>
+      )}
+      {unread > 0 && (
+        <span className="rs-todo r">
+          <span className="dot r" aria-hidden="true" />
+          {unread}
+        </span>
+      )}
     </>
   )
 }

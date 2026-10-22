@@ -292,3 +292,42 @@ describe('RoomSwitcher — 방마다 메뉴', () => {
     expect(document.activeElement).toBe(within(list).getByRole('button', { name: '가을 행사 메뉴' }))
   })
 })
+
+describe('RoomSwitcher — 할 일 수', () => {
+  const ask = (id: string, agentId: string) => ({ id, agentId, toolName: 'Bash', input: {}, kind: 'permission' as const, createdAt: 1 })
+  const msg = (id: string, to: string, roomId: string, state: 'pending' | 'held' = 'pending') =>
+    ({ id, roomId, from: 'a1', to, text: 't', createdAt: 1, state, updatedAt: 1 })
+
+  it('방마다 할 일 수', async () => {
+    snapshot = { ...snapshot, requests: [ask('q1', 'b1'), ask('q2', 'b1')], messages: [msg('m1', 'b1', 'r2'), msg('m2', 'b1', 'r2', 'held')] }
+    await renderApp()
+    const list = openList()
+    const row = list.querySelector<HTMLElement>('[data-nav="r2"]')!
+    expect(row.querySelector('.rs-todo.a')?.textContent).toBe('2')
+    expect(row.querySelector('.rs-todo.r')?.textContent).toBe('2')
+    const quiet = list.querySelector<HTMLElement>('[data-nav="r3"]')!
+    expect(quiet.querySelector('.rs-todo')).toBeNull()
+  })
+
+  it('다른 방에 할 일이 있으면 방 단추에 점', async () => {
+    await renderApp()
+    expect(roomButton().querySelector('[aria-label="다른 방에 할 일 있음"]')).toBeNull()
+    cleanup()
+    snapshot = { ...snapshot, requests: [ask('q1', 'b1')] }
+    await renderApp()
+    expect(roomButton().querySelector('[aria-label="다른 방에 할 일 있음"]')).not.toBeNull()
+  })
+
+  it('지금 방의 할 일만 있으면 방 단추에 점이 없다', async () => {
+    snapshot = { ...snapshot, requests: [ask('q1', 'a1')] }
+    await renderApp()
+    expect(roomButton().querySelector('[aria-label="다른 방에 할 일 있음"]')).toBeNull()
+  })
+
+  it('roomMenuRequest 가 오르면 목록이 열린다', async () => {
+    const store = await renderApp()
+    expect(screen.queryByRole('dialog', { name: '방' })).toBeNull() // 처음 마운트로는 안 열린다
+    act(() => store.requestRoomMenu())
+    expect(screen.getByRole('dialog', { name: '방' })).toBeTruthy()
+  })
+})

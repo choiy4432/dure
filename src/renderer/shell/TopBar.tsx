@@ -1,5 +1,6 @@
 import { Plus, Settings } from 'lucide-react'
 import { RoomSwitcher } from './RoomSwitcher'
+import { TodoButton } from './TodoButton'
 import { UsageMeters } from './UsageMeters'
 
 interface Props {
@@ -20,6 +21,7 @@ export function TopBar({ hasRoom, settingsDisabled, onAddAgent, onSettings }: Pr
         <>
           <span className="vr" aria-hidden="true" />
           <RoomSwitcher />
+          <TodoButton />
         </>
       )}
       <span className="top-sp" />
