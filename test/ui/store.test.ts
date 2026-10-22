@@ -530,6 +530,92 @@ describe('usage · context · effort events', () => {
   })
 })
 
+describe('store 생각하는 중', () => {
+  const think = (agentId: string, active: boolean, tokens: number | null = null) =>
+    ({ agentId, event: { kind: 'thinking', active, tokens } }) as EngineEventMap['agent-event']
+  const working = (agentId: string) => ({ agentId, status: 'working', errorText: null }) as EngineEventMap['status']
+  async function thinkingStore() {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('status', working('a'))
+    emit('agent-event', think('a', true))
+    return { s, emit }
+  }
+
+  it('생각 시작이면 thinking[id] — 토큰 수가 오면 갱신, 생각 끝이면 지운다', async () => {
+    const { s, emit } = await thinkingStore()
+    expect(s.getState().thinking).toEqual({ a: { tokens: null } })
+    emit('agent-event', think('a', true, 278))
+    expect(s.getState().thinking.a).toEqual({ tokens: 278 })
+    emit('agent-event', think('a', true, 452))
+    expect(s.getState().thinking.a).toEqual({ tokens: 452 })
+    emit('agent-event', think('a', false))
+    expect(s.getState().thinking).toEqual({})
+  })
+
+  it('이미 아는 토큰 수는 새 블록 시작(토큰 모름)으로 지우지 않는다', async () => {
+    const { s, emit } = await thinkingStore()
+    emit('agent-event', think('a', true, 278))
+    emit('agent-event', think('a', true))
+    expect(s.getState().thinking.a).toEqual({ tokens: 278 })
+  })
+
+  it('흐르는 글이 오면 생각 끝', async () => {
+    const { s, emit } = await thinkingStore()
+    emit('agent-event', { agentId: 'a', event: { kind: 'text-delta', text: '답' } })
+    expect(s.getState().thinking.a).toBeUndefined()
+    expect(s.getState().streaming.a).toBe('답')
+  })
+
+  it.each<[string, HistoryItem]>([
+    ['assistant(글)', { t: 2, kind: 'assistant', blocks: [{ type: 'text', text: '답' }] }],
+    ['assistant(하는 일)', { t: 2, kind: 'assistant', blocks: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }] }],
+    ['result', { t: 2, kind: 'result', ok: false, subtype: 'error_during_execution' }],
+    ['notice(멈춤·오류)', note('멈췄어요', 2)],
+    ['boundary(새 대화)', { t: 2, kind: 'boundary' }],
+  ])('그 에이전트의 %s 기록이 오면 생각 끝 — 기록을 안 불러왔어도', async (_name, item) => {
+    const { s, emit } = await thinkingStore()
+    emit('history', { agentId: 'a', item })
+    expect(s.getState().thinking.a).toBeUndefined()
+  })
+
+  it('서브에이전트의 줄(parent)·다른 에이전트의 기록은 생각을 지우지 않는다', async () => {
+    const { s, emit } = await thinkingStore()
+    emit('history', { agentId: 'a', item: { t: 2, kind: 'assistant', blocks: [{ type: 'text', text: '서브' }], parent: 'toolu_A' } })
+    emit('history', { agentId: 'b', item: { t: 3, kind: 'result', ok: true, subtype: 'success' } })
+    expect(s.getState().thinking.a).toEqual({ tokens: null })
+  })
+
+  it.each(['idle', 'stopped', 'error'] as const)('상태가 %s 가 되면(멈춤·끝·죽음) 생각 끝 — 승인 기다림은 그대로', async status => {
+    const { s, emit } = await thinkingStore()
+    emit('status', { agentId: 'a', status: 'awaiting', errorText: null })
+    expect(s.getState().thinking.a).toEqual({ tokens: null })
+    emit('status', { agentId: 'a', status, errorText: status === 'error' ? '죽음' : null })
+    expect(s.getState().thinking.a).toBeUndefined()
+  })
+
+  it('일하지 않는 에이전트에게 늦게 온 생각 신호는 무시한다 — 다음 차례가 "생각하는 중"으로 시작하지 않게', async () => {
+    const { s, emit } = await thinkingStore()
+    emit('status', { agentId: 'a', status: 'idle', errorText: null })
+    emit('agent-event', think('a', true, 600))
+    expect(s.getState().thinking.a).toBeUndefined()
+    emit('agent-event', think('b', true))
+    expect(s.getState().thinking.b).toBeUndefined()
+  })
+
+  it('바뀌는 게 없으면 thinking 객체를 그대로 둔다(같은 토큰 수 · 생각 중 아닌 에이전트의 끝)', async () => {
+    const { s, emit } = await thinkingStore()
+    emit('agent-event', think('a', true, 278))
+    const before = s.getState().thinking
+    emit('agent-event', think('a', true, 278))
+    emit('agent-event', think('b', false))
+    emit('agent-event', { agentId: 'b', event: { kind: 'text-delta', text: '다른 답' } })
+    emit('status', { agentId: 'b', status: 'idle', errorText: null })
+    expect(s.getState().thinking).toBe(before)
+  })
+})
+
 describe('store 서브에이전트', () => {
   const said = (text: string, t: number, parent?: string): HistoryItem => ({
     t, kind: 'assistant', blocks: [{ type: 'text', text }], ...(parent ? { parent } : {}),

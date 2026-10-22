@@ -27,6 +27,7 @@ const NO_CHOICE: Record<string, boolean> = {}
  * 위 고정 카드에 펼쳐 보이는 '최근 전달된 메시지'와 같은 줄은 한 줄로 접는다(cardOpen = 패널이 들고 있는 카드 펼침).
  * 에이전트가 일하는 동안(표시 상태 '작업 중' — 승인 기다림은 승인 카드가 알린다) 맨 끝에 '작업 중…' 줄.
  * 서브에이전트가 돌면 부모 차례가 끝나도 작업 중이다(엔진) — 그 줄에 도는 수를 함께 적는다.
+ * Claude 가 생각하는 동안은 그 줄이 '생각하는 중…'과 생각한 추정 토큰 수.
  * 서브에이전트 탭으로 가면 숨을 뿐 그대로다(펼친 줄·불러온 이전 대화) — 다시 보이면 읽던 자리로(ViewShown).
  */
 export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
@@ -45,6 +46,8 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   })
   // 도는 서브에이전트(부모의 Agent tool_use id) — 내용이 같으면 같은 배열(useDure 의 얕은 비교)이라 아래 Set·줄을 다시 만들지 않는다
   const running = useDure(s => s.agents.find(x => x.id === agentId)?.subagentsRunning ?? NO_IDS)
+  // Claude 가 생각하는 중이면 작업 중 줄이 '생각하는 중…'(토큰 수가 오를 때만 다시 그린다 — 기록 줄은 그대로)
+  const thinking = useDure(s => s.thinking[agentId] ?? null)
   const runningSet = useMemo(() => new Set(running), [running])
   const [limit, setLimit] = useState(PAGE)
   const latest = useDure(s => {
@@ -172,7 +175,7 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
         ))}
         {v.streaming && <ChatItem line={{ kind: 'streaming', text: v.streaming }} />}
         <Presence show={work.on}>
-          <WorkingRow since={work.since} subagents={running.length} />
+          <WorkingRow since={work.since} subagents={running.length} thinking={thinking ?? undefined} />
         </Presence>
       </section>
     </div>

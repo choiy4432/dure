@@ -56,7 +56,7 @@ export interface EngineOptions {
 //                못 읽었으면 두레 스위치(허용 + bypassOn)가 아닌 것. pending = 옵션 없이 뜬 세션을 켜려고 그 차례 뒤에 다시 띄우기를
 //                기다리는 중(실제 모드는 아직 그대로 — 화면은 바뀌는 중으로). 살아 있는 세션이 없으면 다음에 띄울 때의 모드.
 //                init · 응답 · 스위치 · 허용 · 내 설정을 읽을 때마다, 다시 띄우기를 미루고 풀 때, 세션이 끝날 때)
-//  'history'     { agentId; item: HistoryItem }   (대화 기록에 한 항목이 더해질 때마다 — text-delta·init·rate-limit 은 기록하지 않는다)
+//  'history'     { agentId; item: HistoryItem }   (대화 기록에 한 항목이 더해질 때마다 — text-delta·thinking·init·rate-limit 은 기록하지 않는다)
 //  'held-input'  { agentId; count }   (보낼 차례를 기다리는 사람 입력 수가 바뀔 때마다)
 //  'effort'      { agentId; effort; effortNow }   (고른 값이 바뀌거나 Claude 에게 지금 값을 읽을 때마다)
 //  'context'     { agentId; value: ContextUsage | null }   (차례 끝에 대화 공간을 받았을 때 · 요약·새 대화 직후엔 null)

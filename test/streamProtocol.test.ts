@@ -83,9 +83,8 @@ describe('parseLine', () => {
       kind: 'rate-limit', info: { status: 'allowed' },
     }));
 
-  test('hook·thinking_tokens·모르는 type → ignored', () => {
+  test('hook·모르는 type → ignored (thinking_tokens 는 생각 신호 — 아래)', () => {
     expect(parseLine('{"type":"system","subtype":"hook_started"}')).toEqual({ kind: 'ignored', type: 'system/hook_started' });
-    expect(parseLine('{"type":"system","subtype":"thinking_tokens"}')).toEqual({ kind: 'ignored', type: 'system/thinking_tokens' });
     expect(parseLine('{"type":"mystery"}')).toEqual({ kind: 'ignored', type: 'mystery' });
   });
 
@@ -153,6 +152,51 @@ describe('parseLine — 서브에이전트', () => {
     for (const subtype of ['task_progress', 'task_updated', 'background_tasks_changed']) {
       expect(parseLine(JSON.stringify({ type: 'system', subtype }))).toEqual({ kind: 'ignored', type: `system/${subtype}` });
     }
+  });
+});
+
+describe('parseLine — 생각 신호(probe13·14 원본 모양)', () => {
+  // 진짜 줄처럼 parent_tool_use_id: null · session_id · uuid 가 붙어 온다
+  const ev = (event: unknown, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ type: 'stream_event', event, session_id: 'S', parent_tool_use_id: null, uuid: 'u1', ...extra });
+  const tokens = (n: unknown, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: n, estimated_tokens_delta: 50, session_id: 'S', uuid: 'u2', ...extra });
+  const blockStart = (content_block: unknown) => ev({ type: 'content_block_start', index: 0, content_block });
+
+  test('thinking 블록 시작 → 생각 시작(토큰 수는 아직 모름)', () =>
+    expect(parseLine(blockStart({ type: 'thinking', thinking: '', signature: '' }))).toEqual({ kind: 'thinking', active: true, tokens: null }));
+
+  test('다른 블록 시작(text·tool_use) → 생각 끝', () => {
+    expect(parseLine(blockStart({ type: 'text', text: '' }))).toEqual({ kind: 'thinking', active: false, tokens: null });
+    expect(parseLine(blockStart({ type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} }))).toEqual({ kind: 'thinking', active: false, tokens: null });
+  });
+
+  test('system/thinking_tokens → 누적 추정 토큰 수, 수가 아니거나 없으면 모름', () => {
+    expect(parseLine(tokens(278))).toEqual({ kind: 'thinking', active: true, tokens: 278 });
+    expect(parseLine(tokens(null))).toEqual({ kind: 'thinking', active: true, tokens: null });
+    expect(parseLine('{"type":"system","subtype":"thinking_tokens"}')).toEqual({ kind: 'thinking', active: true, tokens: null });
+  });
+
+  test('thinking_delta(내용 빈칸 · 토큰 수 null 섞임)·signature_delta → ignored', () => {
+    for (const delta of [
+      { type: 'thinking_delta', thinking: '', estimated_tokens: 250 },
+      { type: 'thinking_delta', thinking: '', estimated_tokens: null },
+      { type: 'signature_delta', signature: 'sig' },
+    ]) {
+      expect(parseLine(ev({ type: 'content_block_delta', index: 0, delta }))).toEqual({ kind: 'ignored', type: 'stream_event' });
+    }
+    expect(parseLine(ev({ type: 'content_block_stop', index: 0 }))).toEqual({ kind: 'ignored', type: 'stream_event' });
+  });
+
+  test('서브에이전트 줄(parent_tool_use_id)의 생각 신호 → ignored', () => {
+    const parent = { parent_tool_use_id: 'toolu_A' };
+    expect(parseLine(ev({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, parent))).toEqual({
+      kind: 'ignored', type: 'stream_event',
+    });
+    expect(parseLine(ev({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }, parent))).toEqual({
+      kind: 'ignored', type: 'stream_event',
+    });
+    expect(parseLine(tokens(278, parent))).toEqual({ kind: 'ignored', type: 'system/thinking_tokens' });
   });
 });
 

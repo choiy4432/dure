@@ -29,6 +29,11 @@
 //                       n 을 주면 '+' 줄 n 개 한 묶음. FAKE_EDIT_TOOL=<도구> 면 그 이름의 tool_use 로(기본 Edit)
 //   EDITBARE [MULTI|FAIL] structuredPatch 없이(tool_use_result 가 없는 서브에이전트 줄처럼) — Edit tool_use(MULTI 면 MultiEdit, 두 군데)
 //                       → tool_result 만 → 글 "EDITED" → result. FAIL 이면 결과가 is_error "String to replace not found in file."
+//   THINK <글>          생각한 뒤 <글>로 답한다(probe13·14 줄 모양 그대로 — 생각 내용은 빈칸, 추정 토큰 수만 오른다):
+//                       system/status requesting → message_start → thinking 블록 시작 → thinking_delta(토큰 50) · system/thinking_tokens 278
+//                       → thinking_delta(토큰 null) · thinking_tokens 452 → signature_delta → assistant(thinking 블록) → 블록 끝
+//                       → text 블록 시작 · text_delta <글> → assistant <글> → 블록 끝 · message_stop → result.
+//                       줄 사이 FAKE_THINK_MS(기본 30)ms. 그새 멈추면(interrupt) 더 내지 않는다
 //   그 밖               글 "받음: <글>"
 // MCP tools/call 은 진짜(probe14 A)처럼 params._meta = { 'claudecode/toolUseId': <그 부르기의 tool_use id> } 를 싣는다.
 // 서브에이전트 손잡이:
@@ -453,6 +458,37 @@ async function turn(text) {
     else await toolResult(id, 'The file bare.txt has been updated successfully.');
     await assistant([{ type: 'text', text: 'EDITED' }]);
     await finish('EDITED');
+    return;
+  }
+  const think = /^THINK ([\s\S]+)$/.exec(text);
+  if (think) {
+    const said = think[1];
+    const gap = Number(process.env.FAKE_THINK_MS ?? 30);
+    const stream = (event) => emit({ type: 'stream_event', event, session_id: sessionId, parent_tool_use_id: null });
+    const delta = (index, d) => stream({ type: 'content_block_delta', index, delta: d });
+    const steps = [
+      () => system('status', { status: 'requesting' }),
+      () => stream({ type: 'message_start', message: { id: 'msg_think', type: 'message', role: 'assistant', content: [] } }),
+      () => stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } }),
+      () => delta(0, { type: 'thinking_delta', thinking: '', estimated_tokens: 50 }),
+      () => system('thinking_tokens', { estimated_tokens: 278, estimated_tokens_delta: 228 }),
+      () => delta(0, { type: 'thinking_delta', thinking: '', estimated_tokens: null }),
+      () => system('thinking_tokens', { estimated_tokens: 452, estimated_tokens_delta: 174 }),
+      () => delta(0, { type: 'signature_delta', signature: 'sig' }),
+      () => assistant([{ type: 'thinking', thinking: '', signature: 'sig' }]),
+      () => stream({ type: 'content_block_stop', index: 0 }),
+      () => stream({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }),
+      () => delta(1, { type: 'text_delta', text: said }),
+      () => assistant([{ type: 'text', text: said }]),
+      () => stream({ type: 'content_block_stop', index: 1 }),
+      () => stream({ type: 'message_stop' }),
+    ];
+    for (const step of steps) {
+      await sleep(gap);
+      if (tok.ended) return; // 멈췄다 — interrupt 가 이 차례를 끝냈다
+      await step();
+    }
+    await finish(said);
     return;
   }
   const send = /^SEND ([^:]+): ([\s\S]*)$/.exec(text);

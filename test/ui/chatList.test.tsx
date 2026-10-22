@@ -536,6 +536,63 @@ describe('ChatList — 작업 중 줄(Claude Code 의 작업 중 표시처럼)',
     expect(working()).not.toHaveTextContent('서브에이전트')
   })
 
+  const think = (active: boolean, tokens: number | null = null) =>
+    emit('agent-event', { agentId: 'w', event: { kind: 'thinking', active, tokens } })
+
+  it('Claude 가 생각하는 동안 "생각하는 중…" — 그 뒤 지난 시간, 그 뒤 "약 278 토큰"(수를 알 때만). 글이 오면 "작업 중…"', async () => {
+    await renderPanel()
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    vi.setSystemTime(100_000)
+    await emit('status', { agentId: 'w', status: 'working', errorText: null })
+    await think(true)
+    const row = working()!
+    expect(row.querySelector('.wk-t')).toHaveTextContent('생각하는 중…')
+    expect(row).not.toHaveTextContent('작업 중…')
+    expect(row).not.toHaveTextContent('토큰') // 아직 모른다
+    await think(true, 278)
+    const tok = within(working() as HTMLElement).getByText('약 278 토큰')
+    // 차례: 생각하는 중… → 지난 시간 → 토큰 수. 1초마다·몇 번씩 바뀌는 수라 화면 읽기 프로그램은 읽지 않는다
+    expect(working()!.querySelector('.wk-time')!.nextElementSibling).toBe(tok)
+    expect(tok).toHaveAttribute('aria-hidden', 'true')
+    await think(true, 12_345)
+    expect(working()).toHaveTextContent('약 1.2만 토큰')
+    act(() => { vi.advanceTimersByTime(3_000) })
+    expect(working()).toHaveTextContent('3초')
+    await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '답을 쓰는 중' } })
+    expect(working()!.querySelector('.wk-t')).toHaveTextContent('작업 중…')
+    expect(working()).not.toHaveTextContent('토큰')
+  })
+
+  it('생각하는 중에도 서브에이전트 문구는 그대로 덧붙는다', async () => {
+    await renderPanel()
+    await emit('status', { agentId: 'w', status: 'working', errorText: null })
+    await emit('subagents', { agentId: 'w', running: ['A'] })
+    await think(true, 50)
+    const sub = within(working() as HTMLElement).getByText('서브에이전트 1개가 일하고 있어요')
+    expect(working()!.querySelector('.wk-t')).toHaveTextContent('생각하는 중…')
+    expect(working()!.querySelector('.wk-t')!.nextElementSibling).toBe(sub)
+    expect(working()).toHaveTextContent('약 50 토큰')
+  })
+
+  it('생각하는 중에 멈추거나 세션이 죽으면 "생각하는 중…"이 남지 않는다 — 다음 차례는 "작업 중…"으로 시작', async () => {
+    await renderPanel()
+    await emit('status', { agentId: 'w', status: 'working', errorText: null })
+    await think(true, 278)
+    // 멈추기: 쉬는 상태 → 멈춤 알림 → 끝(진짜 순서 — 세션은 result 를 내기 직전에 쉰다)
+    await emit('status', { agentId: 'w', status: 'idle', errorText: null })
+    await emit('history', { agentId: 'w', item: { t: 10, kind: 'notice', text: '멈췄어요' } })
+    expect(working()).toBeNull()
+    await emit('status', { agentId: 'w', status: 'working', errorText: null })
+    expect(working()!.querySelector('.wk-t')).toHaveTextContent('작업 중…')
+    expect(working()).not.toHaveTextContent('토큰')
+    // 세션이 죽음: 오류 상태
+    await think(true, 452)
+    await emit('status', { agentId: 'w', status: 'error', errorText: 'fake crash' })
+    expect(working()).toBeNull()
+    await emit('status', { agentId: 'w', status: 'working', errorText: null })
+    expect(working()!.querySelector('.wk-t')).toHaveTextContent('작업 중…')
+  })
+
   it('부모 차례가 끝났어도 서브에이전트 때문에 작업 중이면 줄이 보인다', async () => {
     snapshot.agents[0] = agent('w', { name: '웹 화면', role: '화면 구현', status: 'working', subagentsRunning: ['A'] })
     history.mockResolvedValueOnce([

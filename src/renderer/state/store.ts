@@ -1,5 +1,5 @@
 import { useRef, useSyncExternalStore } from 'react'
-import type { AgentId, EngineEventMap, HistoryItem, RoomId } from '../../engine/types'
+import type { AgentId, AgentStatus, EngineEventMap, HistoryItem, RoomId } from '../../engine/types'
 import type { DureApi, Snapshot } from '../../shared/ipcContract'
 import { displayStatus } from './selectors'
 
@@ -9,6 +9,11 @@ export type UiState = Snapshot & {
   history: Record<AgentId, HistoryItem[]>
   historyStatus: Record<AgentId, { state: 'loading' | 'ready' | 'error'; error?: string }>
   streaming: Record<AgentId, string>
+  /**
+   * Claude 가 생각하는 중인 에이전트 — tokens = 지금까지 생각한 추정 토큰 수(모르면 null). 없으면 생각 중이 아니다.
+   * 생각 끝 신호 · 흐르는 글 · 그 에이전트의 답·끝·알림·새 대화 기록 · 작업 중(승인 기다림 포함)이 아니게 됨에서 지운다
+   */
+  thinking: Record<AgentId, { tokens: number | null }>
   /** 에이전트마다 마지막 assistant 글과 그 시각 — 기록을 안 불러온 에이전트도(관계도 카드의 한 줄 요약) */
   lastText: Record<AgentId, { text: string; at: number }>
   /** 키 `${from}>${to}` → 마지막으로 전달된 시각(message.updatedAt) */
@@ -50,6 +55,17 @@ const EVENTS: (keyof EngineEventMap)[] = [
 
 const sameItem = (a: HistoryItem, b: HistoryItem) => JSON.stringify(a) === JSON.stringify(b)
 
+/** 생각 표시가 살아 있을 수 있는 상태 — 그 밖(쉼·멈춤·오류)이 되면 생각도 끝났다 */
+const busy = (status: AgentStatus | undefined) => status === 'working' || status === 'awaiting'
+
+/** 그 에이전트의 생각 표시를 지운다 — 없으면 같은 객체(구독자가 다시 그리지 않게) */
+function withoutThinking(thinking: UiState['thinking'], id: AgentId): UiState['thinking'] {
+  if (!thinking[id]) return thinking
+  const next = { ...thinking }
+  delete next[id]
+  return next
+}
+
 /** 부모의 assistant 항목의 글(하는 일 블록은 뺀다) — 글이 없거나 서브에이전트의 줄이면 '' */
 function assistantText(item: HistoryItem): string {
   if (item.kind !== 'assistant' || item.parent) return ''
@@ -59,7 +75,7 @@ function assistantText(item: HistoryItem): string {
 export function createStore(api: DureApi): Store {
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, usage: null,
-    roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, lastText: {}, lastDelivered: {},
+    roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, lastText: {}, lastDelivered: {},
     statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null,
   }
   const listeners = new Set<() => void>()
@@ -99,7 +115,13 @@ export function createStore(api: DureApi): Store {
         const agents = state.agents.map(a => (a.id === p.agentId ? { ...a, status: p.status, errorText: p.errorText } : a))
         const next = agents.find(a => a.id === p.agentId)
         const changed = !!old && !!next && displayStatus(old, state.requests) !== displayStatus(next, state.requests)
-        state = { ...state, agents, statusSince: changed ? { ...state.statusSince, [p.agentId]: at } : state.statusSince }
+        state = {
+          ...state,
+          agents,
+          statusSince: changed ? { ...state.statusSince, [p.agentId]: at } : state.statusSince,
+          // 멈춤·차례 끝·세션이 죽음 — 생각 끝 신호 없이 끝나도 '생각하는 중'이 남지 않게
+          thinking: busy(p.status) ? state.thinking : withoutThinking(state.thinking, p.agentId),
+        }
         break
       }
       case 'flags': {
@@ -180,9 +202,12 @@ export function createStore(api: DureApi): Store {
           lastText = { ...lastText }
           delete lastText[agentId]
         }
+        // 부모의 답(글·하는 일 — 생각 블록만 든 빈 답도)·차례 끝·알림(멈춤·오류)·새 대화 — 생각은 끝났다
+        const thoughtEnds = (item.kind === 'assistant' && !sub) || item.kind === 'result' || item.kind === 'notice' || boundary
         state = {
           ...state,
           streaming: state.streaming[agentId] && !sub ? { ...state.streaming, [agentId]: '' } : state.streaming,
+          thinking: thoughtEnds ? withoutThinking(state.thinking, agentId) : state.thinking,
           lastText,
         }
         const pending = loading.get(agentId)
@@ -200,7 +225,23 @@ export function createStore(api: DureApi): Store {
       case 'agent-event': {
         const { agentId, event } = ev.payload
         if (event.kind === 'text-delta') {
-          state = { ...state, streaming: { ...state.streaming, [agentId]: (state.streaming[agentId] ?? '') + event.text } }
+          state = {
+            ...state,
+            streaming: { ...state.streaming, [agentId]: (state.streaming[agentId] ?? '') + event.text },
+            thinking: withoutThinking(state.thinking, agentId), // 글이 흐르면 생각은 끝났다
+          }
+        } else if (event.kind === 'thinking') {
+          const cur = state.thinking[agentId]
+          if (!event.active) {
+            state = { ...state, thinking: withoutThinking(state.thinking, agentId) }
+            break
+          }
+          // 쉬는 에이전트에게 늦게 온 신호는 버린다 — 다음 차례가 '생각하는 중'으로 시작하지 않게
+          if (!busy(state.agents.find(a => a.id === agentId)?.status)) break
+          // 토큰 수를 모르는 신호(새 생각 블록 시작)는 이미 아는 수를 지우지 않는다. 같은 수면 그대로(다시 그리지 않게)
+          const tokens = event.tokens ?? cur?.tokens ?? null
+          if (cur && cur.tokens === tokens) break
+          state = { ...state, thinking: { ...state.thinking, [agentId]: { tokens } } }
         }
         break
       }

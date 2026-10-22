@@ -89,6 +89,9 @@ export type SubagentEnd = 'completed' | 'failed' | 'stopped';
 export type StreamEvent =
   | { kind: 'init'; sessionId: string; model: string; permissionMode: string; slashCommands: string[] }
   | { kind: 'text-delta'; text: string }
+  // Claude 가 생각하는 중(active) — 생각 블록 시작·system/thinking_tokens 면 참, 다른 블록 시작이면 끝.
+  // tokens = 지금까지 생각한 추정 토큰 수(thinking_tokens 의 누적 값, 모르면 null). 내용은 오지 않는다. 기록하지 않는다
+  | { kind: 'thinking'; active: boolean; tokens: number | null }
   | { kind: 'assistant'; blocks: AssistantBlock[]; parent?: string } // thinking 블록은 버린다. parent = 서브에이전트 줄이면 부모의 Agent tool_use id
   // patch = user 줄 최상위 tool_use_result.structuredPatch(Claude Code 가 고친 일 결과에 싣는다) — 모양이 다르면 없음
   | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; parent?: string; patch?: DiffHunk[] }

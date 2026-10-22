@@ -2533,9 +2533,16 @@ code {
   font-weight: 500;
 }
 
-.wk-time {
+.wk-time,
+.wk-tok {
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* 생각한 추정 토큰 수 — 줄이 좁아도 '약 278 토큰'이 여러 줄로 쪼개지지 않는다 */
+.wk-tok {
+  flex: none;
+  white-space: nowrap;
 }
 
 /* ── 서브에이전트 지도(시안 2안) ─────────────────── */

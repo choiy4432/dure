@@ -1119,6 +1119,57 @@ test('engine: history 이벤트가 append 마다', async () => {
   expect(seen.map((h) => h.item)).toEqual(e.history(a.id));
 });
 
+// ── 생각 신호(spec §4.4) ──
+const thinkingOf = (events: StreamEvent[]) => events.filter((x) => x.kind === 'thinking');
+
+test('생각: THINK 차례의 생각 신호가 차례대로 agent-event 로 나가고(글보다 먼저) 기록엔 남지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const events: StreamEvent[] = [];
+  const live: HistoryItem[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === a.id && events.push(x.event));
+  e.on('history', (h: { agentId: string; item: HistoryItem }) => h.agentId === a.id && live.push(h.item));
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('THINK 다 생각했어요'));
+  expect(await resultText(done)).toBe('다 생각했어요');
+  // 시작(토큰 모름) → 278 → 452(system/thinking_tokens 의 누적 값만 — thinking_delta 의 값은 쓰지 않는다) → 글 블록 시작에서 끝
+  expect(thinkingOf(events)).toEqual([
+    { kind: 'thinking', active: true, tokens: null },
+    { kind: 'thinking', active: true, tokens: 278 },
+    { kind: 'thinking', active: true, tokens: 452 },
+    { kind: 'thinking', active: false, tokens: null },
+  ]);
+  const order = events
+    .filter((x) => x.kind === 'thinking' || x.kind === 'text-delta')
+    .map((x) => (x.kind === 'text-delta' ? 'text' : x.active ? 'think' : 'end'));
+  expect(order).toEqual(['think', 'think', 'think', 'end', 'text']);
+  // 기록엔 생각이 없다 — 살아 있는 history 사건에도, 다시 읽은 기록에도, 기록 파일에도
+  expect(live.map((x) => x.kind)).not.toContain('thinking');
+  expect(e.history(a.id).map((x) => x.kind)).not.toContain('thinking');
+  const file = fs.readFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), 'utf8');
+  expect(file).not.toContain('thinking');
+  expect(file).not.toContain('estimated_tokens');
+});
+
+test('생각: 생각하는 중에 멈추면 그 뒤로 생각 신호가 오지 않는다 — 쉬는 상태 · 멈춤 알림으로 끝', async () => {
+  const e = await start({ FAKE_THINK_MS: '150' });
+  const { a } = setup(e);
+  const events: StreamEvent[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === a.id && events.push(x.event));
+  const thinking = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === a.id && x.event.kind === 'thinking' && x.event.tokens === 278);
+  await e.sendUser(a.id, text('THINK 못 끝냄'));
+  await thinking;
+  const ended = resultOf(e, a.id);
+  await e.interrupt(a.id);
+  await ended;
+  const after = events.length;
+  await new Promise((r) => setTimeout(r, 450)); // 남은 단계가 있었다면 그새 세 줄은 왔을 시간
+  expect(thinkingOf(events.slice(after))).toEqual([]);
+  expect(events.some((x) => x.kind === 'text-delta')).toBe(false);
+  expect(e.status(a.id)).toBe('idle');
+  expect(e.history(a.id).filter((x) => x.kind === 'notice')).toMatchObject([{ text: '멈췄어요' }]);
+});
+
 test('engine: 멈춤·비정상 종료는 notice 로 남고, 실행 중 아닌 건 안 남는다', async () => {
   const e = await start();
   const { a, b } = setup(e);

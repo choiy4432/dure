@@ -255,6 +255,43 @@ describe('AgentNode — 카드 내용', () => {
     expect(line()).toBe('결과를 모아 정리하는 중이에요')
   })
 
+  it('흐르는 글이 없고 Claude 가 생각하는 중이면 한 줄 "생각하는 중…" — 글이 오면 그 글, 생각이 끝나면 "일하는 중…"', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', status: 'working' })]
+    const { card } = await renderCard()
+    const line = () => card.querySelector('.na')!.textContent
+    expect(line()).toBe('일하는 중…')
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: null } })
+    expect(line()).toBe('생각하는 중…')
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: 278 } })
+    expect(line()).toBe('생각하는 중…') // 카드엔 토큰 수를 쓰지 않는다
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: false, tokens: null } })
+    expect(line()).toBe('일하는 중…')
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: null } })
+    emit('agent-event', { agentId: 'd', event: { kind: 'text-delta', text: '배너 문구를 고르는 중이에요' } })
+    expect(line()).toBe('배너 문구를 고르는 중이에요')
+  })
+
+  it('차례: 흐르는 글 → 생각하는 중 → 서브에이전트 → 일하는 중 — 생각이 끝나면 서브에이전트 문구', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', status: 'working', subagentsRunning: ['A', 'B'] })]
+    const { card } = await renderCard()
+    const line = () => card.querySelector('.na')!.textContent
+    expect(line()).toBe('서브에이전트 2개가 일하는 중')
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: 50 } })
+    expect(line()).toBe('생각하는 중…')
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: false, tokens: null } })
+    expect(line()).toBe('서브에이전트 2개가 일하는 중')
+  })
+
+  it('생각하는 중에 멈추면 "생각하는 중…"이 남지 않는다', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', status: 'working' })]
+    const { card } = await renderCard()
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: 278 } })
+    emit('status', { agentId: 'd', status: 'idle', errorText: null })
+    expect(card.querySelector('.na')!.textContent).toBe('기다리는 중')
+    emit('status', { agentId: 'd', status: 'working', errorText: null })
+    expect(card.querySelector('.na')!.textContent).toBe('일하는 중…')
+  })
+
   it('서브에이전트가 다 끝나면 지금처럼 — 작업 중이면 "일하는 중…"', async () => {
     snapshot.agents = [agent('d', { name: '디자인', status: 'working', subagentsRunning: ['A'] })]
     const { card } = await renderCard()

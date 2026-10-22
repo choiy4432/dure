@@ -34,6 +34,7 @@ const STATUS_LINE: Record<DisplayStatus, string> = {
   stopped: '기다리는 중',
   error: '오류로 멈췄어요',
 }
+const THINKING_LINE = '생각하는 중…'
 
 /** 앞 max 자 — 마크다운 기호와 줄바꿈은 걷어 한 줄로, 넘치면 '…' */
 function clip(text: string, max: number): string {
@@ -66,6 +67,8 @@ function useCardView(agentId: AgentId) {
       sender: firstUnreadFrom ? (s.agents.find(a => a.id === firstUnreadFrom)?.name ?? '') : '',
       selected: s.selectedAgentId === agentId,
       streaming: s.streaming[agentId] ?? '',
+      // 생각하는 중인지만 — 카드엔 토큰 수를 쓰지 않으니 수가 오를 때마다 다시 그리지 않는다
+      thinking: !!s.thinking[agentId],
       last: s.lastText[agentId] ?? null,
       lastMessageAt,
       since: s.statusSince[agentId] ?? null,
@@ -77,7 +80,9 @@ type CardView = NonNullable<ReturnType<typeof useCardView>>
 
 function activityLine(v: CardView): string {
   if (v.status === 'working' && v.streaming.trim()) return clip(v.streaming, ACTIVITY_MAX)
-  // 흐르는 글이 없고 서브에이전트가 돈다 — 부모 차례가 끝나 서브에이전트만 돌 때도 이 줄
+  // 흐르는 글이 없고 Claude 가 생각하는 중 — 서브에이전트가 돌아도 부모가 생각하는 게 먼저
+  if (v.status === 'working' && v.thinking) return THINKING_LINE
+  // 흐르는 글이 없고 생각 중도 아닌데 서브에이전트가 돈다 — 부모 차례가 끝나 서브에이전트만 돌 때도 이 줄
   const subagents = v.agent.subagentsRunning.length
   if (subagents > 0) return `서브에이전트 ${subagents}개가 일하는 중`
   if (v.status === 'working') return STATUS_LINE.working
