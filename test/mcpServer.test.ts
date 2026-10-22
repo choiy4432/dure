@@ -104,6 +104,30 @@ describe('mcpServer', () => {
     ]);
   });
 
+  test('create_agent — folder·task 가 null 이면 없는 것으로(handler 에 넘기지 않는다) · 잘못된 인자 오류가 아니다', async () => {
+    const seen: unknown[] = [];
+    handle = await startMcpServer(handlers({
+      createAgent: async (_a, args) => {
+        seen.push(args);
+        return `만듦 ${args.name}`;
+      },
+    }));
+    const j = await approveReply(await rpc(handle, call(32, 'create_agent', { name: '셋', role: '역할', folder: null, task: null })));
+    expect(j.result).toEqual({ content: [{ type: 'text', text: '만듦 셋' }] });
+    const k = await approveReply(await rpc(handle, call(33, 'create_agent', { name: '넷', role: '역할', folder: 'sub', task: null })));
+    expect(k.result).toEqual({ content: [{ type: 'text', text: '만듦 넷' }] });
+    expect(seen).toEqual([{ name: '셋', role: '역할' }, { name: '넷', role: '역할', folder: 'sub' }]);
+  });
+
+  test('create_agent 의 folder 설명 — Windows 경로(C:\\… 절대 경로, 또는 내 폴더 기준 상대 경로)', async () => {
+    handle = await startMcpServer(handlers());
+    const j = await (await rpc(handle, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json() as any;
+    const create = j.result.tools.find((t: any) => t.name === 'create_agent');
+    expect(create.inputSchema.properties.folder.description).toBe(
+      '일할 폴더 — Windows 경로(C:\\... 같은 절대 경로, 또는 내 폴더 기준 상대 경로). 없으면 내 폴더',
+    );
+  });
+
   test('create_agent — 잘못된 인자(이름·역할이 글이 아님 · folder·task 가 글이 아님)는 handler 없이 isError · handler 가 던지면 그 글로 isError', async () => {
     const seen: unknown[] = [];
     handle = await startMcpServer(handlers({

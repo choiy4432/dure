@@ -152,6 +152,29 @@ const DURE_TOOL_DENIED = '두레 도구는 승인 대상이 아니에요.';
 const SUBAGENT_DURE_TOOL: string = DENY.subagentDureTool;
 /** create_agent 미리 보기 — 이름 빔·겹침·폴더 문구는 store 의 것을 그대로 쓴다 */
 const ROLE_EMPTY = '역할을 입력하세요';
+/**
+ * create_agent 의 이름·역할 — 시스템 안내문·메시지 머리에 그대로 들어가니 줄을 나누는 글자는 받지 않고, 길이도 묶는다
+ * (사람이 더하는 길은 그대로 — 이 검사는 create_agent 에만). 제어 문자 = C0·DEL·C1, 그리고 줄 나눔 문자(U+2028·2029)
+ */
+const CONTROL_CHAR = /[\p{Cc}\u2028\u2029]/u;
+const NAME_MAX = 40;
+const ROLE_MAX = 200;
+const NAME_CONTROL = '이름에 줄바꿈이나 제어 문자를 쓸 수 없어요';
+const ROLE_CONTROL = '역할에 줄바꿈이나 제어 문자를 쓸 수 없어요';
+const NAME_LONG = `이름은 ${NAME_MAX}자까지예요`;
+const ROLE_LONG = `역할은 ${ROLE_MAX}자까지예요`;
+/** 글자 수 — 코드 포인트로 센다(이모지 하나가 둘로 세지지 않게) */
+const chars = (s: string): number => [...s].length;
+
+/**
+ * Git Bash 꼴 경로(/c/Users/…) → Windows 경로(C:/Users/…) — Claude 의 셸이 Git Bash 라 그 꼴로 넘길 수 있다.
+ * 맨 앞이 '/' + 드라이브 글자 하나 + ('/' 또는 끝)일 때만. 드라이브만(/c)이면 그 드라이브 맨 위(C:/ — 'C:' 만이면 그 드라이브의 현재 폴더다).
+ * 빗금은 뒤의 path.resolve 가 역빗금으로 바꾼다
+ */
+function fromGitBashPath(p: string): string {
+  const m = /^\/([A-Za-z])(\/.*)?$/s.exec(p);
+  return m ? `${m[1].toUpperCase()}:${m[2] ?? '/'}` : p;
+}
 /** 부른 tool_use id 를 스트림에서 못 봤을 때 기다리는 한도 — 그 줄은 보통 부르기보다 먼저 온다(probe13·14) */
 const SEEN_WAIT_MS = 2000;
 /** 끝 알림 뒤 스스로 시작한 차례는 곧바로 온다(probe13) — 멈추기로 끝났으면 오지 않으니(probe14 C) 짧게만 기다린다 */
@@ -729,7 +752,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const plan: CreateAgentInput = {
       name: args.name.trim(),
       role: args.role.trim(),
-      folder: path.resolve(me.folder, args.folder ?? '.'),
+      folder: path.resolve(me.folder, fromGitBashPath(args.folder ?? '.')),
       task: args.task?.trim() ? args.task : null,
     };
     this.checkNewAgent(me.roomId, plan); // 미리 보기 — 카드 없이 던진다
@@ -750,10 +773,17 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * 새 에이전트를 더할 수 있는가 — create_agent 의 미리 보기와 [만들기] 때 다시 확인이 같이 쓴다.
-   * 이름 빔 → 역할 빔 → 방 안 이름 겹침 → 폴더 순. 역할 말고는 store 의 검사·문구 그대로
+   * 이름 빔 → 이름 제어 문자 → 이름 길이 → 역할 빔 → 역할 제어 문자 → 역할 길이 → 방 안 이름 겹침 → 폴더 순.
+   * 빔·겹침·폴더는 store 의 검사·문구 그대로(이름이 비었으면 store 가 먼저 '이름을 입력하세요'). 길이는 앞뒤 빈칸을 자른 값으로
    */
   private checkNewAgent(roomId: RoomId, n: CreateAgentInput): void {
-    if (n.name.trim() && !n.role.trim()) throw new Error(ROLE_EMPTY); // 이름이 비었으면 store 가 먼저 '이름을 입력하세요'
+    if (n.name.trim()) {
+      if (CONTROL_CHAR.test(n.name)) throw new Error(NAME_CONTROL);
+      if (chars(n.name.trim()) > NAME_MAX) throw new Error(NAME_LONG);
+      if (!n.role.trim()) throw new Error(ROLE_EMPTY);
+      if (CONTROL_CHAR.test(n.role)) throw new Error(ROLE_CONTROL);
+      if (chars(n.role.trim()) > ROLE_MAX) throw new Error(ROLE_LONG);
+    }
     this.store.checkAgent({ roomId, name: n.name, folder: n.folder });
   }
 

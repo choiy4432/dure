@@ -57,7 +57,8 @@ const TOOLS = [
       properties: {
         name: { type: 'string', description: '새 에이전트 이름 — 이 방 안에서 겹치지 않게' },
         role: { type: 'string', description: '맡을 역할' },
-        folder: { type: 'string', description: '일할 폴더 — 없으면 내 폴더, 상대 경로는 내 폴더 기준' },
+        // Claude 의 셸이 Git Bash 라 /c/... 꼴로 넘길 수 있다 — Windows 경로로 쓰라고 적는다(그 꼴이 와도 엔진이 C:\... 로 바꾼다)
+        folder: { type: 'string', description: '일할 폴더 — Windows 경로(C:\\... 같은 절대 경로, 또는 내 폴더 기준 상대 경로). 없으면 내 폴더' },
         task: { type: 'string', description: '첫 할 일 — 주면 만든 뒤 내가 보낸 메시지로 간다' },
       },
       required: ['name', 'role'],
@@ -99,10 +100,13 @@ async function callTool(h: McpHandlers, agentId: AgentId, params: any, signal: A
     }
     if (name === 'create_agent') {
       if (typeof a.name !== 'string' || typeof a.role !== 'string') return bad();
-      if ((a.folder !== undefined && typeof a.folder !== 'string') || (a.task !== undefined && typeof a.task !== 'string')) return bad();
+      // 선택 인자의 null 은 없는 것으로 — Claude 가 안 쓰는 칸을 null 로 채워 보내기도 한다
+      const folder = a.folder ?? undefined;
+      const task = a.task ?? undefined;
+      if ((folder !== undefined && typeof folder !== 'string') || (task !== undefined && typeof task !== 'string')) return bad();
       const args: { name: string; role: string; folder?: string; task?: string } = { name: a.name, role: a.role };
-      if (a.folder !== undefined) args.folder = a.folder;
-      if (a.task !== undefined) args.task = a.task;
+      if (folder !== undefined) args.folder = folder;
+      if (task !== undefined) args.task = task;
       return textResult(await h.createAgent(agentId, args, toolUseId, signal));
     }
     return textResult(`알 수 없는 도구: ${String(name)}`, true);

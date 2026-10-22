@@ -3657,6 +3657,85 @@ test('create_agent: 미리 보기 — 이름 빔·역할 빔·이름 겹침(대�
   expect(names(e)).toEqual(['A', 'B']);
 });
 
+test('create_agent: 미리 보기 — 이름·역할의 줄바꿈·제어 문자, 이름 40자·역할 200자 넘음은 카드 없이 오류 글 · 사람이 더하는 길은 그대로', async () => {
+  const e = await start();
+  const { room, a } = setup(e);
+  const requests: PendingRequest[] = [];
+  e.on('request', (r: PendingRequest) => requests.push(r));
+  const NAME_CTRL = '이름에 줄바꿈이나 제어 문자를 쓸 수 없어요';
+  const ROLE_CTRL = '역할에 줄바꿈이나 제어 문자를 쓸 수 없어요';
+  for (const [line, want] of [
+    ['MAKE 가\n나|검사|', NAME_CTRL],
+    ['MAKE 가\r\n나|검사|', NAME_CTRL],
+    ['MAKE 가\t나|검사|', NAME_CTRL],
+    ['MAKE 가나\u0007|검사|', NAME_CTRL], // 끝의 제어 문자는 앞뒤 빈칸 자르기로 안 지워진다
+    ['MAKE 테스트|검사\n하기|', ROLE_CTRL],
+    ['MAKE 테스트|검사\u0000|', ROLE_CTRL],
+    ['MAKE 테스트|검사\u009b하기|', ROLE_CTRL], // C1 제어 문자
+    [`MAKE ${'가'.repeat(41)}|검사|`, '이름은 40자까지예요'],
+    [`MAKE 테스트|${'역'.repeat(201)}|`, '역할은 200자까지예요'],
+  ]) {
+    const done = resultOf(e, a.id);
+    await e.sendUser(a.id, text(line));
+    expect(await resultText(done)).toBe(want);
+    expect(lastToolResult(e, a.id)).toMatchObject({ isError: true, text: want, viaApproval: false });
+  }
+  // 줄 나눔 문자(U+2028·2029) — 가짜 claude 의 readline 이 그 글자에서 사용자 줄을 끊어 MCP 로 바로 부른다
+  expect(await createDirect(a.id, { name: `가${String.fromCharCode(0x2028)}나`, role: '검사' })).toEqual({ text: NAME_CTRL, isError: true });
+  expect(await createDirect(a.id, { name: '테스트', role: `검사${String.fromCharCode(0x2029)}하기` })).toEqual({ text: ROLE_CTRL, isError: true });
+  expect(requests).toEqual([]);
+  expect(names(e)).toEqual(['A', 'B']);
+
+  // 끝 자리 — 이름 40자·역할 200자는 된다(앞뒤 빈칸·줄바꿈은 잘라 낸 뒤 센다)
+  const req = requestOf(e, a.id);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text(`MAKE ${'가'.repeat(40)} |${'역'.repeat(200)}\n|`));
+  const r = await req;
+  expect(r.input).toMatchObject({ name: '가'.repeat(40), role: '역'.repeat(200) });
+  e.answerRequest(r.id, { type: 'deny' });
+  await done;
+
+  // 사람이 더하는 길(에이전트 추가 대화상자)은 그대로 — 이 검사는 create_agent 에만
+  const mine = e.addAgent({ roomId: room.id, name: '사'.repeat(41), role: '역할\n둘째 줄', folder: folder('h') });
+  expect(mine).toMatchObject({ name: '사'.repeat(41), role: '역할\n둘째 줄' });
+});
+
+test('create_agent: 폴더 — Git Bash 꼴(/c/...·/c)은 Windows 경로(C:\\...)로 바꿔 쓴다 · 드라이브 글자 하나일 때만', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const sub = folder('a/sub');
+  expect(sub).toMatch(/^[A-Za-z]:\\/); // 시험 폴더는 드라이브 경로
+  const drive = sub[0];
+  const bash = `/${drive.toLowerCase()}${sub.slice(2).replace(/\\/g, '/')}`; // C:\…\a\sub → /c/…/a/sub
+  const requests: PendingRequest[] = [];
+  e.on('request', (r: PendingRequest) => requests.push(r));
+
+  let req = requestOf(e, a.id);
+  let done = resultOf(e, a.id);
+  await e.sendUser(a.id, text(`MAKE 배시|검사|${bash}|`));
+  let r = await req;
+  expect(r.input).toMatchObject({ folder: sub });
+  e.answerRequest(r.id, { type: 'allow' });
+  expect(await resultText(done)).toBe("에이전트 '배시'를 만들었어요.");
+  expect(e.agents().find((x) => x.name === '배시')?.folder).toBe(sub);
+
+  // 대문자 드라이브·끝 빗금도 · 드라이브만(/c)이면 그 드라이브 맨 위
+  req = requestOf(e, a.id);
+  done = resultOf(e, a.id);
+  await e.sendUser(a.id, text(`MAKE 배시2|검사|/${drive.toUpperCase()}/|`));
+  r = await req;
+  expect(r.input).toMatchObject({ folder: `${drive.toUpperCase()}:\\` });
+  e.answerRequest(r.id, { type: 'deny' });
+  await done;
+
+  // 드라이브 글자가 아니면(두 글자) 바꾸지 않는다 — 지금처럼 내 폴더 기준으로 푼다
+  const seen = requests.length;
+  done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('MAKE 배시3|검사|/cc/nope|'));
+  expect(await resultText(done)).toBe(`폴더를 찾을 수 없습니다: ${path.resolve(a.folder, '/cc/nope')}`);
+  expect(requests).toHaveLength(seen);
+});
+
 test('create_agent: 거절 — 결과는 새 에이전트 만들기를 거절했어요(오류), 에이전트 없음 · 항상 허용은 던지고 카드는 그대로', async () => {
   const e = await start();
   const { a } = setup(e);
