@@ -118,6 +118,42 @@ describe('RelationMap — 요약 칩', () => {
     expect(store.getState().selectedAgentId).toBe('w')
   })
 
+  it('새 결과 칩 — 수, 0 이면 물러남', async () => {
+    const handlers: Record<string, ((p: any) => void)[]> = {}
+    ;(window as any).dure.on = (k: string, fn: (p: any) => void) => {
+      ;(handlers[k] ??= []).push(fn)
+      return () => {}
+    }
+    snapshot.agents = [agent('a', { pos: { x: 64, y: 64 } }), agent('b', { pos: { x: 500, y: 64 } })]
+    const { store } = await renderMap()
+    const zero = screen.getByRole('button', { name: '새 결과 0' }) as HTMLButtonElement
+    expect(zero.disabled).toBe(true)
+    expect(zero.classList.contains('zero')).toBe(true)
+    await act(async () => { (handlers['history'] ?? []).forEach(f => f({ agentId: 'b', item: { kind: 'result', t: 5 } })) })
+    expect(store.getState().fresh.b).toBe(5)
+    const one = screen.getByRole('button', { name: '새 결과 1' }) as HTMLButtonElement
+    expect(one.disabled).toBe(false)
+    expect(one.classList.contains('zero')).toBe(false)
+    expect(one.querySelector('.dot.n')).toBeTruthy()
+    fireEvent.click(one)
+    expect(store.getState().selectedAgentId).toBe('b')
+  })
+
+  it('같은 칩을 두 번 누르면 그 상태의 다음 에이전트로', async () => {
+    snapshot.agents = [
+      agent('w1', { status: 'working', pos: { x: 64, y: 64 } }),
+      agent('w2', { status: 'working', pos: { x: 500, y: 64 } }),
+    ]
+    const { store } = await renderMap()
+    const chip = () => screen.getByRole('button', { name: '작업 중 2' })
+    fireEvent.click(chip())
+    expect(store.getState().selectedAgentId).toBe('w1')
+    fireEvent.click(chip())
+    expect(store.getState().selectedAgentId).toBe('w2')
+    fireEvent.click(chip())
+    expect(store.getState().selectedAgentId).toBe('w1')
+  })
+
   it('수가 0 인 칩은 누를 수 없다', async () => {
     snapshot.agents = [agent('a', { pos: { x: 64, y: 64 } })]
     await renderMap()

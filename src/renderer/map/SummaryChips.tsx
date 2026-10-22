@@ -1,36 +1,27 @@
 import { useReactFlow } from '@xyflow/react'
-import type { AgentId, RoomId } from '../../engine/types'
-import { getStore, useDure, type UiState } from '../state/store'
-import { displayStatus, summary, unreadFor } from '../state/selectors'
+import type { RoomId } from '../../engine/types'
+import { getStore, useDure } from '../state/store'
+import { nextAgent, summary, type ChipKind } from '../state/selectors'
 import { moveMs } from '../lib/motion'
 import { STATUS_WORD } from '../lib/words'
 
-type Kind = 'working' | 'awaiting' | 'unread'
-
-const CHIPS: { kind: Kind; label: string; dot: string }[] = [
+const CHIPS: { kind: ChipKind; label: string; dot: string }[] = [
   { kind: 'working', label: STATUS_WORD.working, dot: 'g' },
   { kind: 'awaiting', label: STATUS_WORD.awaiting, dot: 'a' },
   { kind: 'unread', label: '받은 메시지', dot: 'r' },
+  { kind: 'fresh', label: '새 결과', dot: 'n' },
 ]
 
-/** 그 상태의 첫 에이전트(방 안 순서대로) */
-function firstAgent(kind: Kind, s: UiState, roomId: RoomId): AgentId | null {
-  const hit = s.agents.find(a => {
-    if (a.roomId !== roomId) return false
-    if (kind === 'unread') return unreadFor(a.id, s.messages) > 0
-    return displayStatus(a, s.requests) === kind
-  })
-  return hit?.id ?? null
-}
-
-/** 관계도 왼쪽 위 — 작업 중 · 내 승인 필요 · 받은 메시지 수. 누르면 그 상태의 첫 에이전트로 */
+/** 관계도 왼쪽 위 — 작업 중 · 내 승인 필요 · 받은 메시지 · 새 결과 수. 누를 때마다 그 상태의 다음 에이전트로(돌아가며) */
 export function SummaryChips({ roomId }: { roomId: RoomId }) {
   const sum = useDure(s => summary(s, roomId))
   const flow = useReactFlow()
 
-  const go = (kind: Kind) => {
+  const go = (kind: ChipKind) => {
     const store = getStore()
-    const id = firstAgent(kind, store.getState(), roomId)
+    // 지금 고른 에이전트 다음부터 — 같은 칩을 거듭 누르면 그 상태의 에이전트를 한 바퀴 돈다(첫 번째에 갇히지 않게)
+    const st = store.getState()
+    const id = nextAgent(kind, st, roomId, st.selectedAgentId)
     if (!id) return
     store.selectAgent(id)
     void flow.fitView({ nodes: [{ id }], maxZoom: 1, padding: 0.4, duration: moveMs(300) })
