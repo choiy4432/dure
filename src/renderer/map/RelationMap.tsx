@@ -86,15 +86,22 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
     seatsEqual,
   )
   const views = useDure(s => edgeViews(roomId, s.agents, s.messages), edgesEqual)
+  // 에이전트가 만든 새 에이전트 → 만든 쪽(agent-added) — 자리 없는 새 에이전트를 그 가까이 놓는다
+  const placeNear = useDure(s => s.placeNear)
   const wrap = useRef<HTMLDivElement>(null)
   // 화면에서 정한 자리 — 엔진에 저장되어 스토어로 돌아오기 전까지 이 값을 쓴다
   const placed = useRef(new Map<AgentId, Point>()) // 처음 그릴 때 정해 준 자리({0,0} 이던 에이전트)
   const moved = useRef(new Map<AgentId, Point>()) // 끌어서 옮긴 자리
   const saving = useRef(new Set<AgentId>())
 
-  // 자리 없는({0,0}) 에이전트는 겹치지 않는 칸을 정해 둔다(한 번만 — 저장은 아래 effect 에서)
+  // 자리 없는({0,0}) 에이전트는 겹치지 않는 칸을 정해 둔다(한 번만 — 저장은 아래 effect 에서).
+  // 에이전트가 만든 새 에이전트는 만든 카드 가까운 빈 칸, 그 밖은 첫 빈 칸
   if (seats.some(a => isUnplaced(a.pos) && !placed.current.has(a.id))) {
-    const known = seats.map(a => ({ id: a.id, pos: moved.current.get(a.id) ?? placed.current.get(a.id) ?? a.pos }))
+    const known = seats.map(a => ({
+      id: a.id,
+      pos: moved.current.get(a.id) ?? placed.current.get(a.id) ?? a.pos,
+      by: placeNear[a.id],
+    }))
     for (const [id, p] of placeMissing(known)) placed.current.set(id, p)
   }
   const posOf = (a: Seat): Point =>

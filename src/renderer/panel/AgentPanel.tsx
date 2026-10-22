@@ -9,6 +9,7 @@ import { PanelHeader } from './PanelHeader'
 import type { Described } from './ModelPicker'
 import { MessageCard, pinOpen, type ShownState } from './cards/MessageCard'
 import { PermissionCard } from './cards/PermissionCard'
+import { CreateAgentCard } from './cards/CreateAgentCard'
 import { QuestionCard } from './cards/QuestionCard'
 import { HeldChainCard } from './cards/HeldChainCard'
 import { PresenceList } from '../lib/presence'
@@ -60,7 +61,7 @@ function useOverflows(ref: RefObject<HTMLElement | null>): boolean {
 }
 
 /**
- * 고정 카드 — 권한·질문(먼저 온 것부터) → 받은 메시지(오래된 순) → 자동 상한(방에 한 장) → 최근 전달된 메시지 1장.
+ * 고정 카드 — 권한·질문·새 에이전트 만들기(먼저 온 것부터) → 받은 메시지(오래된 순) → 자동 상한(방에 한 장) → 최근 전달된 메시지 1장.
  * 카드가 없으면 자리도 없다(.pnl-pins:empty).
  */
 function Pins({ agentId, open, onOpenChange }: {
@@ -100,6 +101,8 @@ function Pins({ agentId, open, onOpenChange }: {
         {requests.map(r =>
           r.kind === 'question' ? (
             <QuestionCard key={r.id} request={r} now={now} />
+          ) : r.kind === 'create-agent' ? (
+            <CreateAgentCard key={r.id} request={r} agent={agent} now={now} />
           ) : (
             <PermissionCard key={r.id} request={r} agent={agent} now={now} />
           ),

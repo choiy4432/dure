@@ -102,6 +102,47 @@ describe('AgentNode — 승인 기다림', () => {
   })
 })
 
+describe('AgentNode — 새 에이전트 만들기 승인', () => {
+  const make = () =>
+    request({
+      agentId: 'p', toolName: 'mcp__dure__create_agent', kind: 'create-agent',
+      input: { name: '테스트', role: '시험 담당', folder: 'C:\\w\\t', task: '첫 할 일' },
+    })
+
+  it.each([
+    ['만들기', { type: 'allow' }],
+    ['거절', { type: 'deny' }],
+  ] as const)('앰버 칸 제목 "기획이 새 에이전트를 만들려 해요" · 새 이름 · 역할 — [%s] 은 answerRequest 를 맞는 Decision 으로', async (name, decision) => {
+    snapshot.agents = [agent('p', { name: '기획', status: 'awaiting' })]
+    snapshot.requests = [make()]
+    const { card, store } = await renderCard('p')
+    expect(card.classList.contains('pend')).toBe(true)
+    expect(card.querySelector('.ap-t')!.textContent).toBe('기획이 새 에이전트를 만들려 해요')
+    const who = card.querySelector<HTMLElement>('.ap-who')!
+    expect(who.textContent).toBe('테스트 · 시험 담당')
+    expect(who.title).toBe('테스트 · 시험 담당')
+    expect(who.querySelector('b')!.textContent).toBe('테스트')
+    expect(Array.from(card.querySelectorAll('.ap button')).map(b => b.textContent)).toEqual(['만들기', '거절'])
+    expect(card.textContent).not.toContain('항상 허용')
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name })) })
+    expect(api.answerRequest).toHaveBeenCalledTimes(1)
+    expect(api.answerRequest).toHaveBeenCalledWith('q1', decision)
+    // 누르는 동안 두 단추 모두 막힌다 · 승인하려고 누른 것이 에이전트를 고르지는 않는다
+    for (const b of card.querySelectorAll<HTMLButtonElement>('.ap button')) expect(b.disabled).toBe(true)
+    expect(store.getState().selectedAgentId).toBeNull()
+  })
+
+  it('실패하면 단추가 다시 살아난다', async () => {
+    snapshot.agents = [agent('p', { name: '기획', status: 'awaiting' })]
+    snapshot.requests = [make()]
+    api.answerRequest.mockRejectedValueOnce(new Error('없는 요청'))
+    await renderCard('p')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '만들기' })) })
+    expect((screen.getByRole('button', { name: '만들기' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
 describe('AgentNode — 카드 내용', () => {
   it('머리: 이니셜 · 이름 · 역할 · 자동 켬/끔', async () => {
     snapshot.agents = [agent('d', { name: '디자인', role: '시안 · 스타일', auto: true })]

@@ -29,6 +29,11 @@ export type UiState = Snapshot & {
   panelTab: Record<AgentId, PanelTab>
   /** 대화의 서브에이전트 요약 줄을 눌렀다 — 지도가 key(노드 id)가 든 차례로 간다. n 은 누를 때마다 오른다 */
   subagentFocus: { agentId: AgentId; key: string; n: number } | null
+  /**
+   * 에이전트가 만든 새 에이전트 → 만든 에이전트(agent-added 사건). 관계도가 자리 없는 새 에이전트를 만든 쪽 가까이 놓는 데 쓴다.
+   * 앱을 끄면 잊는다 — 사건을 놓친 새 에이전트(다시 켬)는 지금처럼 첫 빈 칸
+   */
+  placeNear: Record<AgentId, AgentId>
 }
 
 export type PanelTab = 'chat' | 'subagents'
@@ -50,7 +55,7 @@ type Ev = { [K in keyof EngineEventMap]: { name: K; payload: EngineEventMap[K] }
 
 const EVENTS: (keyof EngineEventMap)[] = [
   'agent-event', 'status', 'message', 'request', 'request-resolved', 'flags', 'history', 'held-input',
-  'usage', 'context', 'effort', 'model-now', 'subagents',
+  'usage', 'context', 'effort', 'model-now', 'subagents', 'agent-added',
 ]
 
 const sameItem = (a: HistoryItem, b: HistoryItem) => JSON.stringify(a) === JSON.stringify(b)
@@ -76,7 +81,7 @@ export function createStore(api: DureApi): Store {
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, lastText: {}, lastDelivered: {},
-    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null,
+    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, placeNear: {},
   }
   const listeners = new Set<() => void>()
   let buffer: { ev: Ev; at: number }[] | null = null // 스냅샷을 기다리는 동안 온 이벤트(받은 시각과 함께)
@@ -188,6 +193,14 @@ export function createStore(api: DureApi): Store {
       case 'request-resolved':
         state = { ...state, requests: state.requests.filter(r => r.id !== ev.payload.id) }
         break
+      case 'agent-added': {
+        const { agent, by } = ev.payload
+        state = { ...state, placeNear: { ...state.placeNear, [agent.id]: by } }
+        // 화면이 쓰는 모양(상태·묻지 않음 등)은 스냅샷에 있다 — 이미 받은 스냅샷에 들었으면(기다리는 동안 온 사건) 다시 받지 않는다.
+        // 받는 중이면 끝난 뒤 한 번 더 받는다. 못 받으면 다음 스냅샷(자리 저장 등) 때 들어온다
+        if (!state.agents.some(a => a.id === agent.id)) fetchSnapshot().catch(() => {})
+        break
+      }
       case 'history': {
         const { agentId, item } = ev.payload
         // 새 대화(boundary) — 앞 대화는 버린다. 다시 켜면 엔진의 history() 도 경계 뒤만 주니 같은 화면이 된다(알림 줄 없음)

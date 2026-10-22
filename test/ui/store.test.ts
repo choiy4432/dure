@@ -148,6 +148,54 @@ describe('store events', () => {
     expect(s.getState().requests).toEqual([])
   })
 
+  it('agent-added — 스냅샷을 다시 받아 새 에이전트를 담고, placeNear[새 id] = 만든 에이전트', async () => {
+    let agents = [agent('a'), agent('b')]
+    const { api, emit } = fake({ snapshot: async () => snap({ agents }) })
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().placeNear).toEqual({})
+    expect(api.snapshot).toHaveBeenCalledTimes(1)
+    const n = agent('n')
+    agents = [...agents, n]
+    emit('agent-added', { agent: n, by: 'a' })
+    expect(s.getState().placeNear).toEqual({ n: 'a' })
+    await vi.waitFor(() => expect(s.getState().agents.map(x => x.id)).toEqual(['a', 'b', 'n']))
+    expect(api.snapshot).toHaveBeenCalledTimes(2)
+    // 다음 스냅샷이 와도 만든 쪽은 그대로 — 관계도가 자리를 정할 때까지
+    await s.refresh()
+    expect(s.getState().placeNear).toEqual({ n: 'a' })
+  })
+
+  it('agent-added 가 스냅샷을 기다리는 동안 왔는데 그 스냅샷에 이미 들어 있으면 다시 받지 않는다', async () => {
+    let release!: (s: Snapshot) => void
+    const { api, emit } = fake({ snapshot: () => new Promise<Snapshot>(r => { release = r }) })
+    const s = createStore(api)
+    const p = s.init()
+    const n = agent('n')
+    emit('agent-added', { agent: n, by: 'a' })
+    release(snap({ agents: [agent('a'), n] }))
+    await p
+    expect(s.getState().placeNear).toEqual({ n: 'a' })
+    expect(s.getState().agents.map(x => x.id)).toEqual(['a', 'n'])
+    expect(api.snapshot).toHaveBeenCalledTimes(1)
+  })
+
+  it('agent-added 가 스냅샷을 기다리는 동안 왔는데 그 스냅샷에 아직 없으면 한 번 더 받는다', async () => {
+    let calls = 0
+    const n = agent('n')
+    let release!: (s: Snapshot) => void
+    const { api, emit } = fake({
+      snapshot: () => (++calls === 1 ? new Promise<Snapshot>(r => { release = r }) : Promise.resolve(snap({ agents: [agent('a'), n] }))),
+    })
+    const s = createStore(api)
+    const p = s.init()
+    emit('agent-added', { agent: n, by: 'a' })
+    release(snap({ agents: [agent('a')] }))
+    await p
+    await vi.waitFor(() => expect(s.getState().agents.map(x => x.id)).toEqual(['a', 'n']))
+    expect(api.snapshot).toHaveBeenCalledTimes(2)
+  })
+
   it('text-delta 는 streaming 에 쌓이고 history 가 붙으면 비워진다', async () => {
     const { api, emit } = fake({ history: async () => [note('옛')] })
     const s = createStore(api)

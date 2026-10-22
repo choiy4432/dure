@@ -6,7 +6,7 @@ import type { AgentId, DiffHunk, HistoryItem } from './types';
  * 기록에 남기는 하는 일 입력의 칸 — 화면(renderer lib/toolSummary.ts)이 읽는 것만. 거기서 새 칸을 읽으면 여기도 더한다.
  * 파일 본문·고칠 글·넘김 본문 같은 큰 값은 기록 파일을 키우기만 하고 화면엔 안 쓰인다.
  */
-const KEPT_INPUT = ['file_path', 'notebook_path', 'command', 'pattern', 'url', 'query', 'description', 'to', 'skill'] as const;
+const KEPT_INPUT = ['file_path', 'notebook_path', 'command', 'pattern', 'url', 'query', 'description', 'to', 'skill', 'name'] as const;
 /** 경로 칸 — 넘치면 끝(파일 이름)을 남긴다. 화면은 마지막 조각만 보인다 */
 const PATH_INPUT = new Set<string>(['file_path', 'notebook_path']);
 const INPUT_TEXT_MAX = 500;

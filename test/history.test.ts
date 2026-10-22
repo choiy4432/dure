@@ -91,6 +91,8 @@ test('trimToolInput: 화면이 읽는 칸만 · 글은 500자까지 · 경로는
   });
   expect(trimToolInput({ to: '웹 화면', text: '긴 본문'.repeat(1000) })).toEqual({ to: '웹 화면' });
   expect(trimToolInput({ skill: 'superpowers:brainstorming', args: '긴 인자'.repeat(1000) })).toEqual({ skill: 'superpowers:brainstorming' });
+  // 새 에이전트 만들기 — 하는 일 줄의 대상(새 이름)만. 역할·폴더·첫 할 일은 카드가 승인 요청에서 읽는다
+  expect(trimToolInput({ name: '테스트', role: '시험 담당', folder: 'C:/w/t', task: '긴 할 일'.repeat(1000) })).toEqual({ name: '테스트' });
   expect(trimToolInput({ command: 'npm run build', description: '빌드', timeout: 5000 })).toEqual({
     command: 'npm run build',
     description: '빌드',
@@ -128,6 +130,7 @@ test('trimToolInput: 줄인 입력으로도 하는 일 요약(화면)은 그대�
     ['Agent', { description: '도우미', prompt: 'p' }],
     ['mcp__dure__send_message', { to: '기획', text: '긴 본문'.repeat(500) }],
     ['mcp__dure__list_agents', {}],
+    ['mcp__dure__create_agent', { name: '테스트', role: '시험 담당', folder: 'C:/w/t', task: '긴 할 일'.repeat(500) }],
     ['TodoWrite', { todos: [{ content: 'a' }] }],
     ['AskUserQuestion', { questions: [{ question: '?' }] }],
     ['mcp__other__do_thing', { a: 1 }],

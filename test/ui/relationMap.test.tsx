@@ -72,6 +72,32 @@ describe('RelationMap — 자리', () => {
   })
 })
 
+describe('RelationMap — 에이전트가 만든 새 에이전트의 자리', () => {
+  it('agent-added 로 온 새 에이전트는 만든 카드 가까운 빈 칸(바로 아래)에 놓여 저장된다 — 첫 빈 칸이 아니라', async () => {
+    const handlers: Record<string, ((p: any) => void)[]> = {}
+    ;(window as any).dure.on = (k: string, fn: (p: any) => void) => {
+      ;(handlers[k] ??= []).push(fn)
+      return () => {}
+    }
+    const q = { x: 64 + 256 + 200, y: 64 }
+    snapshot.agents = [agent('p', { pos: { x: 64, y: 64 } }), agent('q', { pos: q })]
+    await renderMap()
+    const n = agent('n')
+    snapshot = { ...snapshot, agents: [...snapshot.agents, n] }
+    await act(async () => { (handlers['agent-added'] ?? []).forEach(f => f({ agent: n, by: 'q' })) })
+    await vi.waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+    // q 바로 아래 칸(세로 칸 사이 = 가장 큰 카드 217 + 64) — 첫 빈 칸이었다면 첫 줄 셋째 칸 {976, 64}
+    expect(updateAgent).toHaveBeenCalledWith('n', { pos: { x: q.x, y: q.y + 217 + 64 } })
+  })
+
+  it('만든 쪽을 모르면(사건을 놓친 새 에이전트) 지금처럼 첫 빈 칸', async () => {
+    snapshot.agents = [agent('p', { pos: { x: 64, y: 64 } }), agent('q', { pos: { x: 520, y: 64 } }), agent('n')]
+    await renderMap()
+    await vi.waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
+    expect(updateAgent).toHaveBeenCalledWith('n', { pos: { x: 976, y: 64 } })
+  })
+})
+
 describe('RelationMap — 요약 칩', () => {
   it('세 칩의 수, 누르면 그 상태의 첫 에이전트를 고른다 · 0 이면 못 누른다', async () => {
     snapshot.agents = [

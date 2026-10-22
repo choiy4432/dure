@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ongoing, requestTarget, requestTitle, toolSummary } from '../../src/renderer/lib/toolSummary'
+import { createAgentPlan, ongoing, requestTarget, requestTitle, toolSummary } from '../../src/renderer/lib/toolSummary'
 
 describe('toolSummary', () => {
   it('파일 도구는 마지막 조각만', () => {
@@ -31,6 +31,11 @@ describe('toolSummary', () => {
     expect(toolSummary('mcp__dure__send_message', { to: '기획', text: 'x' })).toEqual({ verb: '넘김', target: '기획 에게', icon: 'handoff' })
     expect(toolSummary('mcp__dure__list_agents', {})).toMatchObject({ verb: '동료 확인', target: null, icon: 'handoff' })
   })
+  it('새 에이전트 만들기 — 동사 "에이전트 만듦", 대상 = 새 이름', () => {
+    expect(toolSummary('mcp__dure__create_agent', { name: '테스트' })).toEqual({ verb: '에이전트 만듦', target: '테스트', icon: 'handoff' })
+    expect(toolSummary('mcp__dure__create_agent', { name: '테스트', role: '시험', folder: 'C:/w', task: '할 일' }).target).toBe('테스트')
+    expect(toolSummary('mcp__dure__create_agent', {}).target).toBeNull()
+  })
   it('모르는 도구와 잘못된 입력', () => {
     expect(toolSummary('mcp__x__y', {})).toEqual({ verb: '사용', target: 'y', icon: 'other' })
     expect(toolSummary('Foo', null)).toEqual({ verb: '사용', target: 'Foo', icon: 'other' })
@@ -56,6 +61,11 @@ describe('requestTitle', () => {
   it('Agent·Task 는 서브에이전트에게 일을 맡기려', () => {
     expect(requestTitle('기획', 'Agent', { description: '조사' })).toBe('기획이 서브에이전트에게 일을 맡기려 해요')
     expect(requestTitle('기획', 'Task', {})).toBe('기획이 서브에이전트에게 일을 맡기려 해요')
+  })
+
+  it('새 에이전트 만들기는 "새 에이전트를 만들려" — 받침에 따라 이/가', () => {
+    expect(requestTitle('기획', 'mcp__dure__create_agent', {})).toBe('기획이 새 에이전트를 만들려 해요')
+    expect(requestTitle('디자이너', 'mcp__dure__create_agent', { name: '테스트' })).toBe('디자이너가 새 에이전트를 만들려 해요')
   })
 
   it('모르는 도구는 "도구를 쓰려"', () => {
@@ -85,8 +95,24 @@ describe('ongoing', () => {
       읽음: '읽는 중', 만듦: '만드는 중', 수정: '고치는 중', 실행: '실행하는 중', 찾음: '찾는 중',
       '웹에서 찾아봄': '웹에서 찾는 중', '할 일 정리': '할 일 정리하는 중', '서브에이전트에게 맡김': '서브에이전트에게 맡기는 중',
       넘김: '넘기는 중', '동료 확인': '동료 확인하는 중', 물어봄: '묻는 중', '스킬 사용': '스킬 쓰는 중', 사용: '쓰는 중',
+      '에이전트 만듦': '에이전트 만드는 중',
     }
     for (const [verb, want] of Object.entries(table)) expect(ongoing(verb)).toBe(want)
     expect(ongoing('새 동사')).toBe('새 동사 중')
+  })
+})
+
+describe('createAgentPlan', () => {
+  it('만들기 카드의 입력 — 이름·역할·폴더·첫 할 일(없거나 비면 null)', () => {
+    expect(createAgentPlan({ name: '테스트', role: '시험 담당', folder: 'C:\\w\\t', task: '배너 시안' })).toEqual({
+      name: '테스트', role: '시험 담당', folder: 'C:\\w\\t', task: '배너 시안',
+    })
+    expect(createAgentPlan({ name: '테스트', role: '시험 담당', folder: 'C:\\w', task: null }).task).toBeNull()
+    expect(createAgentPlan({ name: '테스트', role: '시험 담당', folder: 'C:\\w', task: '  ' }).task).toBeNull()
+  })
+
+  it('모양이 틀린 입력은 빈 글로 — 화면이 깨지지 않게', () => {
+    expect(createAgentPlan(null)).toEqual({ name: '', role: '', folder: '', task: null })
+    expect(createAgentPlan({ name: 5, role: null, task: {} })).toEqual({ name: '', role: '', folder: '', task: null })
   })
 })

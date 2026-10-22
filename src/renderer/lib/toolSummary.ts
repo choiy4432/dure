@@ -1,3 +1,4 @@
+import type { CreateAgentInput } from '../../engine/types'
 import { josa } from './words'
 
 export type ToolIcon = 'file' | 'edit' | 'run' | 'search' | 'web' | 'handoff' | 'question' | 'other'
@@ -55,6 +56,8 @@ export function toolSummary(name: string, input: unknown): ToolSummary {
     }
     case 'mcp__dure__list_agents':
       return { verb: '동료 확인', target: null, icon: 'handoff' }
+    case 'mcp__dure__create_agent':
+      return { verb: '에이전트 만듦', target: field(input, 'name'), icon: 'handoff' }
     case 'AskUserQuestion':
       return { verb: '물어봄', target: null, icon: 'question' }
     case 'Skill': {
@@ -81,6 +84,7 @@ const INTENT: Record<string, string> = {
   '서브에이전트에게 맡김': '서브에이전트에게 일을 맡기려',
   넘김: '일을 넘기려',
   '동료 확인': '동료를 확인하려',
+  '에이전트 만듦': '새 에이전트를 만들려',
   물어봄: '물어보려',
   '스킬 사용': '스킬을 쓰려',
 }
@@ -106,6 +110,7 @@ const ONGOING: Record<string, string> = {
   '서브에이전트에게 맡김': '서브에이전트에게 맡기는 중',
   넘김: '넘기는 중',
   '동료 확인': '동료 확인하는 중',
+  '에이전트 만듦': '에이전트 만드는 중',
   물어봄: '묻는 중',
   '스킬 사용': '스킬 쓰는 중',
   사용: '쓰는 중',
@@ -137,4 +142,18 @@ export function requestTarget(toolName: string, input: unknown, folder?: string)
     return cmd ? cmd.split(/\r?\n/)[0] : null
   }
   return toolSummary(toolName, input).target
+}
+
+/**
+ * 새 에이전트 만들기 승인 요청(kind 'create-agent')의 입력 — 패널 카드와 관계도 카드의 승인 칸이 읽는다.
+ * 엔진이 정한 모양이지만 승인 요청의 input 은 unknown 이라 글이 아닌 값은 빈 글로(화면이 깨지지 않게). 첫 할 일은 비었으면 null
+ */
+export function createAgentPlan(input: unknown): CreateAgentInput {
+  const task = field(input, 'task')
+  return {
+    name: field(input, 'name') ?? '',
+    role: field(input, 'role') ?? '',
+    folder: field(input, 'folder') ?? '',
+    task: task && task.trim() ? task : null,
+  }
 }

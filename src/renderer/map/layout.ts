@@ -46,13 +46,54 @@ export function placeNew(existing: Point[], cell: Size = CELL): Point {
   }
 }
 
-/** 자리 없는({0,0}) 에이전트마다 차례로 자리를 정한다 — 이미 놓인 카드·앞에서 정한 자리와 겹치지 않게 */
-export function placeMissing(agents: { id: string; pos: Point }[], cell: Size = CELL): Map<string, Point> {
+/**
+ * near 카드 가까이 겹치지 않는 가장 가까운 칸 — 에이전트가 만든 새 에이전트를 만든 쪽 옆에 놓는다.
+ * 칸은 near 에서 격자 간격(칸 + 칸 사이)만큼씩 — 위아래 한 칸(281px)이 옆 한 칸(456px)보다 가까워 아래 → 위 → 오른쪽 → 왼쪽 → 대각선 차례.
+ * 같은 거리면 오른쪽에서 시계 방향으로 먼저 만나는 칸(아래가 위보다, 오른쪽이 왼쪽보다 먼저). {0,0}(자리 없음 뜻)은 고르지 않는다.
+ */
+export function placeNearest(taken: Point[], near: Point, cell: Size = CELL): Point {
+  const sx = cell.w + GAP_X
+  const sy = cell.h + GAP_Y
+  const rects = taken.map(p => ({ ...p, ...cell }))
+  const free = (at: Point) => !isUnplaced(at) && !rects.some(t => overlaps(t, { ...at, ...cell }))
+  // 오른쪽에서 시계 방향(화면은 y 가 아래로 커진다)으로 잰 각 — 같은 거리 칸의 차례
+  const turn = (i: number, j: number) => (Math.atan2(j, i) + 2 * Math.PI) % (2 * Math.PI)
+  for (let r = 1; ; r++) {
+    // 가로·세로 r 칸 안을 본다 — 그 밖의 칸은 (r + 1) 칸 거리 이상이라, 그보다 가까운 빈 칸을 찾으면 그게 가장 가깝다
+    const reach = (r + 1) * Math.min(sx, sy)
+    let best: { at: Point; d: number; t: number } | null = null
+    for (let j = -r; j <= r; j++) {
+      for (let i = -r; i <= r; i++) {
+        if (i === 0 && j === 0) continue
+        const d = Math.hypot(i * sx, j * sy)
+        if (d >= reach) continue
+        const at = { x: near.x + i * sx, y: near.y + j * sy }
+        if (!free(at)) continue
+        const t = turn(i, j)
+        if (!best || d < best.d || (d === best.d && t < best.t)) best = { at, d, t }
+      }
+    }
+    if (best) return best.at
+  }
+}
+
+/**
+ * 자리 없는({0,0}) 에이전트마다 차례로 자리를 정한다 — 이미 놓인 카드·앞에서 정한 자리와 겹치지 않게.
+ * by = 그 에이전트를 만든 에이전트(관계도가 agent-added 사건으로 안다) — 목록에 있으면 그 카드 가까이(placeNearest), 없으면 첫 빈 칸.
+ * 만든 쪽 가까이 놓을 것은 나머지를 다 놓은 뒤에 — 만든 쪽도 자리가 없던 중이면 그 자리가 먼저 정해진다.
+ * 만든 쪽끼리는 목록(만든 차례) 그대로라, 새 에이전트가 또 만든 에이전트도 만든 쪽이 먼저 자리를 받는다.
+ */
+export function placeMissing(agents: { id: string; pos: Point; by?: string }[], cell: Size = CELL): Map<string, Point> {
   const taken = agents.filter(a => !isUnplaced(a.pos)).map(a => a.pos)
   const out = new Map<string, Point>()
-  for (const a of agents) {
+  const known = new Map(agents.map(a => [a.id, a]))
+  const nearOf = (a: { by?: string }) => (a.by !== undefined ? known.get(a.by) : undefined)
+  const order = [...agents.filter(a => !nearOf(a)), ...agents.filter(a => nearOf(a))]
+  for (const a of order) {
     if (!isUnplaced(a.pos)) continue
-    const p = placeNew(taken, cell)
+    const by = nearOf(a)
+    const near = by ? (isUnplaced(by.pos) ? out.get(by.id) : by.pos) : undefined
+    const p = near ? placeNearest(taken, near, cell) : placeNew(taken, cell)
     taken.push(p)
     out.set(a.id, p)
   }

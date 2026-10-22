@@ -311,6 +311,97 @@ describe('권한 카드', () => {
   })
 })
 
+describe('새 에이전트 만들기 카드', () => {
+  const FOLDER = 'C:\\w\\dure\\packages\\test-runner\\fixtures\\very-long-folder-name'
+  const make = (over: Partial<PendingRequest> = {}, input: Record<string, unknown> = {}) =>
+    request({
+      id: 'c1', agentId: 'p', toolName: 'mcp__dure__create_agent', kind: 'create-agent',
+      input: { name: '테스트', role: '시험 담당', folder: FOLDER, task: '배너 시안을 **세 벌** 만들어 주세요', ...input },
+      ...over,
+    })
+  const TITLE = '기획이 새 에이전트를 만들려 해요'
+
+  it('제목 "기획이 새 에이전트를 만들려 해요" · 새 이름(굵게)·역할 · 폴더 전체 경로(고정폭, 말줄임 + title) · 첫 할 일', async () => {
+    snapshot.requests = [make()]
+    await renderPanel('p')
+    const c = card(TITLE)
+    expect(c.querySelector('.ask-t')!.textContent).toBe(TITLE)
+    const who = c.querySelector('.ca-who')!
+    expect(who.querySelector('b')!.textContent).toBe('테스트')
+    expect(who.textContent).toContain('시험 담당')
+    const folder = c.querySelector('.ask-row code')!
+    expect(folder.textContent).toBe(FOLDER)
+    expect(folder.getAttribute('title')).toBe(FOLDER)
+    expect(folder).toHaveClass('trunc')
+    // 첫 할 일 — [만들기]가 이 메시지의 승인이기도 하다. 보낼 쪽 → 받을 쪽과 본문(마크다운, 메시지 카드처럼 접힘)
+    const task = c.querySelector('.ca-task')!
+    expect(task.querySelector('.ca-to')!.textContent).toBe('기획테스트')
+    expect(task.querySelector('.clamp-box.clamp-md .md strong')!.textContent).toBe('세 벌')
+  })
+
+  it("단추는 [만들기] [거절] 둘뿐 — '항상 허용'·'자세히' 없음", async () => {
+    snapshot.requests = [make()]
+    await renderPanel('p')
+    const c = card(TITLE)
+    expect(within(c).getAllByRole('button').map(b => b.textContent)).toEqual(['만들기', '거절'])
+    expect(c.textContent).not.toContain('항상 허용')
+    expect(within(c).getByRole('button', { name: '만들기' })).toHaveClass('pri')
+  })
+
+  it.each([
+    ['만들기', { type: 'allow' }],
+    ['거절', { type: 'deny' }],
+  ] as const)('[%s] → answerRequest(id, %o) · 답을 기다리는 동안 두 단추 모두 막힌다', async (name, decision) => {
+    snapshot.requests = [make()]
+    await renderPanel('p')
+    const c = card(TITLE)
+    await act(async () => { fireEvent.click(within(c).getByRole('button', { name })) })
+    expect(api.answerRequest).toHaveBeenCalledTimes(1)
+    expect(api.answerRequest).toHaveBeenCalledWith('c1', decision)
+    for (const b of within(c).getAllByRole('button')) expect((b as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('첫 할 일이 없으면 그 칸이 없다', async () => {
+    snapshot.requests = [make({}, { task: null })]
+    await renderPanel('p')
+    expect(card(TITLE).querySelector('.ca-task')).toBeNull()
+  })
+
+  it('긴 첫 할 일은 메시지 카드처럼 3줄만 보이고 흐려진다', async () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) { return this.classList.contains('clamp-box') ? 300 : 0 })
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) { return this.classList.contains('clamp-box') ? 54 : 0 })
+    snapshot.requests = [make({}, { task: '긴 줄 '.repeat(200) })]
+    await renderPanel('p')
+    const c = card(TITLE)
+    expect(c.querySelector('.ca-task .clamp-box')).toHaveClass('clamped')
+    expect(within(c).getByRole('button', { name: '더 보기' })).toBeInTheDocument()
+  })
+
+  it('답이 실패하면 엔진 문구를 보여 주고 단추를 다시 연다', async () => {
+    snapshot.requests = [make()]
+    api.answerRequest.mockRejectedValueOnce(new Error('대기 중인 요청이 없습니다: c1'))
+    await renderPanel('p')
+    const c = card(TITLE)
+    const create = within(c).getByRole('button', { name: '만들기' }) as HTMLButtonElement
+    await act(async () => { fireEvent.click(create) })
+    await settle()
+    expect(within(c).getByRole('alert').textContent).toBe('대기 중인 요청이 없습니다: c1')
+    expect(create.disabled).toBe(false)
+  })
+
+  it('관계도 카드의 승인 칸도 같은 제목과 [만들기] [거절] — 요청이 풀리면 둘 다 사라진다', async () => {
+    snapshot.agents = snapshot.agents.map(a => (a.id === 'p' ? { ...a, status: 'awaiting' } : a))
+    snapshot.requests = [make()]
+    await renderPanel('p', 'p')
+    expect(document.querySelector('.nd .ap-t')!.textContent).toBe(TITLE)
+    const box = document.querySelector<HTMLElement>('.nd .ap')!
+    expect(within(box).getAllByRole('button').map(b => b.textContent)).toEqual(['만들기', '거절'])
+    await emit('request-resolved', { id: 'c1', agentId: 'p' })
+    expect(screen.queryByRole('region', { name: TITLE })).toBeNull()
+    expect(document.querySelector('.nd .ap')).toBeNull()
+  })
+})
+
 describe('질문 카드', () => {
   const question = () => request({ id: 'ask1', agentId: 'w', toolName: 'AskUserQuestion', kind: 'question', input: QUESTIONS })
 

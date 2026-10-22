@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { Position, getBezierPath } from '@xyflow/react'
 import {
-  CELL, GAP_X, GAP_Y, MARGIN, NODE_SIZE, curvePoint, edgeEnds, edgePath, isUnplaced, pairBow, placeMissing, placeNew,
+  CELL, GAP_X, GAP_Y, MARGIN, NODE_SIZE, curvePoint, edgeEnds, edgePath, isUnplaced, pairBow, placeMissing, placeNearest, placeNew,
   type Point, type Rect, type Side,
 } from '../../src/renderer/map/layout'
 
@@ -100,6 +100,83 @@ describe('placeMissing', () => {
 
   it('놓을 게 없으면 빈 결과', () => {
     expect(placeMissing([{ id: 'a', pos: { x: 10, y: 20 } }]).size).toBe(0)
+  })
+
+  it('만든 쪽(by)이 있으면 그 카드 가까이(placeNearest), 없으면 지금처럼 첫 빈 칸', () => {
+    const p = { x: MARGIN, y: MARGIN }
+    const q = { x: MARGIN + W + GAP_X, y: MARGIN }
+    const out = placeMissing([
+      { id: 'p', pos: p },
+      { id: 'q', pos: q },
+      { id: 'n', pos: { x: 0, y: 0 }, by: 'q' },
+      { id: 'm', pos: { x: 0, y: 0 } },
+    ])
+    expect(out.get('n')).toEqual({ x: q.x, y: q.y + CH + GAP_Y }) // q 바로 아래 — 첫 빈 칸(p 아래)이 아니라
+    expect(out.get('m')).toEqual(placeNew([p, q])) // 첫 줄 셋째 칸
+    expect(overlaps(out.get('n')!, out.get('m')!, W, CH)).toBe(false)
+  })
+
+  it('만든 쪽도 자리가 없으면 그쪽이 먼저 첫 빈 칸을 받고, 새 에이전트는 그 가까이 — 목록 차례와 상관없이', () => {
+    const out = placeMissing([
+      { id: 'n', pos: { x: 0, y: 0 }, by: 'a' },
+      { id: 'a', pos: { x: 0, y: 0 } },
+    ])
+    expect(out.get('a')).toEqual({ x: MARGIN, y: MARGIN })
+    expect(out.get('n')).toEqual({ x: MARGIN, y: MARGIN + CH + GAP_Y })
+  })
+
+  it('만든 쪽이 목록에 없으면(지워짐·다른 방) 첫 빈 칸', () => {
+    const p = { x: MARGIN, y: MARGIN }
+    expect(placeMissing([{ id: 'p', pos: p }, { id: 'n', pos: { x: 0, y: 0 }, by: 'gone' }]).get('n')).toEqual(placeNew([p]))
+  })
+})
+
+describe('placeNearest', () => {
+  const near = { x: MARGIN + W + GAP_X, y: MARGIN }
+  const SX = W + GAP_X
+  const SY = CH + GAP_Y
+  const at = (i: number, j: number) => ({ x: near.x + i * SX, y: near.y + j * SY })
+
+  it('만든 카드 바로 아래 칸이 비었으면 거기 — 세로 칸 사이(281)가 가로(456)보다 가깝다', () => {
+    expect(placeNearest([near], near)).toEqual(at(0, 1))
+  })
+
+  it('가까운 차례 — 아래 → 위 → 오른쪽 → 왼쪽 → 대각선(같은 거리면 오른쪽·아래가 먼저)', () => {
+    const taken = [near]
+    const order: Point[] = []
+    for (let k = 0; k < 8; k++) {
+      const p = placeNearest(taken, near)
+      order.push(p)
+      taken.push(p)
+    }
+    expect(order).toEqual([at(0, 1), at(0, -1), at(1, 0), at(-1, 0), at(1, 1), at(-1, 1), at(-1, -1), at(1, -1)])
+  })
+
+  it('놓인 카드에 조금만 걸쳐도 그 칸은 건너뛰고, 고른 칸은 어느 카드와도 겹치지 않는다', () => {
+    const dragged = { x: near.x + 200, y: near.y + 300 } // 아래 칸에 걸침
+    const p = placeNearest([near, dragged], near)
+    expect(p).toEqual(at(0, -1))
+    for (const t of [near, dragged]) expect(overlaps(p, t, W, CH)).toBe(false)
+  })
+
+  it('{0,0}(자리 없음 뜻)은 고르지 않는다', () => {
+    const c = { x: SX, y: SY } // 왼쪽 위 대각선 칸이 꼭 {0,0}
+    const taken = [c, { x: c.x, y: c.y + SY }, { x: c.x, y: c.y - SY }, { x: c.x + SX, y: c.y }, { x: c.x - SX, y: c.y }, { x: c.x + SX, y: c.y + SY }, { x: c.x - SX, y: c.y + SY }]
+    const p = placeNearest(taken, c)
+    expect(isUnplaced(p)).toBe(false)
+    expect(p).toEqual({ x: c.x + SX, y: c.y - SY })
+  })
+
+  it('잇달아 20개를 놓아도 서로·만든 카드와 겹치지 않는다', () => {
+    const taken: Point[] = [near]
+    for (let k = 0; k < 20; k++) taken.push(placeNearest(taken, near))
+    for (let i = 0; i < taken.length; i++)
+      for (let j = i + 1; j < taken.length; j++) expect(overlaps(taken[i], taken[j], W, CH)).toBe(false)
+  })
+
+  it('칸 크기를 주면 그 크기로 잰다', () => {
+    const size = { w: 100, h: 50 }
+    expect(placeNearest([{ x: 500, y: 500 }], { x: 500, y: 500 }, size)).toEqual({ x: 500, y: 500 + 50 + GAP_Y })
   })
 })
 
