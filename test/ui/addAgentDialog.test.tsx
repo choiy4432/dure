@@ -20,8 +20,8 @@ beforeEach(() => {
     rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }, { id: 'r2', name: '가을 행사', createdAt: 2 }],
     agents: [
       agent('a1', 'r1', '기획', { x: 64, y: 64 }),
-      agent('a2', 'r1', '웹 화면', { x: 520, y: 64 }),
-      agent('b1', 'r2', '서버', { x: 976, y: 64 }), // 다른 방 — 자리 셈에 들지 않는다
+      agent('a2', 'r1', '웹 화면', { x: 424, y: 64 }),
+      agent('b1', 'r2', '서버', { x: 784, y: 64 }), // 다른 방 — 자리 셈에 들지 않는다
     ],
     messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
   }
@@ -131,8 +131,8 @@ describe('AddAgentDialog', () => {
     expect(store.getState().selectedAgentId).toBe('n1')
     expect(screen.getByRole('complementary', { name: '디자인' })).toBeTruthy()
 
-    const expected = placeNew([{ x: 64, y: 64 }, { x: 520, y: 64 }])
-    expect(expected).toEqual({ x: 976, y: 64 })
+    const expected = placeNew([{ x: 64, y: 64 }, { x: 424, y: 64 }])
+    expect(expected).toEqual({ x: 784, y: 64 })
     // 관계도가 {0,0} 을 보고 또 정해 저장하지 않는다 — 저장은 한 번
     expect(api.updateAgent).toHaveBeenCalledTimes(1)
     expect(api.updateAgent).toHaveBeenCalledWith('n1', { pos: expected })

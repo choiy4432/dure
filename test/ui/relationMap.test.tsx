@@ -79,22 +79,22 @@ describe('RelationMap — 에이전트가 만든 새 에이전트의 자리', ()
       ;(handlers[k] ??= []).push(fn)
       return () => {}
     }
-    const q = { x: 64 + 256 + 200, y: 64 }
+    const q = { x: 64 + 256 + 104, y: 64 }
     snapshot.agents = [agent('p', { pos: { x: 64, y: 64 } }), agent('q', { pos: q })]
     await renderMap()
     const n = agent('n')
     snapshot = { ...snapshot, agents: [...snapshot.agents, n] }
     await act(async () => { (handlers['agent-added'] ?? []).forEach(f => f({ agent: n, by: 'q' })) })
     await vi.waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
-    // q 바로 아래 칸(세로 칸 사이 = 가장 큰 카드 217 + 64) — 첫 빈 칸이었다면 첫 줄 셋째 칸 {976, 64}
+    // q 바로 아래 칸(세로 칸 사이 = 가장 큰 카드 217 + 64) — 첫 빈 칸이었다면 첫 줄 셋째 칸 {784, 64}
     expect(updateAgent).toHaveBeenCalledWith('n', { pos: { x: q.x, y: q.y + 217 + 64 } })
   })
 
   it('만든 쪽을 모르면(사건을 놓친 새 에이전트) 지금처럼 첫 빈 칸', async () => {
-    snapshot.agents = [agent('p', { pos: { x: 64, y: 64 } }), agent('q', { pos: { x: 520, y: 64 } }), agent('n')]
+    snapshot.agents = [agent('p', { pos: { x: 64, y: 64 } }), agent('q', { pos: { x: 424, y: 64 } }), agent('n')]
     await renderMap()
     await vi.waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(1))
-    expect(updateAgent).toHaveBeenCalledWith('n', { pos: { x: 976, y: 64 } })
+    expect(updateAgent).toHaveBeenCalledWith('n', { pos: { x: 784, y: 64 } })
   })
 })
 
@@ -178,6 +178,25 @@ describe('RelationMap — 확대 조절', () => {
     const zc = screen.getByRole('group', { name: '확대 조절' })
     expect(zc.textContent).toContain('100%')
     for (const name of ['축소', '확대', '모두 보기']) expect(screen.getByRole('button', { name })).toBeTruthy()
+  })
+})
+
+describe('RelationMap — 자리 정리', () => {
+  it('자리 정리를 누르면 읽는 순서대로 격자 자리를 저장한다', async () => {
+    // jsdom 은 너비가 0 이라 columnsFor 가 2 칸을 돌려준다
+    snapshot.agents = [
+      agent('c', { pos: { x: 900, y: 300 } }),
+      agent('a', { pos: { x: 100, y: 40 } }),
+      agent('b', { pos: { x: 500, y: 60 } }),
+    ]
+    await renderMap()
+    await act(async () => {})
+    expect(updateAgent).not.toHaveBeenCalled()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '자리 정리' })) })
+    await vi.waitFor(() => expect(updateAgent).toHaveBeenCalledTimes(3))
+    expect(updateAgent).toHaveBeenCalledWith('a', { pos: { x: 64, y: 64 } })
+    expect(updateAgent).toHaveBeenCalledWith('b', { pos: { x: 64 + 256 + 104, y: 64 } })
+    expect(updateAgent).toHaveBeenCalledWith('c', { pos: { x: 64, y: 64 + 217 + 64 } })
   })
 })
 

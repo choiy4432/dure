@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { Position, getBezierPath } from '@xyflow/react'
 import {
-  CELL, GAP_X, GAP_Y, MARGIN, NODE_SIZE, curvePoint, edgeEnds, edgePath, isUnplaced, pairBow, placeMissing, placeNearest, placeNew,
+  AUTO_FIT_MIN, CELL, FIT_PAD_X, GAP_X, GAP_Y, MARGIN, NODE_SIZE, arrange, columnsFor, curvePoint, edgeEnds, edgePath, isUnplaced, pairBow, placeMissing, placeNearest, placeNew,
   type Point, type Rect, type Side,
 } from '../../src/renderer/map/layout'
 
@@ -12,9 +12,9 @@ const CH = CELL.h
 const overlaps = (a: Point, b: Point, w = W, h = H) => a.x < b.x + w && b.x < a.x + w && a.y < b.y + h && b.y < a.y + h
 
 describe('격자 치수', () => {
-  it('바깥 여백 64 · 가로 칸 사이 200(엣지 라벨 알약 양쪽으로 선과 화살촉이 보이게) · 세로 칸 사이 64', () => {
+  it('바깥 여백 64 · 가로 칸 사이 104(촘촘히 — 한눈에 보이게) · 세로 칸 사이 64', () => {
     expect(MARGIN).toBe(64)
-    expect(GAP_X).toBe(200)
+    expect(GAP_X).toBe(104)
     expect(GAP_Y).toBe(64)
   })
 
@@ -24,10 +24,49 @@ describe('격자 치수', () => {
     expect(CELL.h).toBeGreaterThan(NODE_SIZE.h)
   })
 
-  it('승인 칸 카드(304px)와 오른쪽 이웃 사이에도 라벨 알약(약 100px)보다 넓은 틈이 남는다', () => {
+  it('승인 칸 카드(304px)와 오른쪽 이웃 사이에도 틈이 남는다(촘촘해도 겹치지 않게)', () => {
     const a = placeNew([])
     const b = placeNew([a])
-    expect(b.x - (a.x + 304)).toBeGreaterThanOrEqual(150)
+    expect(b.x - (a.x + 304)).toBeGreaterThanOrEqual(48)
+  })
+})
+
+describe('placeNew 간격', () => {
+  it('GAP_X 104 — 새 카드 둘째 칸 x = MARGIN + 256 + 104', () => {
+    expect(placeNew([{ x: MARGIN, y: MARGIN }]).x).toBe(MARGIN + 256 + 104)
+  })
+})
+
+describe('columnsFor', () => {
+  it('columnsFor: 890 → 3, 700 → 2', () => {
+    expect(AUTO_FIT_MIN).toBe(0.85)
+    expect(FIT_PAD_X).toBe(16)
+    expect(columnsFor(890)).toBe(3)
+    expect(columnsFor(700)).toBe(2)
+    expect(columnsFor(0)).toBe(2)
+  })
+})
+
+describe('arrange', () => {
+  const at = (i: number, cols: number) => ({ x: MARGIN + (i % cols) * (W + GAP_X), y: MARGIN + Math.floor(i / cols) * (CH + GAP_Y) })
+  it('arrange: 읽는 순서(같은 줄 = y 차이 CELL.h/2 미만, 줄 안 x 순)로 격자에', () => {
+    const out = arrange([
+      { id: 'd', pos: { x: 10, y: 400 } },
+      { id: 'b', pos: { x: 500, y: 100 } }, // a 와 y 차 100 < 108.5 → 같은 줄
+      { id: 'c', pos: { x: 900, y: 20 } },
+      { id: 'a', pos: { x: 100, y: 0 } },
+    ], 3)
+    expect(out.get('a')).toEqual(at(0, 3))
+    expect(out.get('b')).toEqual(at(1, 3))
+    expect(out.get('c')).toEqual(at(2, 3))
+    expect(out.get('d')).toEqual(at(3, 3))
+  })
+  it('arrange: 2칸이면 셋째 카드가 둘째 줄', () => {
+    const out = arrange([
+      { id: 'a', pos: { x: 0, y: 0 } }, { id: 'b', pos: { x: 300, y: 0 } }, { id: 'c', pos: { x: 600, y: 0 } },
+    ], 2)
+    expect(out.get('c')).toEqual({ x: MARGIN, y: MARGIN + CH + GAP_Y })
+    expect(out.get('b')).toEqual({ x: MARGIN + W + GAP_X, y: MARGIN })
   })
 })
 
@@ -37,13 +76,13 @@ describe('placeNew', () => {
     expect(isUnplaced(placeNew([]))).toBe(false)
   })
 
-  it('3열 격자 — 가로 칸 사이 200px, 세로 줄 간격 = 가장 큰 카드 + 64px', () => {
+  it('3열 격자 — 가로 칸 사이 104px, 세로 줄 간격 = 가장 큰 카드 + 64px', () => {
     const a = placeNew([])
     const b = placeNew([a])
     const c = placeNew([a, b])
     const d = placeNew([a, b, c])
-    expect(b).toEqual({ x: a.x + W + 200, y: a.y })
-    expect(c).toEqual({ x: a.x + 2 * (W + 200), y: a.y })
+    expect(b).toEqual({ x: a.x + W + 104, y: a.y })
+    expect(c).toEqual({ x: a.x + 2 * (W + 104), y: a.y })
     expect(d).toEqual({ x: a.x, y: a.y + 217 + 64 })
   })
 
@@ -79,7 +118,7 @@ describe('placeNew', () => {
   it('칸 크기를 주면 그 크기로 칸을 잡는다', () => {
     const size = { w: 100, h: 50 }
     const a = placeNew([], size)
-    expect(placeNew([a], size)).toEqual({ x: a.x + 100 + 200, y: a.y })
+    expect(placeNew([a], size)).toEqual({ x: a.x + 100 + 104, y: a.y })
   })
 })
 
@@ -140,7 +179,7 @@ describe('placeNearest', () => {
   const corner = { x: MARGIN, y: MARGIN }
   const nonNegative = (p: Point) => p.x >= 0 && p.y >= 0
 
-  it('만든 카드 바로 아래 칸이 비었으면 거기 — 세로 칸 사이(281)가 가로(456)보다 가깝다', () => {
+  it('만든 카드 바로 아래 칸이 비었으면 거기 — 세로 칸 사이(281)가 가로(360)보다 가깝다', () => {
     expect(placeNearest([near], near)).toEqual(at(0, 1))
   })
 

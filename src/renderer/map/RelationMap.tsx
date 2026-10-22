@@ -4,7 +4,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type RefObject,
 } from 'react'
 import {
-  Background, BackgroundVariant, ReactFlow, ReactFlowProvider, applyNodeChanges,
+  Background, BackgroundVariant, ReactFlow, ReactFlowProvider, applyNodeChanges, useReactFlow,
   type EdgeTypes, type NodeChange, type NodeTypes,
 } from '@xyflow/react'
 import { ArrowLeftRight, ArrowRight } from 'lucide-react'
@@ -19,7 +19,7 @@ import { AgentNode, type AgentFlowNode } from './AgentNode'
 import { HandoffEdge, MARKER_TONES, markerId, type HandoffFlowEdge } from './HandoffEdge'
 import { SummaryChips } from './SummaryChips'
 import { FIT_OPTIONS, ZoomControls } from './ZoomControls'
-import { isUnplaced, placeMissing, type Point } from './layout'
+import { arrange, columnsFor, isUnplaced, placeMissing, type Point } from './layout'
 
 const nodeTypes: NodeTypes = { agent: AgentNode }
 const edgeTypes: EdgeTypes = { handoff: HandoffEdge }
@@ -146,6 +146,26 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
       })
   }, [])
 
+  const flow = useReactFlow()
+  // 자리 정리 — 보이는 자리의 읽는 순서대로 격자에 다시 놓는다. 열 수는 지금 너비에 3열이 들어오는지로.
+  // 저장은 끌기 저장과 같다: moved 에 먼저 두어 스토어가 따라오기 전에도 새 자리로 보이게
+  const arrangeAll = useCallback(async () => {
+    const cols = columnsFor(wrap.current?.clientWidth ?? 0)
+    const out = arrange(seats.map(a => ({ id: a.id, pos: posOf(a) })), cols)
+    const todo = seats.filter(a => {
+      const p = out.get(a.id)!
+      const now = posOf(a)
+      return p.x !== now.x || p.y !== now.y
+    })
+    for (const a of todo) moved.current.set(a.id, out.get(a.id)!)
+    setNodes(prev => build(prev))
+    await Promise.allSettled(todo.map(a => window.dure.updateAgent(a.id, { pos: out.get(a.id)! })))
+    try { await getStore().refresh() } catch { /* 못 받으면 이번 실행에선 놓은 자리 그대로 보인다 */ }
+    for (const a of todo) if (moved.current.get(a.id) === out.get(a.id)) moved.current.delete(a.id)
+    // Task 7 에서 자동 맞춤(fitAuto)으로 바뀐다
+    void flow.fitView(FIT_OPTIONS)
+  }, [seats, flow]) // eslint-disable-line react-hooks/exhaustive-deps -- posOf·build 는 seats 와 ref 만 읽는다
+
   const [pair, setPair] = useState<PairAt | null>(null)
   const openPair = useCallback((a: AgentId, b: AgentId, e: MouseEvent) => {
     const r = wrap.current?.getBoundingClientRect()
@@ -240,7 +260,7 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
         <Background variant={BackgroundVariant.Dots} gap={16} size={3} color="var(--dot)" bgColor="var(--canvas)" />
       </ReactFlow>
       <SummaryChips roomId={roomId} />
-      <ZoomControls />
+      <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => {}} />
       {/* 다른 떠 있는 목록처럼 — 닫으면(pair = null) 마지막 모습으로 남아 가라앉는다 */}
       <Presence show={pair !== null}>
         {pair && <PairPopover key={`${pair.a}>${pair.b}`} at={pair} bounds={wrap} onClose={closePair} />}

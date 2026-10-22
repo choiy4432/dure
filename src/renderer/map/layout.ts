@@ -1,4 +1,5 @@
 // 관계도 자리 — 새 에이전트를 놓을 칸과 엣지 끝점 (순수)
+import type { AgentId } from '../../engine/types'
 
 export interface Point {
   x: number
@@ -18,13 +19,42 @@ export const NODE_SIZE: Size = { w: 256, h: 136 }
  * 승인 칸 카드도 같은 256px — 단추는 [허용][거절]과 '패널에서 자세히' 링크가 한 줄에 들어간다.
  */
 export const CELL: Size = { w: NODE_SIZE.w, h: 217 }
-/** 가로 칸 사이 — 이웃 카드 사이 엣지의 라벨 알약(약 90~110px) 양쪽으로 선과 화살촉이 보이게 */
-export const GAP_X = 200
+/** 가로 칸 사이 — 한 화면에 3열이 다 들어와 한눈에 보이도록 촘촘히(엣지 선은 짧아도 알약이 가운데에 놓인다) */
+export const GAP_X = 104
 /** 세로 칸 사이 — 가장 큰 카드 아래로도 이만큼 */
 export const GAP_Y = 64
 /** 격자 바깥 여백 */
 export const MARGIN = 64
 const COLS = 3
+
+/** 맞춤의 좌우 여백(px) — ZoomControls 의 FIT_OPTIONS.padding.x 와 같은 수 */
+export const FIT_PAD_X = 16
+/** 자동 맞춤이 허용하는 가장 작은 배율 — 이보다 작아져야 하면 열을 줄인다 */
+export const AUTO_FIT_MIN = 0.85
+
+/** 관계도 너비에서 3열이 배율 AUTO_FIT_MIN 이상으로 들어오면 3열, 아니면 2열 */
+export function columnsFor(width: number): 2 | 3 {
+  return (width - 2 * FIT_PAD_X) / (3 * CELL.w + 2 * GAP_X) >= AUTO_FIT_MIN ? 3 : 2
+}
+
+/**
+ * 자리 정리 — 지금 보이는 자리의 읽는 순서(위 줄부터, 줄 안은 왼쪽부터)대로 cols 열 격자에 다시 놓는다.
+ * 같은 줄 = 지금 줄의 첫 카드와 y 차이가 CELL.h / 2 미만(손으로 놓은 자리의 들쭉날쭉을 한 줄로 본다).
+ * MARGIN 에서 시작하므로 {0,0}(자리 없음 뜻)이 되지 않는다.
+ */
+export function arrange(cards: { id: AgentId; pos: Point }[], cols: number): Map<AgentId, Point> {
+  const byY = [...cards].sort((a, b) => a.pos.y - b.pos.y)
+  const ordered: typeof cards = []
+  for (let i = 0; i < byY.length; ) {
+    let j = i + 1
+    while (j < byY.length && byY[j].pos.y - byY[i].pos.y < CELL.h / 2) j++
+    ordered.push(...byY.slice(i, j).sort((a, b) => a.pos.x - b.pos.x))
+    i = j
+  }
+  return new Map(
+    ordered.map((c, i) => [c.id, { x: MARGIN + (i % cols) * (CELL.w + GAP_X), y: MARGIN + Math.floor(i / cols) * (CELL.h + GAP_Y) }]),
+  )
+}
 
 const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 
@@ -32,7 +62,7 @@ const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y
 export const isUnplaced = (p: Point) => p.x === 0 && p.y === 0
 
 /**
- * 새 에이전트 자리 — 3열 격자(가로 칸 사이 200px · 세로 64px)에서 놓인 카드와 겹치지 않는 첫 칸.
+ * 새 에이전트 자리 — 3열 격자(가로 칸 사이 104px · 세로 64px)에서 놓인 카드와 겹치지 않는 첫 칸.
  * 이미 저장된 자리는 건드리지 않는다 — 새로 놓을 때만 이 격자를 쓴다.
  */
 export function placeNew(existing: Point[], cell: Size = CELL): Point {
@@ -48,7 +78,7 @@ export function placeNew(existing: Point[], cell: Size = CELL): Point {
 
 /**
  * near 카드 가까이 겹치지 않는 가장 가까운 칸 — 에이전트가 만든 새 에이전트를 만든 쪽 옆에 놓는다.
- * 칸은 near 에서 격자 간격(칸 + 칸 사이)만큼씩 — 위아래 한 칸(281px)이 옆 한 칸(456px)보다 가까워 아래 → 위 → 오른쪽 → 왼쪽 → 대각선 차례.
+ * 칸은 near 에서 격자 간격(칸 + 칸 사이)만큼씩 — 위아래 한 칸(281px)이 옆 한 칸(360px)보다 가까워 아래 → 위 → 오른쪽 → 왼쪽 → 대각선 차례.
  * 같은 거리면 오른쪽에서 시계 방향으로 먼저 만나는 칸(아래가 위보다, 오른쪽이 왼쪽보다 먼저). {0,0}(자리 없음 뜻)은 고르지 않는다.
  * 같은 둘레(아래 r) 안에선 음수 아닌 칸(x ≥ 0 · y ≥ 0)이 먼저다 — 첫 줄 카드의 '위'처럼 처음 맞춘 화면 밖(왼쪽·위)으로 가지 않게.
  * 그 둘레에 음수 아닌 빈 칸이 없을 때만 음수 칸.
