@@ -333,7 +333,7 @@ export function RoomSwitcher() {
   )
 }
 
-/** 목록 줄 오른쪽의 할 일 수 — 승인·질문은 앰버, 메시지·묶음은 빨강, 0 인 쪽은 안 쓴다 */
+/** 목록 줄 오른쪽의 할 일 수 — 승인·질문은 앰버, 메시지·묶음은 빨강, 0 인 쪽은 안 쓴다. 색만으로는 못 읽으니 숫자 앞에 보이지 않는 이름을 둔다 */
 function RoomTodo({ t }: { t: { asks: number; messages: number; held: number } | undefined }) {
   if (!t) return null
   const unread = t.messages + t.held
@@ -342,12 +342,14 @@ function RoomTodo({ t }: { t: { asks: number; messages: number; held: number } |
       {t.asks > 0 && (
         <span className="rs-todo a">
           <span className="dot a" aria-hidden="true" />
+          <span className="sr-only">내 승인 필요 </span>
           {t.asks}
         </span>
       )}
       {unread > 0 && (
         <span className="rs-todo r">
           <span className="dot r" aria-hidden="true" />
+          <span className="sr-only">받은 메시지 </span>
           {unread}
         </span>
       )}

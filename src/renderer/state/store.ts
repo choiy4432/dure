@@ -414,6 +414,15 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     }
   }
 
+  // 창이 다시 초점을 받으면 — 고른 에이전트의 대화가 지금 보이니 '끝남 · 새 결과' 를 지운다(초점이 없을 땐 못 본 것이라 남겼다).
+  // 초점 없는 사이 고른 것도 같은 길로 풀린다. DOM 이 없는 환경(엔진 시험 등)에선 건너뛴다
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('focus', () => {
+      const id = state.selectedAgentId
+      if (id && id in state.fresh) set({ ...state, fresh: without(state.fresh, id) })
+    })
+  }
+
   return {
     getState: () => state,
     subscribe(fn) {

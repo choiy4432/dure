@@ -181,6 +181,31 @@ describe('RelationMap — 확대 조절', () => {
   })
 })
 
+describe('RelationMap — +/- 도 사용자 조작', () => {
+  afterEach(() => { vi.doUnmock('../../src/renderer/map/fitPolicy'); vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+  it('확대(+)를 누른 뒤 창 크기가 바뀌어도 자동 맞춤으로 되돌리지 않는다', async () => {
+    const reasons: { reason: string; fit: boolean }[] = []
+    vi.doMock('../../src/renderer/map/fitPolicy', async () => {
+      const actual = await vi.importActual<typeof import('../../src/renderer/map/fitPolicy')>('../../src/renderer/map/fitPolicy')
+      return { ...actual, fitPolicy: (st: any, reason: any) => { const r = actual.fitPolicy(st, reason); reasons.push({ reason, fit: r.fit }); return r } }
+    })
+    // jsdom 에는 ResizeObserver 가 없다 — 알림을 손으로 보낸다
+    const observers: (() => void)[] = []
+    vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { observers.push(() => { try { cb() } catch { /* React Flow 쪽 알림은 항목이 필요해 던질 수 있다 */ } }) } observe() {} unobserve() {} disconnect() {} })
+    let w = 800
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => w)
+    snapshot.agents = [agent('a', { pos: { x: 64, y: 64 } })]
+    await renderMap()
+    fireEvent.click(screen.getByRole('button', { name: '확대' }))
+    expect(reasons.at(-1)).toEqual({ reason: 'user-move', fit: false })
+    w = 600
+    act(() => observers.forEach(f => f()))
+    await vi.waitFor(() => expect(reasons.at(-1)?.reason).toBe('resize'))
+    expect(reasons.at(-1)?.fit).toBe(false)
+  })
+})
+
 describe('RelationMap — 자리 정리', () => {
   it('자리 정리를 누르면 읽는 순서대로 격자 자리를 저장한다', async () => {
     // jsdom 은 너비가 0 이라 columnsFor 가 2 칸을 돌려준다

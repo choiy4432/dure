@@ -24,10 +24,10 @@ describe('격자 치수', () => {
     expect(CELL.h).toBeGreaterThan(NODE_SIZE.h)
   })
 
-  it('승인 칸 카드(304px)와 오른쪽 이웃 사이에도 틈이 남는다(촘촘해도 겹치지 않게)', () => {
+  it('이웃한 카드(256px) 사이에 GAP_X 이상의 틈이 남는다(촘촘해도 겹치지 않게)', () => {
     const a = placeNew([])
     const b = placeNew([a])
-    expect(b.x - (a.x + 304)).toBeGreaterThanOrEqual(48)
+    expect(b.x - (a.x + W)).toBeGreaterThanOrEqual(GAP_X)
   })
 })
 

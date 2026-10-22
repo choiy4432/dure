@@ -38,6 +38,7 @@ describe('TodoButton', () => {
     await renderButton()
     const b = screen.getByRole('button', { name: /할 일 3/ })
     expect(b.textContent).toBe('할 일 3')
+    expect(b.getAttribute('aria-label')).toBe('할 일 3개 · 내 승인 필요 있음')
     expect(b.querySelector('.dot.a')).not.toBeNull()
     expect(b.querySelector('.dot.r')).toBeNull()
   })
@@ -47,6 +48,7 @@ describe('TodoButton', () => {
     await renderButton()
     const b = screen.getByRole('button', { name: /할 일 1/ })
     expect(b.querySelector('.dot.r')).not.toBeNull()
+    expect(b.getAttribute('aria-label')).toBe('할 일 1개 · 받은 메시지만')
   })
 
   it('0 이면 할 일만 흐리게', async () => {

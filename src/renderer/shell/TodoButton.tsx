@@ -16,6 +16,8 @@ export function TodoButton() {
       type="button"
       className={`todo${none ? ' muted' : ''}`}
       aria-pressed={v.selected === null}
+      // 점 색의 뜻을 화면 읽기 프로그램에도 — 보이는 글은 '할 일 N' 그대로
+      aria-label={none ? undefined : `할 일 ${t.total}개 · ${t.asksTotal > 0 ? '내 승인 필요 있음' : '받은 메시지만'}`}
       onClick={() => getStore().selectAgent(null)}
     >
       {!none && <span className={`dot ${t.asksTotal > 0 ? 'a' : 'r'}`} aria-hidden="true" />}

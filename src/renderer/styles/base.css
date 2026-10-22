@@ -1220,7 +1220,8 @@ code {
 }
 
 .op.top {
-  top: 16px;
+  /* 위 가운데에는 요약 칩(왼쪽 16px 부터 약 400px)이 닿는다 — 그 아래로 내린다 */
+  top: 56px;
   left: 50%;
   transform: translateX(-50%);
 }

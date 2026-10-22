@@ -11,8 +11,12 @@ export const FIT_OPTIONS = { maxZoom: 1, padding: { top: '72px', bottom: '64px',
 
 const EPS = 0.001
 
-/** 관계도 왼쪽 아래 — 축소 · 배율 · 확대 · 모두 보기 · 자리 정리 */
-export function ZoomControls({ onArrange, onFitAll }: { onArrange: () => void; onFitAll: () => void }) {
+/**
+ * 관계도 왼쪽 아래 — 축소 · 배율 · 확대 · 모두 보기 · 자리 정리
+ * +/- 는 d3 전환이라 이벤트가 null 이어서 RelationMap 의 onMoveStart/End 가 사용자 조작으로 못 잡는다 —
+ * 그래서 onUserZoom 으로 직접 알려, 이후 창 크기가 바뀌어도 85% 맞춤으로 되돌아가지 않게 한다.
+ */
+export function ZoomControls({ onArrange, onFitAll, onUserZoom }: { onArrange: () => void; onFitAll: () => void; onUserZoom: () => void }) {
   const zoom = useStore(s => s.transform[2])
   const min = useStore(s => s.minZoom)
   const max = useStore(s => s.maxZoom)
@@ -21,11 +25,11 @@ export function ZoomControls({ onArrange, onFitAll }: { onArrange: () => void; o
 
   return (
     <div className="zc" role="group" aria-label="확대 조절">
-      <button type="button" className="ib" aria-label="축소" title="축소" disabled={zoom <= min + EPS} onClick={() => void flow.zoomOut({ duration: duration() })}>
+      <button type="button" className="ib" aria-label="축소" title="축소" disabled={zoom <= min + EPS} onClick={() => { void flow.zoomOut({ duration: duration() }); onUserZoom() }}>
         <Minus className="i" />
       </button>
       <span className="zc-v">{Math.round(zoom * 100)}%</span>
-      <button type="button" className="ib" aria-label="확대" title="확대" disabled={zoom >= max - EPS} onClick={() => void flow.zoomIn({ duration: duration() })}>
+      <button type="button" className="ib" aria-label="확대" title="확대" disabled={zoom >= max - EPS} onClick={() => { void flow.zoomIn({ duration: duration() }); onUserZoom() }}>
         <Plus className="i" />
       </button>
       <span className="vr" aria-hidden="true" />

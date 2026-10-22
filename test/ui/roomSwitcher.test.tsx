@@ -303,8 +303,9 @@ describe('RoomSwitcher — 할 일 수', () => {
     await renderApp()
     const list = openList()
     const row = list.querySelector<HTMLElement>('[data-nav="r2"]')!
-    expect(row.querySelector('.rs-todo.a')?.textContent).toBe('2')
-    expect(row.querySelector('.rs-todo.r')?.textContent).toBe('2')
+    // 색만으로 구분하지 않는다 — 숫자 앞에 보이지 않는 이름
+    expect(row.querySelector('.rs-todo.a')?.textContent).toBe('내 승인 필요 2')
+    expect(row.querySelector('.rs-todo.r')?.textContent).toBe('받은 메시지 2')
     const quiet = list.querySelector<HTMLElement>('[data-nav="r3"]')!
     expect(quiet.querySelector('.rs-todo')).toBeNull()
   })

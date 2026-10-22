@@ -938,6 +938,18 @@ describe('store 끝남 · 새 결과', () => {
     expect(s.getState().fresh).toEqual({ a: 7 })
   })
 
+  it('초점 없을 때 쌓인 고른 에이전트의 fresh 는 창이 초점을 되찾으면 지워진다(다른 에이전트 것은 그대로)', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api, { hasFocus: () => false })
+    await s.init()
+    s.selectAgent('a')
+    send(emit, 'a', result(7))
+    send(emit, 'b', result(8))
+    expect(s.getState().fresh).toEqual({ a: 7, b: 8 })
+    window.dispatchEvent(new Event('focus'))
+    expect(s.getState().fresh).toEqual({ b: 8 })
+  })
+
   it('고른 에이전트 + 초점 있음 → fresh 없음', async () => {
     const { api, emit } = fake()
     const s = createStore(api, { hasFocus: () => true })

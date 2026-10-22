@@ -327,7 +327,7 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
       </ReactFlow>
       <SummaryChips roomId={roomId} />
       <OffscreenPill roomId={roomId} nodes={nodes} wrap={wrap} />
-      <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => fitOn('fit-all')} />
+      <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => fitOn('fit-all')} onUserZoom={() => fitOn('user-move')} />
       {/* 다른 떠 있는 목록처럼 — 닫으면(pair = null) 마지막 모습으로 남아 가라앉는다 */}
       <Presence show={pair !== null}>
         {pair && <PairPopover key={`${pair.a}>${pair.b}`} at={pair} bounds={wrap} onClose={closePair} />}
