@@ -273,6 +273,21 @@ describe('encode', () => {
     });
   });
 
+  test('encodeUser: U+2028·U+2029 는 이스케이프해 한 줄로 — 받는 쪽이 줄 끝으로 읽어 쪼개지 않게', () => {
+    const text = '앞\u2028가운데\u2029뒤';
+    const s = encodeUser([{ type: 'text', text }]);
+    expect(s.slice(0, -1)).not.toMatch(/[\u2028\u2029]/);
+    expect(s).toContain('\\u2028');
+    expect(s).toContain('\\u2029');
+    expect(JSON.parse(s).message.content[0].text).toBe(text);
+  });
+
+  test('encodeControl: U+2028·U+2029 도 이스케이프', () => {
+    const s = encodeControl('r1', { subtype: 'set_model', model: 'a\u2028b' });
+    expect(s.slice(0, -1)).not.toMatch(/[\u2028\u2029]/);
+    expect(JSON.parse(s).request.model).toBe('a\u2028b');
+  });
+
   test('encodeControl', () => {
     const s = encodeControl('r9', { subtype: 'set_model', model: 'sonnet' });
     expect(s.endsWith('\n')).toBe(true);

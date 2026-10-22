@@ -173,15 +173,23 @@ function parseObject(obj: any): StreamEvent {
   }
 }
 
+/** 줄·문단 구분자(U+2028·U+2029) — JSON.stringify 는 그대로 두지만, 받는 쪽이 줄 끝으로 읽으면(Node readline 등) 한 줄이 쪼개진다 */
+const LINE_SEPARATORS = /[\p{Zl}\p{Zp}]/gu;
+
+/** 보내는 한 줄 JSON 의 구분자를 JSON 이스케이프(백슬래시 u2028·u2029)로 — JSON 으로는 같은 글이다 */
+function escapeSeparators(json: string): string {
+  return json.replace(LINE_SEPARATORS, (c) => `\\u${c.charCodeAt(0).toString(16)}`);
+}
+
 export function encodeUser(parts: UserPart[]): string {
   const content = parts.map((p) =>
     p.type === 'text'
       ? { type: 'text', text: p.text }
       : { type: 'image', source: { type: 'base64', media_type: p.mediaType, data: p.base64 } },
   );
-  return JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n';
+  return escapeSeparators(JSON.stringify({ type: 'user', message: { role: 'user', content } })) + '\n';
 }
 
 export function encodeControl(requestId: string, req: ControlRequest): string {
-  return JSON.stringify({ type: 'control_request', request_id: requestId, request: req }) + '\n';
+  return escapeSeparators(JSON.stringify({ type: 'control_request', request_id: requestId, request: req })) + '\n';
 }
