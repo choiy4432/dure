@@ -258,6 +258,17 @@ describe('권한 카드', () => {
     expect(api.answerRequest).toHaveBeenCalledWith('q1', decision)
   })
 
+  it('PermissionCard inInbox — 항상 허용 없음, 대화 보기', async () => {
+    const { PermissionCard } = await import('../../src/renderer/panel/cards/PermissionCard')
+    const { getStore } = await import('../../src/renderer/state/store')
+    await act(async () => { await getStore().init() })
+    render(<PermissionCard request={request()} agent={{ name: '디자인', folder: 'C:\w' }} now={Date.now()} inInbox />)
+    expect(screen.queryByRole('button', { name: '이 에이전트에선 항상 허용' })).toBeNull()
+    expect(screen.getByRole('button', { name: '허용' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '대화 보기' }))
+    expect(getStore().getState().selectedAgentId).toBe('d')
+  })
+
   it('제목은 관계도 카드와 같은 표 — 만들기는 "파일을 만들려", 명령은 "명령을 실행하려"', async () => {
     snapshot.requests = [
       request({ id: 'a', toolName: 'Write', input: { file_path: 'C:\\w\\src\\styles\\tokens.css', content: 'x' } }),

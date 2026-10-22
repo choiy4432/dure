@@ -20,7 +20,7 @@ interface Question {
 const text = (v: unknown) => (typeof v === 'string' ? v : '')
 
 /** AskUserQuestion 입력 — { questions: [{ question, header, options: [{ label, description }], multiSelect }] }. 모양이 다른 것은 건너뛴다 */
-function readQuestions(input: unknown): Question[] {
+export function readQuestions(input: unknown): Question[] {
   const list = (input as { questions?: unknown } | null)?.questions
   if (!Array.isArray(list)) return []
   return list.flatMap((q): Question[] => {

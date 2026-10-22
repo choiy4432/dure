@@ -1315,20 +1315,8 @@ code {
 
 /* ── 에이전트 패널 ───────────────────────────────── */
 
-/* 고른 에이전트가 없을 때 */
-.pnl-hint {
-  flex: 1;
-  display: grid;
-  place-items: center;
-  margin: 0;
-  padding: 24px;
-  font-size: 13px;
-  line-height: 18px;
-  color: var(--muted);
-  text-align: center;
-}
-
 /* 머리(시안 .ph) */
+
 .ph {
   flex: none;
   padding: 16px 20px;
@@ -3974,4 +3962,130 @@ code {
   overflow: hidden;
   clip-path: inset(50%);
   white-space: nowrap;
+}
+
+/* ── 내가 할 일(아무 에이전트도 안 골랐을 때의 패널) ─────────────────── */
+.inbox {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 20px;
+}
+
+.ib-h {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 20px 20px 0;
+}
+
+.ib-h b {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 700;
+}
+
+.ib-h span {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ib-empty {
+  margin: 0;
+  padding: 24px 20px 0;
+}
+
+.ib-empty-t,
+.ib-empty-d {
+  margin: 0;
+}
+
+.ib-empty-t {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 700;
+}
+
+.ib-empty-d {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+/* 항목 안 한 줄 설명(질문 첫 줄·새 에이전트 이름 · 역할·새 결과 두 줄) */
+.ib-line {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.pin.ib-fresh {
+  background: var(--bg);
+}
+
+/* 묶음 머리 — 새 결과·지금 하는 일 */
+.ib-sub {
+  margin: 20px 20px 0;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.ib-runs {
+  margin: 4px 0 0;
+  padding: 0 12px;
+  list-style: none;
+}
+
+.ib-run button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: left;
+  border-radius: var(--radius-box);
+}
+
+.ib-run button:hover {
+  background: var(--subtle);
+}
+
+.ib-run b {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.ib-word {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-3);
+}
+
+.ib-run .pin-t {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ib-other {
+  display: block;
+  margin: 20px 20px 0;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--primary-text);
+}
+
+.ib-other:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }

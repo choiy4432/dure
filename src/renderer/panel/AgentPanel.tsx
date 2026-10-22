@@ -17,6 +17,7 @@ import { ChatList } from './ChatList'
 import { Composer } from './Composer'
 import { PanelTabs, ViewShown, panelId, tabId } from './PanelTabs'
 import { SubagentMap } from './SubagentMap'
+import { Inbox } from './Inbox'
 
 const IDLE: Described = { state: 'idle' }
 
@@ -243,7 +244,7 @@ export function AgentPanel() {
   if (!sel) {
     return (
       <aside className="pnl" aria-label="에이전트">
-        <p className="pnl-hint">관계도에서 에이전트를 골라 보세요</p>
+        <Inbox />
       </aside>
     )
   }

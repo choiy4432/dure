@@ -81,7 +81,7 @@ const modelChip = () => screen.getByRole('button', { name: /^모델/ }) as HTMLB
 describe('AgentPanel — 고른 에이전트가 없을 때', () => {
   it('조용한 안내만, 패널 이름은 에이전트', async () => {
     await renderPanel(null)
-    expect(screen.getByText('관계도에서 에이전트를 골라 보세요')).toBeTruthy()
+    expect(screen.getByText('지금 할 일이 없어요')).toBeTruthy()
     expect(screen.getByRole('complementary', { name: '에이전트' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: '멈추기' })).toBeNull()
     expect(api.describe).not.toHaveBeenCalled()
@@ -362,7 +362,7 @@ describe('AgentMenu', () => {
     expect(api.removeAgent).toHaveBeenCalledTimes(1)
     expect(api.removeAgent).toHaveBeenCalledWith('w')
     expect(store.getState().selectedAgentId).toBeNull()
-    expect(screen.getByText('관계도에서 에이전트를 골라 보세요')).toBeTruthy()
+    expect(screen.getByText('지금 할 일이 없어요')).toBeTruthy()
   })
 
   it('지우기에 실패하면 대화상자에 엔진 문구', async () => {

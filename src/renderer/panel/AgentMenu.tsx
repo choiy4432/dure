@@ -60,7 +60,7 @@ export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
   const remove = async () => {
     await window.dure.removeAgent(agent.id)
     setAsk(null)
-    // 지운 에이전트는 스냅샷에서 빠지고 선택도 풀린다 — 패널은 '골라 보세요' 로
+    // 지운 에이전트는 스냅샷에서 빠지고 선택도 풀린다 — 패널은 '내가 할 일' 로
     await getStore().refresh().catch(e => onError(errorMessage(e)))
   }
 

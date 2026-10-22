@@ -3,6 +3,7 @@ import { ChevronDown } from 'lucide-react'
 import type { Decision, PendingRequest } from '../../../engine/types'
 import { requestTarget, requestTitle } from '../../lib/toolSummary'
 import { ago } from '../../lib/words'
+import { getStore } from '../../state/store'
 import { useCall } from './useCall'
 import { useMotion } from '../../lib/presence'
 import { MOTION } from '../../lib/motion'
@@ -24,10 +25,12 @@ interface Props {
   request: PendingRequest
   agent: { name: string; folder: string }
   now: number
+  /** '내가 할 일' 목록 안의 카드 — '항상 허용'은 에이전트 패널에서만(여기선 그 대신 대화 보기) */
+  inInbox?: boolean
 }
 
 /** 권한 카드 — 관계도 카드의 앰버 칸과 같은 제목(서브에이전트가 물은 것이면 그렇다고)·대상, 자세히(입력 접힘) · [허용] [거절] · 항상 허용 */
-export function PermissionCard({ request, agent, now }: Props) {
+export function PermissionCard({ request, agent, now, inInbox = false }: Props) {
   const { busy, error, call } = useCall()
   const root = useRef<HTMLElement>(null)
   useMotion(root, MOTION.line)
@@ -63,9 +66,16 @@ export function PermissionCard({ request, agent, now }: Props) {
         <button type="button" className="btn sec sm" disabled={busy} onClick={() => answer({ type: 'deny' })}>
           거절
         </button>
-        <button type="button" className="lk" disabled={busy} onClick={() => answer({ type: 'allow-always' })}>
-          이 에이전트에선 항상 허용
-        </button>
+        {inInbox ? (
+          // 목록에서 눈에 안 띄게 영구 허용까지 하지 않게 — 대화를 보고 정하도록 그 에이전트 패널로 보낸다
+          <button type="button" className="lk" onClick={() => getStore().selectAgent(request.agentId)}>
+            대화 보기
+          </button>
+        ) : (
+          <button type="button" className="lk" disabled={busy} onClick={() => answer({ type: 'allow-always' })}>
+            이 에이전트에선 항상 허용
+          </button>
+        )}
       </div>
       {error && (
         <p className="pin-err" role="alert">
