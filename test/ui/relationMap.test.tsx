@@ -17,7 +17,7 @@ beforeEach(() => {
   vi.resetModules()
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }, { id: 'r2', name: '다른 방', createdAt: 2 }],
-    agents: [], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
+    agents: [], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
   }
   // 엔진처럼 — 자리를 저장하면 다음 스냅샷에 그 자리가 들어 있다
   updateAgent = vi.fn(async (id: string, p: { pos?: { x: number; y: number } }) => {

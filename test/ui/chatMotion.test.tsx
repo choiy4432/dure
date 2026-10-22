@@ -29,7 +29,7 @@ beforeEach(() => {
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '방', createdAt: 1 }],
     agents: [agent('w'), agent('p')],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
   }
   history = vi.fn(async (id: string) => (id === 'w' ? [say(1, '하나'), reply(2, '둘')] : [say(1, '기획')]))
   ;(window as any).dure = {

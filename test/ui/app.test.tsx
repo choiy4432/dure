@@ -12,7 +12,7 @@ let snapshot: Snapshot
 beforeEach(() => {
   vi.resetModules()
   localStorage.clear()
-  snapshot = { claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null }
+  snapshot = { claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null }
   ;(window as any).dure = {
     snapshot: async () => snapshot, history: async () => [], on: () => () => {}, updateAgent: async () => ({}),
   }

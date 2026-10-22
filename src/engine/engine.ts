@@ -13,7 +13,7 @@ import { Permissions } from './permissions';
 import { DENY } from '../shared/denyTexts';
 import { josa } from '../shared/josa';
 import { Router, AUTO_CHAIN_LIMIT } from './router';
-import { EFFORT_LEVELS, type EffortLevel } from './types';
+import { EFFORT_LEVELS, type EffortLevel, type NotifyPrefs } from './types';
 import { toContextUsage } from './usage';
 import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
 import type {
@@ -95,6 +95,10 @@ export interface Engine extends EventEmitter {
   setAutoChainLimit(n: number): void;
   autoChainLimit(): number;
   allowBypass(): boolean;
+  /** Windows 알림 설정 — settings.json 의 notifyAsks(기본 true)·notifyFinished(기본 false). 불리언이 아니면 기본값 */
+  notify(): NotifyPrefs;
+  /** 바꾼 칸만 settings.json 에 남긴다 — 안 넘긴 칸은 그대로 */
+  setNotify(p: Partial<NotifyPrefs>): void;
   /**
    * 저장 + (끄면) 모든 에이전트 bypassOn=false 저장 — 켜져 있던 에이전트의 살아 있는 세션은 내 Claude 설정의 기본 모드로
    * 돌린다(다시 띄우지 않는다). 다음에 띄울 때는 옵션 없이
@@ -412,7 +416,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private settingsFile() { return path.join(this.o.dataDir, 'settings.json'); }
 
   /** 설정 파일 — 없거나 깨졌으면 빈 객체 */
-  private readSettings(): { autoChainLimit?: unknown; allowBypass?: unknown } {
+  private readSettings(): { autoChainLimit?: unknown; allowBypass?: unknown; notifyAsks?: unknown; notifyFinished?: unknown } {
     try {
       const raw = JSON.parse(fs.readFileSync(this.settingsFile(), 'utf8'));
       return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
@@ -422,7 +426,7 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /** 있던 값은 그대로 두고 patch 만 덮어 쓴다 */
-  private writeSettings(patch: { autoChainLimit?: number; allowBypass?: boolean }): void {
+  private writeSettings(patch: { autoChainLimit?: number; allowBypass?: boolean; notifyAsks?: boolean; notifyFinished?: boolean }): void {
     const file = this.settingsFile();
     fs.mkdirSync(this.o.dataDir, { recursive: true });
     fs.writeFileSync(`${file}.tmp`, JSON.stringify({ ...this.readSettings(), ...patch }, null, 2));
@@ -451,6 +455,23 @@ class EngineImpl extends EventEmitter implements Engine {
     for (const a of this.store.agents()) this.emitFlags(a.id); // bySettings 가 허용에 따라 바뀐다
     // 내 기본 모드로 — 옵션으로 떠 있는 세션도 다시 띄우지 않는다(옵션만으론 bypass 가 아니다)
     await Promise.all(targets.map((a) => this.applyBypass(a.id, false)));
+  }
+
+  /** 켜고 끄는 일이 드물어 캐시 없이 파일을 읽는다 — 값이 어디에도 두 벌로 남지 않는다 */
+  notify(): NotifyPrefs {
+    const s = this.readSettings();
+    return {
+      asks: typeof s.notifyAsks === 'boolean' ? s.notifyAsks : true,
+      finished: typeof s.notifyFinished === 'boolean' ? s.notifyFinished : false,
+    };
+  }
+
+  setNotify(p: Partial<NotifyPrefs>): void {
+    // 렌더러에서 온 값이라 불리언인 칸만 받는다 — 바꾼 칸만 쓰므로 기본값 그대로인 칸은 파일에 남지 않는다
+    const patch: { notifyAsks?: boolean; notifyFinished?: boolean } = {};
+    if (typeof p?.asks === 'boolean') patch.notifyAsks = p.asks;
+    if (typeof p?.finished === 'boolean') patch.notifyFinished = p.finished;
+    if (Object.keys(patch).length > 0) this.writeSettings(patch);
   }
 
   autoChainLimit(): number { return this.limit; }

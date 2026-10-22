@@ -7,6 +7,12 @@ export interface Room {
   createdAt: number;
 }
 
+/** Windows 알림 — asks: 승인·질문이 올 때 · finished: 일을 끝냈을 때(창이 가려져 있을 때만 뜬다) */
+export interface NotifyPrefs {
+  asks: boolean;
+  finished: boolean;
+}
+
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 

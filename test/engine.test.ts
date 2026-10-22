@@ -4002,3 +4002,24 @@ test('미리 띄우기: 묻지 않음을 켜려고 다시 띄운 세션도 미�
   e.setSelected(b.id);
   await until('다시 띄운 A 가 꺼짐', () => !isAlive(second.pid));
 });
+
+test('notify 기본 asks true·finished false — setNotify 가 settings.json 에 남고 다시 켜도 그대로', async () => {
+  const e = await start();
+  expect(e.notify()).toEqual({ asks: true, finished: false });
+  e.setNotify({ finished: true });
+  expect(e.notify()).toEqual({ asks: true, finished: true });
+  e.setAutoChainLimit(7);
+  // 바꾼 칸만 파일에 — asks 는 건드리지 않았으니 없고, 다른 설정을 지우지도 않는다
+  expect(JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'))).toEqual({ autoChainLimit: 7, notifyFinished: true });
+  e.setNotify({ asks: false });
+  await e.shutdown();
+  const e2 = await start();
+  expect(e2.notify()).toEqual({ asks: false, finished: true });
+});
+
+test('settings.json 의 알림 값이 불리언이 아니면 기본값', async () => {
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ notifyAsks: 'no', notifyFinished: 1 }));
+  const e = await start();
+  expect(e.notify()).toEqual({ asks: true, finished: false });
+});

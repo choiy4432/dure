@@ -52,6 +52,8 @@ function fakeEngine() {
     continueHeld: rec('continueHeld'),
     answerRequest: rec('answerRequest'),
     setAutoChainLimit: rec('setAutoChainLimit'),
+    notify: () => ({ asks: false, finished: true }), // 기본값과 다른 값 — 칸이 뒤바뀌면 잡힌다
+    setNotify: rec('setNotify'),
     setAllowBypass: rec('setAllowBypass', Promise.resolve()),
     setBypass: rec('setBypass', Promise.resolve()),
   })
@@ -105,7 +107,7 @@ describe('registerIpc', () => {
       newConversation: ['a1'], setModel: ['a1', null], describe: ['a1'], history: ['a1', { all: true }],
       approveMessage: ['m1'], dismissMessage: ['m1'], continueHeld: ['r1'],
       answerRequest: ['q1', { type: 'allow' }], setAutoChainLimit: [5],
-      setEffort: ['a1', 'high'], refreshUsage: [], setAllowBypass: [true], setBypass: ['a1', false],
+      setEffort: ['a1', 'high'], refreshUsage: [], setAllowBypass: [true], setNotify: [{ finished: true }], setBypass: ['a1', false],
     }
     for (const [m, a] of Object.entries(args)) {
       const r = await call(m, ...a)
@@ -130,6 +132,7 @@ describe('registerIpc', () => {
       claudeMissing: false,
       autoChainLimit: 8,
       allowBypass: true,
+      notify: { asks: false, finished: true },
       rooms: [{ id: 'r1' }],
       agents: [{ id: 'a1', status: 'idle', errorText: null, bypassOn: true, bypass: true, bypassBySettings: false, bypassPending: true, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5', subagentsRunning: ['toolu_1', 'toolu_2'] }],
       usage: { windows: [{ key: 'session', percent: 40 }] },
@@ -157,7 +160,7 @@ describe('registerIpc', () => {
     const { call, sent } = setup(false)
     const s = await call('snapshot')
     expect(s.value).toEqual({
-      claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, usage: null,
+      claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
     })
     expect(await call('addRoom', 'x')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })
     expect(await call('pickFolder')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })

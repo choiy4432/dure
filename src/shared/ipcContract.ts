@@ -1,5 +1,5 @@
 import type {
-  Agent, AgentDescription, AgentId, EffortLevel, EngineEventMap, AgentStatus, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, UserPart,
+  Agent, AgentDescription, AgentId, EffortLevel, EngineEventMap, AgentStatus, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, UserPart,
 } from '../engine/types'
 
 export interface AgentView extends Agent {
@@ -29,6 +29,8 @@ export interface Snapshot {
   autoChainLimit: number
   /** 묻지 않고 실행 허용 — 꺼져 있으면 에이전트 스위치를 못 켠다 */
   allowBypass: boolean
+  /** Windows 알림 설정 — claude 가 없으면 기본값 */
+  notify: NotifyPrefs
   /** 플랜 사용량 — claude 가 없거나 아직 모르면 null */
   usage: PlanUsage | null
 }
@@ -60,6 +62,7 @@ export interface DureApi {
   answerRequest(id: string, d: Decision): Promise<void>
   setAutoChainLimit(n: number): Promise<void>
   setAllowBypass(on: boolean): Promise<void>
+  setNotify(p: Partial<NotifyPrefs>): Promise<void>
   setBypass(id: AgentId, on: boolean): Promise<void>
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
@@ -74,7 +77,7 @@ export const METHODS = [
   'snapshot', 'addRoom', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
   'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
-  'setAllowBypass', 'setBypass',
+  'setAllowBypass', 'setNotify', 'setBypass',
   'pickFolder', 'openFolder',
 ] as const satisfies readonly Exclude<keyof DureApi, 'on'>[]
 

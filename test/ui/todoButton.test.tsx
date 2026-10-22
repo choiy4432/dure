@@ -18,7 +18,7 @@ beforeEach(() => {
     claudeMissing: false,
     rooms: [{ id: 'r1', name: '여름', createdAt: 1 }],
     agents: [agent('a1', 'r1'), agent('a2', 'r1')],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
   }
   ;(window as any).dure = { snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
 })

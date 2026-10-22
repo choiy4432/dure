@@ -35,7 +35,7 @@ beforeEach(() => {
       agent('d', { name: '디자인' }),
       agent('x', { name: '다른 방 사람', roomId: 'r2' }),
     ],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
   }
   ;(window as any).dure = {
     approveMessage: vi.fn(async () => {}),

@@ -37,7 +37,7 @@ function agentViews(engine: Engine): AgentView[] {
 
 function snapshot(engine: Engine | null): Snapshot {
   if (!engine) {
-    return { claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, usage: null }
+    return { claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, usage: null }
   }
   return {
     claudeMissing: false,
@@ -47,6 +47,7 @@ function snapshot(engine: Engine | null): Snapshot {
     requests: engine.pendingRequests(),
     autoChainLimit: engine.autoChainLimit(),
     allowBypass: engine.allowBypass(),
+    notify: engine.notify(),
     usage: engine.usage(),
   }
 }
@@ -75,6 +76,7 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   answerRequest: (e, _d, id, d) => e.answerRequest(id, d),
   setAutoChainLimit: (e, _d, n) => e.setAutoChainLimit(n),
   setAllowBypass: (e, _d, on) => e.setAllowBypass(on),
+  setNotify: (e, _d, p) => e.setNotify(p),
   setBypass: (e, _d, id, on) => e.setBypass(id, on),
   pickFolder: (_e, d) => d.pickFolder(),
   openFolder: (e, d, path) => {

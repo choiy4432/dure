@@ -37,7 +37,7 @@ beforeEach(() => {
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }],
     agents: [agent('w', { name: '웹 화면', role: '화면 구현' }), agent('p', { name: '기획', role: '기획서 · 문구' })],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
   }
   api = {
     describe: vi.fn(async (_id: string) => DESC),

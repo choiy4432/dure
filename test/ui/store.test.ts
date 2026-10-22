@@ -11,7 +11,7 @@ const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   claudeMissing: false,
   rooms: [{ id: 'r1', name: '첫 방', createdAt: 2 }, { id: 'r2', name: '둘째', createdAt: 1 }],
   agents: [agent('a'), agent('b'), agent('c', 'r2')],
-  messages: [], requests: [], autoChainLimit: 5, allowBypass: false, usage: null, ...over,
+  messages: [], requests: [], autoChainLimit: 5, allowBypass: false, notify: { asks: true, finished: false }, usage: null, ...over,
 })
 const note = (text: string, t = 1): HistoryItem => ({ t, kind: 'notice', text })
 

@@ -21,7 +21,7 @@ beforeEach(() => {
   handlers = {}
   const snapshot: Snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '방', createdAt: 1 }],
-    agents: [agent('n'), agent('o')], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
+    agents: [agent('n'), agent('o')], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
   }
   ;(window as any).dure = {
     snapshot: async () => snapshot,

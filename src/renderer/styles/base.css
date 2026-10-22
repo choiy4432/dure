@@ -3931,6 +3931,11 @@ code {
   cursor: default;
 }
 
+/* 잠긴 스위치는 흐리게 — 앞선 스위치가 꺼져 있어 눌러도 소용없다는 걸 보여 준다 */
+.fld > .sw[aria-disabled="true"] {
+  opacity: 0.5;
+}
+
 /* 맡기는 정도 — 끔 · 자동 · 묻지 않음 세 칸 스위치. 앞 글자 + 트랙(role=slider) + 손잡이 */
 .lvl-n {
   min-width: 4.5em;

@@ -23,7 +23,7 @@ beforeEach(() => {
       agent('a2', 'r1', '웹 화면', { x: 424, y: 64 }),
       agent('b1', 'r2', '서버', { x: 784, y: 64 }), // 다른 방 — 자리 셈에 들지 않는다
     ],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
   }
   // 엔진처럼 — 이름 겹침·없는 폴더는 엔진 문구로 거절, 새 에이전트 자리는 {0,0}
   api = {

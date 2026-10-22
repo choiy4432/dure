@@ -53,7 +53,7 @@ beforeEach(() => {
       agent('s', { name: '서버', role: 'API · 데이터' }),
       agent('x', { name: '다른 방 사람', roomId: 'r2' }),
     ],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
   }
   api = {
     approveMessage: vi.fn(async (_id: string) => {}),

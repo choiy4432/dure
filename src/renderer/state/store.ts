@@ -106,7 +106,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   // 창에 초점이 있는가 — 초점이 없으면 고른 에이전트의 결과도 못 본 것이다. document.hasFocus 가 없는 환경에선 본 것으로 친다
   const hasFocus = opts.hasFocus ?? (() => (typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true))
   let state: UiState = {
-    claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, usage: null,
+    claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
     statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, placeNear: {}, fresh: {}, roomMenuRequest: 0,
   }

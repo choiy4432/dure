@@ -5,13 +5,14 @@ import type { Snapshot } from '../../src/shared/ipcContract'
 let snapshot: Snapshot
 let setAutoChainLimit: ReturnType<typeof vi.fn>
 let setAllowBypass: ReturnType<typeof vi.fn>
+let setNotify: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   vi.resetModules()
   localStorage.clear()
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }], agents: [],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
   }
   setAutoChainLimit = vi.fn(async (n: number) => {
     snapshot = { ...snapshot, autoChainLimit: n }
@@ -19,7 +20,10 @@ beforeEach(() => {
   setAllowBypass = vi.fn(async (on: boolean) => {
     snapshot = { ...snapshot, allowBypass: on }
   })
-  ;(window as any).dure = { setAutoChainLimit, setAllowBypass, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
+  setNotify = vi.fn(async (p: Partial<{ asks: boolean; finished: boolean }>) => {
+    snapshot = { ...snapshot, notify: { ...snapshot.notify, ...p } }
+  })
+  ;(window as any).dure = { setAutoChainLimit, setAllowBypass, setNotify, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
 })
 afterEach(() => cleanup())
 
@@ -165,5 +169,39 @@ describe('SettingsDialog — 묻지 않고 실행 허용', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
     expect(store.getState().allowBypass).toBe(false)
+  })
+
+  it('알림 두 스위치 — 저장하면 바뀐 칸만 setNotify', async () => {
+    const store = await renderApp()
+    const { dlg } = openSettings()
+    const asks = within(dlg).getByRole('switch', { name: /Windows 알림/ })
+    const fin = within(dlg).getByRole('switch', { name: /일이 끝나도 알림/ })
+    expect(dlg.textContent).toContain('창이 가려져 있을 때 승인·질문을 알려 줘요')
+    expect(dlg.textContent).toContain('창이 가려져 있을 때 일을 끝내면 알려 줘요')
+    expect(asks.getAttribute('aria-checked')).toBe('true')
+    expect(fin.getAttribute('aria-checked')).toBe('false')
+    const save = within(dlg).getByRole('button', { name: '저장' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.click(fin)
+    expect(save.disabled).toBe(false)
+    fireEvent.click(save)
+    await settle()
+    expect(setNotify).toHaveBeenCalledTimes(1)
+    expect(setNotify).toHaveBeenCalledWith({ finished: true })
+    expect(store.getState().notify).toEqual({ asks: true, finished: true })
+  })
+
+  it('Windows 알림을 끄면 일이 끝나도 알림이 흐려지고 눌리지 않는다', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    const asks = within(dlg).getByRole('switch', { name: /Windows 알림/ })
+    const fin = within(dlg).getByRole('switch', { name: /일이 끝나도 알림/ })
+    expect(fin.getAttribute('aria-disabled')).toBeNull()
+    fireEvent.click(asks)
+    expect(fin.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(fin)
+    expect(fin.getAttribute('aria-checked')).toBe('false') // 눌림 무시
+    fireEvent.click(asks)
+    expect(fin.getAttribute('aria-disabled')).toBeNull()
   })
 })

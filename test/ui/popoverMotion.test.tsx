@@ -87,7 +87,7 @@ describe('떠 있는 창 움직임 — 관계도 엣지의 두 에이전트 메�
         { id: 'b', roomId: 'r1', name: '웹 화면', role: '역할', folder: 'C:/w', sessionId: 's', started: true, auto: false, model: null, alwaysAllow: [], pos: { x: 400, y: 64 }, color: null, effort: null, lastContext: null, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, subagentsRunning: [] },
       ],
       messages: [{ id: 'm1', roomId: 'r1', from: 'a', to: 'b', text: '첫 메시지', createdAt: Date.now(), state: 'delivered', updatedAt: Date.now() }],
-      requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
+      requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
     }
     ;(window as any).dure = { snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
   })

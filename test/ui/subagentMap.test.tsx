@@ -120,7 +120,7 @@ beforeEach(() => {
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }],
     agents: [agent('w', { name: '기획', subagentsRunning: ['B', 'B2'] }), agent('p', { name: '디자인' })],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
   }
   ;(window as any).dure = {
     snapshot: async () => snapshot,
