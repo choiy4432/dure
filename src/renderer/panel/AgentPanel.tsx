@@ -116,16 +116,18 @@ const NO_ITEMS: HistoryItem[] = []
 const NO_IDS: string[] = []
 
 /**
- * 머리와 입력창 사이 — [대화 | 서브에이전트 N] 탭(지금 대화에 서브에이전트가 하나라도 있었을 때만) → 고정 카드 → 대화 목록 또는 서브에이전트 지도.
- * pins·chat 은 AgentPanel 이 만든 요소 그대로 받는다 — 기록이 늘어 이 칸이 다시 그려져도 둘은 다시 그리지 않는다(제 구독으로 그린다).
+ * 머리 아래 — [대화 | 서브에이전트 N] 탭(지금 대화에 서브에이전트가 하나라도 있었을 때만) → 고정 카드 → 대화 목록 또는 서브에이전트 지도 → 입력창.
+ * pins·chat·composer 는 AgentPanel 이 만든 요소 그대로 받는다 — 기록이 늘어 이 칸이 다시 그려져도 셋은 다시 그리지 않는다(제 구독으로 그린다).
+ * 입력창은 대화 탭에만 보인다 — 서브에이전트 탭에선 숨겨 두기만 해서(hidden) 쓰던 글·붙인 이미지가 그대로 남는다.
  * 대화 칸은 탭이 생기고 사라져도 같은 요소라 대화 목록이 다시 붙지 않는다. 탭이 있으면 두 칸을 함께 그려 두고 고르지 않은 칸은 숨긴다(hidden) —
  * 탭을 오가도 대화 목록의 스크롤 자리·펼친 줄·불러온 이전 대화, 지도의 펼친 노드가 그대로다.
  */
-function PanelBody({ agentId, name, pins, chat, seen }: {
+function PanelBody({ agentId, name, pins, chat, composer, seen }: {
   agentId: AgentId
   name: string
   pins: ReactNode
   chat: ReactNode
+  composer: ReactNode
   /** 지도가 이미 간 focus 의 n — 패널이 들고 있어 지도가 다시 열려도 지난 focus 로 다시 가지 않는다 */
   seen: RefObject<number>
 }) {
@@ -180,13 +182,16 @@ function PanelBody({ agentId, name, pins, chat, seen }: {
           <SubagentMap key={agentId} name={name} turns={tree.turns} focus={v.focus} seen={seen} active={tab === 'subagents'} />
         </div>
       )}
+      <div className="pnl-cmp" hidden={tab !== 'chat'}>
+        {composer}
+      </div>
     </>
   )
 }
 
 /**
  * 오른쪽 패널 — 고른 에이전트 하나.
- * 위에서부터: 머리(PanelHeader) → 탭(서브에이전트가 있을 때) → 고정 카드 자리(.pnl-pins) → 대화 목록(ChatList) 또는 서브에이전트 지도 → 입력창(Composer).
+ * 위에서부터: 머리(PanelHeader) → 탭(서브에이전트가 있을 때) → 고정 카드 자리(.pnl-pins) → 대화 목록(ChatList) 또는 서브에이전트 지도 → 입력창(Composer, 대화 탭에만).
  */
 export function AgentPanel() {
   const sel = useDure(s => {
@@ -225,13 +230,9 @@ export function AgentPanel() {
     setCardOpen(c => ({ ...c, [messageId]: open }))
   }, [])
 
-  // 내가 보낼 때마다 오르는 수(보낸 에이전트와 함께) — 대화 목록이 맨 아래로 붙어 내 말이 보이게.
-  // 서브에이전트 탭에서 보냈으면 대화 탭으로 — 보낸 말과 답은 대화에 붙는다
+  // 내가 보낼 때마다 오르는 수(보낸 에이전트와 함께) — 대화 목록이 맨 아래로 붙어 내 말이 보이게(입력창은 대화 탭에만 있다)
   const [sent, setSent] = useState<{ agentId: AgentId | null; n: number }>({ agentId: null, n: 0 })
-  const onSent = useCallback((agentId: AgentId) => {
-    setSent(s => ({ agentId, n: s.n + 1 }))
-    getStore().setPanelTab(agentId, 'chat')
-  }, [])
+  const onSent = useCallback((agentId: AgentId) => setSent(s => ({ agentId, n: s.n + 1 })), [])
 
   // 서브에이전트 지도가 이미 간 focus 의 n(store.showSubagents 가 올린다)
   const seenFocus = useRef(0)
@@ -261,16 +262,18 @@ export function AgentPanel() {
         seen={seenFocus}
         pins={<Pins agentId={sel.id} open={cardOpen} onOpenChange={setOpen} />}
         chat={<ChatList key={`c-${sel.id}`} agentId={sel.id} pin={sent.agentId === sel.id ? sent.n : 0} cardOpen={cardOpen} />}
-      />
-      <Composer
-        key={`i-${sel.id}`}
-        agentId={sel.id}
-        name={sel.name}
-        description={described[sel.id] ?? IDLE}
-        onLoadCommands={ensureDescribed}
-        onRetryCommands={retryDescribe}
-        onOpenModel={() => setModelOpenFor(sel.id)}
-        onSent={onSent}
+        composer={
+          <Composer
+            key={`i-${sel.id}`}
+            agentId={sel.id}
+            name={sel.name}
+            description={described[sel.id] ?? IDLE}
+            onLoadCommands={ensureDescribed}
+            onRetryCommands={retryDescribe}
+            onOpenModel={() => setModelOpenFor(sel.id)}
+            onSent={onSent}
+          />
+        }
       />
     </aside>
   )

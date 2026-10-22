@@ -2808,6 +2808,11 @@ code {
 }
 
 /* ── 입력창(시안 .cmp/.box) ─────────────────────── */
+/* 입력창 자리 — 서브에이전트 탭에선 hidden 으로 숨는다(없애지 않아 쓰던 글이 남는다) */
+.pnl-cmp {
+  flex: none;
+}
+
 .cmp {
   flex: none;
   padding: 12px 20px 20px;

@@ -233,11 +233,17 @@ describe('패널 탭', () => {
     expect(subTab()).toHaveAttribute('aria-selected', 'true')
   })
 
-  it('입력창은 두 탭 모두에 있다', async () => {
+  it('입력창은 대화 탭에만 — 서브에이전트 탭에선 숨기고, 쓰던 글은 돌아오면 그대로', async () => {
     await renderPanel()
-    expect(document.querySelector('.cmp')).not.toBeNull()
+    const box = () => screen.queryByRole('textbox', { name: '기획에게 보낼 메시지' })
+    fireEvent.change(box()!, { target: { value: '쓰던 글' } })
     openMap()
-    expect(document.querySelector('.cmp')).not.toBeNull()
+    expect(box()).toBeNull()
+    // 없애지 않고 숨긴다 — 쓰던 글·붙인 이미지가 남게
+    expect(document.querySelector('.cmp')!.closest('[hidden]')).not.toBeNull()
+    fireEvent.click(chatTab())
+    expect(box()).toHaveValue('쓰던 글')
+    expect(document.querySelector('.cmp')!.closest('[hidden]')).toBeNull()
   })
 
   it('고른 탭은 에이전트마다 — 다른 에이전트를 골랐다 돌아오면 그 탭', async () => {
@@ -249,26 +255,6 @@ describe('패널 탭', () => {
     await act(async () => { store.selectAgent('w') })
     await settle()
     expect(subTab()).toHaveAttribute('aria-selected', 'true')
-  })
-
-  it('지도 탭에서 보내면 대화 탭으로 — 보낸 말이 보이고, 위로 올려 읽던 대화도 맨 아래로', async () => {
-    await renderPanel()
-    const el = conv()
-    const size = { scrollHeight: 1000, clientHeight: 400 }
-    fakeScroll(el, size)
-    el.scrollTop = 100
-    fireEvent.scroll(el)
-    openMap()
-    const box = screen.getByRole('textbox', { name: '기획에게 보낼 메시지' })
-    fireEvent.change(box, { target: { value: '이것도 해 줘' } })
-    fireEvent.keyDown(box, { key: 'Enter' })
-    await settle()
-    expect(chatTab()).toHaveAttribute('aria-selected', 'true')
-    expect(el.scrollTop).toBe(1000)
-    size.scrollHeight = 1200
-    emit('history', { agentId: 'w', item: human('이것도 해 줘', 50) })
-    expect(within(conv()).getByText('이것도 해 줘')).toBeInTheDocument()
-    expect(el.scrollTop).toBe(1200)
   })
 
   it('새 대화로 서브에이전트가 0 이 되면 탭이 사라지고 대화로 — 다음 서브에이전트가 와도 대화 탭', async () => {
