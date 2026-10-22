@@ -54,13 +54,11 @@ describe('AgentNode — 승인 기다림', () => {
   it.each([
     ['허용', { type: 'allow' }],
     ['거절', { type: 'deny' }],
-    ['이 에이전트에선 항상 허용', { type: 'allow-always' }],
   ] as const)('앰버 칸의 [%s] 은 answerRequest 를 맞는 Decision 으로 부른다', async (name, decision) => {
     snapshot.agents = [agent('d', { name: '디자인', status: 'awaiting' })]
     snapshot.requests = [request()]
     const { card, store } = await renderCard()
     expect(card.classList.contains('pend')).toBe(true)
-    expect(card.classList.contains('wide')).toBe(true)
     expect(screen.getByText('디자인이 파일을 만들려 해요')).toBeTruthy()
     const target = screen.getByText('src/styles/tokens.css')
     expect(target.tagName).toBe('CODE')
@@ -94,7 +92,6 @@ describe('AgentNode — 승인 기다림', () => {
     snapshot.requests = [request({ toolName: 'AskUserQuestion', input: { questions: [] }, kind: 'question' })]
     const { store, card } = await renderCard()
     expect(card.classList.contains('pend')).toBe(true)
-    expect(card.classList.contains('wide')).toBe(false)
     expect(screen.queryByRole('button', { name: '허용' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '내 답 필요 · 패널에서 답하기' }))
     expect(store.getState().selectedAgentId).toBe('d')
@@ -114,7 +111,6 @@ describe('AgentNode — 새 에이전트 만들기 승인', () => {
     snapshot.requests = [make()]
     const { card } = await renderCard('p')
     expect(card.classList.contains('pend')).toBe(true)
-    expect(card.classList.contains('wide')).toBe(false)
     expect(card.querySelector('.ap-t')!.textContent).toBe('기획이 새 에이전트를 만들려 해요')
     const who = card.querySelector<HTMLElement>('.ap-who')!
     expect(who.textContent).toBe('테스트 · 시험 담당')
@@ -173,11 +169,11 @@ describe('AgentNode — 카드 내용', () => {
     expect(nameEl.classList.contains('trunc')).toBe(true)
     expect(roleEl.classList.contains('trunc')).toBe(true)
     expect(nameEl.getAttribute('title')).toBe(name)
-    expect(roleEl.closest('.nr')!.getAttribute('title')).toBe(`${role} · 기본 모델`)
+    expect(roleEl.closest('.nr')!.getAttribute('title')).toBe(role)
   })
 
   it("역할 옆에 모델 · effort — '기획서 · 문구 · Opus 5.5 · high', 역할만 말줄임", async () => {
-    snapshot.agents = [agent('d', { role: '기획서 · 문구', modelNow: 'claude-opus-5-5', effortNow: 'high' })]
+    snapshot.agents = [agent('d', { role: '기획서 · 문구', model: 'opus', modelNow: 'claude-opus-5-5', effort: 'high', effortNow: 'high' })]
     const { card } = await renderCard()
     const line = card.querySelector('.nr') as HTMLElement
     expect(line.textContent).toBe('기획서 · 문구 · Opus 5.5 · high')
@@ -201,7 +197,7 @@ describe('AgentNode — 카드 내용', () => {
   })
 
   it('긴 역할만 최소 폭(6em) 규칙을 받고, 그 규칙은 CSS 에 있다', async () => {
-    snapshot.agents = [agent('d', { role: '기획서 · 문구 · 행사 페이지 카피 전부', modelNow: 'claude-opus-5[1m]', effortNow: 'xhigh' })]
+    snapshot.agents = [agent('d', { role: '기획서 · 문구 · 행사 페이지 카피 전부', model: 'opus', modelNow: 'claude-opus-5[1m]', effort: 'xhigh', effortNow: 'xhigh' })]
     const { card } = await renderCard()
     expect(card.querySelector('.nr-role')!.classList.contains('floor')).toBe(true)
     expect(card.querySelector('.nr')!.textContent).toBe('기획서 · 문구 · 행사 페이지 카피 전부 · Opus 5 (긴 대화) · xhigh')
@@ -219,7 +215,7 @@ describe('AgentNode — 카드 내용', () => {
   })
 
   it('역할이 비면 앞 구분 점 없이 모델 · effort 만', async () => {
-    snapshot.agents = [agent('d', { role: '', modelNow: 'claude-opus-5-5', effortNow: 'max' })]
+    snapshot.agents = [agent('d', { role: '', model: 'opus', modelNow: 'claude-opus-5-5', effort: 'max', effortNow: 'max' })]
     const { card } = await renderCard()
     expect(card.querySelector('.nr')!.textContent).toBe('Opus 5.5 · max')
   })
@@ -513,5 +509,85 @@ describe('AgentNode — 에이전트가 만든 새 에이전트의 카드도 나
   it('움직임 줄이기면 들어오지 않는다(지금처럼)', async () => {
     const { n } = await renderBoth()
     expect(n.style.opacity).toBe('')
+  })
+})
+
+describe('AgentNode — 흘끗 보기 카드', () => {
+  it('승인 칸 링크는 패널에서 자세히 — 누르면 그 에이전트를 고르고 answerRequest 는 부르지 않는다', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', status: 'awaiting' })]
+    snapshot.requests = [request()]
+    const { store, card } = await renderCard()
+    expect(screen.queryByRole('button', { name: '이 에이전트에선 항상 허용' })).toBeNull()
+    const outside = vi.fn()
+    document.addEventListener('click', outside)
+    try {
+      fireEvent.click(screen.getByRole('button', { name: '패널에서 자세히' }))
+    } finally {
+      document.removeEventListener('click', outside)
+    }
+    expect(store.getState().selectedAgentId).toBe('d')
+    expect(api.answerRequest).not.toHaveBeenCalled()
+    expect(outside).not.toHaveBeenCalled()
+    expect(card.classList.contains('pend')).toBe(true)
+  })
+
+  it('넓은 카드 클래스(wide)가 없다', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', status: 'awaiting' })]
+    snapshot.requests = [request()]
+    const { card } = await renderCard()
+    expect(card.classList.contains('wide')).toBe(false)
+    const fsName: string = 'node:fs'
+    const css: string = (await import(/* @vite-ignore */ fsName)).readFileSync('src/renderer/styles/base.css', 'utf8')
+    expect(css).not.toMatch(/\.nd\.wide/)
+  })
+
+  it('모델·effort 는 고른 값만 — 기본이면 역할만', async () => {
+    snapshot.agents = [agent('d', { role: '기획서' })]
+    const { card } = await renderCard()
+    expect(card.querySelector('.nr')!.textContent).toBe('기획서')
+    expect(card.querySelector('.nr-sep')).toBeNull()
+    cleanup()
+    snapshot.agents = [agent('d', { role: '기획서', effort: 'high' })]
+    const eff = await renderCard()
+    expect(eff.card.querySelector('.nr')!.textContent).toBe('기획서 · high')
+  })
+
+  it('자동 끔은 쓰지 않는다 — 자동 켬·묻지 않음만', async () => {
+    snapshot.agents = [agent('d', { auto: false })]
+    const { card } = await renderCard()
+    expect(card.querySelector('.au')).toBeNull()
+    expect(card.textContent).not.toContain('자동 끔')
+    cleanup()
+    snapshot.agents = [agent('d', { auto: true })]
+    const on = await renderCard()
+    expect(on.card.querySelector('.au')!.textContent).toBe('자동 켬')
+  })
+
+  it('묻지 않음 예약(bypassPending)도 묻지 않음·byp', async () => {
+    snapshot.agents = [agent('d', { auto: true, bypassPending: true })]
+    const { card } = await renderCard()
+    const au = card.querySelector('.au')!
+    expect(au.textContent).toBe('묻지 않음')
+    expect(au.classList.contains('byp')).toBe(true)
+    expect(card.classList.contains('byp')).toBe(true)
+  })
+
+  it('쉬는 에이전트에 fresh 가 있으면 바닥이 끝남 · 새 결과(.dot.n)', async () => {
+    snapshot.agents = [agent('d', { status: 'idle' })]
+    const { card, store } = await renderCard()
+    expect(card.querySelector('.dot.n')).toBeNull()
+    emit('history', { agentId: 'd', item: { kind: 'result', t: 5 } } as any)
+    expect(store.getState().fresh.d).toBe(5)
+    expect(card.querySelector('.dot.n')).toBeTruthy()
+    expect(card.querySelector('.st.n')!.textContent).toContain('끝남 · 새 결과')
+  })
+
+  it('작업 중이면 fresh 가 있어도 작업 중', async () => {
+    snapshot.agents = [agent('d', { status: 'working' })]
+    const { card, store } = await renderCard()
+    emit('history', { agentId: 'd', item: { kind: 'result', t: 5 } } as any)
+    expect(store.getState().fresh.d).toBe(5)
+    expect(card.querySelector('.dot.n')).toBeNull()
+    expect(card.querySelector('.st-l')!.textContent).toBe('작업 중')
   })
 })

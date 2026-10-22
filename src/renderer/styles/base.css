@@ -150,6 +150,11 @@ code {
   background: var(--idle);
 }
 
+/* 끝났는데 아직 안 본 결과 — 파란 점(상태색 초록·앰버·빨강과 겹치지 않게) */
+.dot.n {
+  background: var(--primary);
+}
+
 /* 세로 나눔 줄 */
 .vr {
   width: 1px;
@@ -704,15 +709,6 @@ code {
   border-color: var(--warn);
 }
 
-.nd.pend {
-  border-color: var(--warn-strong);
-}
-
-/* 권한 요청 칸이 있는 카드 — 시안 그대로 304px(버튼·링크 한 줄) */
-.nd.wide {
-  width: 304px;
-}
-
 .nd.sel {
   border-color: var(--primary);
   box-shadow: var(--shadow-node-sel);
@@ -721,6 +717,24 @@ code {
 .nd.sel.byp {
   border-color: var(--warn);
   box-shadow: var(--shadow-node-sel-warn);
+}
+
+/* 승인 기다림 — 2px 앰버로 보이되 크기는 그대로(안쪽 그림자). 묻지 않음(.byp)·고름(.sel)보다 뒤라 이긴다(할 일이 먼저) */
+.nd.pend {
+  border-color: var(--warn);
+  box-shadow: var(--shadow-node-pend);
+}
+
+.nd.sel.pend {
+  border-color: var(--warn);
+  box-shadow: var(--shadow-node-sel-pend);
+}
+
+/* 바닥 줄도 앰버 띠 — 아래 모서리는 카드 반경에서 테두리 1px 를 뺀 값이라 테두리 안쪽에 딱 맞는다 */
+.nd.pend .nf {
+  background: var(--warn-bg);
+  border-top-color: var(--warn-border);
+  border-radius: 0 0 calc(var(--radius-node) - 1px) calc(var(--radius-node) - 1px);
 }
 
 .nh {
@@ -890,6 +904,11 @@ code {
   font-weight: 700;
 }
 
+.st.n {
+  color: var(--primary-text);
+  font-weight: 700;
+}
+
 .st.e {
   color: var(--danger-text);
   font-weight: 700;
@@ -920,7 +939,7 @@ code {
   height: 20px;
   padding: 0 6px;
   border-radius: var(--radius-pill);
-  background: var(--danger);
+  background: var(--danger-solid);
   color: var(--on-danger);
   font-size: 12px;
   line-height: 20px;

@@ -6,7 +6,7 @@ import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
 import { displayStatus, unreadFor, type DisplayStatus } from '../state/selectors'
 import { createAgentPlan, requestTarget, requestTitle } from '../lib/toolSummary'
-import { ago, initial, josa, lasting, nodeModelLabel, PHASE_WORD, QUESTION_LINK, STATUS_LINE, STATUS_WORD } from '../lib/words'
+import { ago, FRESH_WORD, initial, josa, lasting, nodeModelLabel, PHASE_WORD, QUESTION_LINK, STATUS_LINE, STATUS_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { MOTION, popOnce, useRise } from '../lib/motion'
 import { useMotion } from '../lib/presence'
@@ -66,6 +66,7 @@ function useCardView(agentId: AgentId) {
       last: s.lastText[agentId] ?? null,
       lastMessageAt,
       since: s.statusSince[agentId] ?? null,
+      fresh: agentId in s.fresh,
     }
   })
 }
@@ -124,8 +125,9 @@ function Approval({ agent, request }: { agent: AgentView; request: PendingReques
         <button type="button" className="btn sec sm" disabled={busy} onClick={() => answer({ type: 'deny' })}>
           거절
         </button>
-        <button type="button" className="lk" disabled={busy} onClick={() => answer({ type: 'allow-always' })}>
-          이 에이전트에선 항상 허용
+        {/* 응답이 아니라 이동 — 항상 허용 같은 무거운 결정은 패널에서 내용을 보고 한다 */}
+        <button type="button" className="lk" onClick={() => getStore().selectAgent(agent.id)}>
+          패널에서 자세히
         </button>
       </div>
     </div>
@@ -171,21 +173,22 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
   useEffect(() => (rise ? popOnce(badge.current) : undefined), [rise])
   if (!v) return null
 
-  const { agent, request, unread, selected, status } = v
-  // 역할 옆 '모델 · effort' — effort 는 Claude Code 가 쓰는 단계 이름 그대로
-  const level = agent.effortNow ?? agent.effort
-  const meta = [nodeModelLabel(agent.model, agent.modelNow), level].filter(Boolean).join(' · ')
-  const roleLine = agent.role ? `${agent.role} · ${meta}` : meta
+  const { agent, request, unread, selected, status, fresh } = v
+  // 역할 옆 '모델 · effort' — 사용자가 고른 값만(기본이면 개발 정보라 덜어낸다). effort 는 Claude Code 가 쓰는 단계 이름 그대로
+  const level = agent.effort !== null ? (agent.effortNow ?? agent.effort) : null
+  const meta = [agent.model !== null ? nodeModelLabel(agent.model, agent.modelNow) : null, level].filter(Boolean).join(' · ')
+  const roleLine = agent.role && meta ? `${agent.role} · ${meta}` : agent.role || meta
+  const byp = agent.bypass || agent.bypassPending
+  // 쉬는 에이전트가 못 본 결과를 냈다 — 바닥 상태를 '끝남 · 새 결과' 로
+  const isFresh = (status === 'idle' || status === 'stopped') && fresh
   const st = STATUS[status]
   const time = timeText(v, now)
   const errorText = status === 'error' && agent.errorText ? agent.errorText : null
 
   return (
-    // 권한 요청 칸이 있으면 시안처럼 넓게(304px) — [허용][거절]·링크가 한 줄에 들어가 카드가 격자 한 칸(layout.ts CELL, 높이 217) 안에 머문다.
-    // 새 에이전트 만들기 칸은 단추 없이 링크 하나라 256px 그대로(칸 높이도 권한 칸보다 낮다)
     <div
       ref={card}
-      className={`nd${selected ? ' sel' : ''}${agent.bypass ? ' byp' : ''}${request ? ' pend' : ''}${request?.kind === 'permission' ? ' wide' : ''}`}
+      className={`nd${selected ? ' sel' : ''}${byp ? ' byp' : ''}${request ? ' pend' : ''}`}
       data-status={status}
     >
       <div className="nh">
@@ -205,21 +208,17 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
           </span>
           <span className="nr" title={roleLine}>
             {agent.role && (
-              // 구분 점은 역할 쪽에 붙인다 — 줄이 나뉘어도 둘째 줄이 "·" 로 시작하지 않는다
+              // 구분 점은 역할 쪽에 붙인다 — 줄이 나뉘어도 둘째 줄이 "·" 로 시작하지 않는다. 뒤따를 모델·effort 가 없으면 점도 없다
               <span className={`nr-role${agent.role.length > ROLE_FLOOR_CHARS ? ' floor' : ''}`}>
                 <span className="trunc">{agent.role}</span>
-                <span className="nr-sep keep"> · </span>
+                {meta && <span className="nr-sep keep"> · </span>}
               </span>
             )}
-            <span className="nr-meta keep">{meta}</span>
+            {meta && <span className="nr-meta keep">{meta}</span>}
           </span>
         </div>
-        {/* 묻지 않음(테두리 주황과 같은 상태 — Claude 가 알려 준 실제 모드)이면 자동 켬/끔 대신 */}
-        {agent.bypass ? (
-          <span className="au byp">묻지 않음</span>
-        ) : (
-          <span className={`au${agent.auto ? ' on' : ''}`}>{agent.auto ? '자동 켬' : '자동 끔'}</span>
-        )}
+        {/* 묻지 않음(실제 모드 또는 예약)이면 그것만, 아니면 켜졌을 때만 '자동 켬' — '자동 끔' 은 기본이라 그리지 않는다 */}
+        {byp ? <span className="au byp">묻지 않음</span> : agent.auto ? <span className="au on">자동 켬</span> : null}
       </div>
 
       {request?.kind === 'question' ? (
@@ -237,9 +236,9 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
       )}
 
       <div className="nf">
-        <span className={`st${st.tone ? ` ${st.tone}` : ''}`}>
-          <i className={`dot ${st.dot}`} aria-hidden="true" />
-          <span className="st-l">{STATUS_WORD[status]}</span>
+        <span className={`st${isFresh ? ' n' : st.tone ? ` ${st.tone}` : ''}`}>
+          <i className={`dot ${isFresh ? 'n' : st.dot}`} aria-hidden="true" />
+          <span className="st-l">{isFresh ? FRESH_WORD : STATUS_WORD[status]}</span>
           {errorText && (
             <span className="nf-err trunc" title={errorText}>
               {clip(errorText, ERROR_MAX)}
