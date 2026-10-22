@@ -11,6 +11,8 @@ import { ConfirmDialog } from './shell/ConfirmDialog'
 import { Presence } from './lib/presence'
 import { RelationMap } from './map/RelationMap'
 import { AgentPanel } from './panel/AgentPanel'
+import { useAttention } from './shell/useAttention'
+import { Announcer } from './shell/Announcer'
 
 type Dialog = 'room' | 'agent' | 'settings' | null
 
@@ -24,6 +26,7 @@ export function App() {
       agentCount: room ? s.agents.filter(a => a.roomId === room.id).length : 0,
     }
   })
+  const announced = useAttention()
   const [dialog, setDialog] = useState<Dialog>(null)
   const [askAllow, setAskAllow] = useState(false)
   const close = () => setDialog(null)
@@ -71,6 +74,7 @@ export function App() {
           onSettings={() => setDialog('settings')}
         />
         {body}
+        <Announcer text={announced} />
         <Presence show={dialog === 'room'}>
           <NewRoomDialog onClose={close} />
         </Presence>

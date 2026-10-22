@@ -2522,6 +2522,16 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* 화면 읽기 프로그램에게만 들리는 글 — 알림 자리(Announcer) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 /* 읽는 말(지운 줄·더한 줄) — 화면엔 안 보이고 복사에도 안 따라온다 */
 .df-hid {
   position: absolute;
