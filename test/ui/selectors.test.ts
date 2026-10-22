@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { displayStatus, edges, label, pairMessages, summary, unreadFor, type EdgeView } from '../../src/renderer/state/selectors'
+import { displayStatus, edges, label, nextAgent, pairMessages, summary, unreadFor, type EdgeView } from '../../src/renderer/state/selectors'
 import type { PendingRequest, RelayMessage, MessageState } from '../../src/engine/types'
 import type { AgentView } from '../../src/shared/ipcContract'
 
@@ -39,8 +39,31 @@ describe('summary', () => {
       requests: [req('b')],
       messages: [msg('a', 'c', 'pending'), msg('a', 'c', 'held'), msg('a', 'c', 'queued'), msg('x', 'y', 'pending', { roomId: 'r2' })],
     }
-    expect(summary(state, 'r1')).toEqual({ working: 1, awaiting: 1, unread: 2 })
-    expect(summary(state, 'r2')).toEqual({ working: 1, awaiting: 0, unread: 1 })
+    expect(summary(state, 'r1')).toEqual({ working: 1, awaiting: 1, unread: 2, fresh: 0 })
+    expect(summary(state, 'r2')).toEqual({ working: 1, awaiting: 0, unread: 1, fresh: 0 })
+  })
+})
+
+describe('summary.fresh / nextAgent', () => {
+  const state = {
+    agents: [agent('a', { status: 'working' }), agent('b'), agent('c'), agent('d'), agent('z', { roomId: 'r2' })],
+    requests: [req('d')],
+    messages: [] as RelayMessage[],
+    fresh: { a: 1, b: 2, c: 3, d: 4, z: 5 },
+  }
+  it('summary.fresh', () => {
+    expect(summary(state, 'r1').fresh).toBe(2) // b, c (a 는 작업 중, d 는 승인 기다림)
+    expect(summary({ ...state, fresh: undefined }, 'r1').fresh).toBe(0)
+  })
+  it('nextAgent 는 고른 에이전트 다음으로 돌아간다 — 끝이면 처음', () => {
+    expect(nextAgent('fresh', state, 'r1', 'b')).toBe('c')
+    expect(nextAgent('fresh', state, 'r1', 'c')).toBe('b')
+  })
+  it('nextAgent: after 가 그 종류가 아니면 첫 에이전트, 없으면 null', () => {
+    expect(nextAgent('fresh', state, 'r1', 'a')).toBe('b')
+    expect(nextAgent('fresh', state, 'r1', null)).toBe('b')
+    expect(nextAgent('unread', state, 'r1', null)).toBeNull()
+    expect(nextAgent('awaiting', state, 'r1', 'd')).toBe('d')
   })
 })
 

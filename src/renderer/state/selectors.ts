@@ -42,17 +42,40 @@ export function latestDelivered(agentId: AgentId, messages: RelayMessage[]): Rel
   return hit
 }
 
-export function summary(state: SummaryInput, roomId: RoomId): { working: number; awaiting: number; unread: number } {
+type FreshInput = SummaryInput & { fresh?: Record<AgentId, number> }
+
+/** 새 결과 = 확인 안 한 결과가 있고, 지금은 작업 중도 승인 기다림도 아닌 것 */
+const hasFresh = (a: AgentView, s: FreshInput) =>
+  s.fresh?.[a.id] !== undefined && !['working', 'awaiting'].includes(displayStatus(a, s.requests))
+
+export function summary(state: FreshInput, roomId: RoomId): { working: number; awaiting: number; unread: number; fresh: number } {
   let working = 0
   let awaiting = 0
+  let fresh = 0
   for (const a of state.agents) {
     if (a.roomId !== roomId) continue
     const s = displayStatus(a, state.requests)
     if (s === 'working') working++
     else if (s === 'awaiting') awaiting++
+    if (hasFresh(a, state)) fresh++
   }
   const unread = state.messages.filter(m => m.roomId === roomId && isUnread(m)).length
-  return { working, awaiting, unread }
+  return { working, awaiting, unread, fresh }
+}
+
+export type ChipKind = 'working' | 'awaiting' | 'unread' | 'fresh'
+
+/** 요약 칩을 누를 때 갈 에이전트 — 방 안 순서에서 after 다음, 끝이면 처음으로. after 가 그 종류가 아니면 첫 번째 */
+export function nextAgent(kind: ChipKind, s: FreshInput, roomId: RoomId, after: AgentId | null): AgentId | null {
+  const match = (a: AgentView) => {
+    if (kind === 'fresh') return hasFresh(a, s)
+    if (kind === 'unread') return unreadFor(a.id, s.messages) > 0
+    return displayStatus(a, s.requests) === kind
+  }
+  const list = s.agents.filter(a => a.roomId === roomId && match(a)).map(a => a.id)
+  if (list.length === 0) return null
+  const i = after === null ? -1 : list.indexOf(after)
+  return list[(i + 1) % list.length]
 }
 
 export function edges(roomId: RoomId, agents: AgentView[], messages: RelayMessage[]): EdgeView[] {
