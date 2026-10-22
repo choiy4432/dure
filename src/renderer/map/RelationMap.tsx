@@ -14,13 +14,13 @@ import { edges as edgeViews, pairMessages, type EdgeView } from '../state/select
 import { ago, MESSAGE_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { MotionDiv, Presence, useLeaving } from '../lib/presence'
-import { MOTION, moveMs } from '../lib/motion'
+import { MOTION, easeOut5, moveMs } from '../lib/motion'
 import { AgentNode, type AgentFlowNode } from './AgentNode'
 import { HandoffEdge, MARKER_TONES, markerId, type HandoffFlowEdge } from './HandoffEdge'
 import { SummaryChips } from './SummaryChips'
 import { OffscreenPill } from './OffscreenPill'
 import { FIT_OPTIONS, ZoomControls } from './ZoomControls'
-import { fitPolicy, type FitReason, type FitState } from './fitPolicy'
+import { fitPolicy, movedEnough, type Viewport, type FitReason, type FitState } from './fitPolicy'
 import { AUTO_FIT_MIN, arrange, columnsFor, isUnplaced, placeMissing, type Point } from './layout'
 
 /** 처음 그릴 때와 자동 맞춤 — 모두 보기와 같되 너무 작아지지 않게 하한을 둔다 */
@@ -156,10 +156,11 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
   const flow = useReactFlow()
   // 자동 맞춤 상태 — 사건마다 fitPolicy 가 다음 상태와 맞출지를 정한다
   const fitState = useRef<FitState>({ userMoved: false })
+  const moveFrom = useRef<Viewport | null>(null) // 사용자가 움직이기 시작할 때의 화면
   const fitOn = useCallback((reason: FitReason) => {
     const r = fitPolicy(fitState.current, reason)
     fitState.current = r.state
-    if (r.fit) void flow.fitView({ ...AUTO_FIT, duration: moveMs(260) })
+    if (r.fit) void flow.fitView({ ...AUTO_FIT, duration: moveMs(260), ease: easeOut5 })
   }, [flow])
 
   // 카드 수가 바뀌면 다시 맞춘다(처음 그릴 때는 fitView prop 이 맞춘다)
@@ -204,7 +205,7 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
     for (const a of todo) if (moved.current.get(a.id) === out.get(a.id)) moved.current.delete(a.id)
     // 정리는 '보기 좋게 다시 놓아 달라' 는 요청이라 화면도 따라간다 — 직접 옮겼던 것은 잊고 자동 맞춤으로 돌아간다
     fitState.current = fitPolicy(fitState.current, 'count').state
-    void flow.fitView({ ...AUTO_FIT, duration: moveMs(260) })
+    void flow.fitView({ ...AUTO_FIT, duration: moveMs(260), ease: easeOut5 })
   }, [seats, flow]) // eslint-disable-line react-hooks/exhaustive-deps -- posOf·build 는 seats 와 ref 만 읽는다
 
   const [pair, setPair] = useState<PairAt | null>(null)
@@ -296,10 +297,15 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
         nodeDragThreshold={CLICK_SLOP_PX}
         onNodeDragStop={onNodeDragStop}
         onEdgeClick={(e, edge) => openPair(edge.source, edge.target, e)}
-        onMoveStart={(e) => {
+        onMoveStart={(e, vp) => {
           closePair()
-          // event 가 있을 때만 사용자가 움직인 것 — fitView 같은 코드 움직임은 null
-          if (e) fitOn('user-move')
+          // event 가 있을 때만 사용자 움직임 후보 — fitView 같은 코드 움직임은 null. 끝났을 때 실제로 달라졌는지 본다
+          moveFrom.current = e ? vp : null
+        }}
+        onMoveEnd={(_e, vp) => {
+          const from = moveFrom.current
+          moveFrom.current = null
+          if (from && movedEnough(from, vp)) fitOn('user-move')
         }}
         onPaneClick={() => getStore().selectAgent(null)}
         fitView

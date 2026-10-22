@@ -1,3 +1,13 @@
+export interface Viewport { x: number; y: number; zoom: number }
+
+/**
+ * 누르기만 하고 놓은 것(빈 곳 눌러 고르기 풀기)도 React Flow 는 움직임 시작으로 알린다 —
+ * 실제로 화면이 달라졌을 때만 '직접 옮겼다' 로 센다. 위치는 1px 넘게, 확대는 조금이라도.
+ */
+export function movedEnough(a: Viewport, b: Viewport): boolean {
+  return Math.abs(a.x - b.x) > 1 || Math.abs(a.y - b.y) > 1 || a.zoom !== b.zoom
+}
+
 /** 화면 맞춤을 일으킨 사건 */
 export type FitReason = 'resize' | 'count' | 'fit-all' | 'user-move' | 'room'
 

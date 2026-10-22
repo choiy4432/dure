@@ -8,6 +8,9 @@ export function reducedMotion(): boolean {
 /** 화면 이동 시간(ms) — 움직임 줄이기면 0 */
 export const moveMs = (ms: number) => (reducedMotion() ? 0 : ms)
 
+/** 5차 ease-out — 빨리 출발해 길게 멈춘다(관계도 자동 맞춤의 화면 이동 곡선). React Flow 의 `ease` 옵션에 넘긴다 */
+export const easeOut5 = (t: number) => 1 - Math.pow(1 - t, 5)
+
 // ── 기능 움직임(anime.js) 값 — 바뀌는 것을 설명하는 움직임만. 시간·거리·크기·곡선은 여기에만 둔다(컴포넌트에 숫자를 흩뿌리지 않는다).
 // 들어올 때는 outQuint(빨리 출발해 길게 멈춘다), 나갈 때는 outCubic(넘김 서명과 같은 곡선). 튕김은 없다.
 

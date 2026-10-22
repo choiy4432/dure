@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fitPolicy, type FitState } from '../../src/renderer/map/fitPolicy'
+import { fitPolicy, movedEnough, type FitState } from '../../src/renderer/map/fitPolicy'
 
 const fresh: FitState = { userMoved: false }
 
@@ -25,5 +25,18 @@ describe('fitPolicy', () => {
     expect(fitPolicy({ userMoved: true }, 'fit-all').fit).toBe(false)
     expect(fitPolicy({ userMoved: true }, 'count')).toEqual({ state: { userMoved: false }, fit: true })
     expect(fitPolicy({ userMoved: true }, 'room')).toEqual({ state: { userMoved: false }, fit: true })
+  })
+})
+
+describe('movedEnough', () => {
+  const v = { x: 10, y: 20, zoom: 1 }
+  it('누르고 놓기만 한 것(1px 이내·확대 같음)은 옮긴 게 아니다', () => {
+    expect(movedEnough(v, v)).toBe(false)
+    expect(movedEnough(v, { ...v, x: 11, y: 19 })).toBe(false)
+  })
+  it('끌어서 옮기거나 확대하면 옮긴 것이다', () => {
+    expect(movedEnough(v, { ...v, x: 40 })).toBe(true)
+    expect(movedEnough(v, { ...v, y: 3 })).toBe(true)
+    expect(movedEnough(v, { ...v, zoom: 1.2 })).toBe(true)
   })
 })
