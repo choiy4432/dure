@@ -14,12 +14,18 @@ import { edges as edgeViews, pairMessages, type EdgeView } from '../state/select
 import { ago, MESSAGE_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { MotionDiv, Presence, useLeaving } from '../lib/presence'
-import { MOTION } from '../lib/motion'
+import { MOTION, moveMs } from '../lib/motion'
 import { AgentNode, type AgentFlowNode } from './AgentNode'
 import { HandoffEdge, MARKER_TONES, markerId, type HandoffFlowEdge } from './HandoffEdge'
 import { SummaryChips } from './SummaryChips'
 import { FIT_OPTIONS, ZoomControls } from './ZoomControls'
-import { arrange, columnsFor, isUnplaced, placeMissing, type Point } from './layout'
+import { fitPolicy, type FitReason, type FitState } from './fitPolicy'
+import { AUTO_FIT_MIN, arrange, columnsFor, isUnplaced, placeMissing, type Point } from './layout'
+
+/** 처음 그릴 때와 자동 맞춤 — 모두 보기와 같되 너무 작아지지 않게 하한을 둔다 */
+const AUTO_FIT = { ...FIT_OPTIONS, minZoom: AUTO_FIT_MIN }
+/** 마지막 크기 변화 뒤 이만큼 가만하면 맞춘다(창·경계선 끌기 중에는 기다린다) */
+const RESIZE_SETTLE_MS = 150
 
 const nodeTypes: NodeTypes = { agent: AgentNode }
 const edgeTypes: EdgeTypes = { handoff: HandoffEdge }
@@ -147,6 +153,39 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
   }, [])
 
   const flow = useReactFlow()
+  // 자동 맞춤 상태 — 사건마다 fitPolicy 가 다음 상태와 맞출지를 정한다
+  const fitState = useRef<FitState>({ userMoved: false })
+  const fitOn = useCallback((reason: FitReason) => {
+    const r = fitPolicy(fitState.current, reason)
+    fitState.current = r.state
+    if (r.fit) void flow.fitView({ ...AUTO_FIT, duration: moveMs(260) })
+  }, [flow])
+
+  // 카드 수가 바뀌면 다시 맞춘다(처음 그릴 때는 fitView prop 이 맞춘다)
+  const count = seats.length
+  const lastCount = useRef(count)
+  useEffect(() => {
+    if (lastCount.current === count) return
+    lastCount.current = count
+    fitOn('count')
+  }, [count, fitOn])
+
+  // 관계도 크기가 바뀌면(창·경계선 끌기) 잠잠해진 뒤 한 번 — 직접 옮긴 화면이면 건드리지 않는다
+  useEffect(() => {
+    const el = wrap.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let last = `${el.clientWidth}x${el.clientHeight}`
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const ro = new ResizeObserver(() => {
+      const now = `${el.clientWidth}x${el.clientHeight}`
+      if (now === last) return // 관찰을 시작할 때 오는 첫 알림 등 — 크기가 그대로면 무시
+      last = now
+      clearTimeout(timer)
+      timer = setTimeout(() => fitOn('resize'), RESIZE_SETTLE_MS)
+    })
+    ro.observe(el)
+    return () => { ro.disconnect(); clearTimeout(timer) }
+  }, [fitOn])
   // 자리 정리 — 보이는 자리의 읽는 순서대로 격자에 다시 놓는다. 열 수는 지금 너비에 3열이 들어오는지로.
   // 저장은 끌기 저장과 같다: moved 에 먼저 두어 스토어가 따라오기 전에도 새 자리로 보이게
   const arrangeAll = useCallback(async () => {
@@ -162,8 +201,9 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
     await Promise.allSettled(todo.map(a => window.dure.updateAgent(a.id, { pos: out.get(a.id)! })))
     try { await getStore().refresh() } catch { /* 못 받으면 이번 실행에선 놓은 자리 그대로 보인다 */ }
     for (const a of todo) if (moved.current.get(a.id) === out.get(a.id)) moved.current.delete(a.id)
-    // Task 7 에서 자동 맞춤(fitAuto)으로 바뀐다
-    void flow.fitView(FIT_OPTIONS)
+    // 정리는 '보기 좋게 다시 놓아 달라' 는 요청이라 화면도 따라간다 — 직접 옮겼던 것은 잊고 자동 맞춤으로 돌아간다
+    fitState.current = fitPolicy(fitState.current, 'count').state
+    void flow.fitView({ ...AUTO_FIT, duration: moveMs(260) })
   }, [seats, flow]) // eslint-disable-line react-hooks/exhaustive-deps -- posOf·build 는 seats 와 ref 만 읽는다
 
   const [pair, setPair] = useState<PairAt | null>(null)
@@ -180,6 +220,20 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
     setPair({ a, b, x: x - (r?.left ?? 0), y: y - (r?.top ?? 0) })
   }, [])
   const closePair = useCallback(() => setPair(null), [])
+
+  // Esc 로 고르기 풀기 — 메시지 창이 열려 있으면 그 창의 Esc 가 먼저(닫기만), 패널·입력창에 초점이 있으면 그쪽 Esc 라 건드리지 않는다
+  const pairOpen = useRef(false)
+  pairOpen.current = pair !== null
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || pairOpen.current) return
+      const at = document.activeElement
+      if (at !== document.body && at !== null && !wrap.current?.contains(at)) return
+      getStore().selectAgent(null)
+    }
+    window.addEventListener('keydown', onEsc)
+    return () => window.removeEventListener('keydown', onEsc)
+  }, [])
 
   const flowEdges = useMemo<HandoffFlowEdge[]>(() => {
     const ids = new Set(views.map(v => v.id))
@@ -241,9 +295,14 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
         nodeDragThreshold={CLICK_SLOP_PX}
         onNodeDragStop={onNodeDragStop}
         onEdgeClick={(e, edge) => openPair(edge.source, edge.target, e)}
-        onMoveStart={closePair}
+        onMoveStart={(e) => {
+          closePair()
+          // event 가 있을 때만 사용자가 움직인 것 — fitView 같은 코드 움직임은 null
+          if (e) fitOn('user-move')
+        }}
+        onPaneClick={() => getStore().selectAgent(null)}
         fitView
-        fitViewOptions={FIT_OPTIONS}
+        fitViewOptions={AUTO_FIT}
         minZoom={0.25}
         maxZoom={2}
         nodesDraggable
@@ -260,7 +319,7 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
         <Background variant={BackgroundVariant.Dots} gap={16} size={3} color="var(--dot)" bgColor="var(--canvas)" />
       </ReactFlow>
       <SummaryChips roomId={roomId} />
-      <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => {}} />
+      <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => fitOn('fit-all')} />
       {/* 다른 떠 있는 목록처럼 — 닫으면(pair = null) 마지막 모습으로 남아 가라앉는다 */}
       <Presence show={pair !== null}>
         {pair && <PairPopover key={`${pair.a}>${pair.b}`} at={pair} bounds={wrap} onClose={closePair} />}

@@ -200,6 +200,33 @@ describe('RelationMap — 자리 정리', () => {
   })
 })
 
+describe('RelationMap — 고르기 풀기', () => {
+  const pick = async () => {
+    snapshot.agents = [agent('a', { pos: { x: 100, y: 40 } })]
+    const r = await renderMap()
+    act(() => r.store.selectAgent('a'))
+    expect(r.store.getState().selectedAgentId).toBe('a')
+    return r
+  }
+  it('빈 곳을 누르면 고르기를 푼다', async () => {
+    const { store, container } = await pick()
+    fireEvent.click(container.querySelector('.react-flow__pane')!)
+    expect(store.getState().selectedAgentId).toBeNull()
+  })
+  it('Esc — 초점이 바탕이면 풀고, 입력창이면 그대로', async () => {
+    const { store } = await pick()
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(store.getState().selectedAgentId).toBe('a')
+    input.remove()
+    ;(document.activeElement as HTMLElement | null)?.blur?.()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(store.getState().selectedAgentId).toBeNull()
+  })
+})
+
 describe('PairPopover', () => {
   async function renderPopover(onClose = vi.fn()) {
     snapshot.agents = [agent('a', { name: '기획', pos: { x: 64, y: 64 } }), agent('b', { name: '웹 화면', pos: { x: 400, y: 64 } })]
