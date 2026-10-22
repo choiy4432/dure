@@ -1147,6 +1147,58 @@ code {
   white-space: nowrap;
 }
 
+/* 화면 밖 할 일 알약 — 엣지 알약(.el) 모양을 바탕으로 그 쪽 가장자리 가운데에서 16px 안쪽 */
+.op {
+  position: absolute;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: var(--shadow-label);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.op:hover {
+  border-color: var(--border-strong);
+}
+
+.op .dot {
+  width: 6px;
+  height: 6px;
+}
+
+.op.left {
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.op.right {
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.op.top {
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.op.bottom {
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 .el:hover {
   border-color: var(--border-strong);
 }

@@ -18,6 +18,7 @@ import { MOTION, moveMs } from '../lib/motion'
 import { AgentNode, type AgentFlowNode } from './AgentNode'
 import { HandoffEdge, MARKER_TONES, markerId, type HandoffFlowEdge } from './HandoffEdge'
 import { SummaryChips } from './SummaryChips'
+import { OffscreenPill } from './OffscreenPill'
 import { FIT_OPTIONS, ZoomControls } from './ZoomControls'
 import { fitPolicy, type FitReason, type FitState } from './fitPolicy'
 import { AUTO_FIT_MIN, arrange, columnsFor, isUnplaced, placeMissing, type Point } from './layout'
@@ -319,6 +320,7 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
         <Background variant={BackgroundVariant.Dots} gap={16} size={3} color="var(--dot)" bgColor="var(--canvas)" />
       </ReactFlow>
       <SummaryChips roomId={roomId} />
+      <OffscreenPill roomId={roomId} nodes={nodes} wrap={wrap} />
       <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => fitOn('fit-all')} />
       {/* 다른 떠 있는 목록처럼 — 닫으면(pair = null) 마지막 모습으로 남아 가라앉는다 */}
       <Presence show={pair !== null}>
