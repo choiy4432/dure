@@ -110,6 +110,11 @@ function parseObject(obj: any): StreamEvent {
         const tokens = num(obj.estimated_tokens);
         return tokens === null ? ignored('system/thinking_tokens') : { kind: 'thinking', active: true, tokens };
       }
+      // 요청 보냄·요약 중·끝(null) — 모르는 값은 버린다(다음 CLI 가 상태를 늘려도 엉뚱한 단계를 보이지 않게)
+      if (obj.subtype === 'status' && !parentOf(obj).parent) {
+        const st = obj.status;
+        return st === 'requesting' || st === 'compacting' || st === null ? { kind: 'api-status', status: st } : ignored('system/status');
+      }
       if (obj.subtype === 'task_started') {
         // task_type 이 없으면 서브에이전트로 친다. 그 밖(local_bash 등)은 무시
         if (obj.task_type !== undefined && obj.task_type !== 'local_agent') return ignored('system/task_started');

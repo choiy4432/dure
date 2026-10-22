@@ -203,6 +203,26 @@ describe('parseLine — 생각 신호(probe13·14 원본 모양)', () => {
   });
 });
 
+describe('parseLine — API 상태(system/status)', () => {
+  // 진짜 줄 모양(2.1.304 — 없는 모델로 잰 새 세션): {"type":"system","subtype":"status","status":"requesting","session_id":…,"uuid":…}
+  const status = (st: unknown, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ type: 'system', subtype: 'status', status: st, session_id: 'S', uuid: 'u3', ...extra });
+
+  test('requesting·compacting·null → api-status', () => {
+    expect(parseLine(status('requesting'))).toEqual({ kind: 'api-status', status: 'requesting' });
+    expect(parseLine(status('compacting'))).toEqual({ kind: 'api-status', status: 'compacting' });
+    expect(parseLine(status(null))).toEqual({ kind: 'api-status', status: null });
+  });
+
+  test('모르는 값·없는 값 → ignored(다음 CLI 가 상태를 늘려도 엉뚱한 단계를 보이지 않게)', () => {
+    expect(parseLine(status('uploading'))).toEqual({ kind: 'ignored', type: 'system/status' });
+    expect(parseLine('{"type":"system","subtype":"status"}')).toEqual({ kind: 'ignored', type: 'system/status' });
+  });
+
+  test('서브에이전트 줄(parent_tool_use_id)의 상태 → ignored', () =>
+    expect(parseLine(status('requesting', { parent_tool_use_id: 'toolu_A' }))).toEqual({ kind: 'ignored', type: 'system/status' }));
+});
+
 describe('parseLine — 수정의 바뀐 줄(tool_use_result.structuredPatch)', () => {
   // Claude Code 가 Edit 결과에 싣는 모양 — originalFile 같은 큰 칸은 읽지 않는다
   const editResult = (toolUseResult: unknown) =>

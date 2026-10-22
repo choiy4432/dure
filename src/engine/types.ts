@@ -86,6 +86,7 @@ export interface DiffHunk {
   lines: string[];
 }
 export type SubagentEnd = 'completed' | 'failed' | 'stopped';
+export type ApiStatus = 'requesting' | 'compacting' | null;
 export type StreamEvent =
   | { kind: 'init'; sessionId: string; model: string; permissionMode: string; slashCommands: string[] }
   | { kind: 'text-delta'; text: string }
@@ -93,6 +94,9 @@ export type StreamEvent =
   // tokens = 지금까지 생각한 추정 토큰 수(thinking_tokens 의 누적 값 — 늘 수). 블록 시작·끝은 null. 생각을 여는 건 블록 시작
   // (active 참 · tokens null)뿐이고, 수가 있는 신호는 이미 생각 중일 때 수만 바꾼다. 내용은 오지 않는다. 기록하지 않는다
   | { kind: 'thinking'; active: boolean; tokens: number | null }
+  // 차례 안의 API 상태(system/status) — requesting = 모델에 요청을 보냈다(첫 내용 전) · compacting = 대화를 요약하는 중 · null = 그 상태가 끝났다.
+  // 서브에이전트의 것은 쓰지 않는다. 기록하지 않는다
+  | { kind: 'api-status'; status: ApiStatus }
   | { kind: 'assistant'; blocks: AssistantBlock[]; parent?: string } // thinking 블록은 버린다. parent = 서브에이전트 줄이면 부모의 Agent tool_use id
   // patch = user 줄 최상위 tool_use_result.structuredPatch(Claude Code 가 고친 일 결과에 싣는다) — 모양이 다르면 없음
   | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; parent?: string; patch?: DiffHunk[] }

@@ -1151,6 +1151,24 @@ test('생각: THINK 차례의 생각 신호가 차례대로 agent-event 로 나�
   expect(file).not.toContain('estimated_tokens');
 });
 
+test('API 상태: 요청 보냄(api-status requesting)이 생각보다 먼저 agent-event 로 나가고 기록엔 남지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const events: StreamEvent[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === a.id && events.push(x.event));
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('THINK 요청'));
+  await done;
+  const order = events
+    .filter((x) => x.kind === 'init' || x.kind === 'api-status' || x.kind === 'thinking')
+    .map((x) => x.kind)
+    .slice(0, 3);
+  expect(order).toEqual(['init', 'api-status', 'thinking']);
+  expect(events.find((x) => x.kind === 'api-status')).toEqual({ kind: 'api-status', status: 'requesting' });
+  const file = fs.readFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), 'utf8');
+  expect(file).not.toContain('requesting');
+});
+
 test('생각: 생각하는 중에 멈추면 그 뒤로 생각 신호가 오지 않는다 — 쉬는 상태 · 멈춤 알림으로 끝', async () => {
   const e = await start({ FAKE_THINK_MS: '150' });
   const { a } = setup(e);

@@ -1668,12 +1668,13 @@ function sameFlags(x: Flags, y: Flags): boolean {
 /**
  * 보낸 줄을 읽었다는 뜻인 사건 — 부모의 줄(init·글·하는 일·result 등). 제어 응답 · 서브에이전트 줄(parent) · 서브에이전트 시작·끝 ·
  * 버린 줄(task_progress·task_updated·background_tasks_changed 같은 서브에이전트·백그라운드 system 줄 — 세션이 보통 먼저 거른다)은
- * 보낸 줄과 상관없이 온다(부모 차례가 끝난 뒤에도 서브에이전트는 돈다). 생각 신호(thinking)도 치지 않는다 — 늘 그 차례의 init 뒤에 오니
- * 읽은 표시는 init 이 이미 했다
+ * 보낸 줄과 상관없이 온다(부모 차례가 끝난 뒤에도 서브에이전트는 돈다). 생각 신호(thinking)·API 상태(api-status)도 치지 않는다 —
+ * 늘 그 차례의 init 뒤에 오니 읽은 표시는 init 이 이미 했다
  */
 function readsInput(ev: StreamEvent): boolean {
   if (
-    ev.kind === 'control-response' || ev.kind === 'task-started' || ev.kind === 'task-ended' || ev.kind === 'ignored' || ev.kind === 'thinking'
+    ev.kind === 'control-response' || ev.kind === 'task-started' || ev.kind === 'task-ended' || ev.kind === 'ignored' || ev.kind === 'thinking' ||
+    ev.kind === 'api-status'
   ) return false;
   return !((ev.kind === 'assistant' || ev.kind === 'tool-result') && ev.parent);
 }
