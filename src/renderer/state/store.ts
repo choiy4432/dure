@@ -11,7 +11,8 @@ export type UiState = Snapshot & {
   streaming: Record<AgentId, string>
   /**
    * Claude 가 생각하는 중인 에이전트 — tokens = 지금까지 생각한 추정 토큰 수(모르면 null). 없으면 생각 중이 아니다.
-   * 생각 끝 신호 · 흐르는 글 · 그 에이전트의 답·끝·알림·새 대화 기록 · 작업 중(승인 기다림 포함)이 아니게 됨에서 지운다
+   * 생각 블록 시작에서만 생기고(토큰 수 신호는 수만 바꾼다), 생각 끝 신호 · 흐르는 글 · 그 에이전트의 답·끝·알림·새 대화 기록 ·
+   * 작업 중(승인 기다림 포함)이 아니게 됨에서 지운다
    */
   thinking: Record<AgentId, { tokens: number | null }>
   /** 에이전트마다 마지막 assistant 글과 그 시각 — 기록을 안 불러온 에이전트도(관계도 카드의 한 줄 요약) */
@@ -251,6 +252,9 @@ export function createStore(api: DureApi): Store {
           }
           // 쉬는 에이전트에게 늦게 온 신호는 버린다 — 다음 차례가 '생각하는 중'으로 시작하지 않게
           if (!busy(state.agents.find(a => a.id === agentId)?.status)) break
+          // 생각을 여는 건 블록 시작(수 없음)뿐 — 수만 든 신호(thinking_tokens)는 생각 중일 때 수만 바꾼다.
+          // 생각이 끝난 뒤(글 블록 시작) 늦게 온 수가 '생각하는 중'을 잠깐 다시 열지 않게
+          if (!cur && event.tokens !== null) break
           // 토큰 수를 모르는 신호(새 생각 블록 시작)는 이미 아는 수를 지우지 않는다. 같은 수면 그대로(다시 그리지 않게)
           const tokens = event.tokens ?? cur?.tokens ?? null
           if (cur && cur.tokens === tokens) break

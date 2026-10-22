@@ -563,10 +563,25 @@ describe('ChatList — 작업 중 줄(Claude Code 의 작업 중 표시처럼)',
     expect(working()).not.toHaveTextContent('토큰')
   })
 
+  it('생각 블록 시작 없이 온 토큰 수(늦게 온 수)는 "생각하는 중…"을 띄우지 않는다 — 생각이 끝난 뒤에도', async () => {
+    await renderPanel()
+    await emit('status', { agentId: 'w', status: 'working', errorText: null })
+    await think(true, 278)
+    expect(working()!.querySelector('.wk-t')).toHaveTextContent('작업 중…')
+    expect(working()).not.toHaveTextContent('토큰')
+    await think(true)
+    expect(working()!.querySelector('.wk-t')).toHaveTextContent('생각하는 중…')
+    await think(false) // 글 블록 시작 — 생각 끝
+    await think(true, 452)
+    expect(working()!.querySelector('.wk-t')).toHaveTextContent('작업 중…')
+    expect(working()).not.toHaveTextContent('생각하는 중…')
+  })
+
   it('생각하는 중에도 서브에이전트 문구는 그대로 덧붙는다', async () => {
     await renderPanel()
     await emit('status', { agentId: 'w', status: 'working', errorText: null })
     await emit('subagents', { agentId: 'w', running: ['A'] })
+    await think(true)
     await think(true, 50)
     const sub = within(working() as HTMLElement).getByText('서브에이전트 1개가 일하고 있어요')
     expect(working()!.querySelector('.wk-t')).toHaveTextContent('생각하는 중…')
@@ -577,7 +592,9 @@ describe('ChatList — 작업 중 줄(Claude Code 의 작업 중 표시처럼)',
   it('생각하는 중에 멈추거나 세션이 죽으면 "생각하는 중…"이 남지 않는다 — 다음 차례는 "작업 중…"으로 시작', async () => {
     await renderPanel()
     await emit('status', { agentId: 'w', status: 'working', errorText: null })
+    await think(true)
     await think(true, 278)
+    expect(working()!.querySelector('.wk-t')).toHaveTextContent('생각하는 중…')
     // 멈추기: 쉬는 상태 → 멈춤 알림 → 끝(진짜 순서 — 세션은 result 를 내기 직전에 쉰다)
     await emit('status', { agentId: 'w', status: 'idle', errorText: null })
     await emit('history', { agentId: 'w', item: { t: 10, kind: 'notice', text: '멈췄어요' } })
@@ -586,7 +603,9 @@ describe('ChatList — 작업 중 줄(Claude Code 의 작업 중 표시처럼)',
     expect(working()!.querySelector('.wk-t')).toHaveTextContent('작업 중…')
     expect(working()).not.toHaveTextContent('토큰')
     // 세션이 죽음: 오류 상태
+    await think(true)
     await think(true, 452)
+    expect(working()!.querySelector('.wk-t')).toHaveTextContent('생각하는 중…')
     await emit('status', { agentId: 'w', status: 'error', errorText: 'fake crash' })
     expect(working()).toBeNull()
     await emit('status', { agentId: 'w', status: 'working', errorText: null })

@@ -317,16 +317,32 @@ describe('AgentNode — 카드 내용', () => {
     const { card } = await renderCard()
     const line = () => card.querySelector('.na')!.textContent
     expect(line()).toBe('서브에이전트 2개가 일하는 중')
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: null } })
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: 50 } })
     expect(line()).toBe('생각하는 중…')
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: false, tokens: null } })
     expect(line()).toBe('서브에이전트 2개가 일하는 중')
   })
 
+  it('생각이 끝난 뒤 늦게 온 토큰 수는 "생각하는 중…"을 다시 띄우지 않는다 — 생각 블록 시작만 띄운다', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', status: 'working' })]
+    const { card } = await renderCard()
+    const line = () => card.querySelector('.na')!.textContent
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: 278 } })
+    expect(line()).toBe('일하는 중…') // 블록 시작 없이 온 수
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: null } })
+    expect(line()).toBe('생각하는 중…')
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: false, tokens: null } })
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: 452 } })
+    expect(line()).toBe('일하는 중…')
+  })
+
   it('생각하는 중에 멈추면 "생각하는 중…"이 남지 않는다', async () => {
     snapshot.agents = [agent('d', { name: '디자인', status: 'working' })]
     const { card } = await renderCard()
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: null } })
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: 278 } })
+    expect(card.querySelector('.na')!.textContent).toBe('생각하는 중…')
     emit('status', { agentId: 'd', status: 'idle', errorText: null })
     expect(card.querySelector('.na')!.textContent).toBe('기다리는 중')
     emit('status', { agentId: 'd', status: 'working', errorText: null })

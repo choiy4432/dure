@@ -166,15 +166,18 @@ describe('parseLine — 생각 신호(probe13·14 원본 모양)', () => {
   test('thinking 블록 시작 → 생각 시작(토큰 수는 아직 모름)', () =>
     expect(parseLine(blockStart({ type: 'thinking', thinking: '', signature: '' }))).toEqual({ kind: 'thinking', active: true, tokens: null }));
 
+  test('redacted_thinking 블록 시작(가려진 생각)도 생각 시작 — 끝이 아니다', () =>
+    expect(parseLine(blockStart({ type: 'redacted_thinking', data: 'xyz' }))).toEqual({ kind: 'thinking', active: true, tokens: null }));
+
   test('다른 블록 시작(text·tool_use) → 생각 끝', () => {
     expect(parseLine(blockStart({ type: 'text', text: '' }))).toEqual({ kind: 'thinking', active: false, tokens: null });
     expect(parseLine(blockStart({ type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} }))).toEqual({ kind: 'thinking', active: false, tokens: null });
   });
 
-  test('system/thinking_tokens → 누적 추정 토큰 수, 수가 아니거나 없으면 모름', () => {
+  test('system/thinking_tokens → 누적 추정 토큰 수 · 수가 아니거나 없으면 ignored(블록 시작과 헷갈리지 않게 — 생각은 블록 시작만 연다)', () => {
     expect(parseLine(tokens(278))).toEqual({ kind: 'thinking', active: true, tokens: 278 });
-    expect(parseLine(tokens(null))).toEqual({ kind: 'thinking', active: true, tokens: null });
-    expect(parseLine('{"type":"system","subtype":"thinking_tokens"}')).toEqual({ kind: 'thinking', active: true, tokens: null });
+    expect(parseLine(tokens(null))).toEqual({ kind: 'ignored', type: 'system/thinking_tokens' });
+    expect(parseLine('{"type":"system","subtype":"thinking_tokens"}')).toEqual({ kind: 'ignored', type: 'system/thinking_tokens' });
   });
 
   test('thinking_delta(내용 빈칸 · 토큰 수 null 섞임)·signature_delta → ignored', () => {

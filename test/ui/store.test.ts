@@ -602,6 +602,24 @@ describe('store 생각하는 중', () => {
     expect(s.getState().thinking).toEqual({})
   })
 
+  it('토큰 수 신호(thinking_tokens)는 생각 중일 때 수만 바꾼다 — 생각이 끝난 뒤 늦게 온 수가 "생각하는 중"을 다시 열지 않는다', async () => {
+    const { s, emit } = await thinkingStore()
+    emit('agent-event', think('a', false)) // 글 블록 시작 — 생각 끝
+    emit('agent-event', think('a', true, 600)) // 늦게 온 수
+    expect(s.getState().thinking.a).toBeUndefined()
+    // 생각 블록 시작만 연다 — 그 뒤의 수는 그대로 갱신
+    emit('agent-event', think('a', true))
+    emit('agent-event', think('a', true, 700))
+    expect(s.getState().thinking.a).toEqual({ tokens: 700 })
+  })
+
+  it('작업 중이어도 생각 블록 시작 없이 온 토큰 수는 생각을 만들지 않는다', async () => {
+    const { s, emit } = await thinkingStore()
+    emit('status', working('b'))
+    emit('agent-event', think('b', true, 278))
+    expect(s.getState().thinking.b).toBeUndefined()
+  })
+
   it('이미 아는 토큰 수는 새 블록 시작(토큰 모름)으로 지우지 않는다', async () => {
     const { s, emit } = await thinkingStore()
     emit('agent-event', think('a', true, 278))

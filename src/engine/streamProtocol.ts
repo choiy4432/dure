@@ -104,9 +104,11 @@ function parseObject(obj: any): StreamEvent {
         };
       }
       if (obj.subtype === 'compact_boundary') return { kind: 'compacted' };
-      // 생각하는 동안 오르는 누적 추정 토큰 수(probe13·14: 50→278→452). 서브에이전트의 것은 쓰지 않는다
+      // 생각하는 동안 오르는 누적 추정 토큰 수(probe13·14: 50→278→452). 서브에이전트의 것은 쓰지 않는다.
+      // 수가 없으면 버린다 — 수 없는(tokens null) 신호는 생각 블록 시작이고, 생각은 블록 시작만 연다(늦게 온 수가 다시 열지 않게)
       if (obj.subtype === 'thinking_tokens' && !parentOf(obj).parent) {
-        return { kind: 'thinking', active: true, tokens: num(obj.estimated_tokens) };
+        const tokens = num(obj.estimated_tokens);
+        return tokens === null ? ignored('system/thinking_tokens') : { kind: 'thinking', active: true, tokens };
       }
       if (obj.subtype === 'task_started') {
         // task_type 이 없으면 서브에이전트로 친다. 그 밖(local_bash 등)은 무시
@@ -137,11 +139,11 @@ function parseObject(obj: any): StreamEvent {
       if (obj.event?.type === 'content_block_delta' && d?.type === 'text_delta' && typeof d.text === 'string') {
         return { kind: 'text-delta', text: d.text };
       }
-      // 블록 시작 — thinking 이면 생각 시작, 다른 블록(text·tool_use)이면 생각 끝. thinking_delta 는 내용이 비고 토큰 수에
-      // null 이 섞여 쓰지 않는다(수는 system/thinking_tokens 에서). 서브에이전트 줄은 부모의 생각이 아니다
+      // 블록 시작 — thinking·redacted_thinking(가려진 생각)이면 생각 시작, 다른 블록(text·tool_use)이면 생각 끝. thinking_delta 는
+      // 내용이 비고 토큰 수에 null 이 섞여 쓰지 않는다(수는 system/thinking_tokens 에서). 서브에이전트 줄은 부모의 생각이 아니다
       const block = obj.event?.content_block;
       if (obj.event?.type === 'content_block_start' && block && typeof block.type === 'string' && !parentOf(obj).parent) {
-        return { kind: 'thinking', active: block.type === 'thinking', tokens: null };
+        return { kind: 'thinking', active: block.type === 'thinking' || block.type === 'redacted_thinking', tokens: null };
       }
       return ignored('stream_event');
     }
