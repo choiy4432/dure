@@ -36,7 +36,7 @@ async function setup(opts: { focus?: boolean } = {}) {
   const { useAttention } = await import('../../src/renderer/shell/useAttention')
   const notify = vi.fn()
   const drawBadge = vi.fn((t: string) => `png:${t}`)
-  let announced = ''
+  let announced: { text: string; n: number } = { text: '', n: 0 }
   function Probe() {
     announced = useAttention({ hasFocus: () => opts.focus ?? false, notify, drawBadge })
     return null
@@ -62,7 +62,7 @@ describe('useAttention', () => {
     await emit('request', req('q1'))
     expect(dure.flashWindow).toHaveBeenCalledTimes(1)
     expect(notify).toHaveBeenCalledWith('디자인이 파일을 고치려 해요', expect.objectContaining({ body: 'x.ts', tag: 'dure-a' }))
-    expect(announced()).toBe('디자인이 승인을 기다려요')
+    expect(announced().text).toBe('디자인이 승인을 기다려요')
   })
 
   it('초점 있음 + 새 승인 → 알림·깜박임 없음, 제목·배지 수만', async () => {
@@ -90,10 +90,19 @@ describe('useAttention', () => {
     expect(store.getState().selectedAgentId).toBe('b')
   })
 
+  it('같은 에이전트가 연달아 승인을 물으면 두 번 다 알린다(n 이 오른다)', async () => {
+    const { announced } = await setup()
+    await emit('request', req('q1'))
+    const first = announced()
+    await emit('request', req('q2'))
+    expect(announced().text).toBe(first.text)
+    expect(announced().n).toBe(first.n + 1)
+  })
+
   it('새 pending 메시지 → 읽어 줄 글만(깜박임·알림 없음)', async () => {
     const { notify, announced } = await setup()
     await emit('message', msg('m1'))
-    expect(announced()).toBe('b에게 메시지가 왔어요')
+    expect(announced().text).toBe('b에게 메시지가 왔어요')
     expect(dure.flashWindow).not.toHaveBeenCalled()
     expect(notify).not.toHaveBeenCalled()
   })

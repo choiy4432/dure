@@ -6,6 +6,8 @@ import { announceAsk, announceMessage, askNotice, badgeText, finishedNotice, win
 
 type NotifyFn = (title: string, o: { body: string; tag: string; onClick: () => void }) => void
 
+export interface Announcement { text: string; n: number }
+
 export interface AttentionOpts {
   hasFocus?: () => boolean
   notify?: NotifyFn
@@ -18,7 +20,8 @@ const defaultHasFocus = () => typeof document !== 'undefined' && typeof document
 const defaultNotify: NotifyFn = (title, { body, tag, onClick }) => {
   try {
     if (typeof Notification === 'undefined') return
-    const n = new Notification(title, { body, tag })
+    // 같은 tag 가 옛 알림을 바꿀 때도 다시 알리게 renotify — TS DOM 라이브러리의 NotificationOptions 엔 아직 없다
+    const n = new Notification(title, { body, tag, renotify: true } as NotificationOptions)
     n.onclick = onClick
   } catch {
     // 알림을 못 띄워도 앱은 그대로
@@ -33,11 +36,16 @@ function defaultDrawBadge(text: string): string | null {
     canvas.height = 32
     const ctx = canvas.getContext('2d')
     if (!ctx) return null
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--danger-solid').trim() || '#DC2626'
+    // 색은 토큰에서만 — 읽지 못하면(토큰 없음) 배지를 그리지 않는다
+    const css = getComputedStyle(document.documentElement)
+    const fill = css.getPropertyValue('--danger-solid').trim()
+    const ink = css.getPropertyValue('--on-danger').trim()
+    if (!fill || !ink) return null
+    ctx.fillStyle = fill
     ctx.beginPath()
     ctx.arc(16, 16, 16, 0, Math.PI * 2)
     ctx.fill()
-    ctx.fillStyle = '#fff'
+    ctx.fillStyle = ink
     ctx.font = 'bold 20px sans-serif'
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
@@ -61,8 +69,9 @@ function call(fn: () => unknown) {
  * 흘끗 보기 신호 — 창 제목 (N) · 작업표시줄 배지 · 깜박임 · Windows 알림 · 읽어 줄 글.
  * 스토어를 구독해 바뀐 것만 본다(그릴 때마다 돌지 않는다). 마지막 읽어 줄 글을 돌려준다.
  */
-export function useAttention(opts: AttentionOpts = {}): string {
-  const [announced, setAnnounced] = useState('')
+export function useAttention(opts: AttentionOpts = {}): Announcement {
+  // n 은 알릴 때마다 오른다 — 같은 글이 연달아 와도 Announcer 가 노드를 갈아 끼워 다시 읽게
+  const [announced, setAnnounced] = useState<Announcement>({ text: '', n: 0 })
   const optsRef = useRef(opts)
   optsRef.current = opts
 
@@ -118,11 +127,12 @@ export function useAttention(opts: AttentionOpts = {}): string {
       const notify = optsRef.current.notify ?? defaultNotify
       const nameOf = (id: AgentId) => s.agents.find(a => a.id === id)?.name ?? id
 
+      const said: string[] = [] // 한 번에 여럿이 와도 모두 읽어 주도록 모아서 한 번에
       for (const r of s.requests) {
         if (seenRequests.has(r.id)) continue
         const agent = s.agents.find(a => a.id === r.agentId)
         if (!agent) continue // 에이전트가 없으면 누를 곳이 없다 — 세지도 않는다(todoCounts 와 같게)
-        setAnnounced(announceAsk(r, agent.name))
+        said.push(announceAsk(r, agent.name))
         if (focused) continue
         call(() => window.dure.flashWindow())
         if (s.notify.asks) {
@@ -131,8 +141,9 @@ export function useAttention(opts: AttentionOpts = {}): string {
         }
       }
       for (const m of s.messages) {
-        if (m.state === 'pending' && !seenMessages.has(m.id)) setAnnounced(announceMessage(nameOf(m.to)))
+        if (m.state === 'pending' && !seenMessages.has(m.id)) said.push(announceMessage(nameOf(m.to)))
       }
+      if (said.length > 0) setAnnounced(a => ({ text: said.join('. '), n: a.n + 1 }))
       if (!focused && s.notify.asks && s.notify.finished) {
         for (const [id, t] of Object.entries(s.fresh)) {
           if (seenFresh[id] === t) continue

@@ -25,6 +25,9 @@ beforeEach(() => {
   stubMatchMedia(true)
 })
 
+// jsdom 엔 캔버스가 없어 getContext 가 경고를 찍는다 — 배지 그림 같은 캔버스 쓰임은 null(그릴 수 없음)로 답하게
+HTMLCanvasElement.prototype.getContext = (() => null) as unknown as typeof HTMLCanvasElement.prototype.getContext
+
 // fastMotion() 을 되돌리지 않고 끝난 시험이 있어도 다음 시험의 anime 는 제 빠르기로 돈다
 afterEach(() => {
   engine.speed = 1

@@ -23,7 +23,7 @@ describe('askNotice', () => {
     expect(n.body).toBe('src/a.ts')
   })
   it('질문: 제목은 질문이 있어요, 본문은 첫 질문 글', () => {
-    const input = { questions: [{ question: '어느 색으로 할까요?', header: '색', options: [{ label: '파랑', description: '' }], multiSelect: false }] }
+    const input = { questions: [{ question: '어느 색으로 할까요?\n파랑과 빨강 중에', header: '색', options: [{ label: '파랑', description: '' }], multiSelect: false }] }
     const n = askNotice(req({ kind: 'question', toolName: 'AskUserQuestion', input }), agent)
     expect(n).toEqual({ title: '디자인에게 질문이 있어요', body: '어느 색으로 할까요?' })
   })

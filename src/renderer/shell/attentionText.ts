@@ -14,7 +14,7 @@ export function windowTitle(total: number, roomName: string | null): string {
 /** 새 승인 요청의 Windows 알림 글 */
 export function askNotice(request: PendingRequest, agent: { name: string; folder: string }): { title: string; body: string } {
   if (request.kind === 'question') {
-    return { title: `${agent.name}에게 질문이 있어요`, body: readQuestions(request.input)[0]?.question ?? '' }
+    return { title: `${agent.name}에게 질문이 있어요`, body: (readQuestions(request.input)[0]?.question ?? '').split(/\r?\n/)[0] }
   }
   const title = requestTitle(agent.name, request.toolName, request.input, request.fromSubagent === true)
   if (request.kind === 'create-agent') {

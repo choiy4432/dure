@@ -74,7 +74,7 @@ export function App() {
           onSettings={() => setDialog('settings')}
         />
         {body}
-        <Announcer text={announced} />
+        <Announcer {...announced} />
         <Presence show={dialog === 'room'}>
           <NewRoomDialog onClose={close} />
         </Presence>
