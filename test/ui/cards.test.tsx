@@ -339,6 +339,20 @@ describe('새 에이전트 만들기 카드', () => {
     expect(task.querySelector('.clamp-box.clamp-md .md strong')!.textContent).toBe('세 벌')
   })
 
+  it('이름은 한 줄 말줄임 + title, 역할은 말줄임 없이 감긴다 — 저장되고 쓰이는 역할을 다 보인다', async () => {
+    const ROLE = '보도자료·뉴스레터·소셜 문구·광고 카피를 쓰고, 다른 에이전트가 넘긴 초안을 검토해 톤과 맞춤법을 맞추는 담당'
+    snapshot.requests = [make({}, { role: ROLE })]
+    await renderPanel('p')
+    const who = card(TITLE).querySelector('.ca-who')!
+    const name = who.querySelector('b')!
+    expect(name).toHaveClass('trunc')
+    expect(name.getAttribute('title')).toBe('테스트')
+    const role = who.querySelector('.ca-role')!
+    expect(role.textContent).toBe(` · ${ROLE}`)
+    expect(role).not.toHaveClass('trunc')
+    expect(who.querySelectorAll('.trunc')).toHaveLength(1) // 이름만
+  })
+
   it("단추는 [만들기] [거절] 둘뿐 — '항상 허용'·'자세히' 없음", async () => {
     snapshot.requests = [make()]
     await renderPanel('p')

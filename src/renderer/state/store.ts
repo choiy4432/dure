@@ -2,6 +2,7 @@ import { useRef, useSyncExternalStore } from 'react'
 import type { AgentId, AgentStatus, EngineEventMap, HistoryItem, RoomId } from '../../engine/types'
 import type { DureApi, Snapshot } from '../../shared/ipcContract'
 import { displayStatus } from './selectors'
+import { markFresh } from '../map/freshNodes'
 
 export type UiState = Snapshot & {
   roomId: RoomId | null
@@ -196,6 +197,8 @@ export function createStore(api: DureApi): Store {
         break
       case 'agent-added': {
         const { agent, by } = ev.payload
+        // 사람이 더한 카드처럼 관계도 카드가 나타난다(AddAgentDialog 와 같은 표 — 움직임 줄이기면 그대로)
+        markFresh(agent.id)
         state = { ...state, placeNear: { ...state.placeNear, [agent.id]: by } }
         // 화면이 쓰는 모양(상태·묻지 않음 등)은 스냅샷에 있다 — 이미 받은 스냅샷에 들었으면(기다리는 동안 온 사건) 다시 받지 않는다.
         // 받는 중이면 끝난 뒤 한 번 더 받는다. 못 받으면 다음 스냅샷(자리 저장 등) 때 들어온다

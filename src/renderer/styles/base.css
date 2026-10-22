@@ -1800,21 +1800,21 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* 새 에이전트 만들기 카드 — 권한 카드 판 위에 '새 이름 · 역할' → 폴더(.ask-row 코드) → 첫 할 일 */
+/* 새 에이전트 만들기 카드 — 권한 카드 판 위에 '새 이름 · 역할' → 폴더(.ask-row 코드) → 첫 할 일.
+   이름은 한 줄 말줄임(.trunc), 역할은 그 뒤에 이어 쓰고 길면 카드 폭으로 감긴다(말줄임 없이 다 보인다) */
 .ca-who {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
   margin-top: 6px;
   font-size: 13px;
   line-height: 20px;
   color: var(--text-2);
+  overflow-wrap: anywhere;
 }
 
 .ca-who b {
-  flex: none;
+  display: inline-block;
   max-width: 60%;
+  /* 말줄임 상자(overflow hidden)의 기준선은 아래 끝이라 위에 맞춘다 — 같은 줄 높이라 글자 줄이 맞는다 */
+  vertical-align: top;
   color: var(--text);
   font-weight: 700;
 }

@@ -35,15 +35,12 @@ export function CreateAgentCard({ request, agent, now }: Props) {
         <b className="ask-t">{title}</b>
         <span className="pin-t">{ago(request.createdAt, now)}</span>
       </div>
+      {/* 이름은 한 줄 말줄임 + title, 역할은 이름 뒤에 이어 쓰고 길면 여러 줄로 감긴다 — 저장되고 안내문·메시지 머리에 쓰이는 그대로 다 보인다 */}
       <div className="ca-who">
         <b className="trunc" title={plan.name}>
           {plan.name}
         </b>
-        {plan.role && (
-          <span className="trunc" title={plan.role}>
-            · {plan.role}
-          </span>
-        )}
+        {plan.role && <span className="ca-role">{` · ${plan.role}`}</span>}
       </div>
       <div className="ask-row">
         <code className="trunc" title={plan.folder}>

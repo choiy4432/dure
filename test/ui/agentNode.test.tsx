@@ -466,3 +466,34 @@ describe('AgentNode — 넘김 서명: 메시지가 도착하면 받는 노드 �
     expect(animate).not.toHaveBeenCalled()
   })
 })
+
+describe('AgentNode — 에이전트가 만든 새 에이전트의 카드도 나타난다', () => {
+  async function renderBoth() {
+    snapshot.agents = [agent('d', { name: '디자인' }), agent('n', { name: '새 에이전트' })]
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { AgentCard } = await import('../../src/renderer/map/AgentNode')
+    await act(async () => { await getStore().init() })
+    // 엔진이 create_agent 로 만들었다 — 새 에이전트는 이미 받은 스냅샷에 있다
+    emit('agent-added', { agent: snapshot.agents[1] as unknown as EngineEventMap['agent-added']['agent'], by: 'd' })
+    const r = render(
+      <>
+        <AgentCard agentId="d" />
+        <AgentCard agentId="n" />
+      </>,
+    )
+    const [d, n] = r.container.querySelectorAll<HTMLElement>('.nd')
+    return { d, n }
+  }
+
+  it('agent-added 로 온 카드는 사람이 더한 카드처럼 들어온다 — 원래 있던 카드는 그대로', async () => {
+    allowMotion()
+    const { d, n } = await renderBoth()
+    expect(n.style.opacity).toBe('0') // 들어오기 시작(MOTION.node enter)
+    expect(d.style.opacity).toBe('')
+  })
+
+  it('움직임 줄이기면 들어오지 않는다(지금처럼)', async () => {
+    const { n } = await renderBoth()
+    expect(n.style.opacity).toBe('')
+  })
+})
