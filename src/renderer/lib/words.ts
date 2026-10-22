@@ -1,6 +1,6 @@
 // 화면 문구 도우미 — 조사(이/가 …)와 '방금 · N분 전' 같은 시각 말
 
-import type { UsageWindow } from '../../engine/types'
+import type { MessageState, UsageWindow } from '../../engine/types'
 import { hasBatchim } from '../../shared/josa'
 import type { DisplayStatus, Phase } from '../state/selectors'
 
@@ -10,16 +10,40 @@ export { josa, type JosaPair } from '../../shared/josa'
 /** 표시 상태 낱말 — 관계도 카드 바닥과 패널 머리 알약이 같은 말을 쓴다 */
 export const STATUS_WORD: Record<DisplayStatus, string> = {
   working: '작업 중',
-  awaiting: '승인 기다림',
-  idle: '대기',
-  stopped: '대기',
+  awaiting: '내 승인 필요',
+  idle: '쉬는 중',
+  stopped: '쉬는 중',
   error: '멈춤',
 }
+
+/** 관계도 카드 한 줄 — 흐르는 글·단계가 없을 때 상태를 풀어 쓴 말(카드 바닥 낱말보다 한 걸음 자세하다) */
+export const STATUS_LINE: Record<DisplayStatus, string> = {
+  working: '작업 중…',
+  awaiting: '내 승인 필요',
+  idle: '쉬는 중',
+  stopped: '쉬는 중',
+  error: '오류로 멈췄어요',
+}
+
+/** 메시지 상태 — 관계도 엣지 알약·패널 메시지 꼬리표·엣지 목록이 같은 말을 쓴다. 내가 할 일이면 '내 …', 기계가 쥐고 있으면 그 사정 */
+export const MESSAGE_WORD: Record<MessageState, string> = {
+  delivered: '전달됨',
+  pending: '내 확인 필요',
+  held: '자동 멈춤',
+  queued: '끝나면 전달',
+  dismissed: '버림',
+}
+
+/** 방금 끝난 에이전트의 새 결과 표시 낱말 — 카드에서 쓰는 건 따로 붙인다 */
+export const FRESH_WORD = '끝남 · 새 결과'
+
+/** 질문(AskUserQuestion)이 떠 있는 카드의 링크 문구 */
+export const QUESTION_LINK = '내 답 필요 · 패널에서 답하기'
 
 /** 차례의 단계 — 대화 맨 아래 작업 중 줄과 관계도 카드 한 줄이 같은 말을 쓴다(생각 중·흐르는 글이 먼저) */
 export const PHASE_WORD: Record<Phase, string> = {
   preparing: '준비하는 중…',
-  requesting: '답을 기다리는 중…',
+  requesting: 'Claude 답 받는 중…',
   compacting: '대화를 정리하는 중…',
 }
 /** 준비하는 중에 마우스를 올리면 — 이 동안은 Claude 가 아직 질문을 받지 않았다 */

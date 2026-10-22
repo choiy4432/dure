@@ -6,7 +6,7 @@ import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
 import { displayStatus, unreadFor, type DisplayStatus } from '../state/selectors'
 import { createAgentPlan, requestTarget, requestTitle } from '../lib/toolSummary'
-import { ago, initial, josa, lasting, nodeModelLabel, PHASE_WORD, STATUS_WORD } from '../lib/words'
+import { ago, initial, josa, lasting, nodeModelLabel, PHASE_WORD, QUESTION_LINK, STATUS_LINE, STATUS_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { MOTION, popOnce, useRise } from '../lib/motion'
 import { useMotion } from '../lib/presence'
@@ -27,13 +27,6 @@ const STATUS: Record<DisplayStatus, { dot: string; tone: string }> = {
   error: { dot: 'r', tone: 'e' },
 }
 
-const STATUS_LINE: Record<DisplayStatus, string> = {
-  working: '일하는 중…',
-  awaiting: '승인을 기다리는 중',
-  idle: '기다리는 중',
-  stopped: '기다리는 중',
-  error: '오류로 멈췄어요',
-}
 const THINKING_LINE = '생각하는 중…'
 
 /** 앞 max 자 — 마크다운 기호와 줄바꿈은 걷어 한 줄로, 넘치면 '…' */
@@ -232,7 +225,7 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
       {request?.kind === 'question' ? (
         <div className="ap nodrag" onClick={stop}>
           <button type="button" className="lk" onClick={() => getStore().selectAgent(agent.id)}>
-            질문이 있어요 · 패널에서 답하기
+            {QUESTION_LINK}
           </button>
         </div>
       ) : request?.kind === 'create-agent' ? (

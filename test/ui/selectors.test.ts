@@ -88,9 +88,9 @@ describe('label', () => {
   })
 
   it('대기 상태 문구', () => {
-    expect(label(e('pending'), 0)).toBe('확인 대기')
-    expect(label(e('held'), 0)).toBe('상한 대기')
-    expect(label(e('queued'), 0)).toBe('작업 끝 대기')
+    expect(label(e('pending'), 0)).toBe('내 확인 필요')
+    expect(label(e('held'), 0)).toBe('자동 멈춤')
+    expect(label(e('queued'), 0)).toBe('끝나면 전달')
   })
 })
 

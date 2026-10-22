@@ -29,7 +29,7 @@ const RING_MS = 450
 /** 처음 그릴 때 이보다 오래된 전달은 움직이지 않는다 */
 const REPLAY_WINDOW_MS = 2_000
 
-/** 선 모양 — on 갓 전달 · old 전달된 지 오래 · wait 확인 대기 · held 상한 대기 · queue 작업 끝 대기 */
+/** 선 모양 — on 갓 전달 · old 전달된 지 오래 · wait 내 확인 필요 · held 자동 멈춤 · queue 끝나면 전달 */
 type Tone = 'on' | 'old' | 'wait' | 'held' | 'queue'
 export const MARKER_TONES = ['on', 'old', 'wait', 'held'] as const
 export const markerId = (tone: (typeof MARKER_TONES)[number]) => `dure-mk-${tone}`

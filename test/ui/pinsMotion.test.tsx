@@ -224,7 +224,7 @@ describe('고정 카드 자리 — 넘침 표시(.more)와 들어오는 카드',
     snapshot.messages = [relay('pending')]
     await renderPanel()
     const card = pins().querySelector('.pin') as HTMLElement
-    expect(card.textContent).toContain('확인 대기')
+    expect(card.textContent).toContain('내 확인 필요')
     vi.mocked(animate).mockClear()
 
     await act(async () => screen.getByRole('button', { name: '일 시키기' }).click())

@@ -7,7 +7,7 @@ import { ExpandBox } from '../../lib/ExpandBox'
 import { moveMenuFocus, useDismiss } from '../../lib/popover'
 import { MotionDiv, Presence, useMotion } from '../../lib/presence'
 import { MOTION } from '../../lib/motion'
-import { ago, josa } from '../../lib/words'
+import { ago, josa, MESSAGE_WORD } from '../../lib/words'
 import { ConfirmDialog } from '../../shell/ConfirmDialog'
 import { useCall } from './useCall'
 
@@ -25,9 +25,6 @@ export function pinOpen(m: { id: string; state: RelayMessage['state']; updatedAt
   return open[m.id] ?? (m.state !== 'delivered' || now - m.updatedAt < FOLD_AFTER)
 }
 
-/** 상태 표 — 관계도 엣지 알약과 같은 낱말 */
-const TAG: Record<ShownState, string> = { delivered: '전달됨', pending: '확인 대기', queued: '작업 끝 대기' }
-
 interface Props {
   message: RelayMessage & { state: ShownState }
   fromName: string
@@ -38,7 +35,7 @@ interface Props {
   onOpenChange: (open: boolean) => void
 }
 
-/** 받은 메시지 카드(시안 .pin) — 머리 '보낸 → 받는 · 시간 · 상태', 본문 마크다운, 확인 대기면 [일 시키기] [나중에] */
+/** 받은 메시지 카드(시안 .pin) — 머리 '보낸 → 받는 · 시간 · 상태', 본문 마크다운, 확인 필요면 [일 시키기] [나중에] */
 export function MessageCard({ message, fromName, toName, now, open, onOpenChange }: Props) {
   const { busy, error, call } = useCall()
   const root = useRef<HTMLElement>(null)
@@ -80,7 +77,7 @@ export function MessageCard({ message, fromName, toName, now, open, onOpenChange
           ) : (
             <Clock className="i" size={14} strokeWidth={2} aria-hidden="true" />
           )}
-          {TAG[state]}
+          {MESSAGE_WORD[state]}
         </span>
         {state !== 'delivered' && <MessageMenu onDismiss={() => setAsking(true)} />}
       </div>

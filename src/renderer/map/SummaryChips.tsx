@@ -3,12 +3,13 @@ import type { AgentId, RoomId } from '../../engine/types'
 import { getStore, useDure, type UiState } from '../state/store'
 import { displayStatus, summary, unreadFor } from '../state/selectors'
 import { moveMs } from '../lib/motion'
+import { STATUS_WORD } from '../lib/words'
 
 type Kind = 'working' | 'awaiting' | 'unread'
 
 const CHIPS: { kind: Kind; label: string; dot: string }[] = [
-  { kind: 'working', label: '작업 중', dot: 'g' },
-  { kind: 'awaiting', label: '승인 기다림', dot: 'a' },
+  { kind: 'working', label: STATUS_WORD.working, dot: 'g' },
+  { kind: 'awaiting', label: STATUS_WORD.awaiting, dot: 'a' },
   { kind: 'unread', label: '받은 메시지', dot: 'r' },
 ]
 
@@ -22,7 +23,7 @@ function firstAgent(kind: Kind, s: UiState, roomId: RoomId): AgentId | null {
   return hit?.id ?? null
 }
 
-/** 관계도 왼쪽 위 — 작업 중 · 승인 기다림 · 받은 메시지 수. 누르면 그 상태의 첫 에이전트로 */
+/** 관계도 왼쪽 위 — 작업 중 · 내 승인 필요 · 받은 메시지 수. 누르면 그 상태의 첫 에이전트로 */
 export function SummaryChips({ roomId }: { roomId: RoomId }) {
   const sum = useDure(s => summary(s, roomId))
   const flow = useReactFlow()

@@ -110,7 +110,7 @@ describe('RelationMap — 요약 칩', () => {
     const { store } = await renderMap()
     const chip = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
     expect(chip('작업 중 1')).toBeTruthy()
-    fireEvent.click(chip('승인 기다림 1'))
+    fireEvent.click(chip('내 승인 필요 1'))
     expect(store.getState().selectedAgentId).toBe('d')
     fireEvent.click(chip('받은 메시지 1'))
     expect(store.getState().selectedAgentId).toBe('s')
@@ -121,7 +121,7 @@ describe('RelationMap — 요약 칩', () => {
   it('수가 0 인 칩은 누를 수 없다', async () => {
     snapshot.agents = [agent('a', { pos: { x: 64, y: 64 } })]
     await renderMap()
-    expect((screen.getByRole('button', { name: '승인 기다림 0' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '내 승인 필요 0' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('수가 0 인 칩은 뒤로 물러난다(조용한 칩 — 흐린 점·수), 0 이 아닌 칩은 제 색 그대로', async () => {
@@ -129,7 +129,7 @@ describe('RelationMap — 요약 칩', () => {
     snapshot.messages = [msg('m1', 'w', 's', 'pending', 5)]
     await renderMap()
     const chip = (name: string) => screen.getByRole('button', { name })
-    expect(chip('승인 기다림 0').classList.contains('zero')).toBe(true)
+    expect(chip('내 승인 필요 0').classList.contains('zero')).toBe(true)
     expect(chip('작업 중 1').classList.contains('zero')).toBe(false)
     expect(chip('받은 메시지 1').classList.contains('zero')).toBe(false)
   })
@@ -171,7 +171,7 @@ describe('PairPopover', () => {
     expect(dialog.textContent).toContain('메시지 3개')
     const rows = [...dialog.querySelectorAll('li')]
     expect(rows.map(r => r.querySelector('.pm-t')!.textContent)).toEqual(['답장', '버린 메시지', '첫 메시지'])
-    expect(rows[0].querySelector('.pm-h')!.textContent).toBe('웹 화면기획· 확인 대기 · 방금')
+    expect(rows[0].querySelector('.pm-h')!.textContent).toBe('웹 화면기획· 내 확인 필요 · 방금')
     expect(rows[1].querySelector('.pm-m')!.textContent).toBe('· 버림 · 2분 전')
     expect(rows[1].classList.contains('off')).toBe(true)
     expect(rows[0].classList.contains('off')).toBe(false)

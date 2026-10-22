@@ -64,7 +64,7 @@ describe('AgentNode — 승인 기다림', () => {
     expect(screen.getByText('디자인이 파일을 만들려 해요')).toBeTruthy()
     const target = screen.getByText('src/styles/tokens.css')
     expect(target.tagName).toBe('CODE')
-    expect(screen.getByText('승인 기다림')).toBeTruthy()
+    expect(screen.getByText('내 승인 필요')).toBeTruthy()
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name })) })
     expect(api.answerRequest).toHaveBeenCalledTimes(1)
@@ -90,13 +90,13 @@ describe('AgentNode — 승인 기다림', () => {
     expect(screen.getByText('src/a.css').tagName).toBe('CODE') // 대상은 지금 그대로
   })
 
-  it('질문이면 "질문이 있어요 · 패널에서 답하기" 링크만 — 누르면 그 에이전트를 고른다', async () => {
+  it('질문이면 "내 답 필요 · 패널에서 답하기" 링크만 — 누르면 그 에이전트를 고른다', async () => {
     snapshot.requests = [request({ toolName: 'AskUserQuestion', input: { questions: [] }, kind: 'question' })]
     const { store, card } = await renderCard()
     expect(card.classList.contains('pend')).toBe(true)
     expect(card.classList.contains('wide')).toBe(false)
     expect(screen.queryByRole('button', { name: '허용' })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: '질문이 있어요 · 패널에서 답하기' }))
+    fireEvent.click(screen.getByRole('button', { name: '내 답 필요 · 패널에서 답하기' }))
     expect(store.getState().selectedAgentId).toBe('d')
     expect(api.answerRequest).not.toHaveBeenCalled()
   })
@@ -224,7 +224,7 @@ describe('AgentNode — 카드 내용', () => {
     expect(card.querySelector('.nr')!.textContent).toBe('Opus 5.5 · max')
   })
 
-  it('받은 메시지 배지 = 확인 대기·상한 대기 수, 한 줄 요약은 누가 보냈는지', async () => {
+  it('받은 메시지 배지 = 확인 필요·자동 멈춤 수, 한 줄 요약은 누가 보냈는지', async () => {
     snapshot.agents = [agent('s', { name: '서버' }), agent('w', { name: '웹 화면' })]
     snapshot.messages = [msg('w', 's', 'pending'), msg('w', 's', 'held'), msg('w', 's', 'queued'), msg('w', 's', 'delivered'), msg('s', 'w', 'pending')]
     const { card } = await renderCard('s')
@@ -232,7 +232,7 @@ describe('AgentNode — 카드 내용', () => {
     expect(badge.textContent).toBe('받은 메시지2')
     expect(badge.querySelector('b')!.textContent).toBe('2')
     expect(screen.getByText('웹 화면이 보낸 메시지 확인 전')).toBeTruthy()
-    expect(screen.getByText('대기')).toBeTruthy()
+    expect(screen.getByText('쉬는 중')).toBeTruthy()
   })
 
   it('받은 메시지가 없으면 배지 대신 시각', async () => {
@@ -300,13 +300,13 @@ describe('AgentNode — 카드 내용', () => {
     snapshot.agents = [agent('d', { name: '디자인', status: 'working' })]
     const { card } = await renderCard()
     const line = () => card.querySelector('.na')!.textContent
-    expect(line()).toBe('일하는 중…')
+    expect(line()).toBe('작업 중…')
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: null } })
     expect(line()).toBe('생각하는 중…')
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: 278 } })
     expect(line()).toBe('생각하는 중…') // 카드엔 토큰 수를 쓰지 않는다
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: false, tokens: null } })
-    expect(line()).toBe('일하는 중…')
+    expect(line()).toBe('작업 중…')
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: null } })
     emit('agent-event', { agentId: 'd', event: { kind: 'text-delta', text: '배너 문구를 고르는 중이에요' } })
     expect(line()).toBe('배너 문구를 고르는 중이에요')
@@ -324,7 +324,7 @@ describe('AgentNode — 카드 내용', () => {
     expect(line()).toBe('서브에이전트 2개가 일하는 중')
   })
 
-  it('단계: 보내면 "준비하는 중…" → 요청이 나가면 "답을 기다리는 중…" → 요약 중이면 "대화를 정리하는 중…" — 서브에이전트 문구보다 먼저', async () => {
+  it('단계: 보내면 "준비하는 중…" → 요청이 나가면 "Claude 답 받는 중…" → 요약 중이면 "대화를 정리하는 중…" — 서브에이전트 문구보다 먼저', async () => {
     snapshot.agents = [agent('d', { name: '디자인', status: 'working', subagentsRunning: ['A'] })]
     const { card } = await renderCard()
     const line = () => card.querySelector('.na')!.textContent
@@ -332,7 +332,7 @@ describe('AgentNode — 카드 내용', () => {
     emit('history', { agentId: 'd', item: { t: 5, kind: 'user', source: 'human', parts: [{ type: 'text', text: '해 줘' }] } })
     expect(line()).toBe('준비하는 중…')
     emit('agent-event', { agentId: 'd', event: { kind: 'api-status', status: 'requesting' } })
-    expect(line()).toBe('답을 기다리는 중…')
+    expect(line()).toBe('Claude 답 받는 중…')
     emit('agent-event', { agentId: 'd', event: { kind: 'api-status', status: 'compacting' } })
     expect(line()).toBe('대화를 정리하는 중…')
     emit('agent-event', { agentId: 'd', event: { kind: 'api-status', status: 'requesting' } })
@@ -347,12 +347,12 @@ describe('AgentNode — 카드 내용', () => {
     const { card } = await renderCard()
     const line = () => card.querySelector('.na')!.textContent
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: 278 } })
-    expect(line()).toBe('일하는 중…') // 블록 시작 없이 온 수
+    expect(line()).toBe('작업 중…') // 블록 시작 없이 온 수
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: null } })
     expect(line()).toBe('생각하는 중…')
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: false, tokens: null } })
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: 452 } })
-    expect(line()).toBe('일하는 중…')
+    expect(line()).toBe('작업 중…')
   })
 
   it('생각하는 중에 멈추면 "생각하는 중…"이 남지 않는다', async () => {
@@ -362,16 +362,16 @@ describe('AgentNode — 카드 내용', () => {
     emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: 278 } })
     expect(card.querySelector('.na')!.textContent).toBe('생각하는 중…')
     emit('status', { agentId: 'd', status: 'idle', errorText: null })
-    expect(card.querySelector('.na')!.textContent).toBe('기다리는 중')
+    expect(card.querySelector('.na')!.textContent).toBe('쉬는 중')
     emit('status', { agentId: 'd', status: 'working', errorText: null })
-    expect(card.querySelector('.na')!.textContent).toBe('일하는 중…')
+    expect(card.querySelector('.na')!.textContent).toBe('작업 중…')
   })
 
   it('서브에이전트가 다 끝나면 지금처럼 — 작업 중이면 "일하는 중…"', async () => {
     snapshot.agents = [agent('d', { name: '디자인', status: 'working', subagentsRunning: ['A'] })]
     const { card } = await renderCard()
     emit('subagents', { agentId: 'd', running: [] })
-    expect(card.querySelector('.na')!.textContent).toBe('일하는 중…')
+    expect(card.querySelector('.na')!.textContent).toBe('작업 중…')
   })
 
   it('작업 중인데 언제부터인지 모르면(켤 때 이미 작업 중) 시각을 쓰지 않는다', async () => {
@@ -400,7 +400,7 @@ describe('AgentNode — 카드 내용', () => {
 
   it('끝난 답이 있으면 그 글 앞부분, 없으면 상태 문장', async () => {
     const { card } = await renderCard()
-    expect(card.querySelector('.na')!.textContent).toBe('기다리는 중')
+    expect(card.querySelector('.na')!.textContent).toBe('쉬는 중')
     emit('history', { agentId: 'd', item: { t: Date.now(), kind: 'assistant', blocks: [{ type: 'text', text: '배너 문구를 **웹 화면**에 넘겼어요' }] } })
     expect(card.querySelector('.na')!.textContent).toBe('배너 문구를 웹 화면에 넘겼어요')
   })

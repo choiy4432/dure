@@ -119,7 +119,7 @@ describe('받은 메시지 카드', () => {
     expect(head.textContent).toContain('웹 화면')
     expect(head.textContent).toContain('서버')
     expect(head.textContent).toContain('· 방금')
-    expect(c.querySelector('.tag')!.textContent).toBe('확인 대기')
+    expect(c.querySelector('.tag')!.textContent).toBe('내 확인 필요')
     const code = c.querySelector('.md code')!
     expect(code.textContent).toBe('src/api/user.ts')
     expect(c.querySelector('.md strong')!.textContent).toBe('응답')
@@ -157,7 +157,7 @@ describe('받은 메시지 카드', () => {
     await renderPanel('s')
     await emit('message', msg({ id: 'm1', state: 'queued', updatedAt: Date.now() }))
     const c = card('웹 화면이 보낸 메시지')
-    expect(c.querySelector('.tag')!.textContent).toBe('작업 끝 대기')
+    expect(c.querySelector('.tag')!.textContent).toBe('끝나면 전달')
     expect(within(c).queryByRole('button', { name: '일 시키기' })).toBeNull()
   })
 

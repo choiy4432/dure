@@ -565,7 +565,7 @@ describe('ChatList — 작업 중 줄(Claude Code 의 작업 중 표시처럼)',
 
   const apiStatus = (status: 'requesting' | 'compacting' | null) => emit('agent-event', { agentId: 'w', event: { kind: 'api-status', status } })
 
-  it('단계: 보내면 "준비하는 중…"(아직 보내기 전이라는 풀이) → 요청이 나가면 "답을 기다리는 중…" → 생각 → 글이면 "작업 중…"', async () => {
+  it('단계: 보내면 "준비하는 중…"(아직 보내기 전이라는 풀이) → 요청이 나가면 "Claude 답 받는 중…" → 생각 → 글이면 "작업 중…"', async () => {
     await renderPanel()
     await emit('history', { agentId: 'w', item: { t: 5, kind: 'user', source: 'human', parts: [{ type: 'text', text: '해 줘' }] } })
     await emit('status', { agentId: 'w', status: 'working', errorText: null })
@@ -573,14 +573,14 @@ describe('ChatList — 작업 중 줄(Claude Code 의 작업 중 표시처럼)',
     expect(label()).toHaveTextContent('준비하는 중…')
     expect(label()).toHaveAttribute('title', '아직 Claude에게 질문을 보내기 전이에요')
     await apiStatus('requesting')
-    expect(label()).toHaveTextContent('답을 기다리는 중…')
+    expect(label()).toHaveTextContent('Claude 답 받는 중…')
     expect(label()).not.toHaveAttribute('title')
     await think(true)
     expect(label()).toHaveTextContent('생각하는 중…')
     await think(false)
     expect(label()).toHaveTextContent('작업 중…')
     await apiStatus('requesting') // 하는 일 뒤 다음 요청
-    expect(label()).toHaveTextContent('답을 기다리는 중…')
+    expect(label()).toHaveTextContent('Claude 답 받는 중…')
     await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '답' } })
     expect(label()).toHaveTextContent('작업 중…')
   })

@@ -101,7 +101,7 @@ describe('PanelHeader — 멈추기', () => {
     ['작업 중', { status: 'working' }, [], true],
     ['승인 기다림(상태)', { status: 'awaiting' }, [], true],
     ['승인 기다림(남은 요청)', { status: 'idle' }, [request()], true],
-    ['대기', { status: 'idle' }, [], false],
+    ['쉬는 중', { status: 'idle' }, [], false],
     ['멈춘 프로세스', { status: 'stopped' }, [], false],
     ['오류', { status: 'error', errorText: '끝났어요' }, [], false],
   ] as const)('%s → 활성 %s', async (_label, over, requests, enabled) => {
@@ -127,10 +127,10 @@ describe('PanelHeader — 멈추기', () => {
     expect(pill().textContent).toBe('작업 중')
     expect(pill().classList.contains('w')).toBe(true)
     await act(async () => store.selectAgent('d'))
-    expect(pill().textContent).toBe('승인 기다림')
+    expect(pill().textContent).toBe('내 승인 필요')
     expect(pill().classList.contains('p')).toBe(true)
     await act(async () => store.selectAgent('s'))
-    expect(pill().textContent).toBe('대기')
+    expect(pill().textContent).toBe('쉬는 중')
     await act(async () => store.selectAgent('e'))
     expect(pill().textContent).toBe('멈춤')
     expect(pill().classList.contains('e')).toBe(true)

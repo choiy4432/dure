@@ -1,5 +1,6 @@
 import type { AgentId, MessageState, PendingRequest, RelayMessage, RoomId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
+import { MESSAGE_WORD } from '../lib/words'
 
 export type DisplayStatus = 'working' | 'awaiting' | 'idle' | 'error' | 'stopped'
 /** 차례의 단계 — 생각·글이 오기 전 무엇을 기다리는지(store.phase) */
@@ -86,9 +87,9 @@ export function label(edge: EdgeView, now: number): string {
       const sec = (now - edge.at) / 1000
       return sec < 60 ? '전달됨 · 방금' : `전달됨 · ${Math.floor(sec / 60)}분 전`
     }
-    case 'pending': return '확인 대기'
-    case 'held': return '상한 대기'
-    case 'queued': return '작업 끝 대기'
+    case 'pending':
+    case 'held':
+    case 'queued': return MESSAGE_WORD[edge.state]
     default: return ''
   }
 }

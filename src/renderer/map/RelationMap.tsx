@@ -8,10 +8,10 @@ import {
   type EdgeTypes, type NodeChange, type NodeTypes,
 } from '@xyflow/react'
 import { ArrowLeftRight, ArrowRight } from 'lucide-react'
-import type { AgentId, MessageState, RoomId } from '../../engine/types'
+import type { AgentId, RoomId } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { edges as edgeViews, pairMessages, type EdgeView } from '../state/selectors'
-import { ago } from '../lib/words'
+import { ago, MESSAGE_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { MotionDiv, Presence, useLeaving } from '../lib/presence'
 import { MOTION } from '../lib/motion'
@@ -38,14 +38,6 @@ const ARIA = {
   'node.a11yDescription.ariaLiveMessage': () => '카드를 옮겼어요',
   'edge.a11yDescription.default': '',
   'handle.ariaLabel': '연결점',
-}
-
-const STATE_WORD: Record<MessageState, string> = {
-  delivered: '전달됨',
-  pending: '확인 대기',
-  held: '상한 대기',
-  queued: '작업 끝 대기',
-  dismissed: '버림',
 }
 
 /** 관계도 — 그 방의 에이전트 카드와 넘김 엣지. 방을 바꾸면 처음부터 다시 그린다(화면 맞춤 포함) */
@@ -338,7 +330,7 @@ export function PairPopover({ at, bounds, onClose }: { at: PairAt; bounds: RefOb
                 <ArrowRight className="i pm-ic" size={12} aria-hidden="true" />
                 <b className="trunc">{name(m.to)}</b>
                 <span className="pm-m">
-                  · {STATE_WORD[m.state]} · {ago(m.createdAt, now)}
+                  · {MESSAGE_WORD[m.state]} · {ago(m.createdAt, now)}
                 </span>
               </div>
               <p className="pm-t">{m.text}</p>

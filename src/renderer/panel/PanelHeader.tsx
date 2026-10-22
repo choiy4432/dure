@@ -12,7 +12,7 @@ import { LevelSwitch } from './LevelSwitch'
 import { Presence } from '../lib/presence'
 import { ExpandBox } from '../lib/ExpandBox'
 
-// 상태 알약 — 작업 중 초록 · 승인 기다림 앰버 · 대기 회색 · 멈춤 빨강
+// 상태 알약 — 작업 중 초록 · 내 승인 필요 앰버 · 쉬는 중 회색 · 멈춤 빨강
 const PILL: Record<DisplayStatus, { tone: string; dot: string }> = {
   working: { tone: 'w', dot: 'g' },
   awaiting: { tone: 'p', dot: 'a' },
