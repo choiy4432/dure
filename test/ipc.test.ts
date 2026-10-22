@@ -40,6 +40,7 @@ function fakeEngine() {
     addAgent: rec('addAgent', agent),
     updateAgent: rec('updateAgent', agent),
     removeAgent: rec('removeAgent', Promise.resolve()),
+    setSelected: rec('setSelected'),
     sendUser: rec('sendUser', Promise.resolve()),
     interrupt: rec('interrupt', Promise.resolve()),
     newConversation: rec('newConversation', Promise.resolve()),
@@ -100,7 +101,7 @@ describe('registerIpc', () => {
     const args: Record<string, unknown[]> = {
       addRoom: ['방'], renameRoom: ['r1', '새'], removeRoom: ['r1'],
       addAgent: [{ roomId: 'r1', name: 'n', role: 'r', folder: 'f' }], updateAgent: ['a1', { auto: true }],
-      removeAgent: ['a1'], sendUser: ['a1', [{ type: 'text', text: 'hi' }]], interrupt: ['a1'],
+      removeAgent: ['a1'], setSelected: ['a1'], sendUser: ['a1', [{ type: 'text', text: 'hi' }]], interrupt: ['a1'],
       newConversation: ['a1'], setModel: ['a1', null], describe: ['a1'], history: ['a1', { all: true }],
       approveMessage: ['m1'], dismissMessage: ['m1'], continueHeld: ['r1'],
       answerRequest: ['q1', { type: 'allow' }], setAutoChainLimit: [5],

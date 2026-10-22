@@ -288,6 +288,25 @@ describe('store selection', () => {
     expect(s.getState().roomId).toBe('r2')
   })
 
+  it('고르기를 엔진에 알린다(미리 띄우기) — 에이전트·비움·방 바꾸기(null). 알리기가 실패해도 고르기는 그대로', async () => {
+    const { api } = fake()
+    const setSelected = vi.fn(async () => {})
+    ;(api as any).setSelected = setSelected
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    s.selectAgent(null)
+    s.selectAgent('b')
+    s.selectRoom('r2')
+    expect(setSelected.mock.calls).toEqual([['a'], [null], ['b'], [null]])
+    setSelected.mockRejectedValueOnce(new Error('끊김'))
+    s.selectAgent('c')
+    expect(s.getState().selectedAgentId).toBe('c')
+    delete (api as any).setSelected // 알릴 길이 없어도(옛 preload) 고르기는 된다
+    s.selectAgent('a')
+    expect(s.getState().selectedAgentId).toBe('a')
+  })
+
   it('선택한 방이 사라지면 남은 첫 방으로, 없으면 null', async () => {
     const { api } = fake()
     const s = createStore(api)

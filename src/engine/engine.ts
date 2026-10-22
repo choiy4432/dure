@@ -45,6 +45,8 @@ export interface EngineOptions {
    * 그동안 다시 띄우기·/effort 를 미루고 화면은 작업 중. 시험은 짧게
    */
   autoTurnGraceMs?: number;
+  /** 미리 띄웠지만 아무 줄도 안 받은 세션을 고르지 않게 된 뒤 끄기까지(ms) — 없으면 PREWARM_IDLE_MS. 시험은 짧게 */
+  prewarmIdleMs?: number;
 }
 
 // 이벤트:
@@ -106,6 +108,12 @@ export interface Engine extends EventEmitter {
    */
   setBypass(id: AgentId, on: boolean): Promise<void>;
   errorText(id: AgentId): string | null;
+  /**
+   * 화면에서 고른 에이전트(없으면 null) — 아직 claude 가 안 떠 있으면 미리 띄운다(띄울 때의 로컬 요청만 — 토큰을 쓰지 않는다).
+   * 오류로 멈춘 에이전트는 띄우지 않는다. 미리 띄운 뒤 아무 줄도 안 받은 세션은 고르지 않게 되고 PREWARM_IDLE_MS 뒤에 끈다
+   * (그 사이 다시 고르면 그대로). 던지지 않는다 — 폴더가 없으면 보낼 때와 같은 오류 상태
+   */
+  setSelected(id: AgentId | null): void;
   sendUser(id: AgentId, parts: UserPart[]): Promise<void>;
   interrupt(id: AgentId): Promise<void>;
   newConversation(id: AgentId): Promise<void>;
@@ -179,6 +187,8 @@ function fromGitBashPath(p: string): string {
 const SEEN_WAIT_MS = 2000;
 /** 끝 알림 뒤 스스로 시작한 차례는 곧바로 온다(probe13) — 멈추기로 끝났으면 오지 않으니(probe14 C) 짧게만 기다린다 */
 const AUTO_TURN_GRACE_MS = 1500;
+/** 미리 띄웠지만 아무 줄도 안 받은 세션 — 고르지 않게 된 뒤 이만큼 지나면 끈다(둘러보기만 한 에이전트의 프로세스가 쌓이지 않게) */
+const PREWARM_IDLE_MS = 5 * 60_000;
 const EFFORT_UNKNOWN = '알 수 없는 effort 예요.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
 /** /effort 의 답(로컬 명령 — 모델을 부르지 않는다): "Set effort level to max (this session only): …" (probe9) */
@@ -279,6 +289,10 @@ class EngineImpl extends EventEmitter implements Engine {
   private described = new WeakMap<ClaudeSession, Promise<AgentDescription>>();
   private inFlight = new WeakMap<ClaudeSession, InFlight>();
   private removing = new Set<AgentId>();
+  // 미리 띄우기 — 화면에서 고른 에이전트는 첫 메시지 전에 claude 를 띄워 둔다(시작·대화 읽기 시간을 앞당긴다, 토큰 없음)
+  private selected: AgentId | null = null;
+  private prewarmed = new WeakSet<ClaudeSession>(); // 미리 띄운 뒤 아직 아무 줄(사람 입력·받은 메시지)도 안 쓴 세션 — 고르지 않게 되면 끈다
+  private coolTimers = new Map<AgentId, NodeJS.Timeout>(); // 고르지 않게 된 미리 띄운 세션을 끄기까지
   private modes = new WeakMap<ClaudeSession, boolean>(); // 그 세션의 실제 권한 모드(bypass 인가) — 마지막 init · set_permission_mode 응답
   // 묻지 않음: 허용이면 --allow-dangerously-skip-permissions 로 띄우고(그것만으론 평소 모드), 켠 에이전트만 set_permission_mode 로 켠다(probe10·11)
   private optioned = new WeakSet<ClaudeSession>(); // 그 옵션으로 뜬 세션 — 실행 중에 bypass 로 바꿀 수 있다
@@ -471,6 +485,8 @@ class EngineImpl extends EventEmitter implements Engine {
   async removeAgent(id: AgentId) {
     this.need(id);
     this.removing.add(id);
+    this.disarmCool(id);
+    if (this.selected === id) this.selected = null;
     try {
       await this.endSession(id);
       for (const m of this.log.list({ states: ['pending', 'held', 'queued'] })) {
@@ -554,6 +570,49 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     if (s?.status === 'error') return s.errorText;
     return this.errors.get(id) ?? null;
+  }
+
+  // ── 미리 띄우기 ──
+  setSelected(id: AgentId | null) {
+    if (this.closed) return;
+    const prev = this.selected;
+    this.selected = id;
+    if (prev && prev !== id) this.armCool(prev);
+    if (!id) return;
+    this.disarmCool(id);
+    if (!this.store.agent(id) || this.removing.has(id) || this.sessions.has(id) || this.errors.has(id)) return;
+    try {
+      this.prewarmed.add(this.ensure(id));
+    } catch {
+      /* 폴더 없음 — ensure 가 오류 상태를 남겼다(보낼 때와 같다) */
+    }
+  }
+
+  /** 고르지 않게 된 에이전트 — 미리 띄운 뒤 아무 줄도 안 받은 세션이면 끄기를 잰다 */
+  private armCool(id: AgentId): void {
+    const s = this.sessions.get(id);
+    if (!s || !this.prewarmed.has(s) || this.coolTimers.has(id)) return;
+    const timer = setTimeout(() => {
+      this.coolTimers.delete(id);
+      void this.cool(id, s).catch((e) => this.guard(id, () => this.emit('engine-error', { agentId: id, message: e instanceof Error ? e.message : String(e) })));
+    }, this.o.prewarmIdleMs ?? PREWARM_IDLE_MS);
+    timer.unref?.();
+    this.coolTimers.set(id, timer);
+  }
+
+  private disarmCool(id: AgentId): void {
+    const timer = this.coolTimers.get(id);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.coolTimers.delete(id);
+  }
+
+  /** 그 세션이 아직 미리 띄운 그대로(고르지 않음·줄 없음·쉬는 중·기다리는 입력 없음)면 끈다 — 다음에 고르거나 보낼 때 다시 띄운다 */
+  private async cool(id: AgentId, s: ClaudeSession): Promise<void> {
+    if (this.closed || this.selected === id || !this.live(id, s) || !this.prewarmed.has(s)) return;
+    if (!this.resting(id, s) || (this.held.get(id)?.length ?? 0) > 0 || this.subagents.has(id)) return;
+    await this.endSession(id);
+    this.emitStatus(id);
   }
 
   // ── 대화 ──
@@ -693,6 +752,8 @@ class EngineImpl extends EventEmitter implements Engine {
   shutdown(): Promise<void> {
     this.closing ??= (async () => {
       this.closed = true;
+      for (const timer of this.coolTimers.values()) clearTimeout(timer);
+      this.coolTimers.clear();
       const ids = [...this.sessions.keys()];
       for (const r of this.perms.pending()) this.perms.cancelForAgent(r.agentId, EXITED);
       // 맵에서 이미 빠진 채 끄는 중인 세션(다시 띄우기·새 대화)도 기다린다 — 각각 STOP_LIMIT_MS 상한
@@ -873,6 +934,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private sendTo(id: AgentId, s: ClaudeSession, parts: UserPart[], item: InFlight): void {
     s.send(parts);
     this.inFlight.set(s, item);
+    this.prewarmed.delete(s); // 일을 받은 세션 — 고르지 않게 돼도 끄지 않는다(앱을 끌 때까지)
     // 실제로 쓴 줄만 기록한다 — 대기 중인 입력은 보낼 때 나타난다
     this.guard(id, () =>
       this.record(id, {

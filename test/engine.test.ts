@@ -3884,3 +3884,74 @@ test('create_agent: SUBMAKE — 서브에이전트가 부르면 카드 없이 �
   expect(names(e)).toEqual(['A', 'B']);
   expect(e.messages()).toEqual([]);
 });
+
+// ── 미리 띄우기(고른 에이전트) ──
+test('미리 띄우기: 고르면 claude 를 띄우고 줄은 쓰지 않는다 — 다시 골라도 하나, 보내면 그 프로세스가 받는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  e.setSelected(a.id);
+  await until('A 가 뜸', () => spawnsOf('A').length === 1);
+  e.setSelected(a.id);
+  await sleep(100);
+  expect(spawnsOf('A')).toHaveLength(1);
+  expect(userTexts()).toEqual([]);
+  expect(e.status(a.id)).toBe('idle');
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('안녕'));
+  expect(await resultText(done)).toBe('받음: 안녕');
+  expect(spawnsOf('A')).toHaveLength(1);
+});
+
+test('미리 띄우기: 아무 줄도 안 받은 세션은 고르지 않게 되고 prewarmIdleMs 뒤에 끈다 — 그 사이 다시 고르면 그대로', async () => {
+  const e = await start({}, false, { prewarmIdleMs: 300 });
+  const { a, b } = setup(e);
+  e.setSelected(a.id);
+  await until('A 가 뜸', () => spawnsOf('A').length === 1);
+  const pid = spawnsOf('A')[0].pid;
+  e.setSelected(b.id);
+  await sleep(150);
+  e.setSelected(a.id); // 돌아옴 — 끄기 취소
+  await sleep(450);
+  expect(isAlive(pid)).toBe(true);
+  e.setSelected(null);
+  await until('A 가 꺼짐', () => !isAlive(pid));
+  expect(e.status(a.id)).toBe('idle');
+  e.setSelected(a.id); // 다시 고르면 새로 띄운다
+  await until('A 가 다시 뜸', () => spawnsOf('A').length === 2);
+});
+
+test('미리 띄우기: 한 번이라도 줄을 받은 세션은 고르지 않게 돼도 끄지 않는다', async () => {
+  const e = await start({}, false, { prewarmIdleMs: 100 });
+  const { a, b } = setup(e);
+  e.setSelected(a.id);
+  await until('A 가 뜸', () => spawnsOf('A').length === 1);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('일'));
+  await done;
+  e.setSelected(b.id);
+  await sleep(400);
+  expect(isAlive(spawnsOf('A')[0].pid)).toBe(true);
+});
+
+test('미리 띄우기: 오류로 멈춘 에이전트는 고르기만으로 다시 띄우지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const crashed = waitFor<StatusEvent>(e, 'status', (s) => s.agentId === a.id && s.status === 'error');
+  await e.sendUser(a.id, text('CRASH'));
+  await crashed;
+  e.setSelected(a.id);
+  await sleep(150);
+  expect(spawnsOf('A')).toHaveLength(1);
+  expect(e.status(a.id)).toBe('error');
+});
+
+test('미리 띄우기: 폴더가 없으면 던지지 않고 보낼 때와 같은 오류 상태 · 모르는 에이전트는 조용히 넘어간다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  fs.rmSync(agentOf(e, a.id).folder, { recursive: true });
+  expect(() => e.setSelected(a.id)).not.toThrow();
+  expect(e.status(a.id)).toBe('error');
+  expect(e.errorText(a.id)).toContain('폴더를 찾을 수 없습니다');
+  expect(() => e.setSelected('없는-에이전트')).not.toThrow();
+  expect(spawns()).toHaveLength(0);
+});

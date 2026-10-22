@@ -347,6 +347,15 @@ export function createStore(api: DureApi): Store {
     return inflight
   }
 
+  /** 고른 에이전트를 엔진에 알린다 — 엔진이 claude 를 미리 띄운다. 알리기가 실패해도(끊김·없는 길) 고르기는 그대로 */
+  const tellSelected = (id: AgentId | null) => {
+    try {
+      api.setSelected(id).catch(() => {})
+    } catch {
+      /* 알릴 길이 없다 — 보낼 때 띄운다 */
+    }
+  }
+
   const loadHistory = async (id: AgentId) => {
     if (state.history[id] || loading.has(id)) return
     loading.set(id, [])
@@ -395,11 +404,13 @@ export function createStore(api: DureApi): Store {
     },
     selectAgent(id) {
       set({ ...state, selectedAgentId: id })
+      tellSelected(id)
       if (id) void loadHistory(id)
     },
     selectRoom(id) {
       if (!state.rooms.some(r => r.id === id)) return
       set({ ...state, roomId: id, selectedAgentId: null })
+      tellSelected(null)
     },
     setPanelTab(id, tab) {
       if (state.panelTab[id] === tab) return

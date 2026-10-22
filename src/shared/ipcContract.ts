@@ -44,6 +44,8 @@ export interface DureApi {
     p: { name?: string; role?: string; auto?: boolean; pos?: { x: number; y: number }; bypassNoticeClosed?: boolean },
   ): Promise<Agent>
   removeAgent(id: AgentId): Promise<void>
+  /** 화면에서 고른 에이전트(없으면 null) — 엔진이 claude 를 미리 띄운다 */
+  setSelected(id: AgentId | null): Promise<void>
   sendUser(id: AgentId, parts: UserPart[]): Promise<void>
   interrupt(id: AgentId): Promise<void>
   newConversation(id: AgentId): Promise<void>
@@ -70,7 +72,7 @@ export const CHANNEL = { invoke: 'dure:invoke', event: 'dure:event' } as const
 /** invoke 로 부를 수 있는 이름 — DureApi 의 메서드 중 on 만 빠진다(on 은 preload 안에서 처리) */
 export const METHODS = [
   'snapshot', 'addRoom', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
-  'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history',
+  'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
   'setAllowBypass', 'setBypass',
   'pickFolder', 'openFolder',

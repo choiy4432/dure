@@ -60,6 +60,7 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   addAgent: (e, _d, i) => e.addAgent(i),
   updateAgent: (e, _d, id, p) => e.updateAgent(id, p),
   removeAgent: (e, _d, id) => e.removeAgent(id),
+  setSelected: (e, _d, id) => e.setSelected(id),
   sendUser: (e, _d, id, parts) => e.sendUser(id, parts),
   interrupt: (e, _d, id) => e.interrupt(id),
   newConversation: (e, _d, id) => e.newConversation(id),
