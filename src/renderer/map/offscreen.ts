@@ -1,4 +1,5 @@
-import type { AgentId } from '../../engine/types'
+import type { AgentId, PendingRequest, RelayMessage, RoomId } from '../../engine/types'
+import { NODE_SIZE } from './layout'
 
 export type Side = 'left' | 'right' | 'top' | 'bottom'
 export interface OffTarget { id: AgentId; x: number; y: number; w: number; h: number; ask: boolean }
@@ -41,4 +42,34 @@ export function offscreen(
   for (const s of ORDER) if (by[s].length > by[side].length) side = s
   const first = by[side].reduce((a, b) => (b.gap < a.gap ? b : a)).id
   return { side, count, first, ask }
+}
+
+/**
+ * 할 일 카드 — 지금 방 에이전트 중 요청이 있는 것(ask) 또는 아직 못 읽은(pending·held) 메시지를 받은 것.
+ * '새 결과' 만 있는 카드는 넣지 않는다(급하지 않은 것까지 알리면 알약이 늘 떠 있게 된다).
+ * 크기는 React Flow 가 잰 값, 아직 못 쟀으면 NODE_SIZE
+ */
+export function todoTargets(
+  agents: { id: AgentId; roomId: RoomId }[],
+  requests: Pick<PendingRequest, 'agentId'>[],
+  messages: Pick<RelayMessage, 'roomId' | 'to' | 'state'>[],
+  nodes: { id: string; position: { x: number; y: number }; measured?: { width?: number; height?: number } }[],
+  roomId: RoomId,
+): OffTarget[] {
+  const inRoom = new Set(agents.filter(a => a.roomId === roomId).map(a => a.id))
+  const asks = new Set(requests.filter(r => inRoom.has(r.agentId)).map(r => r.agentId))
+  const mail = new Set(messages
+    .filter(m => m.roomId === roomId && (m.state === 'pending' || m.state === 'held') && inRoom.has(m.to))
+    .map(m => m.to))
+  const out: OffTarget[] = []
+  for (const n of nodes) {
+    if (!inRoom.has(n.id)) continue
+    const ask = asks.has(n.id)
+    if (!ask && !mail.has(n.id)) continue
+    out.push({
+      id: n.id, x: n.position.x, y: n.position.y,
+      w: n.measured?.width ?? NODE_SIZE.w, h: n.measured?.height ?? NODE_SIZE.h, ask,
+    })
+  }
+  return out
 }

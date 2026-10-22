@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { offscreen, type OffTarget, type View } from '../../src/renderer/map/offscreen'
+import { offscreen, todoTargets, type OffTarget, type View } from '../../src/renderer/map/offscreen'
 
 // 줌 1·이동 0 인 800x600 화면 — 화면 좌표 = 카드 좌표
 const view: View = { x: 0, y: 0, zoom: 1, width: 800, height: 600 }
@@ -51,5 +51,40 @@ describe('offscreen', () => {
     // 가운데 (400,300) 에서 카드 가운데 (-150+50, 700+25) → dx 450·dy 425 → left
     expect(offscreen([card('a', -150, 700)], view)?.side).toBe('left')
     expect(offscreen([card('a', -50, 800)], view)?.side).toBe('bottom')
+  })
+})
+
+describe('todoTargets', () => {
+  const agents = [
+    { id: 'a', roomId: 'r1' }, { id: 'b', roomId: 'r1' }, { id: 'c', roomId: 'r1' },
+    { id: 'd', roomId: 'r1' }, { id: 'x', roomId: 'r2' },
+  ]
+  const nodes = agents.map((a, i) => ({ id: a.id, position: { x: i * 10, y: 0 } }))
+  const m = (to: string, state: string, roomId = 'r1') => ({ roomId, to, state }) as any
+  const pick = (reqs: any[], msgs: any[]) => todoTargets(agents, reqs, msgs, nodes, 'r1')
+
+  it('요청 → ask true', () => {
+    expect(pick([{ agentId: 'a' }], [])).toEqual([expect.objectContaining({ id: 'a', ask: true })])
+  })
+  it('pending·held 메시지를 받은 카드 → ask false', () => {
+    const r = pick([], [m('a', 'pending'), m('b', 'held')])
+    expect(r.map(t => [t.id, t.ask])).toEqual([['a', false], ['b', false]])
+  })
+  it('둘 다 있으면 ask true', () => {
+    expect(pick([{ agentId: 'a' }], [m('a', 'pending')]).map(t => [t.id, t.ask])).toEqual([['a', true]])
+  })
+  it('새 결과만 있는 카드와 읽은 메시지(delivered·queued·dismissed)는 제외', () => {
+    expect(pick([], [m('a', 'delivered'), m('b', 'queued'), m('c', 'dismissed')])).toEqual([])
+  })
+  it('다른 방 에이전트·다른 방 메시지는 제외', () => {
+    expect(pick([{ agentId: 'x' }], [m('x', 'pending', 'r2'), m('d', 'pending', 'r2')])).toEqual([])
+  })
+  it('크기는 measured 가 있으면 그것, 없으면 NODE_SIZE', () => {
+    const n = [
+      { id: 'a', position: { x: 1, y: 2 }, measured: { width: 300, height: 90 } },
+      { id: 'b', position: { x: 3, y: 4 } },
+    ]
+    const r = todoTargets(agents, [{ agentId: 'a' }, { agentId: 'b' }], [], n, 'r1')
+    expect(r.map(t => [t.w, t.h])).toEqual([[300, 90], [256, 136]])
   })
 })

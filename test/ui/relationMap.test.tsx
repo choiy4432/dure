@@ -270,3 +270,34 @@ describe('PairPopover', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('RelationMap — 화면 밖 할 일 알약', () => {
+  const size = (w: number, h: number) => {
+    const spies = [
+      vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(w),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(h),
+    ]
+    return () => spies.forEach(sp => sp.mockRestore())
+  }
+
+  it('칸 크기를 못 잴 때(0) 할 일 카드가 있어도 알약을 그리지 않고 던지지도 않는다', async () => {
+    snapshot.agents = [agent('a', { pos: { x: 3000, y: 80 } })]
+    snapshot.requests = [{ id: 'q1', agentId: 'a', toolName: 'Bash', input: {}, kind: 'permission', createdAt: 1 }] as any
+    const { container } = await renderMap()
+    await act(async () => {})
+    expect(container.querySelector('.op')).toBeNull()
+  })
+
+  it('크기가 있고 할 일 카드가 화면 밖이면 "<쪽>에 할 일 N" 알약이 뜬다', async () => {
+    const restore = size(800, 600)
+    try {
+      snapshot.agents = [agent('a', { pos: { x: 5000, y: 80 } })]
+      snapshot.requests = [{ id: 'q1', agentId: 'a', toolName: 'Bash', input: {}, kind: 'permission', createdAt: 1 }] as any
+      const { container } = await renderMap()
+      await act(async () => {})
+      const pill = container.querySelector('.op')
+      expect(pill?.textContent).toBe('오른쪽에 할 일 1')
+      expect(pill?.querySelector('.dot.a')).not.toBeNull()
+    } finally { restore() }
+  })
+})

@@ -4,8 +4,7 @@ import type { RoomId } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { moveMs } from '../lib/motion'
 import type { AgentFlowNode } from './AgentNode'
-import { NODE_SIZE } from './layout'
-import { offscreen, type OffTarget, type Side } from './offscreen'
+import { offscreen, todoTargets, type Side } from './offscreen'
 
 const SIDE_WORD: Record<Side, string> = { left: '왼쪽', right: '오른쪽', top: '위', bottom: '아래' }
 
@@ -35,24 +34,10 @@ export function OffscreenPill({ roomId, nodes, wrap }: {
     return () => ro.disconnect()
   }, [wrap])
 
-  const targets = useMemo(() => {
-    const inRoom = new Set(agents.filter(a => a.roomId === roomId).map(a => a.id))
-    const asks = new Set(requests.filter(r => inRoom.has(r.agentId)).map(r => r.agentId))
-    // '새 결과' 만 있는 카드는 넣지 않는다 — 급하지 않은 것까지 알리면 알약이 늘 떠 있게 된다
-    const mail = new Set(messages
-      .filter(m => m.roomId === roomId && (m.state === 'pending' || m.state === 'held') && inRoom.has(m.to))
-      .map(m => m.to))
-    const out: OffTarget[] = []
-    for (const n of nodes) {
-      const ask = asks.has(n.id)
-      if (!ask && !mail.has(n.id)) continue
-      out.push({
-        id: n.id, x: n.position.x, y: n.position.y,
-        w: n.measured?.width ?? NODE_SIZE.w, h: n.measured?.height ?? NODE_SIZE.h, ask,
-      })
-    }
-    return out
-  }, [agents, requests, messages, nodes, roomId])
+  const targets = useMemo(
+    () => todoTargets(agents, requests, messages, nodes, roomId),
+    [agents, requests, messages, nodes, roomId],
+  )
 
   if (size.width === 0 || size.height === 0) return null
   const hit = offscreen(targets, { x: transform[0], y: transform[1], zoom: transform[2], ...size })
