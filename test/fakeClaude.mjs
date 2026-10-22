@@ -17,6 +17,10 @@
 //                       답대로 tool_result(허용 "ok" · 거절은 is_error) → 보고 · 끝 알림 · 스스로 시작한 차례
 //   SUBSEND <이름>: <글> SUB 와 같되(설명 = "<이름>: <글>") 서브에이전트가 mcp__dure__send_message tool_use(parent 붙음) 뒤 MCP send_message 를
 //                       부르고 받은 글을 tool_result 로(MCP 결과가 오류면 is_error) → 보고 · 끝 알림 · 스스로 시작한 차례
+//   MAKE <이름>|<역할>|<폴더>|<첫 할 일>  mcp__dure__create_agent tool_use(id toolu_<n>, 입력 {name, role, folder?, task?} — 폴더·첫 할 일이
+//                       빈칸이면 뺀다) → MCP create_agent(그 id) → 받은 글을 tool_result(MCP 결과가 오류면 is_error) → 같은 글로 result
+//   SUBMAKE <이름>|<역할>|<폴더>|<첫 할 일>  SUB 와 같되(설명 = 인자 그대로) 서브에이전트가 같은 create_agent tool_use(parent 붙음) 뒤 MCP create_agent 를
+//                       부르고 받은 글을 tool_result 로(오류면 is_error) → 보고 · 끝 알림 · 스스로 시작한 차례
 //   SUBNEST <도구>      SUB 와 같되(설명 = <도구>) 서브에이전트가 Agent tool_use(parent 붙음)로 안쪽 서브에이전트를 띄운다 — 안쪽 task_started
 //                       (parent_task_id = 바깥 task, spawn_depth:2). 안쪽은 스트림에 줄을 내지 않고(probe14 A) 새 id 로 MCP approve 를 부른다 →
 //                       안쪽 끝 알림 → 바깥 보고 · 끝 알림 · 스스로 시작한 차례
@@ -219,6 +223,23 @@ const sendTool = (arg) => async (task) => {
   await taskToolResult(task, id, reply.text, reply.isError);
   return true;
 };
+/** MAKE·SUBMAKE 인자 '<이름>|<역할>|<폴더>|<첫 할 일>' → create_agent 입력(폴더·첫 할 일이 빈칸이면 뺀다 — 첫 할 일 안의 '|' 는 그대로) */
+function makeArgs(arg) {
+  const [name = '', role = '', folder = '', ...rest] = arg.split('|');
+  const task = rest.join('|');
+  return { name, role, ...(folder ? { folder } : {}), ...(task ? { task } : {}) };
+}
+/** SUBMAKE — 두레 도구 create_agent 를 부르고 받은 글을 그대로(MCP 결과가 오류면 is_error) */
+const makeTool = (arg) => async (task) => {
+  const args = makeArgs(arg);
+  const id = `toolu_${++sequence}`;
+  await taskAssistant(task, [{ type: 'tool_use', id, name: 'mcp__dure__create_agent', input: args }]);
+  await taskProgress(task, `Creating ${args.name}`, 'mcp__dure__create_agent');
+  const reply = await taskCall('create_agent', args, id);
+  if (task.killed) return false;
+  await taskToolResult(task, id, reply.text, reply.isError);
+  return true;
+};
 /** SUBNEST — Agent 로 안쪽 서브에이전트를 띄운다(probe14 A): 안쪽은 시작·끝 알림만 내고, 스트림에 없는 새 id 로 approve 를 부른다 */
 const nestTask = (tool) => async (task) => {
   const n = ++sequence;
@@ -381,11 +402,12 @@ async function turn(text) {
     process.stderr.write('fake crash\n');
     process.exit(3);
   }
-  const subCmd = /^SUB(FG|ASK|SEND|NEST)? ([\s\S]+)$/.exec(text);
+  const subCmd = /^SUB(FG|ASK|SEND|NEST|MAKE)? ([\s\S]+)$/.exec(text);
   if (subCmd) {
     const [, kind, arg] = subCmd;
     const background = kind !== 'FG';
-    const work = kind === 'ASK' ? askTool(arg) : kind === 'SEND' ? sendTool(arg) : kind === 'NEST' ? nestTask(arg) : readNote;
+    const work =
+      kind === 'ASK' ? askTool(arg) : kind === 'SEND' ? sendTool(arg) : kind === 'NEST' ? nestTask(arg) : kind === 'MAKE' ? makeTool(arg) : readNote;
     const task = await launchTask(arg, background);
     if (background) {
       // 진짜(probe13)의 내부 안내 — 화면에 보이면 안 되는 글
@@ -489,6 +511,25 @@ async function turn(text) {
       await step();
     }
     await finish(said);
+    return;
+  }
+  const make = /^MAKE ([\s\S]*)$/.exec(text);
+  if (make) {
+    const args = makeArgs(make[1]);
+    const id = `toolu_${++sequence}`;
+    await assistant([{ type: 'tool_use', id, name: 'mcp__dure__create_agent', input: args }]);
+    let reply;
+    if (!mcp) reply = { text: 'dure MCP 서버가 설정에 없습니다', isError: true };
+    else {
+      try {
+        reply = await callTool('create_agent', args, id);
+      } catch (e) {
+        reply = { text: `MCP 호출 실패: ${e.message}`, isError: true };
+      }
+    }
+    if (tok.ended) return; // 중단된 차례의 늦은 응답
+    await toolResult(id, reply.text, reply.isError);
+    await finish(reply.text);
     return;
   }
   const send = /^SEND ([^:]+): ([\s\S]*)$/.exec(text);

@@ -1,5 +1,7 @@
 export const APPROVE_TOOL = 'mcp__dure__approve';
-export const DURE_TOOLS = ['mcp__dure__list_agents', 'mcp__dure__send_message'];
+export const CREATE_AGENT_TOOL = 'mcp__dure__create_agent';
+/** Claude 자체 승인 없이 부르는 두레 도구 — create_agent 의 사람 승인은 두레 카드가 한다 */
+export const DURE_TOOLS = ['mcp__dure__list_agents', 'mcp__dure__send_message', CREATE_AGENT_TOOL];
 export const BLOCKED_TOOLS = ['SendMessage', 'ListAgents'];
 export const SPAWN_ENV_EXTRA = { MCP_TOOL_TIMEOUT: '86400000' };
 // The CLI also aborts any MCP call that sends "no response or progress" for 300 s — separate

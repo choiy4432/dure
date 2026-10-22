@@ -9,6 +9,7 @@ import { DENY } from '../shared/denyTexts';
 export const DENY_DEFAULT: string = DENY.userDenied;
 const CANCELLED: string = DENY.requestCancelled; // 부른 쪽이 끊겨 Claude 에겐 닿지 않는다
 const QUESTION_TOOL = 'AskUserQuestion';
+const CREATE_ONLY_ALLOW_DENY = '새 에이전트 만들기에는 allow 나 deny 로만 답할 수 있습니다.';
 
 interface Entry {
   req: PendingRequest;
@@ -27,18 +28,20 @@ export class Permissions extends EventEmitter {
 
   /**
    * signal 이 abort 되면(부른 쪽이 끊김) 대기에서 빼고 deny 로 끝낸다 — 죽은 호출의 카드가 남지 않게.
-   * o.fromSubagent: 서브에이전트가 물은 것 — 요청에 표시해 둔다(차례 끝 정리에서 남길지 가른다)
+   * o.fromSubagent: 서브에이전트가 물은 것 — 요청에 표시해 둔다(차례 끝 정리에서 남길지 가른다).
+   * o.kind 'create-agent': 새 에이전트 만들기 카드 — 늘 허용 목록과 상관없이 늘 묻고, allow·deny 로만 답한다
    */
   request(
     agentId: AgentId,
     args: { tool_name: string; input: unknown; tool_use_id?: string },
     signal?: AbortSignal,
-    o: { fromSubagent?: boolean } = {},
+    o: { fromSubagent?: boolean; kind?: 'create-agent' } = {},
   ): Promise<ApproveResult> {
     const agent = this.store.agent(agentId);
     if (!agent) return Promise.resolve({ behavior: 'deny', message: '에이전트를 찾을 수 없습니다.' });
-    const isQuestion = args.tool_name === QUESTION_TOOL;
-    if (this.allowsAlways(agentId, args.tool_name)) return Promise.resolve({ behavior: 'allow', updatedInput: args.input });
+    const create = o.kind === 'create-agent';
+    const isQuestion = !create && args.tool_name === QUESTION_TOOL;
+    if (!create && this.allowsAlways(agentId, args.tool_name)) return Promise.resolve({ behavior: 'allow', updatedInput: args.input });
     if (signal?.aborted) return Promise.resolve({ behavior: 'deny', message: CANCELLED });
     const req: PendingRequest = {
       id: crypto.randomUUID(),
@@ -46,7 +49,7 @@ export class Permissions extends EventEmitter {
       toolName: args.tool_name,
       input: args.input,
       toolUseId: args.tool_use_id,
-      kind: isQuestion ? 'question' : 'permission',
+      kind: create ? 'create-agent' : isQuestion ? 'question' : 'permission',
       createdAt: Date.now(),
       ...(o.fromSubagent ? { fromSubagent: true as const } : {}),
     };
@@ -82,13 +85,15 @@ export class Permissions extends EventEmitter {
     const entry = this.entries.get(requestId);
     if (!entry) throw new Error(`대기 중인 요청이 없습니다: ${requestId}`);
     const { req } = entry;
+    // 새 에이전트 만들기는 매번 사람이 정한다 — 늘 허용(allow-always)이 없다
+    if (req.kind === 'create-agent' && d.type !== 'allow' && d.type !== 'deny') throw new Error(CREATE_ONLY_ALLOW_DENY);
     if (d.type === 'answer' && req.kind !== 'question') throw new Error('권한 요청에는 answer 로 답할 수 없습니다.');
     if ((d.type === 'allow' || d.type === 'allow-always') && req.kind === 'question') {
       throw new Error('되묻기에는 allow 로 답할 수 없습니다.');
     }
     let result: ApproveResult;
     if (d.type === 'deny') {
-      result = { behavior: 'deny', message: d.message ?? DENY_DEFAULT };
+      result = { behavior: 'deny', message: d.message ?? (req.kind === 'create-agent' ? DENY.createAgentDenied : DENY_DEFAULT) };
     } else if (d.type === 'answer') {
       const base = req.input && typeof req.input === 'object' ? (req.input as object) : {};
       result = { behavior: 'allow', updatedInput: { ...base, answers: d.answers } };

@@ -9,6 +9,7 @@ function handlers(over: Partial<McpHandlers> = {}): McpHandlers {
     listAgents: () => '[]',
     sendMessage: () => 'ok',
     approve: async () => ({ behavior: 'allow', updatedInput: {} }),
+    createAgent: async () => 'made',
     ...over,
   };
 }
@@ -70,10 +71,79 @@ describe('mcpServer', () => {
   test('tools/list → 도구 셋', async () => {
     handle = await startMcpServer(handlers());
     const j = await (await rpc(handle, { jsonrpc: '2.0', id: 2, method: 'tools/list' })).json() as any;
-    expect(j.result.tools.map((t: any) => t.name)).toEqual(['list_agents', 'send_message', 'approve']);
+    expect(j.result.tools.map((t: any) => t.name)).toEqual(['list_agents', 'send_message', 'create_agent', 'approve']);
     const send = j.result.tools[1];
     expect(send.inputSchema.required).toEqual(['to', 'text']);
     expect(send.description).toBe('이 두레 방의 다른 에이전트에게 일을 넘긴다(to = 에이전트 이름)');
+    const create = j.result.tools[2];
+    expect(create.inputSchema.required).toEqual(['name', 'role']);
+    expect(Object.keys(create.inputSchema.properties)).toEqual(['name', 'role', 'folder', 'task']);
+    for (const p of Object.values(create.inputSchema.properties) as any[]) expect(p.type).toBe('string');
+  });
+
+  test('create_agent → SSE 로 handler 결과 text · handler 에 (헤더 agentId, 인자, _meta toolUseId, signal) — 없는 folder·task 는 넘기지 않는다', async () => {
+    const seen: unknown[] = [];
+    handle = await startMcpServer(handlers({
+      createAgent: async (a, args, toolUseId, signal) => {
+        seen.push([a, args, toolUseId, signal instanceof AbortSignal]);
+        return `만듦 ${args.name}`;
+      },
+    }));
+    const full = { name: '테스트', role: '검사', folder: 'sub', task: 'README 정리' };
+    const j = await approveReply(await rpc(handle, {
+      jsonrpc: '2.0', id: 30, method: 'tools/call',
+      params: { name: 'create_agent', arguments: full, _meta: { 'claudecode/toolUseId': 'toolu_make' } },
+    }));
+    expect(j.id).toBe(30);
+    expect(j.result).toEqual({ content: [{ type: 'text', text: '만듦 테스트' }] });
+    const k = await approveReply(await rpc(handle, call(31, 'create_agent', { name: '둘', role: '역할' })));
+    expect(k.result.content[0].text).toBe('만듦 둘');
+    expect(seen).toEqual([
+      ['agent-A', full, 'toolu_make', true],
+      ['agent-A', { name: '둘', role: '역할' }, undefined, true],
+    ]);
+  });
+
+  test('create_agent — 잘못된 인자(이름·역할이 글이 아님 · folder·task 가 글이 아님)는 handler 없이 isError · handler 가 던지면 그 글로 isError', async () => {
+    const seen: unknown[] = [];
+    handle = await startMcpServer(handlers({
+      createAgent: async (_a, args) => {
+        seen.push(args);
+        throw new Error('이름을 입력하세요');
+      },
+    }));
+    for (const [i, args] of [{ role: 'r' }, { name: 'n' }, { name: 'n', role: 'r', folder: 3 }, { name: 'n', role: 'r', task: {} }].entries()) {
+      const j = await approveReply(await rpc(handle, call(40 + i, 'create_agent', args)));
+      expect(j.result).toEqual({ content: [{ type: 'text', text: '잘못된 인자입니다' }], isError: true });
+    }
+    expect(seen).toEqual([]);
+    const j = await approveReply(await rpc(handle, call(45, 'create_agent', { name: '', role: 'r' })));
+    expect(j.result).toEqual({ content: [{ type: 'text', text: '이름을 입력하세요' }], isError: true });
+  });
+
+  test('create_agent 를 부른 쪽이 끊으면 handler 의 signal 이 abort 된다 — 사람 답을 기다리는 카드가 남지 않게', async () => {
+    let signal: AbortSignal | undefined;
+    let done!: () => void;
+    const aborted = new Promise<void>((r) => { done = r; });
+    handle = await startMcpServer(handlers({
+      createAgent: (_a, _args, _id, s) => {
+        signal = s;
+        return new Promise((_resolve, reject) => s.addEventListener('abort', () => { done(); reject(new Error('취소')); }));
+      },
+    }), { keepaliveMs: 20 });
+    const client = new AbortController();
+    const p = fetch(`http://127.0.0.1:${handle.port}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${handle.token}`, 'x-dure-agent': 'agent-A' },
+      body: JSON.stringify(call(46, 'create_agent', { name: 'n', role: 'r' })),
+      signal: client.signal,
+    }).then((r) => r.text()).catch(() => 'aborted');
+    while (!signal) await new Promise((r) => setTimeout(r, 10));
+    expect(signal.aborted).toBe(false);
+    client.abort();
+    await aborted;
+    expect(signal.aborted).toBe(true);
+    await p;
   });
 
   test('list_agents → handler 에 헤더 agentId', async () => {

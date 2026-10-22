@@ -15,13 +15,23 @@ export interface McpHandlers {
     args: { tool_name: string; input: unknown; tool_use_id?: string },
     signal: AbortSignal,
   ): Promise<ApproveResult>;
+  /**
+   * 새 에이전트 만들기 — 사람이 승인할 때까지 기다린다(approve 처럼 SSE 로 답한다). 결과 글을 돌려주고, 안 되면 던진다(오류 결과).
+   * folder·task 는 Claude 가 넘겼을 때만 있다. signal: 부른 쪽이 답을 받기 전에 끊기면 abort
+   */
+  createAgent(
+    agentId: AgentId,
+    args: { name: string; role: string; folder?: string; task?: string },
+    toolUseId: string | undefined,
+    signal: AbortSignal,
+  ): Promise<string>;
 }
 
 export interface McpServerHandle { port: number; token: string; close(): Promise<void> }
 
 export interface McpServerOptions {
   /**
-   * approve 를 기다리는 동안 SSE 주석을 보내는 간격. CLI 의 300초 무응답 제한은 주석을 진행으로 치지 않는다 —
+   * approve·create_agent 를 기다리는 동안 SSE 주석을 보내는 간격. CLI 의 300초 무응답 제한은 주석을 진행으로 치지 않는다 —
    * 그 제한은 MCP 설정의 서버별 timeout 으로 푼다(claudeArgs DURE_SERVER_TIMEOUT_MS). 이 주석 줄은 사이 장비가
    * 조용한 연결을 끊지 않게 하는 덤일 뿐이다.
    */
@@ -38,6 +48,20 @@ const TOOLS = [
     name: 'send_message',
     description: '이 두레 방의 다른 에이전트에게 일을 넘긴다(to = 에이전트 이름)',
     inputSchema: { type: 'object', properties: { to: { type: 'string' }, text: { type: 'string' } }, required: ['to', 'text'] },
+  },
+  {
+    name: 'create_agent',
+    description: '이 두레 방에 새 에이전트를 만든다 — 사람이 승인한 뒤에 생긴다. 새 역할을 오래 맡길 때만 쓴다(짧은 일은 서브에이전트로)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '새 에이전트 이름 — 이 방 안에서 겹치지 않게' },
+        role: { type: 'string', description: '맡을 역할' },
+        folder: { type: 'string', description: '일할 폴더 — 없으면 내 폴더, 상대 경로는 내 폴더 기준' },
+        task: { type: 'string', description: '첫 할 일 — 주면 만든 뒤 내가 보낸 메시지로 간다' },
+      },
+      required: ['name', 'role'],
+    },
   },
   {
     name: 'approve',
@@ -73,15 +97,26 @@ async function callTool(h: McpHandlers, agentId: AgentId, params: any, signal: A
       if (typeof a.tool_use_id === 'string') args.tool_use_id = a.tool_use_id;
       return textResult(JSON.stringify(await h.approve(agentId, args, signal)));
     }
+    if (name === 'create_agent') {
+      if (typeof a.name !== 'string' || typeof a.role !== 'string') return bad();
+      if ((a.folder !== undefined && typeof a.folder !== 'string') || (a.task !== undefined && typeof a.task !== 'string')) return bad();
+      const args: { name: string; role: string; folder?: string; task?: string } = { name: a.name, role: a.role };
+      if (a.folder !== undefined) args.folder = a.folder;
+      if (a.task !== undefined) args.task = a.task;
+      return textResult(await h.createAgent(agentId, args, toolUseId, signal));
+    }
     return textResult(`알 수 없는 도구: ${String(name)}`, true);
   } catch (e) {
     return textResult(e instanceof Error ? e.message : String(e), true);
   }
 }
 
+/** 사람 답을 기다리는 도구 — SSE 로 답한다(아래 toolCall) */
+const WAITS_FOR_HUMAN = new Set(['approve', 'create_agent']);
+
 /**
  * tools/call — 부른 쪽이 답을 받기 전에 끊으면 signal 을 abort 한다.
- * approve 는 사람 답을 오래 기다릴 수 있어 SSE 로 답한다(오래 기다려도 안 끊기는 건 서버별 timeout 덕이다 —
+ * approve·create_agent 는 사람 답을 오래 기다릴 수 있어 SSE 로 답한다(오래 기다려도 안 끊기는 건 서버별 timeout 덕이다 —
  * 위 McpServerOptions 참고): 머리글을 곧바로 보내고 keepaliveMs 마다 주석 줄,
  * 답이 오면 `event: message` + `data: <JSON-RPC>` 한 번 보내고 끝낸다. 다른 도구는 application/json 그대로.
  */
@@ -92,7 +127,7 @@ function toolCall(h: McpHandlers, agentId: AgentId, m: any, res: ServerResponse,
     clearInterval(keepalive);
     if (!res.writableEnded) aborter.abort();
   });
-  const stream = m.params?.name === 'approve';
+  const stream = WAITS_FOR_HUMAN.has(m.params?.name);
   if (stream) {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     res.flushHeaders();

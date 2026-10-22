@@ -126,13 +126,23 @@ export type Decision =
   | { type: 'allow-always' }
   | { type: 'deny'; message?: string }
   | { type: 'answer'; answers: Record<string, string> };
+/** 새 에이전트 만들기 카드의 입력(kind 'create-agent') — folder 는 정규화한 전체 경로, task 는 첫 할 일(없으면 null) */
+export interface CreateAgentInput {
+  name: string;
+  role: string;
+  folder: string;
+  task: string | null;
+}
 export interface PendingRequest {
   id: string;
   agentId: AgentId;
+  /** create-agent 면 'mcp__dure__create_agent' */
   toolName: string;
+  /** create-agent 면 CreateAgentInput */
   input: unknown;
   toolUseId?: string;
-  kind: 'permission' | 'question';
+  /** create-agent = 에이전트가 두레 도구 create_agent 로 새 에이전트를 만들려 한다 — allow·deny 로만 답한다 */
+  kind: 'permission' | 'question' | 'create-agent';
   createdAt: number;
   /** 서브에이전트가 물은 것(tool_use id 로 가른다) — 부모 차례가 끝나도 도는 동안 남는다. 부모 것엔 칸이 없다 */
   fromSubagent?: true;
@@ -159,6 +169,8 @@ export interface EngineEventMap {
   'model-now': { agentId: AgentId; modelNow: string | null };
   /** 도는 서브에이전트 — 부모의 Agent tool_use id, 시작 순. 바뀔 때마다(시작·끝·세션이 끝나 비울 때) */
   subagents: { agentId: AgentId; running: string[] };
+  /** 엔진이 에이전트를 만들었다(create_agent 를 사람이 승인) — by = 만든 에이전트. 사람이 화면에서 더한 것엔 오지 않는다 */
+  'agent-added': { agent: Agent; by: AgentId };
 }
 
 export interface AgentDescription {

@@ -16,6 +16,13 @@ describe('buildRoomPrompt', () => {
     expect(p).toContain('mcp__dure__send_message');
     expect(p).toContain('mcp__dure__list_agents');
   });
+  test('새 에이전트 만들기 안내 두 줄 — 오래 맡길 역할만, 짧은 일은 서브에이전트 · 첫 할 일은 그 메시지 하나로 시작할 수 있게', () => {
+    const p = buildRoomPrompt(mk('a', 'r'), []);
+    expect(p).toContain(
+      '새 역할을 오래 맡길 에이전트가 필요하면 mcp__dure__create_agent 로 같은 방에 만들 수 있다(사람이 승인한다). 짧은 일회성 일은 새 에이전트가 아니라 서브에이전트(Agent 도구)로 한다.',
+    );
+    expect(p).toContain('만들 때 첫 할 일(task)을 같이 넘기면, 새 에이전트가 그 메시지 하나만 읽고 바로 시작할 수 있게 쓴다.');
+  });
   test('동료가 없으면 안내', () => {
     expect(buildRoomPrompt(mk('a', 'r'), [])).toContain('아직 같은 방에 다른 에이전트가 없습니다');
   });

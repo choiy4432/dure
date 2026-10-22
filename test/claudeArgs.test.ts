@@ -63,6 +63,8 @@ describe('buildArgs', () => {
   });
   test('상수', () => {
     expect(BLOCKED_TOOLS).toEqual(['SendMessage', 'ListAgents']);
+    // 두레 도구는 Claude 자체 승인 없이 — create_agent 의 승인은 두레 카드가 한다
+    expect(DURE_TOOLS).toEqual(['mcp__dure__list_agents', 'mcp__dure__send_message', 'mcp__dure__create_agent']);
     expect(SPAWN_ENV_EXTRA).toEqual({ MCP_TOOL_TIMEOUT: '86400000' });
   });
 });

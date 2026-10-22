@@ -235,3 +235,50 @@ test('없는 에이전트는 즉시 deny, 대기·이벤트 없음', async () =>
   expect(events).toEqual([]);
   expect(perms.pending()).toEqual([]);
 });
+
+// ── 새 에이전트 만들기(create-agent) — 두레 도구 create_agent 의 승인 카드 ──
+const MAKE = 'mcp__dure__create_agent';
+const makeInput = { name: '테스트', role: '검사', folder: '/x', task: null };
+
+test('create-agent: kind create-agent 로 대기 — 늘 허용 목록에 그 이름이 있어도 묻는다 · allow 면 입력 그대로 allow', async () => {
+  store.updateAgent(a1, { alwaysAllow: [MAKE] }); // 손으로 고친 파일 등 — 그래도 묻는다
+  const events: PendingRequest[] = [];
+  perms.on('request', (r) => events.push(r));
+  const p = perms.request(a1, { tool_name: MAKE, input: makeInput, tool_use_id: 'm1' }, undefined, { kind: 'create-agent' });
+  expect(perms.pending()).toHaveLength(1);
+  const req = lastPending();
+  expect(req).toMatchObject({ agentId: a1, toolName: MAKE, input: makeInput, toolUseId: 'm1', kind: 'create-agent' });
+  expect(req).not.toHaveProperty('fromSubagent');
+  expect(events).toEqual([req]);
+  expect(perms.wasAsked(a1, 'm1')).toBe(true);
+  perms.answer(req.id, { type: 'allow' });
+  expect(await p).toEqual({ behavior: 'allow', updatedInput: makeInput });
+});
+
+test('create-agent: allow-always·answer 는 던지고 요청은 대기 그대로 — 늘 허용 목록도 늘지 않는다', async () => {
+  const p = perms.request(a1, { tool_name: MAKE, input: makeInput }, undefined, { kind: 'create-agent' });
+  const id = lastPending().id;
+  expect(() => perms.answer(id, { type: 'allow-always' })).toThrow('새 에이전트 만들기에는 allow 나 deny 로만 답할 수 있습니다.');
+  expect(() => perms.answer(id, { type: 'answer', answers: {} })).toThrow('새 에이전트 만들기에는 allow 나 deny 로만 답할 수 있습니다.');
+  expect(perms.pending()).toHaveLength(1);
+  expect(store.agent(a1)!.alwaysAllow).toEqual([]);
+  perms.answer(id, { type: 'deny' });
+  await p;
+});
+
+test('create-agent: deny 기본 글은 새 에이전트 만들기를 거절했어요 — 지정하면 그 글 · 끊김·cancelForAgent 는 지금처럼', async () => {
+  const p1 = perms.request(a1, { tool_name: MAKE, input: makeInput }, undefined, { kind: 'create-agent' });
+  perms.answer(lastPending().id, { type: 'deny' });
+  expect(await p1).toEqual({ behavior: 'deny', message: '사용자가 새 에이전트 만들기를 거절했어요.' });
+  const p2 = perms.request(a1, { tool_name: MAKE, input: makeInput }, undefined, { kind: 'create-agent' });
+  perms.answer(lastPending().id, { type: 'deny', message: '안 돼요' });
+  expect(await p2).toEqual({ behavior: 'deny', message: '안 돼요' });
+  const ac = new AbortController();
+  const p3 = perms.request(a1, { tool_name: MAKE, input: makeInput }, ac.signal, { kind: 'create-agent' });
+  ac.abort();
+  expect(await p3).toEqual({ behavior: 'deny', message: '요청이 취소되었습니다.' });
+  const p4 = perms.request(a1, { tool_name: MAKE, input: makeInput }, undefined, { kind: 'create-agent' });
+  perms.cancelForAgent(a1, 'Claude 가 종료되었습니다.');
+  expect(await p4).toEqual({ behavior: 'deny', message: 'Claude 가 종료되었습니다.' });
+  expect(perms.pending()).toEqual([]);
+});

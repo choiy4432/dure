@@ -5,18 +5,19 @@ import path from 'node:path';
 import { openStore, renameRetrying, type Store } from './store';
 import { openMessageLog, type MessageLog } from './messageLog';
 import { capPatch, openHistory, patchFromInput, trimToolInput, type History } from './history';
-import { buildArgs, buildMcpConfig, buildUsageArgs, SPAWN_ENV_EXTRA } from './claudeArgs';
+import { buildArgs, buildMcpConfig, buildUsageArgs, CREATE_AGENT_TOOL, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
 import { ClaudeSession } from './claudeSession';
 import { startMcpServer, type McpServerHandle } from './mcpServer';
 import { Permissions } from './permissions';
 import { DENY } from '../shared/denyTexts';
+import { josa } from '../shared/josa';
 import { Router, AUTO_CHAIN_LIMIT } from './router';
 import { EFFORT_LEVELS, type EffortLevel } from './types';
 import { toContextUsage } from './usage';
 import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
 import type {
-  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, ContextUsage, Decision, DiffHunk, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, StreamEvent, UserPart,
+  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, ContextUsage, CreateAgentInput, Decision, DiffHunk, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, StreamEvent, UserPart,
 } from './types';
 
 export interface EngineOptions {
@@ -62,6 +63,7 @@ export interface EngineOptions {
 //  'context'     { agentId; value: ContextUsage | null }   (차례 끝에 대화 공간을 받았을 때 · 요약·새 대화 직후엔 null)
 //  'model-now'   { agentId; modelNow }   (차례의 init 이 알려 준 모델 id 가 바뀔 때 · setModel 은 null 로 비운다)
 //  'subagents'   { agentId; running }   (도는 서브에이전트 목록이 바뀔 때마다 — 부모의 Agent tool_use id, 시작 순. 세션이 끝나면 빈 목록)
+//  'agent-added' { agent; by }   (에이전트가 create_agent 로 만든 에이전트를 사람이 승인해 더했을 때 — by = 만든 에이전트. 화면에서 더한 것엔 없다)
 //  'usage'       PlanUsage | null   (플랜 사용량을 받을 때마다 — 모르는 모양·한도 없음이면 null)
 //  'engine-error' { agentId: string | null; message: string }  (프로세스 이벤트 처리·듣는 쪽에서 난 오류 — 앱을 죽이지 않고 알린다)
 export interface Engine extends EventEmitter {
@@ -148,6 +150,8 @@ const LIMIT_INVALID = '상한은 1 이상이어야 해요.';
 const DURE_TOOL_PREFIX = 'mcp__dure__';
 const DURE_TOOL_DENIED = '두레 도구는 승인 대상이 아니에요.';
 const SUBAGENT_DURE_TOOL: string = DENY.subagentDureTool;
+/** create_agent 미리 보기 — 이름 빔·겹침·폴더 문구는 store 의 것을 그대로 쓴다 */
+const ROLE_EMPTY = '역할을 입력하세요';
 /** 부른 tool_use id 를 스트림에서 못 봤을 때 기다리는 한도 — 그 줄은 보통 부르기보다 먼저 온다(probe13·14) */
 const SEEN_WAIT_MS = 2000;
 /** 끝 알림 뒤 스스로 시작한 차례는 곧바로 온다(probe13) — 멈추기로 끝났으면 오지 않으니(probe14 C) 짧게만 기다린다 */
@@ -355,6 +359,7 @@ class EngineImpl extends EventEmitter implements Engine {
         if (this.closed || this.removing.has(agentId) || (s && this.sessions.get(agentId) !== s)) return { behavior: 'deny', message: EXITED };
         return this.perms.request(agentId, args, signal, { fromSubagent }); // 부른 프로세스가 끊기면 카드도 사라진다
       },
+      createAgent: (agentId, args, toolUseId, signal) => this.createAgentFor(agentId, args, toolUseId, signal),
     });
     if (this.o.autoStart !== false) this.start();
   }
@@ -701,6 +706,55 @@ class EngineImpl extends EventEmitter implements Engine {
     // 기다리는 사이 세션이 끝났다(origin 은 부모로 돌려준다) — 끝난 세션의 부르기는 실행하지 않는다(승인과 같은 거절 문구)
     if (s && this.sessions.get(agentId) !== s) throw new Error(EXITED);
     return this.caller(agentId); // 기다리는 사이 지워졌을 수 있다
+  }
+
+  /**
+   * 두레 도구 create_agent — 에이전트가 같은 방에 새 에이전트를 만든다. 사람이 카드에서 [만들기] 해야 생긴다.
+   * 부른 쪽 가르기는 다른 두레 도구와 같다(서브에이전트면 거절 · 기다리는 사이 세션이 끝나면 EXITED). 카드는 살아 있는 세션의
+   * 부르기에만 띄운다 — 그 세션이 끝나면(멈추기·새 대화·종료·비정상 종료) 세션 끝 정리가 카드를 거절로 치운다, 부른 쪽이 끊겨도(signal).
+   * 미리 보기(이름·역할·겹침·폴더)가 실패하면 카드 없이 그 이유로 던진다. [만들기] 때 같은 검사를 다시 한다(그사이 이름이 겹치게
+   * 됐거나 폴더가 사라졌으면 만들지 않는다). 새 에이전트는 만든 쪽의 모델·effort·자동을 물려받고, 묻지 않음은 꺼짐·늘 허용은 빈 목록.
+   * 첫 할 일이 있으면 만든 쪽이 보낸 메시지로 — [만들기]가 그 메시지의 승인이다(router.sendApproved)
+   */
+  private async createAgentFor(
+    agentId: AgentId,
+    args: { name: string; role: string; folder?: string; task?: string },
+    toolUseId: string | undefined,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const s = this.sessions.get(agentId);
+    const me = await this.dureCaller(agentId, toolUseId);
+    // 살아 있는 세션의 부르기만 — 세션 없이 온 부르기(끝난 프로세스의 늦은 호출)의 카드는 세션 끝 정리가 치우지 못한다
+    if (!s || this.sessions.get(agentId) !== s) throw new Error(EXITED);
+    const plan: CreateAgentInput = {
+      name: args.name.trim(),
+      role: args.role.trim(),
+      folder: path.resolve(me.folder, args.folder ?? '.'),
+      task: args.task?.trim() ? args.task : null,
+    };
+    this.checkNewAgent(me.roomId, plan); // 미리 보기 — 카드 없이 던진다
+    const res = await this.perms.request(agentId, { tool_name: CREATE_AGENT_TOOL, input: plan, tool_use_id: toolUseId }, signal, { kind: 'create-agent' });
+    if (res.behavior === 'deny') throw new Error(res.message); // 거절·멈춤·세션 끝·끊김 — 그 글 그대로
+    // [만들기] — 그사이 세션이 끝났거나 만든 쪽이 지워졌으면 만들지 않는다(세션 끝 정리가 카드를 먼저 거절하지만 겹쳐 지킨다)
+    if (this.closed || this.removing.has(agentId) || this.sessions.get(agentId) !== s) throw new Error(EXITED);
+    const creator = this.caller(agentId); // 지금 저장값 — 카드가 떠 있는 사이 바뀐 모델·effort·자동도
+    this.checkNewAgent(creator.roomId, plan); // 다시 확인
+    const added = this.store.addAgent({ roomId: creator.roomId, name: plan.name, role: plan.role, folder: plan.folder });
+    const agent = this.store.updateAgent(added.id, {
+      model: creator.model, effort: creator.effort, auto: creator.auto, bypassOn: false, alwaysAllow: [],
+    });
+    this.guard(null, () => this.emit('agent-added', { agent, by: creator.id }));
+    if (plan.task !== null) this.router.sendApproved(creator.id, agent.id, plan.task);
+    return `에이전트 '${agent.name}'${josa(agent.name, '을/를')} 만들었어요.${plan.task !== null ? ' 첫 메시지를 보냈어요.' : ''}`;
+  }
+
+  /**
+   * 새 에이전트를 더할 수 있는가 — create_agent 의 미리 보기와 [만들기] 때 다시 확인이 같이 쓴다.
+   * 이름 빔 → 역할 빔 → 방 안 이름 겹침 → 폴더 순. 역할 말고는 store 의 검사·문구 그대로
+   */
+  private checkNewAgent(roomId: RoomId, n: CreateAgentInput): void {
+    if (n.name.trim() && !n.role.trim()) throw new Error(ROLE_EMPTY); // 이름이 비었으면 store 가 먼저 '이름을 입력하세요'
+    this.store.checkAgent({ roomId, name: n.name, folder: n.folder });
   }
 
   /**
@@ -1584,10 +1638,13 @@ function sameFlags(x: Flags, y: Flags): boolean {
 /**
  * 보낸 줄을 읽었다는 뜻인 사건 — 부모의 줄(init·글·하는 일·result 등). 제어 응답 · 서브에이전트 줄(parent) · 서브에이전트 시작·끝 ·
  * 버린 줄(task_progress·task_updated·background_tasks_changed 같은 서브에이전트·백그라운드 system 줄 — 세션이 보통 먼저 거른다)은
- * 보낸 줄과 상관없이 온다(부모 차례가 끝난 뒤에도 서브에이전트는 돈다)
+ * 보낸 줄과 상관없이 온다(부모 차례가 끝난 뒤에도 서브에이전트는 돈다). 생각 신호(thinking)도 치지 않는다 — 늘 그 차례의 init 뒤에 오니
+ * 읽은 표시는 init 이 이미 했다
  */
 function readsInput(ev: StreamEvent): boolean {
-  if (ev.kind === 'control-response' || ev.kind === 'task-started' || ev.kind === 'task-ended' || ev.kind === 'ignored') return false;
+  if (
+    ev.kind === 'control-response' || ev.kind === 'task-started' || ev.kind === 'task-ended' || ev.kind === 'ignored' || ev.kind === 'thinking'
+  ) return false;
   return !((ev.kind === 'assistant' || ev.kind === 'tool-result') && ev.parent);
 }
 

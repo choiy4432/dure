@@ -1,7 +1,11 @@
 // 화면 문구 도우미 — 조사(이/가 …)와 '방금 · N분 전' 같은 시각 말
 
 import type { UsageWindow } from '../../engine/types'
+import { hasBatchim } from '../../shared/josa'
 import type { DisplayStatus } from '../state/selectors'
+
+// 조사 규칙은 엔진도 쓴다(새 에이전트를 만든 결과 글) — 정본은 shared/josa, 화면은 여기서 그대로 가져다 쓴다
+export { josa, type JosaPair } from '../../shared/josa'
 
 /** 표시 상태 낱말 — 관계도 카드 바닥과 패널 머리 알약이 같은 말을 쓴다 */
 export const STATUS_WORD: Record<DisplayStatus, string> = {
@@ -77,20 +81,6 @@ export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
-export type JosaPair = '이/가' | '을/를' | '은/는' | '과/와'
-
-// 숫자를 읽은 소리에 받침이 있는가 — 영 일 이 삼 사 오 육 칠 팔 구
-const DIGIT_BATCHIM = [true, true, false, true, false, false, true, true, true, false]
-
-function hasBatchim(word: string): boolean | null {
-  const last = word.trimEnd().slice(-1)
-  if (last === '') return null
-  const code = last.charCodeAt(0)
-  if (code >= 0xac00 && code <= 0xd7a3) return (code - 0xac00) % 28 !== 0
-  if (last >= '0' && last <= '9') return DIGIT_BATCHIM[Number(last)]
-  return null
-}
-
 /** 엔진의 이름 겹침 문구 — store.ts addAgent·updateAgent 가 던진다 */
 const NAME_TAKEN = /^이미 있는 이름입니다: (.+)$/
 
@@ -106,14 +96,6 @@ export function fieldError(message: string): string {
   const b = hasBatchim(name)
   const ra = b === null ? '(이)라는' : b ? '이라는' : '라는'
   return `‘${name}’${ra} 에이전트가 이미 있어요. 다른 이름을 써 주세요.`
-}
-
-/** 낱말 뒤에 붙일 조사 — 받침이 있으면 앞 것, 없으면 뒤 것, 알 수 없으면 '이(가)' 처럼 둘 다 */
-export function josa(word: string, pair: JosaPair): string {
-  const [withB, withoutB] = pair.split('/')
-  const b = hasBatchim(word)
-  if (b === null) return `${withB}(${withoutB})`
-  return b ? withB : withoutB
 }
 
 const MIN = 60_000

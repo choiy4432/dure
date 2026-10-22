@@ -67,11 +67,24 @@ export class Router extends EventEmitter {
       return `${target.name} 에게 보냈습니다. 자동 전달이 ${this.limit}번 이어져, 사람이 확인한 뒤 전달됩니다.`;
     }
     this.chains.set(roomId, this.chain(roomId) + 1);
-    const m = log.create({ roomId, from: from.id, to: target.id, text, state: 'queued' });
-    this.record(m);
-    return this.tryDeliver(m.id) === 'delivered'
-      ? `${target.name} 에게 전달했습니다.`
-      : `${target.name} 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.`;
+    return this.queue(from, target, text);
+  }
+
+  /**
+   * 사람이 이미 허락한 메시지 — 새 에이전트를 만들 때 넘긴 첫 할 일([만들기] 승인이 이 메시지의 승인이다).
+   * 받는 쪽 확인(pending)·자동 상한(held)을 건너뛰고 queued 로, 그 방 연속 횟수는 사람이 승인한 메시지(approve)처럼 0.
+   * 전달을 시도하고 send 와 같은 결과 글을 돌려준다
+   */
+  sendApproved(fromId: AgentId, toId: AgentId, text: string): string {
+    const { store } = this.d;
+    const from = store.agent(fromId);
+    if (!from) throw new Error('보낸 에이전트를 찾을 수 없습니다.');
+    const target = store.agent(toId);
+    if (!target || target.roomId !== from.roomId) throw new Error('받는 에이전트를 찾을 수 없습니다.');
+    if (target.id === from.id) throw new Error('자기 자신에게는 보낼 수 없습니다.');
+    if (!text.trim()) throw new Error('보낼 내용이 비어 있습니다.');
+    this.chains.set(from.roomId, 0);
+    return this.queue(from, target, text);
   }
 
   approve(messageId: string): void {
@@ -115,6 +128,15 @@ export class Router extends EventEmitter {
     for (const m of this.d.log.list({ to, states: ['queued'] })) {
       if (this.tryDeliver(m.id, ignoreBusy) !== 'dismissed') return;
     }
+  }
+
+  /** 전달 허락된 새 메시지 — queued 로 만들고 전달을 시도해 결과 글을 돌려준다 */
+  private queue(from: Agent, target: Agent, text: string): string {
+    const m = this.d.log.create({ roomId: from.roomId, from: from.id, to: target.id, text, state: 'queued' });
+    this.record(m);
+    return this.tryDeliver(m.id) === 'delivered'
+      ? `${target.name} 에게 전달했습니다.`
+      : `${target.name} 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.`;
   }
 
   /** 사람이 풀어 준 메시지: queued 로 바꾸고, 한가하면 바로 전달 */

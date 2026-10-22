@@ -11,6 +11,8 @@ export interface Store {
   renameRoom(id: RoomId, name: string): Room;
   removeRoom(id: RoomId): void;
   addAgent(input: { roomId: RoomId; name: string; role: string; folder: string }): Agent;
+  /** addAgent 가 더하기 전에 하는 검사 그대로(방·이름 빔·방 안 이름 겹침·폴더) — 더하지 않고 던지기만 한다 */
+  checkAgent(input: { roomId: RoomId; name: string; folder: string }): void;
   updateAgent(id: AgentId, patch: AgentPatch): Agent;
   removeAgent(id: AgentId): void;
 }
@@ -109,6 +111,13 @@ export function openStore(dataDir: string): Store {
       throw new Error(`이미 있는 이름입니다: ${name.trim()}`);
     }
   };
+  const checkAgent = ({ roomId, name, folder }: { roomId: RoomId; name: string; folder: string }) => {
+    needRoom(roomId);
+    checkName(roomId, name);
+    if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
+      throw new Error(`폴더를 찾을 수 없습니다: ${folder}`);
+    }
+  };
 
   return {
     rooms: () => clone(state.rooms),
@@ -137,12 +146,9 @@ export function openStore(dataDir: string): Store {
       state.agents = state.agents.filter((a) => a.roomId !== id);
       save();
     },
+    checkAgent,
     addAgent({ roomId, name, role, folder }) {
-      needRoom(roomId);
-      checkName(roomId, name);
-      if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
-        throw new Error(`폴더를 찾을 수 없습니다: ${folder}`);
-      }
+      checkAgent({ roomId, name, folder });
       const agent: Agent = {
         id: crypto.randomUUID(), roomId, name: name.trim(), role, folder,
         sessionId: crypto.randomUUID(), started: false, auto: false, model: null,

@@ -285,3 +285,49 @@ test('setLimit: 바꾼 상한이 바로 적용되고 이미 센 연속 횟수는
   expect(router.chain(roomId)).toBe(4);
   expect(log.list({ states: ['held'] })).toHaveLength(1);
 });
+
+// ── sendApproved — 사람이 이미 허락한 메시지(새 에이전트를 만들 때 넘긴 첫 할 일) ──
+test('sendApproved: 받는 쪽 자동이 꺼져 있어도 pending 이 아니라 바로 전달 · 자동 상한에 걸려 있어도 held 가 아니고 연속 횟수 0', () => {
+  auto(b.id);
+  for (let i = 0; i < 3; i++) router.send(a.id, 'Backend', `m${i}`);
+  expect(router.chain(roomId)).toBe(3); // 상한 — 보통 send 면 held
+  store.updateAgent(b.id, { auto: false }); // 보통 send 면 pending
+  const held = vi.fn();
+  router.on('held', held);
+  const r = router.sendApproved(a.id, b.id, '첫 할 일');
+  expect(r).toBe('Backend 에게 전달했습니다.');
+  const m = log.list().at(-1)!;
+  expect(m).toMatchObject({ roomId, from: a.id, to: b.id, text: '첫 할 일', state: 'delivered' });
+  expect(deliver).toHaveBeenLastCalledWith(b.id, formatDelivery(a, '첫 할 일'), m.id);
+  expect(router.chain(roomId)).toBe(0);
+  expect(held).not.toHaveBeenCalled();
+  // 다음 자동 전달은 처음부터 센다
+  auto(b.id);
+  expect(router.send(a.id, 'Backend', '다음')).toBe('Backend 에게 전달했습니다.');
+  expect(router.chain(roomId)).toBe(1);
+});
+
+test('sendApproved: 받는 쪽이 바쁘면 queued 로 남고 send 와 같은 대기 글 — onIdle 에 전달', () => {
+  busy.add(b.id);
+  const events: string[] = [];
+  router.on('message', (m) => events.push(m.state));
+  expect(router.sendApproved(a.id, b.id, '첫 할 일')).toBe('Backend 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+  expect(deliver).not.toHaveBeenCalled();
+  expect(log.list()[0].state).toBe('queued');
+  expect(events).toEqual(['queued']);
+  busy.delete(b.id);
+  router.onIdle(b.id);
+  expect(deliver).toHaveBeenCalledTimes(1);
+  expect(events).toEqual(['queued', 'delivered']);
+});
+
+test('sendApproved: 자기 자신·빈 본문·없는 보낸 쪽·없는 받는 쪽·다른 방은 던지고 메시지를 만들지 않는다', () => {
+  const other = store.addAgent({ roomId: store.addRoom('다른방').id, name: 'Outsider', role: '외부', folder: dir });
+  expect(() => router.sendApproved(a.id, a.id, 'x')).toThrow('자기 자신에게는 보낼 수 없습니다.');
+  expect(() => router.sendApproved(a.id, b.id, '  \n ')).toThrow('보낼 내용이 비어 있습니다.');
+  expect(() => router.sendApproved('nope', b.id, 'x')).toThrow('보낸 에이전트를 찾을 수 없습니다.');
+  expect(() => router.sendApproved(a.id, 'nope', 'x')).toThrow('받는 에이전트를 찾을 수 없습니다.');
+  expect(() => router.sendApproved(a.id, other.id, 'x')).toThrow('받는 에이전트를 찾을 수 없습니다.');
+  expect(log.list()).toEqual([]);
+  expect(deliver).not.toHaveBeenCalled();
+});

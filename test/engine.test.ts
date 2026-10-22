@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createEngine, type AgentStatus, type Engine, type EngineOptions, type HistoryItem, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
+import { createEngine, type Agent, type AgentStatus, type Engine, type EngineOptions, type HistoryItem, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
 import { openMessageLog } from '../src/engine/messageLog';
 import { openStore } from '../src/engine/store';
 import { DENY } from '../src/shared/denyTexts';
@@ -3467,4 +3467,323 @@ test('subagent: 스스로 시작할 차례를 기다리는 중 보낸 사람 입
   expect(userTexts()).toEqual(['SUB 조사', 'echo 끼어듦', '/effort low']);
   expect(e.history(a.id).filter((x) => isText(x, '전달: 보고: 조사'))).toHaveLength(1);
   expect(e.status(a.id)).toBe('idle');
+});
+
+// ── 새 에이전트 만들기(create_agent) ──
+const MAKE_TOOL = 'mcp__dure__create_agent';
+interface AgentAddedEvent {
+  agent: Agent;
+  by: string;
+}
+const requestOf = (e: Engine, agentId: string) => waitFor<PendingRequest>(e, 'request', (r) => r.agentId === agentId);
+const names = (e: Engine) => e.agents().map((x) => x.name);
+const lastToolResult = (e: Engine, id: string) => e.history(id).filter((h) => h.kind === 'tool-result').at(-1);
+/** create_agent 를 직접 부른다(SSE) — toolUseId 를 주면 _meta 에. 답은 data 줄 결과의 글·오류 표시 */
+async function createDirect(
+  agentId: string,
+  args: unknown,
+  o: { toolUseId?: string; signal?: AbortSignal } = {},
+): Promise<{ text: string; isError: boolean }> {
+  const cfg = JSON.parse(fs.readFileSync(path.join(dataDir, 'run', agentId, 'mcp.json'), 'utf8')).mcpServers.dure;
+  const res = await fetch(cfg.url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...cfg.headers },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'create_agent', arguments: args, ...(o.toolUseId ? { _meta: { 'claudecode/toolUseId': o.toolUseId } } : {}) },
+    }),
+    signal: o.signal,
+  });
+  const data = (await res.text()).split('\n').find((l) => l.startsWith('data: '));
+  const { result } = JSON.parse(data!.slice('data: '.length)) as { result: { content: { text: string }[]; isError?: boolean } };
+  return { text: result.content[0].text, isError: result.isError === true };
+}
+
+test('create_agent: MAKE — 카드(create-agent · 폴더 전체 경로 · task null) 동안 승인 기다림 · 만들기면 같은 방에 생기고 결과 글 · agent-added', async () => {
+  const e = await start();
+  const { room, a } = setup(e);
+  const added: AgentAddedEvent[] = [];
+  e.on('agent-added', (x: AgentAddedEvent) => added.push(x));
+  const req = requestOf(e, a.id);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('MAKE 테스트|검사|'));
+  const r = await req;
+  expect(r).toMatchObject({
+    agentId: a.id, toolName: MAKE_TOOL, kind: 'create-agent', toolUseId: expect.any(String),
+    input: { name: '테스트', role: '검사', folder: a.folder, task: null },
+  });
+  expect(r).not.toHaveProperty('fromSubagent');
+  expect(e.status(a.id)).toBe('awaiting');
+  expect(names(e)).toEqual(['A', 'B']); // 승인 전엔 없다
+
+  e.answerRequest(r.id, { type: 'allow' });
+  expect(await resultText(done)).toBe("에이전트 '테스트'를 만들었어요.");
+  const made = e.agents().find((x) => x.name === '테스트')!;
+  expect(made).toMatchObject({ roomId: room.id, role: '검사', folder: a.folder, started: false });
+  expect(added).toEqual([{ agent: made, by: a.id }]);
+  expect(lastToolResult(e, a.id)).toMatchObject({ isError: false, text: "에이전트 '테스트'를 만들었어요.", viaApproval: true });
+  expect(e.messages()).toEqual([]); // 첫 할 일이 없으면 메시지도 없다
+  expect(spawnsOf('테스트')).toHaveLength(0); // 할 일이 오기 전엔 띄우지 않는다
+  expect(e.pendingRequests()).toEqual([]);
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('create_agent: 물려받기 — 모델·effort·자동은 만든 쪽 저장값 · 묻지 않음은 꺼짐 · 늘 허용은 빈 목록(만든 쪽이 켜고 늘 허용해도) · 묻지 않음이어도 카드는 뜬다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true);
+  await e.setModel(a.id, 'haiku');
+  await e.setEffort(a.id, 'low');
+  e.updateAgent(a.id, { auto: true });
+  const ask = requestOf(e, a.id); // 늘 허용 — 승인 카드의 항상 허용으로 더한다
+  const asked = resultOf(e, a.id);
+  await e.sendUser(a.id, text('ASK Write'));
+  e.answerRequest((await ask).id, { type: 'allow-always' });
+  await asked;
+  expect(agentOf(e, a.id)).toMatchObject({ model: 'haiku', effort: 'low', auto: true, bypassOn: true, alwaysAllow: ['Write'] });
+
+  const req = requestOf(e, a.id);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('MAKE 테스트|검사|'));
+  e.answerRequest((await req).id, { type: 'allow' });
+  expect(await resultText(done)).toBe("에이전트 '테스트'를 만들었어요.");
+  const made = e.agents().find((x) => x.name === '테스트')!;
+  expect(made).toMatchObject({ model: 'haiku', effort: 'low', auto: true, bypassOn: false, alwaysAllow: [] });
+  expect(e.flags(made.id)).toEqual({ bypass: false, bySettings: false, pending: false });
+});
+
+test('create_agent: 첫 할 일 — 새 에이전트 자동이 꺼져 있어도 확인 없이 만든 쪽이 보낸 메시지로 전달 · 결과 글 끝에 첫 메시지를 보냈어요', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const states: string[] = [];
+  e.on('message', (m: RelayMessage) => states.push(m.state));
+  const req = requestOf(e, a.id);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('MAKE 테스트|검사||README 정리해 줘'));
+  const r = await req;
+  expect(r.input).toEqual({ name: '테스트', role: '검사', folder: a.folder, task: 'README 정리해 줘' });
+  const added = waitFor<AgentAddedEvent>(e, 'agent-added');
+  e.answerRequest(r.id, { type: 'allow' });
+  const { agent: made, by } = await added;
+  expect(by).toBe(a.id);
+  expect(made.auto).toBe(false);
+  const theirs = resultOf(e, made.id);
+  expect(await resultText(done)).toBe("에이전트 '테스트'를 만들었어요. 첫 메시지를 보냈어요.");
+  expect(await resultText(theirs)).toBe('받음: [두레 메시지 — 보낸 쪽: A(기획)]\nREADME 정리해 줘');
+  expect(states).toEqual(['queued', 'delivered']); // pending(확인 대기)을 거치지 않는다
+  const [m] = e.messages();
+  expect(m).toMatchObject({ from: a.id, to: made.id, text: 'README 정리해 줘', state: 'delivered' });
+  expect(e.history(made.id).find((h) => h.kind === 'user')).toMatchObject({ source: 'relay', messageId: m.id });
+});
+
+test('create_agent: 첫 할 일은 사람이 승인한 메시지처럼 — 자동 상한에 걸려 있어도 held 가 아니고, 그 방 연속 횟수를 0 으로', async () => {
+  const e = await start({}, false, { autoChainLimit: 1 });
+  const { a, b } = setup(e);
+  e.updateAgent(b.id, { auto: true });
+  const first = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나')); // 세션을 띄운다
+  await first;
+  // 사람 입력 없이(MCP 직접) 자동 전달 하나 — 상한 1 에 닿는다
+  const bDone = resultOf(e, b.id);
+  expect(await toolDirect(a.id, 'send_message', { to: 'B', text: '하나' })).toEqual({ text: 'B 에게 전달했습니다.', isError: false });
+  await bDone;
+
+  const req = requestOf(e, a.id);
+  const call = createDirect(a.id, { name: '테스트', role: '검사', task: '첫 일' });
+  e.answerRequest((await req).id, { type: 'allow' });
+  expect(await call).toEqual({ text: "에이전트 '테스트'를 만들었어요. 첫 메시지를 보냈어요.", isError: false });
+  expect(e.messages().find((m) => m.text === '첫 일')?.state).toMatch(/^(queued|delivered)$/);
+  // 연속 횟수가 0 이 됐다 — 다음 자동 전달은 상한에 걸리지 않는다(안 되돌렸으면 held)
+  expect(await toolDirect(a.id, 'send_message', { to: 'B', text: '둘' })).toEqual({ text: 'B 에게 전달했습니다.', isError: false });
+  expect(e.messages().filter((m) => m.state === 'held')).toEqual([]);
+});
+
+test('create_agent: 폴더 — 상대 경로는 만든 쪽 폴더 기준 · 절대 경로는 정규화해 그대로 · 없는 폴더는 카드 없이 오류', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const sub = folder('a/sub');
+  const other = folder('elsewhere');
+  const requests: PendingRequest[] = [];
+  e.on('request', (r: PendingRequest) => requests.push(r));
+
+  let req = requestOf(e, a.id);
+  let done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('MAKE 하위작업|검사|sub|'));
+  let r = await req;
+  expect(r.input).toEqual({ name: '하위작업', role: '검사', folder: sub, task: null });
+  e.answerRequest(r.id, { type: 'allow' });
+  expect(await resultText(done)).toBe("에이전트 '하위작업'을 만들었어요."); // 받침 있으면 을
+  expect(e.agents().find((x) => x.name === '하위작업')?.folder).toBe(sub);
+
+  req = requestOf(e, a.id);
+  done = resultOf(e, a.id);
+  await e.sendUser(a.id, text(`MAKE 절대|검사|${path.join(other, '..', 'elsewhere')}|`));
+  r = await req;
+  expect(r.input).toMatchObject({ folder: other });
+  e.answerRequest(r.id, { type: 'deny' });
+  await done;
+
+  const missing = path.join(a.folder, 'nope');
+  const seen = requests.length;
+  done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('MAKE 없음|검사|nope|'));
+  expect(await resultText(done)).toBe(`폴더를 찾을 수 없습니다: ${missing}`);
+  expect(requests).toHaveLength(seen);
+  expect(lastToolResult(e, a.id)).toMatchObject({ isError: true, text: `폴더를 찾을 수 없습니다: ${missing}`, viaApproval: false });
+  expect(names(e)).toEqual(['A', 'B', '하위작업']);
+});
+
+test('create_agent: 미리 보기 — 이름 빔·역할 빔·이름 겹침(대소문자 무시)은 카드 없이 오류 글', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const requests: PendingRequest[] = [];
+  e.on('request', (r: PendingRequest) => requests.push(r));
+  for (const [line, want] of [
+    ['MAKE |검사|', '이름을 입력하세요'],
+    ['MAKE  |검사|', '이름을 입력하세요'],
+    ['MAKE 테스트||', '역할을 입력하세요'],
+    ['MAKE 테스트| |', '역할을 입력하세요'],
+    ['MAKE b|검사|', '이미 있는 이름입니다: b'],
+    ['MAKE A|검사|', '이미 있는 이름입니다: A'],
+  ]) {
+    const done = resultOf(e, a.id);
+    await e.sendUser(a.id, text(line));
+    expect(await resultText(done)).toBe(want);
+    expect(lastToolResult(e, a.id)).toMatchObject({ isError: true, text: want });
+  }
+  expect(requests).toEqual([]);
+  expect(e.pendingRequests()).toEqual([]);
+  expect(names(e)).toEqual(['A', 'B']);
+});
+
+test('create_agent: 거절 — 결과는 새 에이전트 만들기를 거절했어요(오류), 에이전트 없음 · 항상 허용은 던지고 카드는 그대로', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const added: unknown[] = [];
+  e.on('agent-added', (x: unknown) => added.push(x));
+  const req = requestOf(e, a.id);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('MAKE 테스트|검사||할 일'));
+  const r = await req;
+  expect(() => e.answerRequest(r.id, { type: 'allow-always' })).toThrow();
+  expect(e.pendingRequests()).toHaveLength(1);
+  expect(agentOf(e, a.id).alwaysAllow).toEqual([]);
+  e.answerRequest(r.id, { type: 'deny' });
+  expect(DENY.createAgentDenied).toBe('사용자가 새 에이전트 만들기를 거절했어요.');
+  expect(await resultText(done)).toBe(DENY.createAgentDenied);
+  expect(lastToolResult(e, a.id)).toMatchObject({ isError: true, text: DENY.createAgentDenied, viaApproval: true });
+  expect(names(e)).toEqual(['A', 'B']);
+  expect(added).toEqual([]);
+  expect(e.messages()).toEqual([]);
+});
+
+test('create_agent: 카드가 떠 있는 동안 만든 쪽 세션이 끝나면(새 대화·멈추기·종료) 카드가 사라지고 만들지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const added: unknown[] = [];
+  e.on('agent-added', (x: unknown) => added.push(x));
+  for (const end of [(id: string) => e.newConversation(id), (id: string) => e.interrupt(id), () => e.shutdown()]) {
+    const req = requestOf(e, a.id);
+    await e.sendUser(a.id, text('MAKE 테스트|검사||할 일'));
+    const r = await req;
+    const gone = waitFor(e, 'request-resolved', (x: { id: string }) => x.id === r.id);
+    await end(a.id);
+    expect(await gone).toEqual({ id: r.id, agentId: a.id });
+    expect(e.pendingRequests()).toEqual([]);
+    expect(() => e.answerRequest(r.id, { type: 'allow' })).toThrow('대기 중인 요청이 없습니다');
+  }
+  await sleep(200); // 늦게 만들어지지도 않는다
+  expect(names(e)).toEqual(['A', 'B']);
+  expect(added).toEqual([]);
+  expect(e.messages()).toEqual([]);
+});
+
+test('create_agent: 부른 쪽이 끊으면(MCP 호출이 끊김) 카드가 사라지고 만들지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const first = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나')); // 세션을 띄운다
+  await first;
+  const req = requestOf(e, a.id);
+  const ac = new AbortController();
+  const call = createDirect(a.id, { name: '테스트', role: '검사' }, { signal: ac.signal }).catch(() => 'aborted');
+  const r = await req;
+  expect(e.status(a.id)).toBe('awaiting');
+  const gone = waitFor(e, 'request-resolved', (x: { id: string }) => x.id === r.id);
+  ac.abort();
+  expect(await gone).toEqual({ id: r.id, agentId: a.id });
+  expect(await call).toBe('aborted');
+  expect(e.pendingRequests()).toEqual([]);
+  expect(e.status(a.id)).toBe('idle');
+  expect(names(e)).toEqual(['A', 'B']);
+});
+
+test('create_agent: 못 본 id 를 기다리는 사이 세션이 끝나거나 살아 있는 세션이 없으면 — 카드 없이 Claude 가 종료되었습니다', async () => {
+  const e = await start({}, false, { seenWaitMs: 30_000 });
+  const { a } = setup(e);
+  const first = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나')); // 세션을 띄운다
+  await first;
+  const requests: PendingRequest[] = [];
+  e.on('request', (r: PendingRequest) => requests.push(r));
+  const call = createDirect(a.id, { name: '테스트', role: '검사' }, { toolUseId: 'toolu_nowhere' }); // 기다리기 시작
+  await sleep(200);
+  await e.newConversation(a.id);
+  expect(await call).toEqual({ text: DENY.claudeExited, isError: true });
+  // 세션이 없는 채로 온 부르기(끝난 프로세스의 늦은 호출) — 세션 끝 정리가 치울 수 없는 카드를 만들지 않는다
+  expect(await createDirect(a.id, { name: '테스트', role: '검사' })).toEqual({ text: DENY.claudeExited, isError: true });
+  expect(requests).toEqual([]);
+  expect(names(e)).toEqual(['A', 'B']);
+});
+
+test('create_agent: 카드가 떠 있는 사이 사람이 같은 이름을 먼저 만들면 — 만들기 때 다시 확인해 만들지 않고 이름 겹침 오류', async () => {
+  const e = await start();
+  const { room, a } = setup(e);
+  const added: unknown[] = [];
+  e.on('agent-added', (x: unknown) => added.push(x));
+  const req = requestOf(e, a.id);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('MAKE 테스트|검사||할 일'));
+  const r = await req;
+  const mine = e.addAgent({ roomId: room.id, name: '테스트', role: '사람이 만듦', folder: folder('t') });
+  e.answerRequest(r.id, { type: 'allow' });
+  expect(await resultText(done)).toBe('이미 있는 이름입니다: 테스트');
+  expect(lastToolResult(e, a.id)).toMatchObject({ isError: true, text: '이미 있는 이름입니다: 테스트' });
+  expect(e.agents().filter((x) => x.name === '테스트')).toEqual([mine]);
+  expect(added).toEqual([]);
+  expect(e.messages()).toEqual([]); // 첫 할 일도 보내지 않는다
+});
+
+test('create_agent: 카드가 떠 있는 사이 폴더가 사라지면 — 만들기 때 다시 확인해 만들지 않고 폴더 오류', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const sub = folder('a/sub');
+  const req = requestOf(e, a.id);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('MAKE 테스트|검사|sub|'));
+  const r = await req;
+  fs.rmSync(sub, { recursive: true });
+  e.answerRequest(r.id, { type: 'allow' });
+  expect(await resultText(done)).toBe(`폴더를 찾을 수 없습니다: ${sub}`);
+  expect(names(e)).toEqual(['A', 'B']);
+});
+
+test('create_agent: SUBMAKE — 서브에이전트가 부르면 카드 없이 거절(서브에이전트는 두레 도구를 못 쓴다)', async () => {
+  const e = await start({ FAKE_SUB_MS: '50' }, false, { seenWaitMs: 30_000 }); // 서브에이전트 줄은 스트림에서 본 id — 기다리면 시간 초과
+  const { a } = setup(e);
+  const requests: PendingRequest[] = [];
+  e.on('request', (r: PendingRequest) => requests.push(r));
+  const relayed = resultTextIs(e, a.id, '전달: 보고: 테스트|검사||할 일');
+  await e.sendUser(a.id, text('SUBMAKE 테스트|검사||할 일'));
+  await relayed;
+  const tool = agentToolId(e, a.id);
+  const sub = e.history(a.id).filter(hasParent);
+  expect(sub.find((x) => x.kind === 'assistant' && x.blocks.some((b) => b.type === 'tool_use' && b.name === MAKE_TOOL))).toBeDefined();
+  expect(sub.find((x) => x.kind === 'tool-result')).toMatchObject({
+    kind: 'tool-result', isError: true, text: DENY.subagentDureTool, viaApproval: false, parent: tool,
+  });
+  expect(requests).toEqual([]);
+  expect(names(e)).toEqual(['A', 'B']);
+  expect(e.messages()).toEqual([]);
 });

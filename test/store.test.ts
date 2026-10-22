@@ -232,3 +232,19 @@ test('bypassNoticeClosed — 새 에이전트·옛 기록은 false · 닫으면 
   old.updateAgent(a.id, { bypassNoticeClosed: true });
   expect(openStore(dir).agent(a.id)!.bypassNoticeClosed).toBe(true);
 });
+
+test('checkAgent: addAgent 와 같은 검사·문구(방·이름 빔·이름 겹침·폴더) — 통과하면 아무것도 더하지 않는다', () => {
+  const s = openStore(dir);
+  const r = s.addRoom('R');
+  s.addAgent({ roomId: r.id, name: 'world', role: 'r', folder: dir });
+  const missing = path.join(dir, 'nope');
+  expect(() => s.checkAgent({ roomId: 'ghost', name: 'n', folder: dir })).toThrow('방을 찾을 수 없습니다: ghost');
+  expect(() => s.checkAgent({ roomId: r.id, name: '  ', folder: dir })).toThrow('이름을 입력하세요');
+  expect(() => s.checkAgent({ roomId: r.id, name: ' World', folder: dir })).toThrow('이미 있는 이름입니다: World');
+  expect(() => s.checkAgent({ roomId: r.id, name: 'n', folder: missing })).toThrow(`폴더를 찾을 수 없습니다: ${missing}`);
+  const file = path.join(dir, 'f.txt');
+  fs.writeFileSync(file, '');
+  expect(() => s.checkAgent({ roomId: r.id, name: 'n', folder: file })).toThrow(`폴더를 찾을 수 없습니다: ${file}`);
+  expect(() => s.checkAgent({ roomId: r.id, name: 'n', folder: dir })).not.toThrow();
+  expect(s.agents().map((a) => a.name)).toEqual(['world']);
+});
