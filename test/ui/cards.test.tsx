@@ -389,13 +389,14 @@ describe('새 에이전트 만들기 카드', () => {
     expect(create.disabled).toBe(false)
   })
 
-  it('관계도 카드의 승인 칸도 같은 제목과 [만들기] [거절] — 요청이 풀리면 둘 다 사라진다', async () => {
+  it('관계도 카드의 승인 칸은 같은 제목 + "패널에서 확인하기"뿐 — 승인은 이 카드에서만, 요청이 풀리면 둘 다 사라진다', async () => {
     snapshot.agents = snapshot.agents.map(a => (a.id === 'p' ? { ...a, status: 'awaiting' } : a))
     snapshot.requests = [make()]
     await renderPanel('p', 'p')
     expect(document.querySelector('.nd .ap-t')!.textContent).toBe(TITLE)
     const box = document.querySelector<HTMLElement>('.nd .ap')!
-    expect(within(box).getAllByRole('button').map(b => b.textContent)).toEqual(['만들기', '거절'])
+    expect(within(box).getAllByRole('button').map(b => b.textContent)).toEqual(['패널에서 확인하기'])
+    expect(within(card(TITLE)).getAllByRole('button').map(b => b.textContent)).toEqual(['만들기', '거절'])
     await emit('request-resolved', { id: 'c1', agentId: 'p' })
     expect(screen.queryByRole('region', { name: TITLE })).toBeNull()
     expect(document.querySelector('.nd .ap')).toBeNull()

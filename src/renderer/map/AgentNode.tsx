@@ -112,33 +112,10 @@ function Approval({ agent, request }: { agent: AgentView; request: PendingReques
     // 성공하면 엔진이 요청을 지워 이 칸이 사라진다 — 실패(이미 끝난 요청 등)면 다시 누를 수 있게
     window.dure.answerRequest(request.id, d).catch(() => setBusy(false))
   }
-  const title = requestTitle(agent.name, request.toolName, request.input, request.fromSubagent)
-  if (request.kind === 'create-agent') {
-    // 새 에이전트 만들기 — 대상 자리(코드 한 줄)에 새 이름 · 역할. 폴더·첫 할 일은 패널 카드에(칸 높이는 권한 칸과 같다 — layout.ts CELL)
-    const plan = createAgentPlan(request.input)
-    const who = plan.role ? `${plan.name} · ${plan.role}` : plan.name
-    return (
-      <div className="ap nodrag" onClick={stop}>
-        <b className="ap-t">{title}</b>
-        <span className="ap-who trunc" title={who}>
-          <b>{plan.name}</b>
-          {plan.role && ` · ${plan.role}`}
-        </span>
-        <div className="ab">
-          <button type="button" className="btn pri sm" disabled={busy} onClick={() => answer({ type: 'allow' })}>
-            만들기
-          </button>
-          <button type="button" className="btn sec sm" disabled={busy} onClick={() => answer({ type: 'deny' })}>
-            거절
-          </button>
-        </div>
-      </div>
-    )
-  }
   const target = requestTarget(request.toolName, request.input, agent.folder)
   return (
     <div className="ap nodrag" onClick={stop}>
-      <b className="ap-t">{title}</b>
+      <b className="ap-t">{requestTitle(agent.name, request.toolName, request.input, request.fromSubagent)}</b>
       {target && (
         <code className="trunc" title={target}>
           {target}
@@ -155,6 +132,27 @@ function Approval({ agent, request }: { agent: AgentView; request: PendingReques
           이 에이전트에선 항상 허용
         </button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * 새 에이전트 만들기 칸 — 제목 · 새 이름 · 역할 · '패널에서 확인하기'. 여기선 승인하지 않는다:
+ * 폴더(아무 폴더나 될 수 있다)와 첫 할 일([만들기]가 그 메시지의 승인)을 다 보이는 패널 카드에서만 [만들기]·[거절]
+ */
+function CreateAgentAsk({ agent, request }: { agent: AgentView; request: PendingRequest }) {
+  const plan = createAgentPlan(request.input)
+  const who = plan.role ? `${plan.name} · ${plan.role}` : plan.name
+  return (
+    <div className="ap nodrag" onClick={stop}>
+      <b className="ap-t">{requestTitle(agent.name, request.toolName, request.input, request.fromSubagent)}</b>
+      <span className="ap-who trunc" title={who}>
+        <b>{plan.name}</b>
+        {plan.role && ` · ${plan.role}`}
+      </span>
+      <button type="button" className="lk" onClick={() => getStore().selectAgent(agent.id)}>
+        패널에서 확인하기
+      </button>
     </div>
   )
 }
@@ -188,7 +186,7 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
 
   return (
     // 권한 요청 칸이 있으면 시안처럼 넓게(304px) — [허용][거절]·링크가 한 줄에 들어가 카드가 격자 한 칸(layout.ts CELL, 높이 217) 안에 머문다.
-    // 새 에이전트 만들기 칸은 단추 둘뿐이라 256px 그대로 한 줄에 든다
+    // 새 에이전트 만들기 칸은 단추 없이 링크 하나라 256px 그대로(칸 높이도 권한 칸보다 낮다)
     <div
       ref={card}
       className={`nd${selected ? ' sel' : ''}${agent.bypass ? ' byp' : ''}${request ? ' pend' : ''}${request?.kind === 'permission' ? ' wide' : ''}`}
@@ -234,6 +232,8 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
             질문이 있어요 · 패널에서 답하기
           </button>
         </div>
+      ) : request?.kind === 'create-agent' ? (
+        <CreateAgentAsk agent={agent} request={request} />
       ) : request ? (
         <Approval key={request.id} agent={agent} request={request} />
       ) : (

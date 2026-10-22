@@ -50,6 +50,8 @@ export function placeNew(existing: Point[], cell: Size = CELL): Point {
  * near 카드 가까이 겹치지 않는 가장 가까운 칸 — 에이전트가 만든 새 에이전트를 만든 쪽 옆에 놓는다.
  * 칸은 near 에서 격자 간격(칸 + 칸 사이)만큼씩 — 위아래 한 칸(281px)이 옆 한 칸(456px)보다 가까워 아래 → 위 → 오른쪽 → 왼쪽 → 대각선 차례.
  * 같은 거리면 오른쪽에서 시계 방향으로 먼저 만나는 칸(아래가 위보다, 오른쪽이 왼쪽보다 먼저). {0,0}(자리 없음 뜻)은 고르지 않는다.
+ * 같은 둘레(아래 r) 안에선 음수 아닌 칸(x ≥ 0 · y ≥ 0)이 먼저다 — 첫 줄 카드의 '위'처럼 처음 맞춘 화면 밖(왼쪽·위)으로 가지 않게.
+ * 그 둘레에 음수 아닌 빈 칸이 없을 때만 음수 칸.
  */
 export function placeNearest(taken: Point[], near: Point, cell: Size = CELL): Point {
   const sx = cell.w + GAP_X
@@ -58,10 +60,13 @@ export function placeNearest(taken: Point[], near: Point, cell: Size = CELL): Po
   const free = (at: Point) => !isUnplaced(at) && !rects.some(t => overlaps(t, { ...at, ...cell }))
   // 오른쪽에서 시계 방향(화면은 y 가 아래로 커진다)으로 잰 각 — 같은 거리 칸의 차례
   const turn = (i: number, j: number) => (Math.atan2(j, i) + 2 * Math.PI) % (2 * Math.PI)
+  type Pick = { at: Point; d: number; t: number }
+  const better = (c: Pick, best: Pick | null) => !best || c.d < best.d || (c.d === best.d && c.t < best.t)
   for (let r = 1; ; r++) {
-    // 가로·세로 r 칸 안을 본다 — 그 밖의 칸은 (r + 1) 칸 거리 이상이라, 그보다 가까운 빈 칸을 찾으면 그게 가장 가깝다
+    // 둘레 r = 가로·세로 r 칸 안 — 그 밖의 칸은 (r + 1) 칸 거리 이상이라, 그보다 가까운 빈 칸을 찾으면 그게 가장 가깝다
     const reach = (r + 1) * Math.min(sx, sy)
-    let best: { at: Point; d: number; t: number } | null = null
+    let best: Pick | null = null // 음수 아닌 칸 중 가장 가까운
+    let any: Pick | null = null // 음수 칸까지 가장 가까운
     for (let j = -r; j <= r; j++) {
       for (let i = -r; i <= r; i++) {
         if (i === 0 && j === 0) continue
@@ -69,11 +74,13 @@ export function placeNearest(taken: Point[], near: Point, cell: Size = CELL): Po
         if (d >= reach) continue
         const at = { x: near.x + i * sx, y: near.y + j * sy }
         if (!free(at)) continue
-        const t = turn(i, j)
-        if (!best || d < best.d || (d === best.d && t < best.t)) best = { at, d, t }
+        const c = { at, d, t: turn(i, j) }
+        if (better(c, any)) any = c
+        if (at.x >= 0 && at.y >= 0 && better(c, best)) best = c
       }
     }
-    if (best) return best.at
+    const pick = best ?? any
+    if (pick) return pick.at
   }
 }
 

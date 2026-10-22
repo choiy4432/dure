@@ -132,10 +132,13 @@ describe('placeMissing', () => {
 })
 
 describe('placeNearest', () => {
-  const near = { x: MARGIN + W + GAP_X, y: MARGIN }
   const SX = W + GAP_X
   const SY = CH + GAP_Y
+  // 둘째 줄 둘째 칸 — 둘레 여덟 칸이 모두 음수 아닌 자리라 거리 차례 그대로 본다
+  const near = { x: MARGIN + SX, y: MARGIN + SY }
   const at = (i: number, j: number) => ({ x: near.x + i * SX, y: near.y + j * SY })
+  const corner = { x: MARGIN, y: MARGIN }
+  const nonNegative = (p: Point) => p.x >= 0 && p.y >= 0
 
   it('만든 카드 바로 아래 칸이 비었으면 거기 — 세로 칸 사이(281)가 가로(456)보다 가깝다', () => {
     expect(placeNearest([near], near)).toEqual(at(0, 1))
@@ -157,6 +160,28 @@ describe('placeNearest', () => {
     const p = placeNearest([near, dragged], near)
     expect(p).toEqual(at(0, -1))
     for (const t of [near, dragged]) expect(overlaps(p, t, W, CH)).toBe(false)
+  })
+
+  it('같은 둘레에선 음수 아닌 칸이 먼저 — 왼쪽 위 구석 카드의 아래가 차 있으면 위(화면 밖)가 아니라 오른쪽', () => {
+    const p = placeNearest([corner, { x: corner.x, y: corner.y + SY }], corner)
+    expect(nonNegative(p)).toBe(true)
+    expect(p).toEqual({ x: corner.x + SX, y: corner.y })
+  })
+
+  it('구석 카드 둘레의 음수 아닌 칸이 다 차면 그 둘레의 가장 가까운 음수 칸(위)', () => {
+    const taken = [corner, { x: corner.x, y: corner.y + SY }, { x: corner.x + SX, y: corner.y }, { x: corner.x + SX, y: corner.y + SY }]
+    expect(placeNearest(taken, corner)).toEqual({ x: corner.x, y: corner.y - SY })
+  })
+
+  it('구석 카드에서 잇달아 놓아도 음수 아닌 칸이 남아 있는 둘레에선 음수 칸을 고르지 않는다', () => {
+    const taken: Point[] = [corner]
+    const first3 = [0, 1, 2].map(() => {
+      const p = placeNearest(taken, corner)
+      taken.push(p)
+      return p
+    })
+    expect(first3).toEqual([{ x: corner.x, y: corner.y + SY }, { x: corner.x + SX, y: corner.y }, { x: corner.x + SX, y: corner.y + SY }])
+    expect(first3.every(nonNegative)).toBe(true)
   })
 
   it('{0,0}(자리 없음 뜻)은 고르지 않는다', () => {
