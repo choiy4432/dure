@@ -10,6 +10,12 @@ export interface IpcLike {
 export interface IpcDeps {
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
+  /** 작업표시줄 배지 — count 가 0 이면 지운다. 엔진을 거치지 않는 창 쪽 일이라 deps 로 받는다 */
+  setTaskbar(count: number, png: string | null): Promise<void>
+  /** 초점이 없는 창의 작업표시줄 단추를 깜박인다 */
+  flashWindow(): Promise<void>
+  /** 창을 앞으로(최소화면 되살리고 초점) */
+  focusWindow(): Promise<void>
   /** 요청을 보낸 프레임 주소가 두레 화면인가 — 아니면 거절(window.ts 의 appPageMatcher) */
   isAppPage(url: string | undefined): boolean
 }
@@ -79,6 +85,9 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   setNotify: (e, _d, p) => e.setNotify(p),
   setBypass: (e, _d, id, on) => e.setBypass(id, on),
   pickFolder: (_e, d) => d.pickFolder(),
+  setTaskbar: (_e, d, count, png) => d.setTaskbar(count as number, (png ?? null) as string | null),
+  flashWindow: (_e, d) => d.flashWindow(),
+  focusWindow: (_e, d) => d.focusWindow(),
   openFolder: (e, d, path) => {
     // renderer 가 임의 경로를 열지 못하게 — 등록된 에이전트의 폴더만
     if (!e.agents().some((a) => a.folder === path)) throw new Error(FOLDER_NOT_ALLOWED)

@@ -70,7 +70,10 @@ function setup(withEngine = true) {
   const handlers = new Map<string, Fn>()
   const ipc = { handle: (ch: string, fn: Fn) => void handlers.set(ch, fn) }
   const sent: [string, any][] = []
-  const deps = { pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), isAppPage }
+  const deps = {
+    pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), isAppPage,
+    setTaskbar: vi.fn(async () => {}), flashWindow: vi.fn(async () => {}), focusWindow: vi.fn(async () => {}),
+  }
   const fe = fakeEngine()
   registerIpc(ipc, withEngine ? fe.engine : null, (ch, p) => sent.push([ch, p]), deps)
   const callFrom = (event: unknown, method: string, ...args: unknown[]) =>
@@ -93,6 +96,7 @@ describe('registerIpc', () => {
       pickFolder: async () => null,
       openFolder: async () => {},
       isAppPage,
+      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {},
     })
     expect(await handlers.get(CHANNEL.invoke)!(fromApp, null)).toMatchObject({ ok: false })
     expect(await handlers.get(CHANNEL.invoke)!(fromApp, { method: 5 })).toMatchObject({ ok: false })
@@ -152,7 +156,10 @@ describe('registerIpc', () => {
     const e = fakeEngine()
     registerIpc({ handle: () => {} }, e.engine, () => {
       throw new Error('Object has been destroyed')
-    }, { pickFolder: async () => null, openFolder: async () => {}, isAppPage })
+    }, {
+      pickFolder: async () => null, openFolder: async () => {}, isAppPage,
+      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {},
+    })
     expect(() => e.engine.emit('held', { roomId: 'r1' })).not.toThrow()
   })
 
@@ -182,6 +189,16 @@ describe('registerIpc', () => {
     expect(calls).toEqual([['setAllowBypass', [false]], ['setBypass', ['a1', true]]])
     ;(engine as any).setBypass = async () => { throw new Error('먼저 허용을 켜 주세요') }
     expect(await call('setBypass', 'a1', true)).toEqual({ ok: false, error: '먼저 허용을 켜 주세요' })
+  })
+
+  it('setTaskbar·flashWindow·focusWindow 는 deps 로 간다(엔진 아님)', async () => {
+    const { call, deps } = setup()
+    expect((await call('setTaskbar', 3, 'data:image/png;base64,AAAA')).ok).toBe(true)
+    expect(deps.setTaskbar).toHaveBeenCalledWith(3, 'data:image/png;base64,AAAA')
+    expect((await call('flashWindow')).ok).toBe(true)
+    expect(deps.flashWindow).toHaveBeenCalledTimes(1)
+    expect((await call('focusWindow')).ok).toBe(true)
+    expect(deps.focusWindow).toHaveBeenCalledTimes(1)
   })
 
   it('pickFolder returns the dialog result', async () => {

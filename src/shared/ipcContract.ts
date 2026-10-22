@@ -66,6 +66,12 @@ export interface DureApi {
   setBypass(id: AgentId, on: boolean): Promise<void>
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
+  /** 작업표시줄 배지(할 일 개수 + 아이콘 PNG data URL; png 가 null 이거나 count 0 이면 지움) */
+  setTaskbar(count: number, png: string | null): Promise<void>
+  /** 초점이 없을 때 작업표시줄 단추 깜박임 */
+  flashWindow(): Promise<void>
+  /** 창을 앞으로 */
+  focusWindow(): Promise<void>
   /** 해제 함수를 돌려준다 */
   on<K extends keyof EngineEventMap>(k: K, fn: (p: EngineEventMap[K]) => void): () => void
 }
@@ -78,7 +84,7 @@ export const METHODS = [
   'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
   'setAllowBypass', 'setNotify', 'setBypass',
-  'pickFolder', 'openFolder',
+  'pickFolder', 'openFolder', 'setTaskbar', 'flashWindow', 'focusWindow',
 ] as const satisfies readonly Exclude<keyof DureApi, 'on'>[]
 
 /** 엔진 이벤트 전부 — 새 이벤트를 EngineEventMap 에 더하면 여기서 타입 오류가 난다 */

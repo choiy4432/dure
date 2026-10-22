@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { join } from 'node:path'
 import { createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
@@ -28,6 +28,9 @@ function e2eFolders(raw: string | undefined): (() => string | null) | null {
   return () => (next < list.length ? list[next++] : null)
 }
 
+// Windows 알림·작업표시줄 묶음이 앱을 알아보게 — 개발 실행용 임시 ID(설치 패키지의 고정 ID 는 계획 3)
+if (process.platform === 'win32') app.setAppUserModelId(process.execPath)
+
 const indexFile = join(__dirname, '../renderer/index.html')
 /** 두레 화면 자신의 주소인가 — IPC 요청·창 안 이동을 이걸로 가린다 */
 const isAppPage = appPageMatcher({ devUrl: process.env.ELECTRON_RENDERER_URL, indexFile })
@@ -54,6 +57,8 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
   guardNavigation(win.webContents, isAppPage)
+  // 사용자가 창을 보면 깜박임을 그친다 — 안 끄면 단추가 계속 주황색으로 남는다
+  win.on('focus', () => win.flashFrame(false))
   // 닫힌 창을 붙들지 않는다 — 끄는 동안(최대 5초) 또 켜면 second-instance 가 파괴된 창을 건드려 오류 상자가 떴다
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
@@ -122,6 +127,21 @@ if (!app.requestSingleInstanceLock()) {
           async openFolder(path) {
             const err = await shell.openPath(path)
             if (err) throw new Error(err)
+          },
+          async setTaskbar(count, png) {
+            if (!mainWindow || mainWindow.isDestroyed()) return
+            mainWindow.setOverlayIcon(
+              png && count > 0 ? nativeImage.createFromDataURL(png) : null,
+              count > 0 ? `할 일 ${count}개` : '',
+            )
+          },
+          async flashWindow() {
+            // 이미 보고 있는 창은 깜박일 이유가 없다
+            if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return
+            mainWindow.flashFrame(true)
+          },
+          async focusWindow() {
+            focusExisting(mainWindow)
           },
           isAppPage,
         },
