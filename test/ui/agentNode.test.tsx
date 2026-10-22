@@ -324,6 +324,24 @@ describe('AgentNode — 카드 내용', () => {
     expect(line()).toBe('서브에이전트 2개가 일하는 중')
   })
 
+  it('단계: 보내면 "준비하는 중…" → 요청이 나가면 "답을 기다리는 중…" → 요약 중이면 "대화를 정리하는 중…" — 서브에이전트 문구보다 먼저', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', status: 'working', subagentsRunning: ['A'] })]
+    const { card } = await renderCard()
+    const line = () => card.querySelector('.na')!.textContent
+    expect(line()).toBe('서브에이전트 1개가 일하는 중')
+    emit('history', { agentId: 'd', item: { t: 5, kind: 'user', source: 'human', parts: [{ type: 'text', text: '해 줘' }] } })
+    expect(line()).toBe('준비하는 중…')
+    emit('agent-event', { agentId: 'd', event: { kind: 'api-status', status: 'requesting' } })
+    expect(line()).toBe('답을 기다리는 중…')
+    emit('agent-event', { agentId: 'd', event: { kind: 'api-status', status: 'compacting' } })
+    expect(line()).toBe('대화를 정리하는 중…')
+    emit('agent-event', { agentId: 'd', event: { kind: 'api-status', status: 'requesting' } })
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: true, tokens: null } })
+    expect(line()).toBe('생각하는 중…')
+    emit('agent-event', { agentId: 'd', event: { kind: 'thinking', active: false, tokens: null } })
+    expect(line()).toBe('서브에이전트 1개가 일하는 중')
+  })
+
   it('생각이 끝난 뒤 늦게 온 토큰 수는 "생각하는 중…"을 다시 띄우지 않는다 — 생각 블록 시작만 띄운다', async () => {
     snapshot.agents = [agent('d', { name: '디자인', status: 'working' })]
     const { card } = await renderCard()

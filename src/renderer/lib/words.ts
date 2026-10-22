@@ -2,7 +2,7 @@
 
 import type { UsageWindow } from '../../engine/types'
 import { hasBatchim } from '../../shared/josa'
-import type { DisplayStatus } from '../state/selectors'
+import type { DisplayStatus, Phase } from '../state/selectors'
 
 // 조사 규칙은 엔진도 쓴다(새 에이전트를 만든 결과 글) — 정본은 shared/josa, 화면은 여기서 그대로 가져다 쓴다
 export { josa, type JosaPair } from '../../shared/josa'
@@ -15,6 +15,15 @@ export const STATUS_WORD: Record<DisplayStatus, string> = {
   stopped: '대기',
   error: '멈춤',
 }
+
+/** 차례의 단계 — 대화 맨 아래 작업 중 줄과 관계도 카드 한 줄이 같은 말을 쓴다(생각 중·흐르는 글이 먼저) */
+export const PHASE_WORD: Record<Phase, string> = {
+  preparing: '준비하는 중…',
+  requesting: '답을 기다리는 중…',
+  compacting: '대화를 정리하는 중…',
+}
+/** 준비하는 중에 마우스를 올리면 — 이 동안은 Claude 가 아직 질문을 받지 않았다 */
+export const PREPARING_HINT = '아직 Claude에게 질문을 보내기 전이에요'
 
 /** 새 대화 확인 — 에이전트 메뉴의 '새 대화'와 입력창의 /clear 가 같은 말을 쓴다 */
 export const RENEW_CONFIRM = {

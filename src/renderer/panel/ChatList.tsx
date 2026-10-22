@@ -48,6 +48,8 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   const running = useDure(s => s.agents.find(x => x.id === agentId)?.subagentsRunning ?? NO_IDS)
   // Claude 가 생각하는 중이면 작업 중 줄이 '생각하는 중…'(토큰 수가 오를 때만 다시 그린다 — 기록 줄은 그대로)
   const thinking = useDure(s => s.thinking[agentId] ?? null)
+  // 생각 전 기다림 — 준비하는 중·답을 기다리는 중·대화를 정리하는 중
+  const phase = useDure(s => s.phase[agentId])
   const runningSet = useMemo(() => new Set(running), [running])
   const [limit, setLimit] = useState(PAGE)
   const latest = useDure(s => {
@@ -175,7 +177,7 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
         ))}
         {v.streaming && <ChatItem line={{ kind: 'streaming', text: v.streaming }} />}
         <Presence show={work.on}>
-          <WorkingRow since={work.since} subagents={running.length} thinking={thinking ?? undefined} />
+          <WorkingRow since={work.since} subagents={running.length} thinking={thinking ?? undefined} phase={phase} />
         </Presence>
       </section>
     </div>

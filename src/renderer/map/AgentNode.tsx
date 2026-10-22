@@ -6,7 +6,7 @@ import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
 import { displayStatus, unreadFor, type DisplayStatus } from '../state/selectors'
 import { createAgentPlan, requestTarget, requestTitle } from '../lib/toolSummary'
-import { ago, initial, josa, lasting, nodeModelLabel, STATUS_WORD } from '../lib/words'
+import { ago, initial, josa, lasting, nodeModelLabel, PHASE_WORD, STATUS_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { MOTION, popOnce, useRise } from '../lib/motion'
 import { useMotion } from '../lib/presence'
@@ -69,6 +69,7 @@ function useCardView(agentId: AgentId) {
       streaming: s.streaming[agentId] ?? '',
       // 생각하는 중인지만 — 카드엔 토큰 수를 쓰지 않으니 수가 오를 때마다 다시 그리지 않는다
       thinking: !!s.thinking[agentId],
+      phase: s.phase[agentId] ?? null,
       last: s.lastText[agentId] ?? null,
       lastMessageAt,
       since: s.statusSince[agentId] ?? null,
@@ -82,6 +83,8 @@ function activityLine(v: CardView): string {
   if (v.status === 'working' && v.streaming.trim()) return clip(v.streaming, ACTIVITY_MAX)
   // 흐르는 글이 없고 Claude 가 생각하는 중 — 서브에이전트가 돌아도 부모가 생각하는 게 먼저
   if (v.status === 'working' && v.thinking) return THINKING_LINE
+  // 생각 전 기다림(준비·답 기다림·대화 정리) — 이것도 부모의 일이라 서브에이전트 문구보다 먼저
+  if (v.status === 'working' && v.phase) return PHASE_WORD[v.phase]
   // 흐르는 글이 없고 생각 중도 아닌데 서브에이전트가 돈다 — 부모 차례가 끝나 서브에이전트만 돌 때도 이 줄
   const subagents = v.agent.subagentsRunning.length
   if (subagents > 0) return `서브에이전트 ${subagents}개가 일하는 중`

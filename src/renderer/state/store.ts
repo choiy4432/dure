@@ -1,7 +1,7 @@
 import { useRef, useSyncExternalStore } from 'react'
 import type { AgentId, AgentStatus, EngineEventMap, HistoryItem, RoomId } from '../../engine/types'
 import type { DureApi, Snapshot } from '../../shared/ipcContract'
-import { displayStatus } from './selectors'
+import { displayStatus, type Phase } from './selectors'
 import { markFresh } from '../map/freshNodes'
 
 export type UiState = Snapshot & {
@@ -16,6 +16,12 @@ export type UiState = Snapshot & {
    * 작업 중(승인 기다림 포함)이 아니게 됨에서 지운다
    */
   thinking: Record<AgentId, { tokens: number | null }>
+  /**
+   * 차례의 단계 — 내용(생각·글·하는 일)이 오기 전 무엇을 기다리는지. 보낸 줄(user 기록)이 오면 준비, API 상태(api-status)가
+   * 요청 보냄이면 답 기다림 · 요약 중이면 대화 정리. 내용이 오기 시작함(생각 신호·흐르는 글·부모의 답) · 차례 끝·알림·새 대화 ·
+   * API 상태 null · 작업 중(승인 기다림 포함)이 아니게 됨에서 지운다. 없으면 단계를 모른다(작업 중…)
+   */
+  phase: Record<AgentId, Phase>
   /** 에이전트마다 마지막 assistant 글과 그 시각 — 기록을 안 불러온 에이전트도(관계도 카드의 한 줄 요약) */
   lastText: Record<AgentId, { text: string; at: number }>
   /** 키 `${from}>${to}` → 마지막으로 전달된 시각(message.updatedAt) */
@@ -65,12 +71,18 @@ const sameItem = (a: HistoryItem, b: HistoryItem) => JSON.stringify(a) === JSON.
 /** 생각 표시가 살아 있을 수 있는 상태 — 그 밖(쉼·멈춤·오류)이 되면 생각도 끝났다 */
 const busy = (status: AgentStatus | undefined) => status === 'working' || status === 'awaiting'
 
-/** 그 에이전트의 생각 표시를 지운다 — 없으면 같은 객체(구독자가 다시 그리지 않게) */
-function withoutThinking(thinking: UiState['thinking'], id: AgentId): UiState['thinking'] {
-  if (!thinking[id]) return thinking
-  const next = { ...thinking }
+/** 그 에이전트의 표시(생각·단계)를 지운다 — 없으면 같은 객체(구독자가 다시 그리지 않게) */
+function without<T>(rec: Record<AgentId, T>, id: AgentId): Record<AgentId, T> {
+  if (rec[id] === undefined) return rec
+  const next = { ...rec }
   delete next[id]
   return next
+}
+const withoutThinking = without<UiState['thinking'][AgentId]>
+
+/** 그 에이전트의 단계를 바꾼다 — 같으면 같은 객체 */
+function withPhase(phase: UiState['phase'], id: AgentId, to: Phase): UiState['phase'] {
+  return phase[id] === to ? phase : { ...phase, [id]: to }
 }
 
 /** 부모의 assistant 항목의 글(하는 일 블록은 뺀다) — 글이 없거나 서브에이전트의 줄이면 '' */
@@ -82,7 +94,7 @@ function assistantText(item: HistoryItem): string {
 export function createStore(api: DureApi): Store {
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, usage: null,
-    roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, lastText: {}, lastDelivered: {},
+    roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
     statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, placeNear: {},
   }
   const listeners = new Set<() => void>()
@@ -128,6 +140,7 @@ export function createStore(api: DureApi): Store {
           statusSince: changed ? { ...state.statusSince, [p.agentId]: at } : state.statusSince,
           // 멈춤·차례 끝·세션이 죽음 — 생각 끝 신호 없이 끝나도 '생각하는 중'이 남지 않게
           thinking: busy(p.status) ? state.thinking : withoutThinking(state.thinking, p.agentId),
+          phase: busy(p.status) ? state.phase : without(state.phase, p.agentId),
         }
         break
       }
@@ -225,6 +238,8 @@ export function createStore(api: DureApi): Store {
           ...state,
           streaming: state.streaming[agentId] && !sub ? { ...state.streaming, [agentId]: '' } : state.streaming,
           thinking: thoughtEnds ? withoutThinking(state.thinking, agentId) : state.thinking,
+          // 보낸 줄은 Claude 에게 쓴 순간 기록된다(엔진은 그 뒤에 working 을 알린다) — 요청이 나갈 때까지 준비. 같은 때에 생각도 끝난다
+          phase: item.kind === 'user' ? withPhase(state.phase, agentId, 'preparing') : thoughtEnds ? without(state.phase, agentId) : state.phase,
           lastText,
         }
         const pending = loading.get(agentId)
@@ -246,8 +261,18 @@ export function createStore(api: DureApi): Store {
             ...state,
             streaming: { ...state.streaming, [agentId]: (state.streaming[agentId] ?? '') + event.text },
             thinking: withoutThinking(state.thinking, agentId), // 글이 흐르면 생각은 끝났다
+            phase: without(state.phase, agentId), // 기다리던 답이 왔다
           }
+        } else if (event.kind === 'api-status') {
+          // 쉬는 에이전트에게 늦게 온 상태는 버린다 — 다음 차례가 그 단계로 시작하지 않게
+          if (!busy(state.agents.find(a => a.id === agentId)?.status)) break
+          const phase = event.status === null ? without(state.phase, agentId)
+            : withPhase(state.phase, agentId, event.status === 'requesting' ? 'requesting' : 'compacting')
+          if (phase !== state.phase) state = { ...state, phase }
         } else if (event.kind === 'thinking') {
+          // 블록이 시작됐다(생각이든 글·하는 일이든) — 기다리던 답이 왔다
+          const phase = without(state.phase, agentId)
+          if (phase !== state.phase) state = { ...state, phase }
           const cur = state.thinking[agentId]
           if (!event.active) {
             state = { ...state, thinking: withoutThinking(state.thinking, agentId) }

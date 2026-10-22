@@ -682,6 +682,111 @@ describe('store 생각하는 중', () => {
   })
 })
 
+describe('store 단계(준비·답 기다림·대화 정리)', () => {
+  const apiStatus = (agentId: string, status: 'requesting' | 'compacting' | null) =>
+    ({ agentId, event: { kind: 'api-status', status } }) as EngineEventMap['agent-event']
+  const working = (agentId: string) => ({ agentId, status: 'working', errorText: null }) as EngineEventMap['status']
+  const sent: HistoryItem = { t: 1, kind: 'user', source: 'human', parts: [{ type: 'text', text: '해 줘' }] }
+  async function phaseStore() {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    return { s, emit }
+  }
+
+  it('보낸 줄(user 기록)이 오면 준비 — 상태 알림보다 먼저 와도(엔진은 기록 뒤에 working 을 알린다)', async () => {
+    const { s, emit } = await phaseStore()
+    emit('history', { agentId: 'a', item: sent })
+    expect(s.getState().phase).toEqual({ a: 'preparing' })
+    emit('status', working('a'))
+    expect(s.getState().phase.a).toBe('preparing')
+  })
+
+  it('받은 메시지를 보낸 줄(relay)도 준비', async () => {
+    const { s, emit } = await phaseStore()
+    emit('history', { agentId: 'a', item: { ...sent, source: 'relay', messageId: 'm1' } })
+    expect(s.getState().phase.a).toBe('preparing')
+  })
+
+  it('요청 보냄 → 답 기다림 · 요약 중 → 대화 정리 · null → 단계 없음', async () => {
+    const { s, emit } = await phaseStore()
+    emit('history', { agentId: 'a', item: sent })
+    emit('status', working('a'))
+    emit('agent-event', apiStatus('a', 'requesting'))
+    expect(s.getState().phase.a).toBe('requesting')
+    emit('agent-event', apiStatus('a', 'compacting'))
+    expect(s.getState().phase.a).toBe('compacting')
+    emit('agent-event', apiStatus('a', null))
+    expect(s.getState().phase.a).toBeUndefined()
+  })
+
+  it('init 은 준비를 끝내지 않는다 — 요청이 나가기 전까지는 준비(긴 준비가 init 뒤에 오기도 한다)', async () => {
+    const { s, emit } = await phaseStore()
+    emit('history', { agentId: 'a', item: sent })
+    emit('status', working('a'))
+    emit('agent-event', { agentId: 'a', event: { kind: 'init', sessionId: 'S', model: 'm', permissionMode: 'default', slashCommands: [] } })
+    expect(s.getState().phase.a).toBe('preparing')
+  })
+
+  it.each<[string, EngineEventMap['agent-event']['event']]>([
+    ['생각 블록 시작', { kind: 'thinking', active: true, tokens: null }],
+    ['다른 블록 시작', { kind: 'thinking', active: false, tokens: null }],
+    ['흐르는 글', { kind: 'text-delta', text: '답' }],
+  ])('%s 이 오면 단계 끝(내용이 오기 시작했다)', async (_name, event) => {
+    const { s, emit } = await phaseStore()
+    emit('status', working('a'))
+    emit('agent-event', apiStatus('a', 'requesting'))
+    emit('agent-event', { agentId: 'a', event })
+    expect(s.getState().phase.a).toBeUndefined()
+  })
+
+  it.each<[string, HistoryItem]>([
+    ['assistant(하는 일)', { t: 2, kind: 'assistant', blocks: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }] }],
+    ['result', { t: 2, kind: 'result', ok: true, subtype: 'success' }],
+    ['notice(멈춤·오류)', note('멈췄어요', 2)],
+    ['boundary(새 대화)', { t: 2, kind: 'boundary' }],
+  ])('그 에이전트의 %s 기록이 오면 단계 끝', async (_name, item) => {
+    const { s, emit } = await phaseStore()
+    emit('history', { agentId: 'a', item: sent })
+    emit('history', { agentId: 'a', item })
+    expect(s.getState().phase.a).toBeUndefined()
+  })
+
+  it('서브에이전트의 줄(parent)은 단계를 바꾸지 않는다', async () => {
+    const { s, emit } = await phaseStore()
+    emit('status', working('a'))
+    emit('agent-event', apiStatus('a', 'requesting'))
+    emit('history', { agentId: 'a', item: { t: 2, kind: 'assistant', blocks: [{ type: 'text', text: '서브' }], parent: 'toolu_A' } })
+    expect(s.getState().phase.a).toBe('requesting')
+  })
+
+  it.each(['idle', 'stopped', 'error'] as const)('상태가 %s 가 되면 단계 끝 — 승인 기다림은 그대로', async status => {
+    const { s, emit } = await phaseStore()
+    emit('history', { agentId: 'a', item: sent })
+    emit('status', { agentId: 'a', status: 'awaiting', errorText: null })
+    expect(s.getState().phase.a).toBe('preparing')
+    emit('status', { agentId: 'a', status, errorText: status === 'error' ? '죽음' : null })
+    expect(s.getState().phase.a).toBeUndefined()
+  })
+
+  it('일하지 않는 에이전트에게 온 API 상태는 무시한다', async () => {
+    const { s, emit } = await phaseStore()
+    emit('agent-event', apiStatus('a', 'requesting'))
+    expect(s.getState().phase.a).toBeUndefined()
+  })
+
+  it('바뀌는 게 없으면 phase 객체를 그대로 둔다', async () => {
+    const { s, emit } = await phaseStore()
+    emit('status', working('a'))
+    emit('agent-event', apiStatus('a', 'requesting'))
+    const before = s.getState().phase
+    emit('agent-event', apiStatus('a', 'requesting'))
+    emit('agent-event', { agentId: 'b', event: { kind: 'text-delta', text: '다른 답' } })
+    emit('status', { agentId: 'b', status: 'idle', errorText: null })
+    expect(s.getState().phase).toBe(before)
+  })
+})
+
 describe('store 서브에이전트', () => {
   const said = (text: string, t: number, parent?: string): HistoryItem => ({
     t, kind: 'assistant', blocks: [{ type: 'text', text }], ...(parent ? { parent } : {}),

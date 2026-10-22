@@ -2,6 +2,8 @@ import type { AgentId, MessageState, PendingRequest, RelayMessage, RoomId } from
 import type { AgentView } from '../../shared/ipcContract'
 
 export type DisplayStatus = 'working' | 'awaiting' | 'idle' | 'error' | 'stopped'
+/** 차례의 단계 — 생각·글이 오기 전 무엇을 기다리는지(store.phase) */
+export type Phase = 'preparing' | 'requesting' | 'compacting'
 
 export interface EdgeView {
   id: string
