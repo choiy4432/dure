@@ -6,7 +6,10 @@ scripts/probe/work*/
 scripts/probe/*.jsonl
 *.log
 scripts/probe/mcp*.json
-.impeccable/questions/
-.impeccable/review/
 test-results/
 playwright-report/
+# 문서·디자인 문서는 공개 레포에 올리지 않는다(로컬에만, 2026-10-23)
+docs/
+DESIGN.md
+PRODUCT.md
+.impeccable/
