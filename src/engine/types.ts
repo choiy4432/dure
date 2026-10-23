@@ -157,8 +157,7 @@ export interface PendingRequest {
   /** create-agent 면 CreateAgentInput */
   input: unknown;
   toolUseId?: string;
-  /** plan = ExitPlanMode — 계획을 보고 진행(allow)이나 고쳐 달라고 하기(deny + 의견)로만 답한다 */
-  /** create-agent = 에이전트가 두레 도구 create_agent 로 새 에이전트를 만들려 한다 — allow·deny 로만 답한다 */
+  /** create-agent = 에이전트가 두레 도구 create_agent 로 새 에이전트를 만들려 한다 — allow·deny 로만 답한다 · plan = ExitPlanMode — 계획을 보고 진행(allow)이나 고쳐 달라고 하기(deny + 의견)로만 답한다 */
   kind: 'permission' | 'question' | 'create-agent' | 'plan';
   createdAt: number;
   /** 서브에이전트가 물은 것(tool_use id 로 가른다) — 부모 차례가 끝나도 도는 동안 남는다. 부모 것엔 칸이 없다 */

@@ -696,7 +696,7 @@ async function control(msg) {
     const fail = (error, extra = {}) =>
       emit({ type: 'control_response', response: { subtype: 'error', request_id: rid, error, ...extra } });
     if (knobHits('FAKE_SET_MODE_FAIL', mode)) return fail('set_permission_mode failed');
-    const apply = () => {
+    const apply = async () => {
       if (mode === 'bypassPermissions' && !allowBypass) {
         return fail(
           'Cannot set permission mode to bypassPermissions because the session was not launched with --dangerously-skip-permissions',
@@ -706,7 +706,7 @@ async function control(msg) {
       const before = permissionMode;
       permissionMode = mode === 'manual' ? 'default' : mode;
       // 진짜(probe16)처럼 모드가 바뀌면 곧바로 status 줄 — 응답보다 앞
-      if (permissionMode !== before) void modeStatus();
+      if (permissionMode !== before) await modeStatus();
       return ok({ mode: permissionMode });
     };
     const late = Number(process.env.FAKE_SET_MODE_LATE_MS ?? 0);
