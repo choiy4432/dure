@@ -7,7 +7,7 @@ import {
   Background, BackgroundVariant, ReactFlow, ReactFlowProvider, applyNodeChanges, useReactFlow,
   type EdgeTypes, type NodeChange, type NodeTypes,
 } from '@xyflow/react'
-import { ArrowLeftRight, ArrowRight } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, Plus } from 'lucide-react'
 import type { AgentId, RoomId } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { edges as edgeViews, pairMessages, type EdgeView } from '../state/selectors'
@@ -47,13 +47,16 @@ const ARIA = {
   'handle.ariaLabel': '연결점',
 }
 
-/** 관계도 — 그 방의 에이전트 카드와 넘김 엣지. 방을 바꾸면 처음부터 다시 그린다(화면 맞춤 포함) */
-export function RelationMap() {
+/**
+ * 관계도 — 그 방의 에이전트 카드와 넘김 엣지. 방을 바꾸면 처음부터 다시 그린다(화면 맞춤 포함).
+ * onAddAgent — 확대 조절 옆 '에이전트 추가'(App 이 추가 대화상자를 연다)
+ */
+export function RelationMap({ onAddAgent }: { onAddAgent?: () => void } = {}) {
   const roomId = useDure(s => s.roomId)
   if (!roomId) return null
   return (
     <ReactFlowProvider key={roomId}>
-      <MapCanvas roomId={roomId} />
+      <MapCanvas roomId={roomId} onAddAgent={onAddAgent} />
     </ReactFlowProvider>
   )
 }
@@ -79,7 +82,7 @@ interface PairAt {
   y: number
 }
 
-function MapCanvas({ roomId }: { roomId: RoomId }) {
+function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => void }) {
   const seats = useDure(
     s => s.agents.filter(a => a.roomId === roomId).map(a => ({ id: a.id, name: a.name, role: a.role, pos: a.pos })),
     seatsEqual,
@@ -327,7 +330,16 @@ function MapCanvas({ roomId }: { roomId: RoomId }) {
       </ReactFlow>
       <SummaryChips roomId={roomId} />
       <OffscreenPill roomId={roomId} nodes={nodes} wrap={wrap} />
-      <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => fitOn('fit-all')} onUserZoom={() => fitOn('user-move')} />
+      {/* 왼쪽 아래 한 줄 — 확대 조절 · 에이전트 추가(카드가 생기는 곳 옆) */}
+      <div className="mbl">
+        <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => fitOn('fit-all')} onUserZoom={() => fitOn('user-move')} />
+        {onAddAgent && (
+          <button type="button" className="btn pri" onClick={onAddAgent}>
+            <Plus className="i" />
+            에이전트 추가
+          </button>
+        )}
+      </div>
       {/* 다른 떠 있는 목록처럼 — 닫으면(pair = null) 마지막 모습으로 남아 가라앉는다 */}
       <Presence show={pair !== null}>
         {pair && <PairPopover key={`${pair.a}>${pair.b}`} at={pair} bounds={wrap} onClose={closePair} />}

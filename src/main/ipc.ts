@@ -3,6 +3,7 @@ import {
   CHANNEL, CLAUDE_MISSING_ERROR, EVENT_NAMES, METHODS,
   type AgentView, type InvokeRequest, type InvokeResult, type Snapshot,
 } from '../shared/ipcContract'
+import type { ThemePref } from '../engine/types'
 
 export interface IpcLike {
   handle(channel: string, fn: (event: unknown, req: unknown) => unknown): void
@@ -16,6 +17,8 @@ export interface IpcDeps {
   flashWindow(): Promise<void>
   /** 창을 앞으로(최소화면 되살리고 초점) */
   focusWindow(): Promise<void>
+  /** 화면 테마를 창에 — Windows 에 알릴 테마(nativeTheme.themeSource)를 바꾼다 */
+  applyTheme(t: ThemePref): void
   /** 요청을 보낸 프레임 주소가 두레 화면인가 — 아니면 거절(window.ts 의 appPageMatcher) */
   isAppPage(url: string | undefined): boolean
 }
@@ -43,7 +46,7 @@ function agentViews(engine: Engine): AgentView[] {
 
 function snapshot(engine: Engine | null): Snapshot {
   if (!engine) {
-    return { claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, usage: null }
+    return { claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, theme: 'system', usage: null }
   }
   return {
     claudeMissing: false,
@@ -54,6 +57,7 @@ function snapshot(engine: Engine | null): Snapshot {
     autoChainLimit: engine.autoChainLimit(),
     allowBypass: engine.allowBypass(),
     notify: engine.notify(),
+    theme: engine.theme(),
     usage: engine.usage(),
   }
 }
@@ -84,6 +88,10 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   setAutoChainLimit: (e, _d, n) => e.setAutoChainLimit(n),
   setAllowBypass: (e, _d, on) => e.setAllowBypass(on),
   setNotify: (e, _d, p) => e.setNotify(p),
+  setTheme: (e, d, t) => {
+    e.setTheme(t) // 저장이 거절되면(모르는 값) 창도 그대로
+    d.applyTheme(t)
+  },
   setBypass: (e, _d, id, on) => e.setBypass(id, on),
   pickFolder: (_e, d) => d.pickFolder(),
   setTaskbar: (_e, d, count, png) => d.setTaskbar(count as number, (png ?? null) as string | null),

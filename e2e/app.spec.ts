@@ -165,7 +165,10 @@ async function say(page: Page, name: string, text: string): Promise<void> {
 }
 
 async function addAgent(page: Page, a: { name: string; role: string }, folder: string): Promise<void> {
-  await page.getByRole('button', { name: '에이전트 추가', exact: true }).click()
+  // 관계도 왼쪽 아래 '에이전트 추가' — 에이전트가 없는 방은 빈 화면의 '추가'가 그 자리
+  const fromMap = page.getByRole('button', { name: '에이전트 추가', exact: true })
+  const opener = (await fromMap.count()) > 0 ? fromMap : page.getByRole('main', { name: '관계도' }).getByRole('button', { name: '추가', exact: true })
+  await opener.click()
   const dlg = page.getByRole('dialog', { name: '에이전트 추가' })
   await dlg.getByRole('button', { name: '폴더 고르기' }).click()
   await expect(dlg.getByText(folder, { exact: true })).toBeVisible()
@@ -215,7 +218,7 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await addAgent(page, PLAN, w.planFolder)
       await addAgent(page, WEB, w.webFolder)
       for (const a of [PLAN, WEB]) {
-        await expect(node(page, a.name).locator('.au')).toHaveText('자동 끔')
+        await expect(node(page, a.name).locator('.au')).toHaveCount(0) // 자동이 꺼진 카드엔 꼬리표가 없다(흘끗 보기 — 잡음 줄이기)
         await expect(node(page, a.name).locator('.nr')).toContainText(a.role)
         // 역할은 모델·effort 에 밀려 잘리지 않는다 — 말줄임 없이 다 보인다
         const clipped = await node(page, a.name).locator('.nr-role .trunc').evaluate((el) => el.scrollWidth > el.clientWidth)
@@ -233,7 +236,13 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
         const probe = nr.cloneNode(true) as HTMLElement
         const roleText = probe.querySelector('.nr-role .trunc') as HTMLElement
         const role = probe.querySelector('.nr-role') as HTMLElement
-        const meta = probe.querySelector('.nr-meta') as HTMLElement
+        // 모델·effort 는 고른 때만 보인다 — 없으면 잴 칸을 만든다
+        let meta = probe.querySelector('.nr-meta') as HTMLElement | null
+        if (!meta) {
+          meta = document.createElement('span')
+          meta.className = 'nr-meta keep'
+          probe.append(meta)
+        }
         roleText.textContent = '기획서 · 문구 · 행사 페이지 카피 전부 · 보도자료 · 이벤트 안내'
         role.className = 'nr-role floor'
         meta.textContent = 'Opus 5 (긴 대화) · xhigh'
@@ -273,7 +282,7 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await say(page, PLAN.name, `SEND ${WEB.name}: ${HANDOFF_TEXT}`)
 
       await expect(edge).toHaveCount(1)
-      await expect(page.locator('.el')).toHaveText('확인 대기')
+      await expect(page.locator('.el')).toHaveText('내 확인 필요')
       await expect(node(page, WEB.name).locator('.um')).toHaveText(/받은 메시지\s*1/)
 
       await node(page, WEB.name).locator('.nh').click()
@@ -314,7 +323,8 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await say(page, WEB.name, IMAGE_TEXT)
 
       const me = web.locator('.me', { hasText: IMAGE_TEXT })
-      await expect(me).toContainText('이미지 1개')
+      // 보낸 그림은 썸네일 — 저장한 그림을 엔진에서 읽어 온다
+      await expect(me.getByRole('button', { name: '이미지 1/1 크게 보기' }).locator('img')).toHaveAttribute('src', /^data:image\//)
       await expect.poll(() => loggedImages(w.log).length).toBe(1)
       const [img] = loggedImages(w.log)
       console.log(`큰 이미지: 원본 ${(size / 1048576).toFixed(1)}MB → 보낸 base64 ${(img.length / 1048576).toFixed(2)}MB (${img.mediaType})`)
@@ -331,7 +341,7 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
     await test.step('4++. 위 띠 사용량 · effort 칩/슬라이더 · context 링', async () => {
       const web = panel(page, WEB.name)
       // 사용량 전용 프로세스가 앱을 켠 뒤 에이전트 없이도 값을 가져온다
-      const usage = page.locator('header.top .usg-btn')
+      const usage = page.locator('footer.sbar .usg-btn')
       for (const t of ['5시간', '12%', 'Fable', '81%']) await expect(usage).toContainText(t, { timeout: 5000 })
 
       // 링 — 차례가 끝난 뒤 % 글자, 누르면 토큰 수
@@ -379,7 +389,8 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       const web = panel(page, WEB.name)
       await expect(web.locator('.ci-relay')).toContainText(HANDOFF_TEXT)
       await expect(web.locator('.acts li', { hasText: '만듦' })).toHaveCount(1)
-      await expect(web.locator('.me', { hasText: IMAGE_TEXT })).toContainText('이미지 1개')
+      // 다시 켜도 보낸 그림은 썸네일로 열린다(그림 칸에 저장돼 있다)
+      await expect(web.locator('.me', { hasText: IMAGE_TEXT }).getByRole('button', { name: '이미지 1/1 크게 보기' }).locator('img')).toHaveAttribute('src', /^data:image\//)
       await expect(web.getByRole('region', { name: `${PLAN.name}이 보낸 메시지` })).toContainText('전달됨')
       // 지난 승인 요청은 남지 않는다
       await expect(page.locator('.ap')).toHaveCount(0)
@@ -391,7 +402,7 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
     await test.step('6. 검수 캡처 — 1440×900 · 1280×800', async () => {
       fs.mkdirSync(REVIEW_DIR, { recursive: true })
       // 다시 켠 뒤 사용량 전용 프로세스가 값을 가져올 때까지 — 캡처에 위 띠 막대가 보이게
-      await expect(page.locator('header.top .usg-btn')).toContainText('81%', { timeout: 10_000 })
+      await expect(page.locator('footer.sbar .usg-btn')).toContainText('81%', { timeout: 10_000 })
       // 마지막 대화 줄 — 창이 줄어도 대화 칸 밑으로 숨지 않는다(맨 아래에 붙어 있던 목록)
       const lastLine = panel(page, WEB.name).locator('.conv > *').last()
       await capture(run!, 1440, 900, path.join(REVIEW_DIR, 'desktop.png'))
@@ -418,7 +429,7 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       }
       await run!.app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [1440, 900])
       await page.waitForFunction(() => window.innerWidth === 1440 && window.innerHeight === 900)
-      await shot('usage-open.png', page.locator('header.top .usg-btn'), page.locator('.usg-pop'))
+      await shot('usage-open.png', page.locator('footer.sbar .usg-btn'), page.locator('.usg-pop'))
       await page.keyboard.press('Escape')
       await shot('effort-open.png', web.locator('.eff-chip'), web.locator('.eff-pop'))
       await expect(web.getByRole('slider', { name: '생각하는 정도' })).toBeFocused()
@@ -429,13 +440,14 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       // 좁은 끝(창 1100×700, 패널 360) — 링 펼침이 패널·창 안에 머문다
       await run!.app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), [1100, 700])
       await page.waitForFunction(() => window.innerWidth === 1100 && window.innerHeight === 700)
-      // 12px 글자로도 위 띠 막대 셋이 1100px 에 들어간다(한 막대 모드는 1100 미만부터)
-      await expect(page.locator('header.top .usg')).toHaveCount(3)
+      // 12px 글자로도 아래 상태 띠 막대 셋이 1100px 에 들어간다(한 막대 모드는 1100 미만부터) · 위 띠도 넘치지 않는다
+      await expect(page.locator('footer.sbar .usg')).toHaveCount(3)
       const fit = await page.evaluate(() => {
         const top = document.querySelector('header.top') as HTMLElement
-        const btn = (document.querySelector('header.top .usg-btn') as HTMLElement).getBoundingClientRect()
-        const last = (document.querySelector('header.top') as HTMLElement).lastElementChild!.getBoundingClientRect()
-        return { over: top.scrollWidth - top.clientWidth, btnRight: btn.right, lastRight: last.right, w: window.innerWidth }
+        const bar = document.querySelector('footer.sbar') as HTMLElement
+        const btn = (document.querySelector('footer.sbar .usg-btn') as HTMLElement).getBoundingClientRect()
+        const last = top.lastElementChild!.getBoundingClientRect()
+        return { over: Math.max(top.scrollWidth - top.clientWidth, bar.scrollWidth - bar.clientWidth), btnRight: btn.right, lastRight: last.right, w: window.innerWidth }
       })
       expect(fit.over).toBeLessThanOrEqual(0)
       expect(fit.btnRight).toBeLessThanOrEqual(fit.w)

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { LucideProvider } from 'lucide-react'
 import { getStore, useDure } from './state/store'
 import { TopBar } from './shell/TopBar'
+import { StatusBar } from './shell/StatusBar'
 import { SplitView } from './shell/SplitView'
 import { Empty } from './shell/Empty'
 import { NewRoomDialog } from './shell/RoomSwitcher'
@@ -56,7 +57,7 @@ export function App() {
       <SplitView
         left={
           <main className="cv" aria-label="관계도">
-            {v.agentCount === 0 ? <Empty kind="agent" onAction={() => setDialog('agent')} /> : <RelationMap />}
+            {v.agentCount === 0 ? <Empty kind="agent" onAction={() => setDialog('agent')} /> : <RelationMap onAddAgent={() => setDialog('agent')} />}
           </main>
         }
         right={<AgentPanel />}
@@ -67,13 +68,9 @@ export function App() {
   return (
     <LucideProvider size={16} strokeWidth={1.75}>
       <div className="app">
-        <TopBar
-          hasRoom={!blocked && v.roomId !== null}
-          settingsDisabled={blocked}
-          onAddAgent={() => setDialog('agent')}
-          onSettings={() => setDialog('settings')}
-        />
+        <TopBar hasRoom={!blocked && v.roomId !== null} settingsDisabled={blocked} onSettings={() => setDialog('settings')} />
         {body}
+        <StatusBar />
         <Announcer {...announced} />
         <Presence show={dialog === 'room'}>
           <NewRoomDialog onClose={close} />

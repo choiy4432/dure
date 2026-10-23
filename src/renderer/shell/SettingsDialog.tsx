@@ -1,4 +1,5 @@
 import { useId, useRef, useState } from 'react'
+import type { ThemePref } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { errorMessage } from '../lib/words'
 import { FormDialog } from './FormDialog'
@@ -6,6 +7,13 @@ import { FormDialog } from './FormDialog'
 /** 자동 전달 상한으로 적을 수 있는 수 */
 const LIMIT_MIN = 1
 const LIMIT_MAX = 20
+
+/** 화면 테마 칸 — 누르는 차례대로 */
+const THEMES: { key: ThemePref; label: string }[] = [
+  { key: 'light', label: '라이트' },
+  { key: 'dark', label: '다크' },
+  { key: 'system', label: 'Windows 따라감' },
+]
 
 /** 적은 글이 1~20 의 정수면 그 수, 아니면 null */
 function parseLimit(text: string): number | null {
@@ -16,13 +24,19 @@ function parseLimit(text: string): number | null {
 }
 
 /**
- * 설정(위 띠 톱니) — 자동 전달 상한 · 묻지 않고 실행 허용.
+ * 설정(위 띠 톱니) — 화면 테마 · 자동 전달 상한 · 묻지 않고 실행 허용 · 알림.
+ * 화면 테마는 누르는 즉시 바꿔 뒤 화면으로 비교하게 한다 — 저장 없이 닫으면(취소·Esc·바깥) 열 때의 테마로 되돌린다.
  * 허용을 켜고 저장하면 설정 창을 닫은 뒤 onAskAllow 로 확인 창을 부른다(두 창을 겹쳐 띄우지 않는다).
  */
 export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; onAskAllow: () => void }) {
   const limit = useDure(s => s.autoChainLimit)
   const allowed = useDure(s => s.allowBypass)
   const notified = useDure(s => s.notify)
+  const savedTheme = useDure(s => s.theme ?? 'system')
+  /** 열 때의 테마 — 저장 없이 닫으면 여기로 */
+  const startTheme = useRef(savedTheme)
+  const [theme, setTheme] = useState(savedTheme)
+  const [themeError, setThemeError] = useState<string | null>(null)
   const [allow, setAllow] = useState(allowed)
   const [asks, setAsks] = useState(notified.asks)
   const [finished, setFinished] = useState(notified.finished)
@@ -57,17 +71,59 @@ export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; o
     }
   }
 
+  const pickTheme = async (t: ThemePref) => {
+    if (t === theme) return
+    setThemeError(null)
+    try {
+      await window.dure.setTheme(t)
+      setTheme(t)
+      await getStore().refresh()
+    } catch (e) {
+      setThemeError(errorMessage(e))
+    }
+  }
+
+  /** 저장 없이 닫기 — 바꿔 본 테마는 되돌린다 */
+  const cancel = () => {
+    const back = startTheme.current
+    if (theme !== back) {
+      void window.dure.setTheme(back).then(
+        () => getStore().refresh(),
+        () => {}, // 못 되돌려도 닫기는 막지 않는다 — 다음에 열면 실제 값이 보인다
+      )
+    }
+    onClose()
+  }
+
   const described = [`${id}-d`, outOfRange && `${id}-r`, error && `${id}-e`].filter(Boolean).join(' ')
 
   return (
     <FormDialog
       title="설정"
       submitLabel="저장"
-      canSubmit={n !== null && (n !== limit || allow !== allowed || asks !== notified.asks || finished !== notified.finished)}
+      canSubmit={
+        n !== null && (n !== limit || allow !== allowed || asks !== notified.asks || finished !== notified.finished || theme !== startTheme.current)
+      }
       busy={busy}
       onSubmit={() => void submit()}
-      onClose={onClose}
+      onClose={cancel}
     >
+      <div className="fld">
+        <span className="fld-l" id={`${id}-t`}>
+          화면 테마
+        </span>
+        <div className="seg" role="radiogroup" aria-labelledby={`${id}-t`} aria-describedby={`${id}-td`}>
+          {THEMES.map(t => (
+            <button key={t.key} type="button" role="radio" aria-checked={theme === t.key} onClick={() => void pickTheme(t.key)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <p className="fld-d" id={`${id}-td`}>
+          Windows 따라감은 Windows 가 어둡게 바뀌면 두레도 같이 바뀌어요
+        </p>
+        {themeError && <p className="fe">{themeError}</p>}
+      </div>
       <div className="fld">
         <label className="fld-l" htmlFor={`${id}-n`}>
           자동 전달 상한

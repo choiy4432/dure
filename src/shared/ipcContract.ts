@@ -1,5 +1,5 @@
 import type {
-  Agent, AgentDescription, AgentId, EffortLevel, EngineEventMap, AgentStatus, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, UserPart,
+  Agent, AgentDescription, AgentId, EffortLevel, EngineEventMap, AgentStatus, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, ThemePref, UserPart,
 } from '../engine/types'
 
 export interface AgentView extends Agent {
@@ -31,6 +31,8 @@ export interface Snapshot {
   allowBypass: boolean
   /** Windows 알림 설정 — claude 가 없으면 기본값 */
   notify: NotifyPrefs
+  /** 화면 테마 — claude 가 없으면 Windows 따라감. 옛 main 이 보내지 않으면 없다(Windows 따라감으로 친다) */
+  theme?: ThemePref
   /** 플랜 사용량 — claude 가 없거나 아직 모르면 null */
   usage: PlanUsage | null
 }
@@ -65,6 +67,8 @@ export interface DureApi {
   setAutoChainLimit(n: number): Promise<void>
   setAllowBypass(on: boolean): Promise<void>
   setNotify(p: Partial<NotifyPrefs>): Promise<void>
+  /** 화면 테마 저장 + 창에 바로 적용(설정 창이 누르는 즉시 부른다) */
+  setTheme(t: ThemePref): Promise<void>
   setBypass(id: AgentId, on: boolean): Promise<void>
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
@@ -85,7 +89,7 @@ export const METHODS = [
   'snapshot', 'addRoom', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
   'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'image',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
-  'setAllowBypass', 'setNotify', 'setBypass',
+  'setAllowBypass', 'setNotify', 'setTheme', 'setBypass',
   'pickFolder', 'openFolder', 'setTaskbar', 'flashWindow', 'focusWindow',
 ] as const satisfies readonly Exclude<keyof DureApi, 'on'>[]
 

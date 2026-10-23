@@ -239,6 +239,7 @@ code {
 }
 
 /* 위 띠 — 방 목록이 관계도 위 칩(.sum 5)·경계선(6)·메시지 창(7) 위로 열리게 그보다 높다(대화상자 50 아래) */
+/* 위 띠 = 창 제목 표시줄 — 빈 곳을 끌면 창이 옮겨진다. 오른쪽은 Windows 단추 자리(창 단추 겹침 영역 env)만큼 비운다 */
 .top {
   position: relative;
   z-index: 10;
@@ -248,8 +249,37 @@ code {
   align-items: center;
   gap: 12px;
   padding: 0 12px 0 20px;
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
+  -webkit-app-region: drag;
+}
+
+/* 누르는 것과 위 띠에서 펼친 목록은 끌기 자리에서 뺀다 */
+.top button,
+.top input,
+.top a,
+.top .pop {
+  -webkit-app-region: no-drag;
+}
+
+/* 창 맨 아래 상태 띠 — 왼쪽에 플랜 사용량 */
+.sbar {
+  position: relative;
+  z-index: 10;
+  flex: none;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.sbar .usg-btn {
+  height: 26px;
+  padding: 0 6px;
 }
 
 .brand {
@@ -636,12 +666,9 @@ code {
   overflow: hidden;
 }
 
-/* 요약 칩(왼쪽 위) · 확대 조절(왼쪽 아래) */
+/* 요약 칩(왼쪽 위) · 확대 조절(왼쪽 아래 줄 .mbl 안) */
 .sum,
 .zc {
-  position: absolute;
-  left: 16px;
-  z-index: 5;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -653,7 +680,26 @@ code {
 }
 
 .sum {
+  position: absolute;
+  left: 16px;
   top: 16px;
+  z-index: 5;
+}
+
+/* 관계도 왼쪽 아래 한 줄 — 확대 조절 · 에이전트 추가(높이를 확대 조절에 맞춘다) */
+.mbl {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 5;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.mbl .btn {
+  height: auto;
+  box-shadow: var(--shadow-sm);
 }
 
 .sum button {
@@ -688,7 +734,6 @@ code {
 }
 
 .zc {
-  bottom: 16px;
   font-size: 12px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
@@ -1227,7 +1272,8 @@ code {
 }
 
 .op.bottom {
-  bottom: 16px;
+  /* 왼쪽 아래 줄(확대 조절 · 에이전트 추가)과 겹치지 않게 그 위로 */
+  bottom: 64px;
   left: 50%;
   transform: translateX(-50%);
 }
@@ -3195,7 +3241,7 @@ code {
   right: 0;
   bottom: calc(100% + 6px);
   padding: 4px;
-  background: var(--bg);
+  background: var(--raised);
   border: 1px solid var(--border);
   border-radius: var(--radius-box);
   box-shadow: var(--shadow-pop);
@@ -3291,7 +3337,7 @@ code {
   max-height: 360px;
   overflow: auto;
   padding: 4px;
-  background: var(--bg);
+  background: var(--raised);
   border: 1px solid var(--border);
   border-radius: var(--radius-box);
   box-shadow: var(--shadow-pop);
@@ -3301,6 +3347,12 @@ code {
   left: auto;
   right: 0;
   min-width: 200px;
+}
+
+/* 위로 펼침 — 아래 상태 띠의 사용량 */
+.pop.up {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 
 .mi {
@@ -3415,7 +3467,7 @@ code {
   max-width: 320px;
   padding: 24px 28px;
   border-radius: var(--radius-node);
-  background: var(--bg);
+  background: var(--raised);
   box-shadow: var(--shadow-dlg);
   color: var(--text-2);
   font-size: 13px;
@@ -3446,7 +3498,7 @@ code {
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-dot);
-  background: var(--bg);
+  background: var(--raised);
   color: var(--text);
   box-shadow: var(--shadow-pop);
 }
@@ -3490,7 +3542,7 @@ code {
   margin: 0;
   padding: 3px 12px;
   border-radius: var(--radius-pill);
-  background: var(--bg);
+  background: var(--raised);
   color: var(--text-2);
   font-size: 12px;
   line-height: 18px;
@@ -3514,7 +3566,7 @@ code {
   width: 400px;
   max-width: 100%;
   padding: 20px 20px 16px;
-  background: var(--bg);
+  background: var(--raised);
   border: 1px solid var(--border);
   border-radius: var(--radius-node);
   box-shadow: var(--shadow-dlg);
@@ -3701,6 +3753,39 @@ code {
   font-size: 12px;
   line-height: 18px;
   color: var(--muted);
+}
+
+/* 세 칸 고르기(화면 테마) — 고른 칸만 떠 보인다 */
+.seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-ctl);
+  background: var(--hover);
+}
+
+.seg button {
+  flex: 1;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-3);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.seg button:hover {
+  color: var(--text);
+}
+
+.seg button[aria-checked="true"] {
+  background: var(--raised);
+  color: var(--text);
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
+}
+
+.seg + .fld-d {
+  margin-top: 0;
 }
 
 /* 고른 폴더 + 폴더 고르기 */

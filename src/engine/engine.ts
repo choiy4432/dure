@@ -14,7 +14,7 @@ import { Permissions } from './permissions';
 import { DENY } from '../shared/denyTexts';
 import { josa } from '../shared/josa';
 import { Router, AUTO_CHAIN_LIMIT } from './router';
-import { EFFORT_LEVELS, type EffortLevel, type NotifyPrefs } from './types';
+import { EFFORT_LEVELS, THEME_PREFS, type EffortLevel, type NotifyPrefs, type ThemePref } from './types';
 import { toContextUsage } from './usage';
 import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
 import type {
@@ -100,6 +100,9 @@ export interface Engine extends EventEmitter {
   notify(): NotifyPrefs;
   /** 바꾼 칸만 settings.json 에 남긴다 — 안 넘긴 칸은 그대로 */
   setNotify(p: Partial<NotifyPrefs>): void;
+  /** 화면 테마 — settings.json 의 theme(기본 system = Windows 따라감). 모르는 값이면 기본값 */
+  theme(): ThemePref;
+  setTheme(t: ThemePref): void;
   /**
    * 저장 + (끄면) 모든 에이전트 bypassOn=false 저장 — 켜져 있던 에이전트의 살아 있는 세션은 내 Claude 설정의 기본 모드로
    * 돌린다(다시 띄우지 않는다). 다음에 띄울 때는 옵션 없이
@@ -162,6 +165,7 @@ const EDITS_PENDING_MAX = 32;
 const STOPPED_NOTICE = '멈췄어요';
 const NO_AGENT = '에이전트를 찾을 수 없습니다.';
 const LIMIT_INVALID = '상한은 1 이상이어야 해요.';
+const THEME_INVALID = '화면 테마는 라이트·다크·Windows 따라감 중 하나예요';
 const DURE_TOOL_PREFIX = 'mcp__dure__';
 const DURE_TOOL_DENIED = '두레 도구는 승인 대상이 아니에요.';
 const SUBAGENT_DURE_TOOL: string = DENY.subagentDureTool;
@@ -422,7 +426,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private settingsFile() { return path.join(this.o.dataDir, 'settings.json'); }
 
   /** 설정 파일 — 없거나 깨졌으면 빈 객체 */
-  private readSettings(): { autoChainLimit?: unknown; allowBypass?: unknown; notifyAsks?: unknown; notifyFinished?: unknown } {
+  private readSettings(): { autoChainLimit?: unknown; allowBypass?: unknown; notifyAsks?: unknown; notifyFinished?: unknown; theme?: unknown } {
     try {
       const raw = JSON.parse(fs.readFileSync(this.settingsFile(), 'utf8'));
       return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
@@ -432,7 +436,7 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /** 있던 값은 그대로 두고 patch 만 덮어 쓴다 */
-  private writeSettings(patch: { autoChainLimit?: number; allowBypass?: boolean; notifyAsks?: boolean; notifyFinished?: boolean }): void {
+  private writeSettings(patch: { autoChainLimit?: number; allowBypass?: boolean; notifyAsks?: boolean; notifyFinished?: boolean; theme?: ThemePref }): void {
     const file = this.settingsFile();
     fs.mkdirSync(this.o.dataDir, { recursive: true });
     fs.writeFileSync(`${file}.tmp`, JSON.stringify({ ...this.readSettings(), ...patch }, null, 2));
@@ -478,6 +482,16 @@ class EngineImpl extends EventEmitter implements Engine {
     if (typeof p?.asks === 'boolean') patch.notifyAsks = p.asks;
     if (typeof p?.finished === 'boolean') patch.notifyFinished = p.finished;
     if (Object.keys(patch).length > 0) this.writeSettings(patch);
+  }
+
+  theme(): ThemePref {
+    const t = this.readSettings().theme;
+    return THEME_PREFS.includes(t as ThemePref) ? (t as ThemePref) : 'system';
+  }
+
+  setTheme(t: ThemePref): void {
+    if (!THEME_PREFS.includes(t)) throw new Error(THEME_INVALID);
+    this.writeSettings({ theme: t });
   }
 
   autoChainLimit(): number { return this.limit; }

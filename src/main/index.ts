@@ -1,10 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
 import { createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
 import { resolveClaudeCommand } from './claudeCommand'
 import { logEngineErrors, registerIpc } from './ipc'
 import { appPageMatcher, focusExisting, guardNavigation } from './window'
+import { TITLE_BAR_HEIGHT, windowColors } from './windowTheme'
 
 let mainWindow: BrowserWindow | null = null
 let engine: Engine | null = null
@@ -35,13 +36,26 @@ const indexFile = join(__dirname, '../renderer/index.html')
 /** 두레 화면 자신의 주소인가 — IPC 요청·창 안 이동을 이걸로 가린다 */
 const isAppPage = appPageMatcher({ devUrl: process.env.ELECTRON_RENDERER_URL, indexFile })
 
+/** 창 바탕·창 단추를 지금 테마로 — 테마를 바꾸거나 Windows 가 바꾸면(Windows 따라감) 다시 칠한다 */
+function paintWindow(win: BrowserWindow): void {
+  if (win.isDestroyed()) return
+  const c = windowColors(nativeTheme.shouldUseDarkColors)
+  win.setBackgroundColor(c.bg)
+  win.setTitleBarOverlay({ color: c.bg, symbolColor: c.symbol, height: TITLE_BAR_HEIGHT })
+}
+
 function createWindow(): BrowserWindow {
+  const c = windowColors(nativeTheme.shouldUseDarkColors)
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
     minWidth: 1100,
     minHeight: 700,
-    backgroundColor: '#FFFFFF',
+    // 처음 칠도 테마로 — 화면이 뜨기 전 흰 창이 번쩍이지 않게
+    backgroundColor: c.bg,
+    // Windows 제목 표시줄 대신 두레 위 띠 — 최소화·최대화·닫기는 Windows 단추를 위 띠 오른쪽에 겹친다(창 배치 메뉴 그대로)
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: c.bg, symbolColor: c.symbol, height: TITLE_BAR_HEIGHT },
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -143,10 +157,18 @@ if (!app.requestSingleInstanceLock()) {
           async focusWindow() {
             focusExisting(mainWindow)
           },
+          applyTheme(t) {
+            nativeTheme.themeSource = t // 'updated' 사건이 창을 다시 칠한다
+          },
           isAppPage,
         },
       )
       engine?.start()
+      // 저장한 화면 테마를 Windows 에 알린다 — 화면의 prefers-color-scheme·제목 표시줄 단추·스크롤바가 따른다(claude 가 없으면 Windows 따라감)
+      nativeTheme.themeSource = engine?.theme() ?? 'system'
+      nativeTheme.on('updated', () => {
+        if (mainWindow) paintWindow(mainWindow)
+      })
       mainWindow = createWindow()
 
       const smokeMs = Number(process.env.DURE_SMOKE_EXIT_MS)

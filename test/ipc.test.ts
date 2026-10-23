@@ -54,6 +54,8 @@ function fakeEngine() {
     answerRequest: rec('answerRequest'),
     setAutoChainLimit: rec('setAutoChainLimit'),
     notify: () => ({ asks: false, finished: true }), // 기본값과 다른 값 — 칸이 뒤바뀌면 잡힌다
+    theme: () => 'dark',
+    setTheme: rec('setTheme'),
     setNotify: rec('setNotify'),
     setAllowBypass: rec('setAllowBypass', Promise.resolve()),
     setBypass: rec('setBypass', Promise.resolve()),
@@ -74,6 +76,7 @@ function setup(withEngine = true) {
   const deps = {
     pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), isAppPage,
     setTaskbar: vi.fn(async () => {}), flashWindow: vi.fn(async () => {}), focusWindow: vi.fn(async () => {}),
+    applyTheme: vi.fn(),
   }
   const fe = fakeEngine()
   registerIpc(ipc, withEngine ? fe.engine : null, (ch, p) => sent.push([ch, p]), deps)
@@ -97,7 +100,7 @@ describe('registerIpc', () => {
       pickFolder: async () => null,
       openFolder: async () => {},
       isAppPage,
-      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {},
+      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {},
     })
     expect(await handlers.get(CHANNEL.invoke)!(fromApp, null)).toMatchObject({ ok: false })
     expect(await handlers.get(CHANNEL.invoke)!(fromApp, { method: 5 })).toMatchObject({ ok: false })
@@ -112,7 +115,7 @@ describe('registerIpc', () => {
       newConversation: ['a1'], setModel: ['a1', null], describe: ['a1'], history: ['a1', { all: true }], image: ['a1', 'f.png'],
       approveMessage: ['m1'], dismissMessage: ['m1'], continueHeld: ['r1'],
       answerRequest: ['q1', { type: 'allow' }], setAutoChainLimit: [5],
-      setEffort: ['a1', 'high'], refreshUsage: [], setAllowBypass: [true], setNotify: [{ finished: true }], setBypass: ['a1', false],
+      setEffort: ['a1', 'high'], refreshUsage: [], setAllowBypass: [true], setNotify: [{ finished: true }], setTheme: ['dark'], setBypass: ['a1', false],
     }
     for (const [m, a] of Object.entries(args)) {
       const r = await call(m, ...a)
@@ -138,6 +141,7 @@ describe('registerIpc', () => {
       autoChainLimit: 8,
       allowBypass: true,
       notify: { asks: false, finished: true },
+      theme: 'dark',
       rooms: [{ id: 'r1' }],
       agents: [{ id: 'a1', status: 'idle', errorText: null, bypassOn: true, bypass: true, bypassBySettings: false, bypassPending: true, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5', subagentsRunning: ['toolu_1', 'toolu_2'] }],
       usage: { windows: [{ key: 'session', percent: 40 }] },
@@ -159,7 +163,7 @@ describe('registerIpc', () => {
       throw new Error('Object has been destroyed')
     }, {
       pickFolder: async () => null, openFolder: async () => {}, isAppPage,
-      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {},
+      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {},
     })
     expect(() => e.engine.emit('held', { roomId: 'r1' })).not.toThrow()
   })
@@ -168,11 +172,20 @@ describe('registerIpc', () => {
     const { call, sent } = setup(false)
     const s = await call('snapshot')
     expect(s.value).toEqual({
-      claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
+      claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, theme: 'system', usage: null,
     })
     expect(await call('addRoom', 'x')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })
     expect(await call('pickFolder')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })
     expect(sent).toEqual([])
+  })
+
+  it('setTheme 은 엔진에 저장한 뒤 창 테마를 바꾼다 — 엔진이 거절하면 창은 그대로', async () => {
+    const { call, deps, engine } = setup()
+    expect(await call('setTheme', 'light')).toMatchObject({ ok: true })
+    expect(deps.applyTheme).toHaveBeenCalledWith('light')
+    ;(engine as any).setTheme = () => { throw new Error('화면 테마는 라이트·다크·Windows 따라감 중 하나예요') }
+    expect(await call('setTheme', 'blue')).toEqual({ ok: false, error: '화면 테마는 라이트·다크·Windows 따라감 중 하나예요' })
+    expect(deps.applyTheme).toHaveBeenCalledTimes(1)
   })
 
   it('openFolder only opens a registered agent folder', async () => {

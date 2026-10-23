@@ -8,6 +8,10 @@ export interface Room {
 }
 
 /** Windows 알림 — asks: 승인·질문이 올 때 · finished: 일을 끝냈을 때(창이 가려져 있을 때만 뜬다) */
+/** 화면 테마 — system 은 Windows 설정을 따라간다 */
+export type ThemePref = 'light' | 'dark' | 'system';
+export const THEME_PREFS: readonly ThemePref[] = ['light', 'dark', 'system'];
+
 export interface NotifyPrefs {
   asks: boolean;
   finished: boolean;

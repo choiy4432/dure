@@ -28,20 +28,20 @@ async function renderApp() {
 }
 
 describe('App 셸', () => {
-  it('claude 가 없으면 안내만, 에이전트 추가는 막힘', async () => {
+  it('claude 가 없으면 안내만, 에이전트 추가는 없다(관계도가 없다)', async () => {
     snapshot = { ...snapshot, claudeMissing: true, rooms: [room('r1')] }
     await renderApp()
     expect(screen.getByText('Claude Code 가 필요해요')).toBeTruthy()
     expect(screen.getByText('설치·로그인 안내는 곧 들어갑니다')).toBeTruthy()
     expect(screen.queryByRole('separator')).toBeNull()
-    expect(screen.getByRole('button', { name: '에이전트 추가' })).toHaveProperty('disabled', true)
+    expect(screen.queryByRole('button', { name: '에이전트 추가' })).toBeNull()
   })
 
-  it('방이 없으면 첫 방 안내 + 방 만들기, 에이전트 추가는 막힘', async () => {
+  it('방이 없으면 첫 방 안내 + 방 만들기, 에이전트 추가는 없다', async () => {
     await renderApp()
     expect(screen.getByText('첫 방을 만들어 보세요')).toBeTruthy()
     expect(screen.getByRole('button', { name: '방 만들기' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '에이전트 추가' })).toHaveProperty('disabled', true)
+    expect(screen.queryByRole('button', { name: '에이전트 추가' })).toBeNull()
     expect(screen.queryByRole('separator')).toBeNull()
   })
 
@@ -50,7 +50,8 @@ describe('App 셸', () => {
     await renderApp()
     expect(screen.getByText('두레')).toBeTruthy()
     expect(screen.getByRole('button', { name: '여름 캠페인' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: '에이전트 추가' })).toHaveProperty('disabled', false)
+    // 에이전트가 없는 방은 빈 화면의 '추가'가 그 자리 — 관계도 단추는 카드가 생긴 뒤에
+    expect(screen.queryByRole('button', { name: '에이전트 추가' })).toBeNull()
     expect(screen.getByRole('button', { name: '설정' })).toBeTruthy()
     const map = screen.getByRole('main', { name: '관계도' })
     expect(map.textContent).toContain('첫 에이전트를 추가해 보세요')
@@ -78,18 +79,49 @@ describe('App 셸', () => {
     const { getStore } = await import('../../src/renderer/state/store')
     const { TopBar } = await import('../../src/renderer/shell/TopBar')
     await act(async () => { await getStore().init() })
-    const onAddAgent = vi.fn()
     const onSettings = vi.fn()
-    render(<TopBar hasRoom onAddAgent={onAddAgent} onSettings={onSettings} />)
+    render(<TopBar hasRoom onSettings={onSettings} />)
     const roomButton = screen.getByRole('button', { name: '여름 캠페인' })
     expect(roomButton.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(roomButton)
     expect(roomButton.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByRole('dialog', { name: '방' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: '에이전트 추가' }))
     fireEvent.click(screen.getByRole('button', { name: '설정' }))
-    expect(onAddAgent).toHaveBeenCalledTimes(1)
     expect(onSettings).toHaveBeenCalledTimes(1)
+    // 위 띠엔 사용량·에이전트 추가가 없다 — 아래 상태 띠·관계도로 갔다
+    expect(screen.queryByRole('button', { name: '에이전트 추가' })).toBeNull()
+    expect(document.querySelector('.top .usg-wrap')).toBeNull()
+  })
+
+  it('위 띠는 창 제목 표시줄 — 끌어 옮기는 자리라 표시해 둔다', async () => {
+    snapshot = { ...snapshot, rooms: [room('r1', '여름 캠페인')] }
+    await renderApp()
+    expect(document.querySelector('header.top')).toBeTruthy()
+  })
+
+  it('에이전트가 있으면 관계도 왼쪽 아래(확대 조절 옆)에 에이전트 추가 — 누르면 추가 대화상자', async () => {
+    snapshot = { ...snapshot, rooms: [room('r1')], agents: [agent('a1', 'r1', '웹 화면')] }
+    ;(window as any).dure.pickFolder = async () => null
+    await renderApp()
+    const map = screen.getByRole('main', { name: '관계도' })
+    const add = within(map).getByRole('button', { name: '에이전트 추가' })
+    const zoom = within(map).getByRole('group', { name: '확대 조절' })
+    expect(add.parentElement).toBe(zoom.parentElement)
+    fireEvent.click(add)
+    expect(screen.getByRole('dialog', { name: '에이전트 추가' })).toBeTruthy()
+  })
+
+  it('사용량은 창 맨 아래 상태 띠 왼쪽에 — 펼침은 위로 연다', async () => {
+    snapshot = {
+      ...snapshot, rooms: [room('r1')],
+      usage: { windows: [{ key: 'session', label: '5시간', percent: 12, resetsAt: null }], at: Date.now() },
+    }
+    ;(window as any).dure.refreshUsage = async () => {}
+    await renderApp()
+    const bar = screen.getByRole('contentinfo')
+    const button = within(bar).getByRole('button', { expanded: false })
+    fireEvent.click(button)
+    expect(within(bar).getByRole('dialog', { name: '사용량' }).classList.contains('up')).toBe(true)
   })
 
   it('설정은 claude 가 없으면 막힘', async () => {
@@ -111,7 +143,7 @@ describe('App 셸', () => {
     expect(screen.getByText('두레를 불러오지 못했어요')).toBeTruthy()
     expect(screen.getByText('연결이 끊겼어요')).toBeTruthy()
     expect(screen.queryByText('첫 방을 만들어 보세요')).toBeNull()
-    expect(screen.getByRole('button', { name: '에이전트 추가' })).toHaveProperty('disabled', true)
+    expect(screen.queryByRole('button', { name: '에이전트 추가' })).toBeNull()
     expect(screen.getByRole('button', { name: '설정' })).toHaveProperty('disabled', true)
 
     // 다시 시도 — 또 실패하면 새 문구

@@ -6,6 +6,7 @@ let snapshot: Snapshot
 let setAutoChainLimit: ReturnType<typeof vi.fn>
 let setAllowBypass: ReturnType<typeof vi.fn>
 let setNotify: ReturnType<typeof vi.fn>
+let setTheme: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   vi.resetModules()
@@ -23,7 +24,10 @@ beforeEach(() => {
   setNotify = vi.fn(async (p: Partial<{ asks: boolean; finished: boolean }>) => {
     snapshot = { ...snapshot, notify: { ...snapshot.notify, ...p } }
   })
-  ;(window as any).dure = { setAutoChainLimit, setAllowBypass, setNotify, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
+  setTheme = vi.fn(async (t: 'light' | 'dark' | 'system') => {
+    snapshot = { ...snapshot, theme: t }
+  })
+  ;(window as any).dure = { setAutoChainLimit, setAllowBypass, setNotify, setTheme, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
 })
 afterEach(() => cleanup())
 
@@ -203,5 +207,75 @@ describe('SettingsDialog — 묻지 않고 실행 허용', () => {
     expect(fin.getAttribute('aria-checked')).toBe('false') // 눌림 무시
     fireEvent.click(asks)
     expect(fin.getAttribute('aria-disabled')).toBeNull()
+  })
+})
+
+describe('SettingsDialog — 화면 테마', () => {
+  const radios = (dlg: HTMLElement) => {
+    const group = within(dlg).getByRole('radiogroup', { name: '화면 테마' })
+    return {
+      light: within(group).getByRole('radio', { name: '라이트' }),
+      dark: within(group).getByRole('radio', { name: '다크' }),
+      system: within(group).getByRole('radio', { name: 'Windows 따라감' }),
+    }
+  }
+
+  it('기본은 Windows 따라감 — 누르면 저장 전에도 바로 바꾼다(setTheme)', async () => {
+    const store = await renderApp()
+    const { dlg } = openSettings()
+    const r = radios(dlg)
+    expect(r.system.getAttribute('aria-checked')).toBe('true')
+    expect(r.light.getAttribute('aria-checked')).toBe('false')
+    await act(async () => { fireEvent.click(r.dark) })
+    await settle()
+    expect(setTheme).toHaveBeenCalledWith('dark')
+    expect(r.dark.getAttribute('aria-checked')).toBe('true')
+    expect(store.getState().theme).toBe('dark')
+    expect((within(dlg).getByRole('button', { name: '저장' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('저장하면 고른 테마 그대로 닫힌다 — 되돌리지 않는다', async () => {
+    const store = await renderApp()
+    const { dlg } = openSettings()
+    await act(async () => { fireEvent.click(radios(dlg).light) })
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '저장' })) })
+    await settle()
+    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
+    expect(setTheme.mock.calls).toEqual([['light']])
+    expect(store.getState().theme).toBe('light')
+  })
+
+  it.each([
+    ['취소', (dlg: HTMLElement) => fireEvent.click(within(dlg).getByRole('button', { name: '취소' }))],
+    ['Esc', (dlg: HTMLElement) => fireEvent.keyDown(dlg, { key: 'Escape' })],
+  ])('%s 로 닫으면 열 때의 테마로 되돌린다', async (_name, close) => {
+    snapshot = { ...snapshot, theme: 'light' }
+    const store = await renderApp()
+    const { dlg } = openSettings()
+    await act(async () => { fireEvent.click(radios(dlg).dark) })
+    await act(async () => { close(dlg) })
+    await settle()
+    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
+    expect(setTheme.mock.calls).toEqual([['dark'], ['light']])
+    expect(store.getState().theme).toBe('light')
+  })
+
+  it('테마를 안 바꾸고 닫으면 아무것도 부르지 않는다', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '취소' })) })
+    expect(setTheme).not.toHaveBeenCalled()
+  })
+
+  it('바꾸지 못하면 오류 글 — 고른 칸은 그대로', async () => {
+    setTheme.mockRejectedValueOnce(new Error('설정 파일을 쓰지 못했어요'))
+    await renderApp()
+    const { dlg } = openSettings()
+    const r = radios(dlg)
+    await act(async () => { fireEvent.click(r.dark) })
+    await settle()
+    expect(within(dlg).getByText('설정 파일을 쓰지 못했어요')).toBeTruthy()
+    expect(r.system.getAttribute('aria-checked')).toBe('true')
+    expect(r.dark.getAttribute('aria-checked')).toBe('false')
   })
 })

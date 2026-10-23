@@ -4033,6 +4033,28 @@ test('notify 기본 asks true·finished false — setNotify 가 settings.json �
   expect(e2.notify()).toEqual({ asks: false, finished: true });
 });
 
+test('theme 기본은 Windows 따라감(system) — setTheme 이 settings.json 에 남고 다시 켜도 그대로', async () => {
+  const e = await start();
+  expect(e.theme()).toBe('system');
+  e.setTheme('dark');
+  expect(e.theme()).toBe('dark');
+  expect(JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'))).toEqual({ theme: 'dark' });
+  e.setTheme('light');
+  await e.shutdown();
+  const e2 = await start();
+  expect(e2.theme()).toBe('light');
+});
+
+test('theme — 모르는 값은 받지 않고, 파일의 이상한 값은 기본값', async () => {
+  const e = await start();
+  expect(() => e.setTheme('blue' as never)).toThrow('화면 테마는 라이트·다크·Windows 따라감 중 하나예요');
+  expect(e.theme()).toBe('system');
+  await e.shutdown();
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ theme: 7 }));
+  const e2 = await start();
+  expect(e2.theme()).toBe('system');
+});
+
 test('settings.json 의 알림 값이 불리언이 아니면 기본값', async () => {
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ notifyAsks: 'no', notifyFinished: 1 }));

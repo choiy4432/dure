@@ -74,7 +74,7 @@ export function UsageMeters() {
         ))}
       </button>
       <Presence show={open}>
-        <MotionDiv motion={MOTION.pop} origin="top right" className="pop end usg-pop" role="dialog" aria-label="사용량">
+        <MotionDiv motion={MOTION.popUp} origin="bottom left" className="pop up usg-pop" role="dialog" aria-label="사용량">
           <h5 className="usg-h">
             사용량 <span>· 내 계정</span>
           </h5>

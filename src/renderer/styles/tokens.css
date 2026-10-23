@@ -3,10 +3,13 @@
  * 컴포넌트 CSS·TSX 는 아래 변수만 쓴다(색 값을 직접 쓰지 않는다).
  * 다른 시안을 테마로 쓰려면 이 파일만 바꾸면 된다.
  * 지금 값 = 고른 시안 '이 분야의 표준'(.impeccable/mocks/decision/canon.html).
+ * 다크 = 맨 아래 prefers-color-scheme: dark 블록(시안 A 슬레이트 남색, 2026-10-23). 설정의 화면 테마(main 의 nativeTheme.themeSource)가
+ * 이 미디어 질의를 정한다 — 라이트의 색 토큰은 다크에도 빠짐없이(test/themeTokens). --bg·--text-3 은 main 의 창 색 거울(main/windowTheme)과 같아야 한다.
  */
 :root {
   /* 바탕·글자 */
   --bg: #FFFFFF;
+  --raised: #FFFFFF;           /* 떠 있는 판(대화상자·떠 있는 목록) — 다크에선 한 단 밝게 */
   --canvas: #F8FAFC;           /* 관계도 바탕 */
   --dot: #E2E8F0;              /* 관계도 점 모눈 */
   --subtle: #F8FAFC;           /* 옅은 칸·두 번째 버튼 hover */
@@ -84,4 +87,72 @@
   /* 글꼴 */
   --font: 'Noto Sans KR', system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
+
+  color-scheme: light;
+}
+
+/* 다크 — 슬레이트 남색(라이트의 푸른 회색을 그대로 어둡게). 상태색·주색은 어두운 바탕에서 읽히게 한 단 밝게, 옅은 바탕은 반투명으로 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111827;
+    --raised: #182235;
+    --canvas: #0B1120;
+    --dot: #1F2A3D;
+    --subtle: #162033;
+    --hover: #1E293B;
+    --text: #E5E9F0;
+    --text-2: #CBD5E1;
+    --text-3: #A3B1C6;
+    --muted: #8392A8;
+    --selection: rgba(59, 130, 246, 0.35);
+    --code-bg: rgba(255, 255, 255, 0.07);
+
+    --primary: #2563EB;
+    --primary-hover: #3B82F6;
+    --primary-text: #93C5FD;
+    --primary-soft: rgba(59, 130, 246, 0.16);
+    --primary-soft-border: rgba(96, 165, 250, 0.38);
+    --on-primary: #FFFFFF;
+
+    --border: #243044;
+    --border-strong: #334155;
+    --border-soft: #1A2436;
+
+    --ok: #10B981;
+    --ok-bg: rgba(16, 185, 129, 0.14);
+    --ok-text: #6EE7B7;
+    --warn: #F59E0B;
+    --warn-bg: rgba(245, 158, 11, 0.12);
+    --warn-border: rgba(245, 158, 11, 0.38);
+    --warn-strong: #FBBF24;
+    --warn-text: #FCD34D;
+    --warn-code-bg: rgba(245, 158, 11, 0.18);
+    --warn-code-text: #FDE68A;
+    --danger: #EF4444;
+    --danger-text: #FCA5A5;
+    --on-danger: #FFFFFF;
+    --danger-bg: rgba(239, 68, 68, 0.12);
+    --danger-border: rgba(239, 68, 68, 0.38);
+    --danger-solid: #DC2626;
+    --danger-solid-hover: #EF4444;
+    --idle: #64748B;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-label: 0 1px 2px rgba(0, 0, 0, 0.45);
+    --shadow-pri: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-knob: 0 1px 2px rgba(0, 0, 0, 0.6);
+    --shadow-node: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px -6px rgba(0, 0, 0, 0.55);
+    --shadow-node-sel: 0 0 0 1px var(--primary), 0 0 0 5px rgba(59, 130, 246, 0.25), 0 8px 20px -6px rgba(0, 0, 0, 0.6);
+    --shadow-node-pend: inset 0 0 0 1px var(--warn), 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px -6px rgba(0, 0, 0, 0.55);
+    --shadow-node-sel-pend: inset 0 0 0 1px var(--warn), 0 0 0 5px rgba(59, 130, 246, 0.25), 0 8px 20px -6px rgba(0, 0, 0, 0.6);
+    --shadow-node-sel-warn: 0 0 0 1px var(--warn), 0 0 0 5px rgba(245, 158, 11, 0.22), 0 8px 20px -6px rgba(0, 0, 0, 0.6);
+    --shadow-box: 0 1px 2px rgba(0, 0, 0, 0.35), 0 4px 12px -4px rgba(0, 0, 0, 0.5);
+    --ring-soft: 0 0 0 3px rgba(59, 130, 246, 0.3);
+    --shadow-pop: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 28px -8px rgba(0, 0, 0, 0.65);
+    --shadow-dlg: 0 1px 2px rgba(0, 0, 0, 0.45), 0 24px 48px -12px rgba(0, 0, 0, 0.75);
+    --overlay: rgba(2, 6, 23, 0.6);
+    --on-overlay: #FFFFFF;
+
+    color-scheme: dark;
+  }
 }
