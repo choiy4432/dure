@@ -34,4 +34,13 @@ describe('requestDetails', () => {
     const o = detailRows('Edit', { old_string: Array(12).fill('a').join('\n') })[0].value
     expect(o.split('\n')).toHaveLength(11)
   })
+  it('아는 칸이라도 못 그리면 JSON 칸으로 — 사라지지 않는다', () => {
+    expect(detailRows('Bash', { command: 5 })).toEqual([{ label: 'command', value: '5', mono: true }])
+    expect(detailRows('Bash', { description: '' })).toEqual([{ label: 'description', value: '""', mono: true }])
+    expect(detailRows('Bash', { timeout: 0 })).toEqual([{ label: 'timeout', value: '0', mono: true }])
+    expect(detailRows('Write', { file_path: 5 })).toEqual([{ label: 'file_path', value: '5', mono: true }])
+  })
+  it('양수 제한 시간은 0초로 읽히지 않는다', () => {
+    expect(detailRows('Bash', { timeout: 400 })[0].value).toBe('1초')
+  })
 })

@@ -38,15 +38,12 @@ function head(v: string, n: number): string {
 }
 
 function duration(ms: number): string {
-  const sec = Math.round(ms / 1000)
+  const sec = Math.max(1, Math.round(ms / 1000))
   const m = Math.floor(sec / 60)
   const s = sec % 60
   if (m === 0) return `${s}초`
   return s === 0 ? `${m}분` : `${m}분 ${s}초`
 }
-
-// 아는 칸 — 이 차례로 보여준다
-const KNOWN = ['command', 'description', 'timeout', 'file_path', 'notebook_path', 'content', 'old_string', 'new_string', 'pattern', 'url', 'query']
 
 /** 자세히 의 칸들 — 아는 칸은 쉬운 이름으로, 모르는 칸은 이름 그대로 JSON 으로 */
 export function detailRows(toolName: string, input: unknown, folder?: string): DetailRow[] {
@@ -54,28 +51,34 @@ export function detailRows(toolName: string, input: unknown, folder?: string): D
   const o = obj(input)
   if (!o) return []
   const rows: DetailRow[] = []
+  // 칸을 실제로 그린 키만 여기 담는다 — 글이 아니거나 빈 값이면 아래 JSON 칸으로 가서 사라지지 않는다
+  const shown = new Set<string>()
   const str = (k: string) => (typeof o[k] === 'string' && o[k] !== '' ? (o[k] as string) : null)
-  const push = (label: string, value: string, mono: boolean) => rows.push({ label, value: cap(value), mono })
+  const push = (key: string, label: string, value: string, mono: boolean) => {
+    rows.push({ label, value: cap(value), mono })
+    shown.add(key)
+  }
 
   let v = str('command')
-  if (v) push('명령', v, true)
-  if ((v = str('description'))) push('설명', v, false)
-  if (typeof o.timeout === 'number' && o.timeout > 0) push('제한 시간', duration(o.timeout), false)
-  const path = filePathTarget(o, folder)
-  if (path) push('파일', path, true)
-  if ((v = str('content'))) push('내용', head(v, 20), true)
-  if ((v = str('old_string'))) push('바꿀 글', head(v, 10), true)
-  if ((v = str('new_string'))) push('새 글', head(v, 10), true)
-  if ((v = str('pattern'))) push('찾을 것', v, true)
-  if ((v = str('url'))) push('주소', v, true)
-  if ((v = str('query'))) push('검색어', v, false)
+  if (v) push('command', '명령', v, true)
+  if ((v = str('description'))) push('description', '설명', v, false)
+  if (typeof o.timeout === 'number' && o.timeout > 0) push('timeout', '제한 시간', duration(o.timeout), false)
+  const pathKey = str('file_path') ? 'file_path' : str('notebook_path') ? 'notebook_path' : null
+  const path = pathKey ? filePathTarget({ file_path: o[pathKey] }, folder) : null
+  if (pathKey && path) push(pathKey, '파일', path, true)
+  if ((v = str('content'))) push('content', '내용', head(v, 20), true)
+  if ((v = str('old_string'))) push('old_string', '바꿀 글', head(v, 10), true)
+  if ((v = str('new_string'))) push('new_string', '새 글', head(v, 10), true)
+  if ((v = str('pattern'))) push('pattern', '찾을 것', v, true)
+  if ((v = str('url'))) push('url', '주소', v, true)
+  if ((v = str('query'))) push('query', '검색어', v, false)
 
   for (const k of Object.keys(o)) {
-    if (KNOWN.includes(k)) continue
+    if (shown.has(k)) continue
     let j = JSON.stringify(o[k])
     if (j === undefined) continue
     if (j.length > 200) j = j.slice(0, 200) + '…'
-    push(k, j, true)
+    push(k, k, j, true)
   }
   return rows
 }
