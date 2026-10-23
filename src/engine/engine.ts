@@ -18,7 +18,7 @@ import { EFFORT_LEVELS, THEME_PREFS, type EffortLevel, type NotifyPrefs, type Th
 import { toContextUsage } from './usage';
 import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
 import type {
-  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, ContextUsage, CreateAgentInput, Decision, DiffHunk, EngineEventMap, HistoryItem, HistoryPart, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, StreamEvent, UserPart,
+  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, ContextUsage, CreateAgentInput, Decision, DiffHunk, EngineEventMap, HistoryItem, HistoryPart, Hold, HoldItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, StreamEvent, UserPart,
 } from './types';
 
 export interface EngineOptions {
@@ -65,7 +65,8 @@ export interface EngineOptions {
 //                계획 모드 동안은 bypass 가 아니다(세션이 없으면 다음에 띄울 때 계획 모드로 맞추니 false)
 //  'plan-mode'   { agentId; on }   (planMode() 가 바뀔 때만 — 세션의 실제 모드가 plan 인가. 세션이 없거나 아직 모드를 모르면 바라는 값)
 //  'history'     { agentId; item: HistoryItem }   (대화 기록에 한 항목이 더해질 때마다 — text-delta·thinking·init·rate-limit 은 기록하지 않는다)
-//  'held-input'  { agentId; count }   (보낼 차례를 기다리는 사람 입력 수가 바뀔 때마다)
+//  'held-input'  { agentId; count }   (보낼 차례를 기다리는 사람 입력 수가 바뀔 때마다 — 붙잡힌 것은 세지 않는다)
+//  'hold'        { agentId; hold: Hold | null }   (붙잡기가 바뀔 때마다 — 멈춰서 붙잡음 · 항목이 붙거나 빠짐. 풀리면 null)
 //  'effort'      { agentId; effort; effortNow }   (고른 값이 바뀌거나 Claude 에게 지금 값을 읽을 때마다)
 //  'context'     { agentId; value: ContextUsage | null }   (차례 끝에 대화 공간을 받았을 때 · 요약·새 대화 직후엔 null)
 //  'model-now'   { agentId; modelNow }   (차례의 init 이 알려 준 모델 id 가 바뀔 때 · setModel 은 null 로 비운다)
@@ -89,7 +90,16 @@ export interface Engine extends EventEmitter {
    * 기다리는 동안(autoTurnGraceMs)도
    */
   status(id: AgentId): AgentStatus;
+  /** 보낼 차례를 기다리는 내 입력 수 — 붙잡힌 것은 세지 않는다(붙잡기 목록이 보여 준다) */
   heldInput(id: AgentId): number;
+  /** 멈춰서 붙잡은 대기열 — 없으면 null */
+  hold(id: AgentId): Hold | null;
+  /** 이어서 보내기 — 붙잡기를 풀고 차례대로 보낸다(내 입력 먼저, 그다음 메시지). 세션이 없으면 띄운다. 붙잡기가 없으면 아무 일도 안 한다 */
+  resumeHold(id: AgentId): void;
+  /** 빼기 — 내 입력은 버리고 메시지는 dismissed. 다 빠지면 붙잡기도 풀린다. 없는 항목이면 아무 일도 안 한다 */
+  dropHoldItem(id: AgentId, itemId: string): void;
+  /** 모두 버리기 — 내 입력은 버리고 메시지는 모두 dismissed, 붙잡기를 푼다 */
+  dropHold(id: AgentId): void;
   /** 도는 서브에이전트 — 부모의 Agent tool_use id, 시작 순. 살아 있는 세션이 없으면 빈 목록 */
   subagentsRunning(id: AgentId): string[];
   /**
@@ -131,7 +141,10 @@ export interface Engine extends EventEmitter {
    * Claude 는 계획을 ExitPlanMode 승인 요청(kind plan)으로 올리고, 허용하면 CLI 가 스스로 기본 모드로 간다(probe16)
    */
   sendUser(id: AgentId, parts: UserPart[], o?: { plan?: boolean }): Promise<void>;
-  /** 멈춘다 — 떠 있던 승인 요청은 거절로 치우고, 계획 모드였으면 평소 모드로(묻지 않음이 켜진 에이전트면 bypass, 아니면 default) */
+  /**
+   * 멈춘다 — 떠 있던 승인 요청은 거절로 치우고, 계획 모드였으면 평소 모드로(묻지 않음이 켜진 에이전트면 bypass, 아니면 default).
+   * 기다리던 내 입력·전달 대기 메시지가 있으면 붙잡는다(hold) — 사람이 고를 때까지 나가지 않는다
+   */
   interrupt(id: AgentId): Promise<void>;
   /** 새 대화 — 계획 모드는 끈 채로 시작한다 */
   newConversation(id: AgentId): Promise<void>;
@@ -183,6 +196,8 @@ const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit']);
 /** 결과를 기다리는 고친 일의 입력 묶음 상한(세션마다) — 결과가 끝내 안 온 것(멈춤 등)이 쌓이지 않게 오래된 것부터 버린다 */
 const EDITS_PENDING_MAX = 32;
 const STOPPED_NOTICE = '멈췄어요';
+/** 붙잡기 목록의 글 — 첫 줄을 이만큼까지(코드 포인트로) */
+const HOLD_TEXT_MAX = 200;
 const NO_AGENT = '에이전트를 찾을 수 없습니다.';
 const LIMIT_INVALID = '상한은 1 이상이어야 해요.';
 const THEME_INVALID = '화면 테마는 라이트·다크·Windows 따라감 중 하나예요';
@@ -261,10 +276,26 @@ interface EffortTurn {
   timer: NodeJS.Timeout | null; // 답이 없으면 다시 띄운다
 }
 
-/** 보낼 차례를 기다리는 사람 입력 — plan: 계획 먼저(쓰기 직전에 계획 모드로) */
+/** 보낼 차례를 기다리는 사람 입력 — id: 엔진이 붙인 것(붙잡기 목록의 항목 id) · plan: 계획 먼저(쓰기 직전에 계획 모드로) */
 interface HeldInput {
+  id: string;
   parts: UserPart[];
   plan?: true;
+}
+
+/** 붙잡은 것 하나 — item: 화면에 알리는 모양 · input: 내 입력이면 보낼 것(메시지는 기록에 queued 로 남아 있다 — item.id = 메시지 id) */
+interface HoldEntry {
+  item: HoldItem;
+  input?: HeldInput;
+}
+
+/**
+ * 멈출 때 붙잡은 대기열(에이전트마다) — 그동안 entries 의 내 입력은 기다리는 줄(held) 밖에 두고, 그 에이전트는 전달 쪽에서 바쁨이다.
+ * 새로 친 말은 거치지 않는다. 그 에이전트에게 새로 queued 가 된 메시지는 끝에 붙고, queued 가 아니게 된 메시지는 빠진다
+ */
+interface HoldState {
+  since: number;
+  entries: HoldEntry[];
 }
 
 /** 프로세스에 써 넣었지만 아직 아무 이벤트도 안 온 줄 — 읽기 전에 죽으면 되살린다 */
@@ -328,7 +359,8 @@ class SeenToolUses {
 
 class EngineImpl extends EventEmitter implements Engine {
   private sessions = new Map<AgentId, ClaudeSession>();
-  private held = new Map<AgentId, HeldInput[]>(); // 일하는 중에 사람이 넣은 입력 — 끝나면 순서대로
+  private held = new Map<AgentId, HeldInput[]>(); // 일하는 중에 사람이 넣은 입력 — 끝나면 순서대로(붙잡힌 것은 holds 에)
+  private holds = new Map<AgentId, HoldState>(); // 멈춰서 붙잡은 대기열 — 사람이 고를 때까지. 메모리만(다시 켜면 풀린다), 비면 지운다
   private errors = new Map<AgentId, string>(); // 세션 없이 남은 오류(비정상 종료·폴더 없음) — 다음 실행까지
   private shown = new Map<AgentId, { status: AgentStatus; errorText: string | null }>();
   private described = new WeakMap<ClaudeSession, Promise<AgentDescription>>();
@@ -411,7 +443,8 @@ class EngineImpl extends EventEmitter implements Engine {
         if (this.effortTurn.has(s)) throw new Error(EFFORT_BUSY);
         this.sendTo(id, s, [{ type: 'text', text }], { kind: 'relay', messageId });
       },
-      isBusy: (id) => this.waiting(id) || (this.held.get(id)?.length ?? 0) > 0,
+      // 붙잡힌 에이전트도 바쁨 — 전달 대기 메시지는 queued 로 남아 붙잡기 목록에 붙는다
+      isBusy: (id) => this.waiting(id) || (this.held.get(id)?.length ?? 0) > 0 || this.holds.has(id),
     });
     // 아래 알림은 프로세스 이벤트·MCP 요청 처리 중에도 불린다 — 듣는 쪽이 던져도 남은 일(상태·다음 입력)은 한다
     this.perms.on('request', (r: PendingRequest) => {
@@ -425,7 +458,10 @@ class EngineImpl extends EventEmitter implements Engine {
         this.pump(r.agentId);
       });
     });
-    this.router.on('message', (m: RelayMessage) => this.guard(null, () => this.emit('message', m)));
+    this.router.on('message', (m: RelayMessage) => {
+      this.guard(null, () => this.emit('message', m));
+      this.guard(m.to, () => this.noteHoldMessage(m));
+    });
     this.router.on('held', (h: { roomId: RoomId }) => this.guard(null, () => this.emit('held', h)));
   }
 
@@ -566,6 +602,8 @@ class EngineImpl extends EventEmitter implements Engine {
     this.removing.add(id);
     this.disarmCool(id);
     if (this.selected === id) this.selected = null;
+    // 붙잡기도 같이 — 아래에서 버리는 메시지가 목록에서 하나씩 빠지며 알리지 않게 먼저 지운다(풀림은 끝에 한 번)
+    const hadHold = this.holds.delete(id);
     try {
       await this.endSession(id);
       for (const m of this.log.list({ states: ['pending', 'held', 'queued'] })) {
@@ -587,6 +625,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.effortBroken.delete(id);
       this.modelNows.delete(id);
       if (had > 0) this.guard(id, () => this.emit('held-input', { agentId: id, count: 0 }));
+      if (hadHold) this.guard(id, () => this.emit('hold', { agentId: id, hold: null }));
     }
   }
 
@@ -606,6 +645,11 @@ class EngineImpl extends EventEmitter implements Engine {
   heldInput(id: AgentId): number {
     this.need(id);
     return this.held.get(id)?.length ?? 0;
+  }
+
+  hold(id: AgentId): Hold | null {
+    this.need(id);
+    return this.holdView(id);
   }
 
   subagentsRunning(id: AgentId): string[] {
@@ -718,7 +762,8 @@ class EngineImpl extends EventEmitter implements Engine {
     this.router.humanInput(agent.roomId);
     const q = this.heldOf(id);
     // 계획 먼저는 그 입력에 붙여 둔다 — 차례 중이면 지금 차례를 계획 모드로 바꾸지 않고, 그 입력을 쓸 때(pump) 바꾼다
-    q.push({ parts, ...(o?.plan === true ? { plan: true as const } : {}) });
+    // 붙잡힌 동안 새로 친 말도 여기로 — 붙잡기를 거치지 않고 보통처럼 나간다(사람이 지금 하는 말이 가장 급하다)
+    q.push({ id: crypto.randomUUID(), parts, ...(o?.plan === true ? { plan: true as const } : {}) });
     try {
       this.ensure(id);
     } catch (e) {
@@ -732,16 +777,19 @@ class EngineImpl extends EventEmitter implements Engine {
 
   async interrupt(id: AgentId) {
     this.need(id);
+    const hadInput = (this.held.get(id)?.length ?? 0) > 0; // 아래 /effort 다시 띄우기의 근거 — 붙잡으면 줄이 빈다
+    // 멈춤 = 하던 일 끊기 + 대기열 붙잡기. 승인 카드를 치우기 전에 붙잡는다 — 치우면 pump 가 돌아 기다리던 것을 보낼 수 있다
+    this.holdQueue(id);
     this.perms.cancelForAgent(id, STOPPED_BY_USER);
     // 멈춤 = 그만 — 계획 모드였으면 평소 모드로(떠 있던 계획 요청은 위에서 거절로 치웠다). 멈추기 제어 요청보다 먼저 쓴다.
     // 세션이 없으면 바라는 값만 · 아래에서 다시 띄우면 계획 모드 없이(바라는 값은 여기서 거둔다)
     const leaving = this.leavePlan(id);
     const s = this.sessions.get(id);
     if (!s) return leaving;
-    // 엔진이 보낸 /effort 차례 중 — 기다리는 사람 입력이 있으면(화면엔 작업 중) 같은 프로세스에 이어 쓰지 않고 다시 띄운다(답 없음과 같은 길).
-    // 없으면(남은 승인 카드만 멈춤) 카드만 치우고 그 /effort 는 그대로 끝나게 둔다
+    // 엔진이 보낸 /effort 차례 중 — 기다리는 사람 입력이 있었으면(화면엔 작업 중이었다 — 이제 붙잡혔다) 그 /effort 를 끊으려 다시 띄운다
+    // (답 없음과 같은 길 — 붙잡힌 것은 이어서 보내기를 고르면 새 세션으로). 없으면(남은 승인 카드만 멈춤) 카드만 치우고 그 /effort 는 그대로 끝나게 둔다
     if (this.effortTurn.has(s)) {
-      if ((this.held.get(id)?.length ?? 0) > 0) return this.restartAfterEffort(id, s, 'interrupt');
+      if (hadInput) return this.restartAfterEffort(id, s, 'interrupt');
       return leaving;
     }
     // 부모 차례와 도는 서브에이전트 모두(spec §4.6) — 서브에이전트만 돌아도 interrupt 하나로 멈춘다(끝 알림 stopped, probe14 C)
@@ -749,6 +797,49 @@ class EngineImpl extends EventEmitter implements Engine {
     await s.interrupt();
     await leaving;
     if (wasWorking) this.guard(id, () => this.record(id, { kind: 'notice', text: STOPPED_NOTICE }));
+  }
+
+  resumeHold(id: AgentId): void {
+    this.need(id);
+    const h = this.holds.get(id);
+    if (!h) return;
+    this.holds.delete(id);
+    // 내 입력은 기다리는 줄 끝으로(붙잡힌 동안 새로 친 말이 앞선다). 메시지는 queued 그대로 — 내 입력이 다 나간 뒤 pump → onIdle 이 꺼낸다
+    const inputs = h.entries.flatMap((e) => (e.input ? [e.input] : []));
+    if (inputs.length > 0) {
+      this.heldOf(id).push(...inputs);
+      this.emitHeld(id);
+    }
+    this.emitHold(id);
+    // 붙잡기는 비지 않는다(다 빠지면 풀린다) — 보낼 것이 있으니 세션이 없으면 띄운다(계획 먼저 입력이 맨 앞이면 띄울 때 계획 모드로)
+    if (!this.sessions.has(id)) {
+      try {
+        this.ensure(id, { quiet: true });
+      } catch {
+        return; // 폴더 없음 등 — ensure 가 status error·errorText 를 남겼다(기다리는 것은 다음 실행에)
+      }
+    }
+    this.pump(id); // 차례 중·승인 대기면 그 차례의 result 에서
+    this.emitStatus(id);
+  }
+
+  dropHoldItem(id: AgentId, itemId: string): void {
+    this.need(id);
+    const entry = this.holds.get(id)?.entries.find((e) => e.item.id === itemId);
+    if (!entry) return;
+    // 메시지는 '버림'으로 — 그 message 사건에서 목록에서 빠진다(noteHoldMessage). 내 입력은 그냥 버린다
+    if (!entry.input) this.router.dismiss(itemId);
+    this.unhold(id, entry);
+  }
+
+  dropHold(id: AgentId): void {
+    this.need(id);
+    const h = this.holds.get(id);
+    if (!h) return;
+    // 먼저 푼다 — 버리는 메시지가 목록에서 하나씩 빠지며 알리지 않게(풀림은 한 번)
+    this.holds.delete(id);
+    for (const e of h.entries) if (!e.input) this.guard(id, () => this.router.dismiss(e.item.id));
+    this.emitHold(id);
   }
 
   async newConversation(id: AgentId) {
@@ -1035,7 +1126,8 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * 한가하면 — 권한 모드 때문에 다시 띄울 세션이면(묻지 않음을 켜려고, 또는 끄기에 실패해 남은 bypass 를 걷으려고) 그것부터
-   * (기다리던 입력은 새 세션이 받는다), 다음은 줄에 선 /effort, 다음은 사람 입력, 없으면 다른 에이전트가 보낸 대기 메시지 — 한 번에 한 줄.
+   * (기다리던 입력은 새 세션이 받는다), 다음은 줄에 선 /effort, 다음은 사람 입력, 없으면 다른 에이전트가 보낸 대기 메시지(붙잡혀 있으면
+   * 꺼내지 않는다 — 사람이 이어서 보내기를 고를 때까지) — 한 번에 한 줄.
    * 다시 띄우기·/effort 는 서브에이전트 일이 다 끝날 때까지 줄에 둔다 — 다시 띄우기를 기다리는 동안은 입력도 보내지 않고,
    * /effort 만 미뤄지면 사람 입력·받은 메시지는 그대로 간다
    */
@@ -1061,7 +1153,7 @@ class EngineImpl extends EventEmitter implements Engine {
       if (next.plan && !this.inPlan(id, s)) void this.enterPlan(id, s);
       this.sendTo(id, s, next.parts, { kind: 'human', input: next });
     }
-    else this.router.onIdle(id);
+    else if (!this.holds.has(id)) this.router.onIdle(id);
   }
 
   private sendTo(id: AgentId, s: ClaudeSession, parts: UserPart[], item: InFlight): void {
@@ -1106,6 +1198,60 @@ class EngineImpl extends EventEmitter implements Engine {
     const q = this.held.get(id) ?? [];
     this.held.set(id, q);
     return q;
+  }
+
+  /**
+   * 멈출 때 — 기다리던 내 입력(기다리는 줄에서 옮긴다)과 그 에이전트에게 온 전달 대기 메시지를 붙잡는다. 둘 다 없으면 붙잡지 않는다.
+   * 이미 붙잡혀 있으면(붙잡힌 동안 새로 친 말이 기다리다 또 멈춤) 그 목록에 — 내 입력은 내 입력 끝에, 메시지는 맨 끝에
+   */
+  private holdQueue(id: AgentId): void {
+    const inputs = this.held.get(id) ?? [];
+    const h = this.holds.get(id) ?? { since: Date.now(), entries: [] };
+    const known = new Set(h.entries.map((e) => e.item.id));
+    const queued = this.log.list({ to: id, states: ['queued'] }).filter((m) => !known.has(m.id));
+    if (inputs.length === 0 && queued.length === 0) return;
+    const mine = h.entries.filter((e) => e.input).length;
+    h.entries.splice(mine, 0, ...inputs.map((input) => ({ item: humanItem(input), input })));
+    h.entries.push(...queued.map((m) => ({ item: relayItem(m) })));
+    this.holds.set(id, h);
+    if (inputs.length > 0) {
+      this.held.delete(id);
+      this.emitHeld(id);
+    }
+    this.emitHold(id);
+    this.emitStatus(id); // /effort 차례 중 기다리던 입력 때문에 작업 중이었으면 이제 대기
+  }
+
+  /** 기록이 바뀐 메시지 — 받는 쪽이 붙잡혀 있으면 새로 queued 가 된 것은 목록 끝에, queued 가 아니게 된 것(버림 등)은 목록에서 뺀다 */
+  private noteHoldMessage(m: RelayMessage): void {
+    const h = this.holds.get(m.to);
+    if (!h) return;
+    const entry = h.entries.find((e) => !e.input && e.item.id === m.id);
+    if (m.state === 'queued' && !entry) {
+      h.entries.push({ item: relayItem(m) });
+      this.emitHold(m.to);
+    } else if (m.state !== 'queued' && entry) {
+      this.unhold(m.to, entry);
+    }
+  }
+
+  /** 붙잡기에서 하나를 뺀다(이미 빠졌으면 그대로) — 다 빠지면 붙잡기도 풀린다(사건 null) */
+  private unhold(id: AgentId, entry: HoldEntry): void {
+    const h = this.holds.get(id);
+    const i = h ? h.entries.indexOf(entry) : -1;
+    if (!h || i < 0) return;
+    h.entries.splice(i, 1);
+    if (h.entries.length === 0) this.holds.delete(id);
+    this.emitHold(id);
+  }
+
+  private holdView(id: AgentId): Hold | null {
+    const h = this.holds.get(id);
+    return h ? { since: h.since, items: h.entries.map((e) => ({ ...e.item })) } : null;
+  }
+
+  private emitHold(id: AgentId): void {
+    this.guard(id, () => this.emit('hold', { agentId: id, hold: this.holdView(id) }));
   }
 
   /** 사용량 전용 claude — 데이터 폴더 안 빈 폴더에서, 에이전트와 같은 환경으로(start 는 UsageWatcher 가) */
@@ -1330,7 +1476,9 @@ class EngineImpl extends EventEmitter implements Engine {
       }
       await this.endSession(id); // 기다리던 입력·queued 메시지는 그대로 — /effort 는 보낸 줄로 치지 않아 되살릴 것이 없다
       if (this.closed || this.removing.has(id) || !this.store.agent(id)) return;
-      const waiting = (this.held.get(id)?.length ?? 0) > 0 || this.log.list({ to: id, states: ['queued'] }).length > 0;
+      // 붙잡힌 메시지는 기다리는 것으로 치지 않는다 — 이어서 보내기를 고르면 그때 띄운다
+      const waiting =
+        (this.held.get(id)?.length ?? 0) > 0 || (!this.holds.has(id) && this.log.list({ to: id, states: ['queued'] }).length > 0);
       // 그새 누가 띄웠으면 그 세션을 쓴다. 상태는 보내고 나서 한 번만 알린다(다시 띄우는 사이 대기로 깜박이지 않게)
       if (!this.sessions.has(id) && waiting) this.ensure(id, { quiet: true });
       else this.prewarm(id); // 기다리는 것이 없으면 고른 에이전트만 다시 미리 띄운다
@@ -2022,6 +2170,23 @@ function readsInput(ev: StreamEvent): boolean {
     ev.kind === 'api-status'
   ) return false;
   return !((ev.kind === 'assistant' || ev.kind === 'tool-result') && ev.parent);
+}
+
+/** 붙잡기 목록의 글 — 첫 줄(앞뒤 빈칸을 자르고 HOLD_TEXT_MAX 자까지, 코드 포인트로). 글이 없으면 '' */
+function firstLine(s: string): string {
+  const line = (s.trim().split(/\r?\n/, 1)[0] ?? '').trim();
+  return [...line].slice(0, HOLD_TEXT_MAX).join('');
+}
+
+/** 붙잡은 내 입력 — 글은 글 칸들을 이은 것의 첫 줄, 그림은 수만 */
+function humanItem(input: HeldInput): HoldItem {
+  const texts = input.parts.flatMap((p) => (p.type === 'text' ? [p.text] : []));
+  return { id: input.id, source: 'human', from: null, text: firstLine(texts.join('\n')), images: input.parts.length - texts.length };
+}
+
+/** 붙잡은 전달 대기 메시지 — id 는 메시지 id, 보낸 쪽은 보낸 에이전트 */
+function relayItem(m: RelayMessage): HoldItem {
+  return { id: m.id, source: 'relay', from: m.from, text: firstLine(m.text), images: 0 };
 }
 
 /** /effort 답에서 정해진 단계 — 모르는 말이면 null */

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createEngine, type Agent, type AgentStatus, type Engine, type EngineOptions, type HistoryItem, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
+import { createEngine, type Agent, type AgentStatus, type Engine, type EngineOptions, type HistoryItem, type Hold, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
 import { openMessageLog } from '../src/engine/messageLog';
 import { openStore } from '../src/engine/store';
 import { DENY } from '../src/shared/denyTexts';
@@ -307,6 +307,7 @@ test('일하는 중 사람이 또 입력하면 차례가 끝난 뒤 보낸다 �
   const delivery = '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n셋째';
   const third = resultTextIs(e, a.id, `받음: ${delivery}`);
   await e.interrupt(a.id);
+  e.resumeHold(a.id); // 멈추면 둘째·셋째가 붙잡힌다 — 이어서 보낸다
   await third;
   expect(aTexts()).toEqual(['SLOW', 'echo 둘째', delivery]);
   expect(e.status(a.id)).toBe('idle');
@@ -451,6 +452,7 @@ test('newConversation 때 남은 사람 입력은 새 대화로 보내고 idle �
   const delivery = '[두레 메시지 — 보낸 쪽: A(기획)]\n이어서';
   const last = resultTextIs(e, b.id, `받음: ${delivery}`);
   await e.interrupt(b.id);
+  e.resumeHold(b.id); // 멈추면 전달 대기 메시지가 붙잡힌다 — 이어서 보낸다
   await last;
   expect(e.status(b.id)).toBe('idle');
   // 첫 줄은 mute 프로세스가 받기만 한 기록
@@ -1229,6 +1231,8 @@ test('engine: 보내기 전 대기 중인 입력은 기록에 없고 보낼 때 
   expect(e.history(a.id).map((x) => x.kind)).toEqual(['user']);
   const second = waitFor(e, 'agent-event', (x: AgentEvent) => x.agentId === a.id && x.event.kind === 'result' && x.event.text === '받음: 나중');
   await e.interrupt(a.id);
+  expect(e.history(a.id).filter((x) => x.kind === 'user')).toHaveLength(1); // 붙잡힌 입력도 기록에 없다
+  e.resumeHold(a.id);
   await second;
   expect(e.history(a.id).filter((x) => x.kind === 'user').map((x: any) => x.parts[0].text)).toEqual(['SLOW', '나중']);
 });
@@ -1280,9 +1284,12 @@ test('heldInput: 작업 중 sendUser 두 번 → 2, 차례가 끝나며 1 → 0,
   expect(e.heldInput(a.id)).toBe(2);
   const done = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === a.id && x.event.kind === 'result' && x.event.text.includes('둘'));
   await e.interrupt(a.id);
+  expect(e.heldInput(a.id)).toBe(0); // 붙잡힌 것은 세지 않는다
+  e.resumeHold(a.id);
   await done;
   expect(e.heldInput(a.id)).toBe(0);
-  expect(counts).toEqual([1, 0, 1, 2, 1, 0]); // SLOW 는 넣자마자 나가고(1→0), 둘은 줄에 서고(1→2), 차례마다 하나씩(1→0)
+  // SLOW 는 넣자마자 나가고(1→0), 둘은 줄에 서고(1→2), 멈추면 붙잡혀 빠졌다가(0) 이어서 보내면 돌아와(2) 차례마다 하나씩(1→0)
+  expect(counts).toEqual([1, 0, 1, 2, 0, 2, 1, 0]);
 });
 
 test('flags(): init 전엔 bypass false, FAKE_PERMISSION_MODE=bypassPermissions 이면 init 뒤 true', async () => {
@@ -1480,6 +1487,7 @@ test('effort: 일하는 중에 고르면 그 차례의 result 뒤에, 기다리�
   const heard = waitFor(e, 'effort', (x: any) => x.effortNow === 'medium');
   const done = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === a.id && x.event.kind === 'result' && x.event.text.includes('둘'));
   await e.interrupt(a.id);
+  e.resumeHold(a.id); // 멈추면 둘이 붙잡힌다 — 이어서 보내도 /effort 가 먼저
   await done;
   await heard;
   expect(userTexts()).toEqual(['echo 하나', 'SLOW', '/effort medium', 'echo 둘']);
@@ -1783,7 +1791,7 @@ test('effort: 끄는 상한이 먼저 지나도(느린 강제 종료) shutdown �
   expect(isAlive(pid)).toBe(false);
 }, 20_000);
 
-test('effort: /effort 차례 중 멈추기 — 같은 프로세스에 이어 쓰지 않고 다시 띄워 /effort 부터 다시, 고른 effort 는 그대로', async () => {
+test('effort: /effort 차례 중 멈추기 — 기다리던 입력은 붙잡고 다시 띄운다, 이어서 보내면 /effort 부터 다시, 고른 effort 는 그대로', async () => {
   const e = await start({ FAKE_SLOW_EFFORT_MS: '600' }); // 멀쩡하지만 느린 시작('보냈다, 아차, 멈춤')
   const { b } = setup(e);
   const errs: unknown[] = [];
@@ -1794,6 +1802,9 @@ test('effort: /effort 차례 중 멈추기 — 같은 프로세스에 이어 쓰
   await until('/effort 를 씀', () => effortLines().length === 1);
   expect(e.status(b.id)).toBe('working');
   await e.interrupt(b.id);
+  expect(e.hold(b.id)!.items.map((i) => i.text)).toEqual(['echo 하나']);
+  expect(e.status(b.id)).toBe('idle');
+  e.resumeHold(b.id);
   expect(await resultText(done)).toBe('받음: echo 하나');
   expect(linesByProcess('B')).toEqual([['/effort max'], ['/effort max', 'echo 하나']]);
   expect(e.effortNow(b.id)).toBe('max'); // 화면이 기본값으로 돌아가지 않는다
@@ -2159,6 +2170,7 @@ test('bypass: 옵션 없이 떠 있던 세션에서 켜면 다시 띄워(--resum
   const on = waitFor<FlagsEvent>(e, 'flags', (f) => f.agentId === b.id && f.bypass);
   const done = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === b.id && x.event.kind === 'result' && x.event.text.includes('둘'));
   await e.interrupt(b.id);
+  e.resumeHold(b.id); // 멈추면 둘이 붙잡힌다 — 이어서 보낸다
   expect(await resultText(done)).toBe('받음: echo 둘');
   expect(await on).toEqual({ agentId: b.id, bypass: true, bySettings: false, pending: false });
   expect(spawnsOf('B')).toHaveLength(2);
@@ -3059,6 +3071,218 @@ test('plan: 계획 모드로 바꾸지 못하면 알리고 그 차례를 멈춘�
   expect(noticesOf(e, a.id)).toEqual([PLAN_ON_FAILED_STOPPED_NOTICE]);
 });
 
+// ── 붙잡기(멈추면 기다리던 내 입력·전달 대기 메시지를 사람이 고를 때까지 보내지 않는다) ──
+interface HoldEvent {
+  agentId: string;
+  hold: Hold | null;
+}
+const holdEvents = (e: Engine, id: string) => {
+  const got: (Hold | null)[] = [];
+  e.on('hold', (h: HoldEvent) => h.agentId === id && got.push(h.hold));
+  return got;
+};
+/** SLOW 차례를 열고 init 까지 — interrupt 가 올 때까지 일하는 중 */
+async function slowTurn(e: Engine, id: string): Promise<void> {
+  const init = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === id && x.event.kind === 'init');
+  await e.sendUser(id, text('SLOW'));
+  await init;
+}
+/** b 가 a 에게 보낸 메시지 — a 가 바쁘면 queued 로 남는다 */
+async function relayTo(e: Engine, b: string, line: string): Promise<void> {
+  const bDone = resultOf(e, b);
+  await e.sendUser(b, text(line));
+  expect(await resultText(bDone)).toBe('A 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+}
+const textsToA = () => userTexts().filter((t) => !t.startsWith('SEND A:'));
+
+test('hold: 일하는 중에 더 친 말이 있을 때 멈추면 붙잡고, 그 차례가 끝나도 보내지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await slowTurn(e, a.id);
+  await e.sendUser(a.id, text('둘째'));
+  expect(e.heldInput(a.id)).toBe(1);
+  const got = holdEvents(e, a.id);
+  const held: number[] = [];
+  e.on('held-input', (h: { agentId: string; count: number }) => h.agentId === a.id && held.push(h.count));
+  const done = resultOf(e, a.id);
+  await e.interrupt(a.id);
+  const h = e.hold(a.id)!;
+  expect(h.items).toEqual([{ id: expect.any(String), source: 'human', from: null, text: '둘째', images: 0 }]);
+  expect(h.since).toBeGreaterThan(0);
+  expect(e.heldInput(a.id)).toBe(0); // 붙잡힌 것은 기다리는 입력 수에 들지 않는다
+  expect(held).toEqual([0]);
+  expect(got).toEqual([h]);
+  expect(await resultText(done)).toBe('interrupted');
+  // 그 차례의 result 에서 다음 입력을 보냈다면 이미 작업 중이다
+  expect(e.status(a.id)).toBe('idle');
+  expect(userTexts()).not.toContain('둘째');
+  expect(e.hold(a.id)).toEqual(h);
+});
+
+test('hold: 기다리는 것이 없으면 붙잡지 않는다', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  const got = holdEvents(e, a.id);
+  await slowTurn(e, a.id);
+  const done = resultOf(e, a.id);
+  await e.interrupt(a.id);
+  await done;
+  await e.interrupt(b.id); // 세션 없는 에이전트도
+  expect(e.hold(a.id)).toBeNull();
+  expect(e.hold(b.id)).toBeNull();
+  expect(got).toEqual([]);
+});
+
+test('hold: 전달 대기 메시지도 붙잡고 보낸 쪽을 적는다', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  e.updateAgent(a.id, { auto: true });
+  await slowTurn(e, a.id);
+  await relayTo(e, b.id, 'SEND A: 셋째\n둘째 줄');
+  const [m] = e.messages({ to: a.id });
+  expect(m.state).toBe('queued');
+  const done = resultOf(e, a.id);
+  await e.interrupt(a.id);
+  expect(e.hold(a.id)!.items).toEqual([{ id: m.id, source: 'relay', from: b.id, text: '셋째', images: 0 }]);
+  await done;
+  expect(e.status(a.id)).toBe('idle');
+  expect(e.messages({ to: a.id }).map((x) => x.state)).toEqual(['queued']);
+  expect(textsToA()).toEqual(['SLOW']);
+});
+
+test('hold: 이어서 보내기 = 내 입력 먼저 그다음 메시지, 붙잡기 풀림', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  e.updateAgent(a.id, { auto: true });
+  await slowTurn(e, a.id);
+  await e.sendUser(a.id, text('echo 둘째'));
+  await relayTo(e, b.id, 'SEND A: 셋째');
+  const done = resultOf(e, a.id);
+  await e.interrupt(a.id);
+  expect(e.hold(a.id)!.items.map((i) => i.source)).toEqual(['human', 'relay']);
+  await done;
+  const got = holdEvents(e, a.id);
+  const delivery = '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n셋째';
+  const third = resultTextIs(e, a.id, `받음: ${delivery}`);
+  e.resumeHold(a.id);
+  expect(e.hold(a.id)).toBeNull();
+  expect(got).toEqual([null]);
+  await third;
+  expect(textsToA()).toEqual(['SLOW', 'echo 둘째', delivery]);
+  expect(e.messages({ to: a.id }).map((x) => x.state)).toEqual(['delivered']);
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('hold: 계획 먼저로 친 입력은 이어서 보내도 계획 모드로 나간다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await slowTurn(e, a.id);
+  await e.sendUser(a.id, text('PLAN 헤더'), { plan: true });
+  const done = resultOf(e, a.id);
+  await e.interrupt(a.id);
+  await done;
+  const req = planRequest(e, a.id);
+  e.resumeHold(a.id);
+  await req;
+  expect(e.planMode(a.id)).toBe(true);
+  expect(modeLines('A')).toEqual([['SLOW', 'mode:plan', 'PLAN 헤더']]);
+});
+
+test('hold: 빼기·모두 버리기 — 내 입력은 버리고 메시지는 dismissed, 다 빠지면 풀림', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  e.updateAgent(a.id, { auto: true });
+  const holdUp = async (mine: string, msg: string) => {
+    await slowTurn(e, a.id);
+    await e.sendUser(a.id, text(mine));
+    await relayTo(e, b.id, `SEND A: ${msg}`);
+    const done = resultOf(e, a.id);
+    await e.interrupt(a.id);
+    await done;
+    return e.hold(a.id)!.items;
+  };
+  const got = holdEvents(e, a.id);
+  const [mine, msg] = await holdUp('echo 둘째', '셋째');
+  expect([mine.source, msg.source]).toEqual(['human', 'relay']);
+  e.dropHoldItem(a.id, mine.id);
+  expect(e.hold(a.id)!.items).toEqual([msg]);
+  expect(e.heldInput(a.id)).toBe(0);
+  e.dropHoldItem(a.id, msg.id);
+  expect(e.hold(a.id)).toBeNull();
+  expect(got.map((h) => h?.items.length ?? null)).toEqual([2, 1, null]);
+  expect(e.messages({ to: a.id }).map((x) => x.state)).toEqual(['dismissed']);
+
+  expect(await holdUp('echo 넷째', '다섯째')).toHaveLength(2);
+  got.length = 0;
+  e.dropHold(a.id);
+  expect(e.hold(a.id)).toBeNull();
+  expect(got).toEqual([null]);
+  expect(e.messages({ to: a.id }).map((x) => x.state)).toEqual(['dismissed', 'dismissed']);
+  // 버린 것은 나가지 않는다 — 다음 차례는 새로 친 말 하나
+  const next = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 여섯째'));
+  expect(await resultText(next)).toBe('받음: echo 여섯째');
+  expect(textsToA()).toEqual(['SLOW', 'SLOW', 'echo 여섯째']);
+});
+
+test('hold: 붙잡힌 동안 새로 친 말은 바로 나가고 목록은 그대로', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await slowTurn(e, a.id);
+  await e.sendUser(a.id, text('둘째'));
+  const done = resultOf(e, a.id);
+  await e.interrupt(a.id);
+  await done;
+  const before = e.hold(a.id);
+  const next = resultOf(e, a.id);
+  await e.sendUser(a.id, text('새 말'));
+  expect(await resultText(next)).toBe('받음: 새 말');
+  expect(e.hold(a.id)).toEqual(before);
+  expect(userTexts()).toEqual(['SLOW', '새 말']);
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('hold: 붙잡힌 동안 새로 전달 대기가 된 메시지는 목록 끝에', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  e.updateAgent(a.id, { auto: true });
+  await slowTurn(e, a.id);
+  await e.sendUser(a.id, text('둘째'));
+  const done = resultOf(e, a.id);
+  await e.interrupt(a.id);
+  await done;
+  expect(e.hold(a.id)!.items).toHaveLength(1);
+  const got = holdEvents(e, a.id);
+  await relayTo(e, b.id, 'SEND A: 셋째'); // a 는 쉬지만 붙잡혀 있다 — 전달 쪽에선 바쁨
+  const [m] = e.messages({ to: a.id });
+  const items = e.hold(a.id)!.items;
+  expect(items).toHaveLength(2);
+  expect(items[1]).toEqual({ id: m.id, source: 'relay', from: b.id, text: '셋째', images: 0 });
+  expect(got).toHaveLength(1);
+  expect(m.state).toBe('queued');
+  expect(textsToA()).toEqual(['SLOW']);
+});
+
+test('hold: 목록의 글은 첫 줄(200자까지) · 그림은 수만 · 에이전트를 지우면 같이 지운다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const png = Buffer.alloc(10, 1).toString('base64');
+  await slowTurn(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: `\n  ${'가'.repeat(250)}\n둘째 줄` }, { type: 'image', mediaType: 'image/png', base64: png }]);
+  await e.sendUser(a.id, [{ type: 'image', mediaType: 'image/png', base64: png }, { type: 'image', mediaType: 'image/png', base64: png }]);
+  const done = resultOf(e, a.id);
+  await e.interrupt(a.id);
+  await done;
+  expect(e.hold(a.id)!.items.map(({ text: t, images }) => ({ t, images }))).toEqual([
+    { t: '가'.repeat(200), images: 1 },
+    { t: '', images: 2 },
+  ]);
+  const got = holdEvents(e, a.id);
+  await e.removeAgent(a.id);
+  expect(got).toEqual([null]);
+  expect(() => e.hold(a.id)).toThrow('에이전트를 찾을 수 없습니다');
+});
+
 // ── 서브에이전트 ──
 // 가짜 claude 의 SUB(뒤에서 도는)·SUBFG(앞에서 도는) — 서브에이전트 줄엔 parent_tool_use_id, 시작·끝은 task_started·task_notification(probe13·14)
 interface SubagentsEvent {
@@ -3618,6 +3842,7 @@ test('subagent: 다시 띄워야 하는 세션도 서브에이전트가 도는 �
   const on = waitFor<FlagsEvent>(e, 'flags', (f) => f.agentId === a.id && f.bypass);
   const done = resultTextIs(e, a.id, '받음: echo 둘');
   await e.interrupt(a.id); // 멈춘 서브에이전트 뒤엔 스스로 시작한 차례가 오지 않는다(probe14 C) — 기다림(50 ms) 뒤 다시 띄운다
+  e.resumeHold(a.id); // 멈추면 둘이 붙잡힌다 — 이어서 보낸다
   await done;
   expect(await on).toEqual({ agentId: a.id, bypass: true, bySettings: false, pending: false });
   expect(spawnsOf('A')).toHaveLength(2);

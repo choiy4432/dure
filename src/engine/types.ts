@@ -164,6 +164,26 @@ export interface PendingRequest {
   fromSubagent?: true;
 }
 
+/**
+ * 붙잡은 것 하나 — id: 내 입력이면 엔진이 붙인 id, 메시지면 메시지 id · from: 메시지를 보낸 에이전트(내 입력이면 null) ·
+ * text: 글의 첫 줄(200자까지, 글이 없으면 '') · images: 그림 수(그림 자체는 싣지 않는다)
+ */
+export interface HoldItem {
+  id: string;
+  source: 'human' | 'relay';
+  from: AgentId | null;
+  text: string;
+  images: number;
+}
+/**
+ * 붙잡기 — 멈출 때 그 에이전트에게 기다리던 내 입력·전달 대기(queued) 메시지. 사람이 고를 때까지(이어서 보내기·빼기·모두 버리기) 나가지 않는다.
+ * since: 붙잡은 시각 · items: 내 입력, 그다음 메시지(붙잡힌 동안 전달 대기가 된 메시지는 끝에)
+ */
+export interface Hold {
+  since: number;
+  items: HoldItem[];
+}
+
 export interface EngineEventMap {
   'agent-event': { agentId: AgentId; event: StreamEvent; viaApproval?: boolean };
   status: { agentId: AgentId; status: AgentStatus; errorText: string | null };
@@ -183,6 +203,8 @@ export interface EngineEventMap {
   'engine-error': { agentId: string | null; message: string };
   history: { agentId: AgentId; item: HistoryItem };
   'held-input': { agentId: AgentId; count: number };
+  /** 붙잡기가 바뀔 때마다(붙잡음 · 항목이 붙거나 빠짐) — 풀리면(이어서 보내기·다 빠짐·에이전트 지움) null */
+  hold: { agentId: AgentId; hold: Hold | null };
   usage: PlanUsage | null;
   context: { agentId: AgentId; value: ContextUsage | null };
   effort: { agentId: AgentId; effort: EffortLevel | null; effortNow: EffortLevel | null };
