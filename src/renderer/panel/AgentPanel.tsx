@@ -12,6 +12,7 @@ import { PermissionCard } from './cards/PermissionCard'
 import { PlanCard } from './cards/PlanCard'
 import { CreateAgentCard } from './cards/CreateAgentCard'
 import { QuestionCard } from './cards/QuestionCard'
+import { HoldCard } from './cards/HoldCard'
 import { HeldChainCard } from './cards/HeldChainCard'
 import { PresenceList } from '../lib/presence'
 import { ChatList } from './ChatList'
@@ -80,6 +81,7 @@ function Pins({ agentId, open, onOpenChange }: {
   if (!agent) return <div className="pnl-pins" />
 
   const nameOf = (id: AgentId) => v.agents.find(a => a.id === id)?.name ?? '지워진 에이전트'
+  const holdName = (id: AgentId) => v.agents.find(a => a.id === id)?.name ?? null
   const requests = v.requests.filter(r => r.agentId === agentId).sort(byCreated)
   const inbox = v.messages.filter(m => m.to === agentId && isWaiting(m)).sort(byCreated) as Shown[]
   const held = v.messages.some(m => m.roomId === agent.roomId && m.state === 'held')
@@ -111,6 +113,7 @@ function Pins({ agentId, open, onOpenChange }: {
             <PermissionCard key={r.id} request={r} agent={agent} now={now} />
           ),
         )}
+        {agent.hold && <HoldCard key="hold" agent={agent} hold={agent.hold} nameOf={holdName} now={now} />}
         {inbox.map(card)}
         {held && <HeldChainCard key="held" roomId={agent.roomId} limit={v.limit} />}
         {delivered && card(delivered)}

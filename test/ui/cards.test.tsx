@@ -36,7 +36,7 @@ const QUESTIONS = {
 
 let snapshot: Snapshot
 let handlers: Record<string, ((p: any) => void)[]>
-let api: Record<'approveMessage' | 'dismissMessage' | 'continueHeld' | 'answerRequest' | 'interrupt', ReturnType<typeof vi.fn>>
+let api: Record<'approveMessage' | 'dismissMessage' | 'continueHeld' | 'answerRequest' | 'interrupt' | 'resumeHold' | 'dropHoldItem' | 'dropHold', ReturnType<typeof vi.fn>>
 
 const emit = <K extends keyof EngineEventMap>(k: K, p: EngineEventMap[K]) => act(() => (handlers[k] ?? []).forEach(f => f(p)))
 
@@ -61,6 +61,9 @@ beforeEach(() => {
     continueHeld: vi.fn(async (_roomId: string) => {}),
     answerRequest: vi.fn(async (_id: string, _d: Decision) => {}),
     interrupt: vi.fn(async (_id: string) => {}),
+    resumeHold: vi.fn(async (_id: string) => {}),
+    dropHoldItem: vi.fn(async (_id: string, _itemId: string) => {}),
+    dropHold: vi.fn(async (_id: string) => {}),
   }
   ;(window as any).dure = {
     ...api,
@@ -641,5 +644,60 @@ describe('계획 카드', () => {
     await renderPanel('p')
     fireEvent.click(within(card(TITLE)).getByRole('button', { name: '그만' }))
     expect(api.interrupt).toHaveBeenCalledWith('p')
+  })
+})
+
+describe('붙잡기 카드', () => {
+  const HOLD = {
+    since: Date.now() - 2 * MIN,
+    items: [
+      { id: 'h1', source: 'human' as const, from: null, text: '헤더도 같이 줄여 줘', images: 0 },
+      { id: 'h2', source: 'relay' as const, from: 'd', text: 'API 응답 확인 부탁해요', images: 0 },
+      { id: 'h3', source: 'human' as const, from: null, text: '', images: 2 },
+      { id: 'h4', source: 'relay' as const, from: 'gone', text: '이름 모를 쪽', images: 0 },
+    ],
+  }
+  const TITLE = '멈췄어요 · 기다리는 입력 4개'
+
+  it('붙잡기 카드 — 제목·보낸 쪽·글·그림만이면 그림 N장', async () => {
+    snapshot.agents[0] = agent('p', { name: '기획', role: '기획서 · 문구', hold: HOLD })
+    await renderPanel('p')
+    const c = card(TITLE)
+    expect(c.querySelector('.ask-t')!.textContent).toBe(TITLE)
+    expect(c.querySelector('.pin-t')!.textContent).toBe('2분 전')
+    const rows = Array.from(c.querySelectorAll('.hd-row'))
+    expect(rows).toHaveLength(4)
+    expect(rows[0].querySelector('.hd-from')!.textContent).toBe('나')
+    expect(rows[0].querySelector('.hd-text')!.textContent).toBe('헤더도 같이 줄여 줘')
+    expect(rows[1].querySelector('.hd-from')!.textContent).toBe('디자인에게서')
+    expect(rows[2].querySelector('.hd-text')!.textContent).toBe('그림 2장')
+    expect(rows[3].querySelector('.hd-from')!.textContent).toBe('다른 에이전트에게서')
+  })
+
+  it('빼기·이어서 보내기·모두 버리기가 엔진을 부른다', async () => {
+    snapshot.agents[0] = agent('p', { name: '기획', role: '기획서 · 문구', hold: HOLD })
+    await renderPanel('p')
+    const c = card(TITLE)
+    await act(async () => { fireEvent.click(within(c).getAllByRole('button', { name: '빼기' })[1]) })
+    expect(api.dropHoldItem).toHaveBeenCalledWith('p', 'h2')
+    await act(async () => { fireEvent.click(within(c).getByRole('button', { name: '이어서 보내기' })) })
+    expect(api.resumeHold).toHaveBeenCalledWith('p')
+    // 이어서 보내기는 성공하면 막은 채로 둔다(카드가 곧 치워진다) — 모두 버리기는 새로 그려서
+    cleanup()
+    await renderPanel('p')
+    await act(async () => { fireEvent.click(within(card(TITLE)).getByRole('button', { name: '모두 버리기' })) })
+    expect(api.dropHold).toHaveBeenCalledWith('p')
+  })
+
+  it('hold 가 있으면 패널 위에 붙잡기 카드, 없으면 없다', async () => {
+    snapshot.agents[0] = agent('p', { name: '기획', role: '기획서 · 문구', hold: HOLD })
+    snapshot.requests = [request({ id: 'q9', agentId: 'p' })]
+    const { store } = await renderPanel('p')
+    const first = pins()
+    expect(first).toHaveLength(2)
+    expect(first[1].getAttribute('aria-label')).toBe(TITLE) // 요청 카드 다음
+    emit('hold', { agentId: 'p', hold: null })
+    expect(screen.queryByRole('region', { name: TITLE })).toBeNull()
+    expect(store).toBeTruthy()
   })
 })
