@@ -106,7 +106,7 @@ export type StreamEvent =
   | { kind: 'thinking'; active: boolean; tokens: number | null }
   // 차례 안의 API 상태(system/status) — requesting = 모델에 요청을 보냈다(첫 내용 전) · compacting = 대화를 요약하는 중 · null = 그 상태가 끝났다.
   // 서브에이전트의 것은 쓰지 않는다. 기록하지 않는다
-  | { kind: 'api-status'; status: ApiStatus }
+  | { kind: 'api-status'; status: ApiStatus; permissionMode?: string }
   | { kind: 'assistant'; blocks: AssistantBlock[]; parent?: string } // thinking 블록은 버린다. parent = 서브에이전트 줄이면 부모의 Agent tool_use id
   // patch = user 줄 최상위 tool_use_result.structuredPatch(Claude Code 가 고친 일 결과에 싣는다) — 모양이 다르면 없음
   | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; parent?: string; patch?: DiffHunk[] }
@@ -157,8 +157,9 @@ export interface PendingRequest {
   /** create-agent 면 CreateAgentInput */
   input: unknown;
   toolUseId?: string;
+  /** plan = ExitPlanMode — 계획을 보고 진행(allow)이나 고쳐 달라고 하기(deny + 의견)로만 답한다 */
   /** create-agent = 에이전트가 두레 도구 create_agent 로 새 에이전트를 만들려 한다 — allow·deny 로만 답한다 */
-  kind: 'permission' | 'question' | 'create-agent';
+  kind: 'permission' | 'question' | 'create-agent' | 'plan';
   createdAt: number;
   /** 서브에이전트가 물은 것(tool_use id 로 가른다) — 부모 차례가 끝나도 도는 동안 남는다. 부모 것엔 칸이 없다 */
   fromSubagent?: true;

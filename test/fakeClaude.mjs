@@ -5,6 +5,10 @@
 //   CRASH               init 뒤 stderr 에 'fake crash' 를 쓰고 죽는다(exit 3)
 //   SEND <이름>: <글>   mcp__dure__send_message 를 부르고 받은 글로 끝낸다
 //   ASK <도구>          MCP approve 로 묻고 답대로 tool_result
+//   PLAN <제목>         지금 모드가 plan 일 때(set_permission_mode) — ExitPlanMode tool_use(입력 {plan:'# <제목>\n1. 첫 단계\n2. 둘째 단계\n', planFilePath}) +
+//                       MCP approve(probe16). 허용이면 모드 default + status 줄 + tool_result "User has approved your plan." → result.
+//                       거절이면 tool_result(거절 글, is_error) 뒤 같은 차례에서 첫 줄을 '# <제목> (고침: <거절 글>)' 로 바꿔 다시 ExitPlanMode(최대 3번,
+//                       넘으면 result). 모드가 plan 이 아니면 보통 글("받음")로 답한다
 //   /effort · /compact  로컬 명령(아래)
 //   SUB <설명>          서브에이전트를 뒤에서 띄운다(probe13) — Agent tool_use(id toolu_<n>) → task_started(task_<n>, is_backgrounded:true,
 //                       task_type:'local_agent', spawn_depth:1) → 부모 tool_result "Async agent launched successfully. …" → 글 "LAUNCHED" → result.
@@ -52,6 +56,8 @@
 //   FAKE_INTERRUPT_SPARES_TASKS=1  interrupt 가 진행 중인 차례만 끝내고 서브에이전트는 그대로 둔다 — 앞에서 돌던 서브에이전트의
 //                          끝 알림이 그 차례의 result 뒤(쉬는 중)에 온다(부모 tool_result·스스로 시작한 차례 없이)
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import readline from 'node:readline';
 
 const argv = process.argv.slice(2);
@@ -123,6 +129,8 @@ const assistant = (content, extra = {}) => emit({ type: 'assistant', message: { 
 const toolResult = (id, text, isError = false, extra = {}) =>
   emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, is_error: isError, content: text }] }, ...extra });
 const system = (subtype, fields) => emit({ type: 'system', subtype, session_id: sessionId, ...fields });
+/** 모드 바뀜 줄 — 진짜(probe16): system/status, status null, permissionMode 새 모드 */
+const modeStatus = () => system('status', { status: null, permissionMode });
 
 async function rpc(method, params, id, sid) {
   const res = await fetch(mcp.url, {
@@ -539,6 +547,41 @@ async function turn(text) {
     await finish(reply.text);
     return;
   }
+  const plan = /^PLAN ([\s\S]+)$/.exec(text);
+  if (plan && permissionMode === 'plan') {
+    const title = plan[1];
+    const planFilePath = path.join(os.tmpdir(), 'plan.md');
+    let line = `# ${title}`;
+    for (let n = 0; n < 3; n++) {
+      const id = `toolu_${++sequence}`;
+      const input = { plan: `${line}\n1. 첫 단계\n2. 둘째 단계\n`, planFilePath };
+      await assistant([{ type: 'tool_use', id, name: 'ExitPlanMode', input }]);
+      let reply;
+      try {
+        if (!mcp) throw new Error('dure MCP 서버가 설정에 없습니다');
+        reply = (await callTool('approve', { tool_name: 'ExitPlanMode', input, tool_use_id: id }, id)).text;
+      } catch (e) {
+        if (tok.ended) return;
+        await toolResult(id, `MCP 호출 실패: ${e.message}`, true);
+        await finish('error', { is_error: true, subtype: 'error_during_execution' });
+        return;
+      }
+      if (tok.ended) return; // 중단된 차례의 늦은 응답
+      const verdict = verdictOf(reply);
+      if (verdict.behavior === 'allow') {
+        permissionMode = 'default'; // 허용하면 스스로 기본 모드로 돌아간다(probe16)
+        await modeStatus();
+        await toolResult(id, 'User has approved your plan.');
+        await finish('approved');
+        return;
+      }
+      const msg = verdict.message ?? 'denied';
+      await toolResult(id, msg, true);
+      line = `# ${title} (고침: ${msg})`; // 계획 모드 그대로 고쳐 다시 부른다
+    }
+    await finish('plan not approved');
+    return;
+  }
   const send = /^SEND ([^:]+): ([\s\S]*)$/.exec(text);
   const ask = /^ASK (\S+)/.exec(text);
   if (send || ask) {
@@ -660,7 +703,10 @@ async function control(msg) {
           { error_code: 'bypass_not_launched' },
         );
       }
+      const before = permissionMode;
       permissionMode = mode === 'manual' ? 'default' : mode;
+      // 진짜(probe16)처럼 모드가 바뀌면 곧바로 status 줄 — 응답보다 앞
+      if (permissionMode !== before) void modeStatus();
       return ok({ mode: permissionMode });
     };
     const late = Number(process.env.FAKE_SET_MODE_LATE_MS ?? 0);

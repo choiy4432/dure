@@ -282,3 +282,17 @@ test('create-agent: deny 기본 글은 새 에이전트 만들기를 거절했�
   expect(await p4).toEqual({ behavior: 'deny', message: 'Claude 가 종료되었습니다.' });
   expect(perms.pending()).toEqual([]);
 });
+
+test('ExitPlanMode 는 plan 종류 — 허용·거절만, 늘 묻는다', async () => {
+  store.updateAgent(a1, { alwaysAllow: ['ExitPlanMode'] });
+  expect(perms.allowsAlways(a1, 'ExitPlanMode')).toBe(false);
+  const input = { plan: '# 계획\n1. 하나\n', planFilePath: '/tmp/plan.md' };
+  const p = perms.request(a1, { tool_name: 'ExitPlanMode', input, tool_use_id: 'p1' });
+  const id = lastPending().id;
+  expect(lastPending().kind).toBe('plan');
+  expect(() => perms.answer(id, { type: 'allow-always' })).toThrow('계획에는 진행이나 고쳐 달라고 하기로만 답할 수 있습니다.');
+  expect(() => perms.answer(id, { type: 'answer', answers: {} })).toThrow('계획에는 진행이나 고쳐 달라고 하기로만 답할 수 있습니다.');
+  expect(perms.pending()).toHaveLength(1);
+  perms.answer(id, { type: 'allow' });
+  expect(await p).toEqual({ behavior: 'allow', updatedInput: input });
+});

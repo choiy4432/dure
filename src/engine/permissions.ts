@@ -9,6 +9,8 @@ import { DENY } from '../shared/denyTexts';
 export const DENY_DEFAULT: string = DENY.userDenied;
 const CANCELLED: string = DENY.requestCancelled; // 부른 쪽이 끊겨 Claude 에겐 닿지 않는다
 const QUESTION_TOOL = 'AskUserQuestion';
+const PLAN_TOOL = 'ExitPlanMode';
+const PLAN_ONLY_ALLOW_DENY = '계획에는 진행이나 고쳐 달라고 하기로만 답할 수 있습니다.';
 const CREATE_ONLY_ALLOW_DENY = '새 에이전트 만들기에는 allow 나 deny 로만 답할 수 있습니다.';
 
 interface Entry {
@@ -49,7 +51,7 @@ export class Permissions extends EventEmitter {
       toolName: args.tool_name,
       input: args.input,
       toolUseId: args.tool_use_id,
-      kind: create ? 'create-agent' : isQuestion ? 'question' : 'permission',
+      kind: create ? 'create-agent' : isQuestion ? 'question' : args.tool_name === PLAN_TOOL ? 'plan' : 'permission',
       createdAt: Date.now(),
       ...(o.fromSubagent ? { fromSubagent: true as const } : {}),
     };
@@ -78,7 +80,7 @@ export class Permissions extends EventEmitter {
 
   /** 묻지 않고 허용할 도구인가 — 그 에이전트가 늘 허용한 도구(질문은 늘 묻는다). 엔진은 부른 쪽을 가르기 전에 본다 */
   allowsAlways(agentId: AgentId, toolName: string): boolean {
-    return toolName !== QUESTION_TOOL && !!this.store.agent(agentId)?.alwaysAllow.includes(toolName);
+    return toolName !== QUESTION_TOOL && toolName !== PLAN_TOOL && !!this.store.agent(agentId)?.alwaysAllow.includes(toolName);
   }
 
   answer(requestId: string, d: Decision): void {
@@ -87,6 +89,8 @@ export class Permissions extends EventEmitter {
     const { req } = entry;
     // 새 에이전트 만들기는 매번 사람이 정한다 — 늘 허용(allow-always)이 없다
     if (req.kind === 'create-agent' && d.type !== 'allow' && d.type !== 'deny') throw new Error(CREATE_ONLY_ALLOW_DENY);
+    // 계획도 allow·deny 로만 — 늘 허용 없이 매번 사람이 본다
+    if (req.kind === 'plan' && d.type !== 'allow' && d.type !== 'deny') throw new Error(PLAN_ONLY_ALLOW_DENY);
     if (d.type === 'answer' && req.kind !== 'question') throw new Error('권한 요청에는 answer 로 답할 수 없습니다.');
     if ((d.type === 'allow' || d.type === 'allow-always') && req.kind === 'question') {
       throw new Error('되묻기에는 allow 로 답할 수 없습니다.');

@@ -113,7 +113,10 @@ function parseObject(obj: any): StreamEvent {
       // 요청 보냄·요약 중·끝(null) — 모르는 값은 버린다(다음 CLI 가 상태를 늘려도 엉뚱한 단계를 보이지 않게)
       if (obj.subtype === 'status' && !parentOf(obj).parent) {
         const st = obj.status;
-        return st === 'requesting' || st === 'compacting' || st === null ? { kind: 'api-status', status: st } : ignored('system/status');
+        // 모드가 바뀌면 status null 줄에 permissionMode 가 실려 온다(probe16) — 모르는 status 여도 모드는 버리지 않는다
+        const mode = typeof obj.permissionMode === 'string' ? { permissionMode: obj.permissionMode } : {};
+        if (st === 'requesting' || st === 'compacting' || st === null) return { kind: 'api-status', status: st, ...mode };
+        return 'permissionMode' in mode ? { kind: 'api-status', status: null, ...mode } : ignored('system/status');
       }
       if (obj.subtype === 'task_started') {
         // task_type 이 없으면 서브에이전트로 친다. 그 밖(local_bash 등)은 무시

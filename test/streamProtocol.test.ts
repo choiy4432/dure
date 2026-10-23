@@ -214,6 +214,12 @@ describe('parseLine — API 상태(system/status)', () => {
     expect(parseLine(status(null))).toEqual({ kind: 'api-status', status: null });
   });
 
+  test('status 줄의 permissionMode 를 싣는다 — 모르는 status 여도 모드는 남긴다', () => {
+    expect(parseLine(status(null, { permissionMode: 'plan' }))).toEqual({ kind: 'api-status', status: null, permissionMode: 'plan' });
+    expect(parseLine(status('weird', { permissionMode: 'default' }))).toEqual({ kind: 'api-status', status: null, permissionMode: 'default' });
+    expect(parseLine(status('requesting'))).toEqual({ kind: 'api-status', status: 'requesting' });
+  });
+
   test('모르는 값·없는 값 → ignored(다음 CLI 가 상태를 늘려도 엉뚱한 단계를 보이지 않게)', () => {
     expect(parseLine(status('uploading'))).toEqual({ kind: 'ignored', type: 'system/status' });
     expect(parseLine('{"type":"system","subtype":"status"}')).toEqual({ kind: 'ignored', type: 'system/status' });
