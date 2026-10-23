@@ -3636,6 +3636,12 @@ code {
   transform: translateX(-50%);
 }
 
+/* 메뉴 줄 오른쪽 수 */
+.mi-n {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* 확인 대화상자 */
 .dlg-bd {
   position: fixed;
@@ -3683,6 +3689,65 @@ code {
   font-size: 12px;
   line-height: 18px;
   color: var(--danger-text);
+}
+
+/* 항상 허용한 일 목록 */
+.aa-bypass {
+  color: var(--text);
+}
+
+.aa-list {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.aa-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.aa-row:first-child {
+  border-top: 0;
+}
+
+.aa-noun {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.aa-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.aa-empty {
+  margin-top: 14px;
+  padding: 16px 0 4px;
+  text-align: center;
+}
+
+.aa-empty-t {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.aa-empty-d {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .dlg-ab {

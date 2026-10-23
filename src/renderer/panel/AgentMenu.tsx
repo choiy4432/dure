@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Ref } from 'react'
-import { Ellipsis, FolderOpen, MessageSquarePlus, Pencil, Trash2 } from 'lucide-react'
-import type { AgentId } from '../../engine/types'
+import { Ellipsis, FolderOpen, MessageSquarePlus, ShieldCheck, Pencil, Trash2 } from 'lucide-react'
+import type { AgentView } from '../../shared/ipcContract'
 import { getStore } from '../state/store'
 import { errorMessage, josa, RENEW_CONFIRM } from '../lib/words'
 import { moveMenuFocus, useDismiss } from '../lib/popover'
 import { MotionDiv, Presence } from '../lib/presence'
 import { MOTION } from '../lib/motion'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
+import { AlwaysAllowDialog } from './AlwaysAllowDialog'
 
 interface Props {
-  agent: { id: AgentId; name: string; folder: string }
+  agent: AgentView
   /** '이름·역할 바꾸기' — 머리가 같은 자리에 입력칸을 연다 */
   onEdit: () => void
   /** 폴더 열기 등이 실패했을 때 엔진 문구 */
@@ -18,9 +19,9 @@ interface Props {
   buttonRef?: Ref<HTMLButtonElement>
 }
 
-type Ask = 'renew' | 'remove' | null
+type Ask = 'renew' | 'remove' | 'always' | null
 
-/** 패널 머리의 … 메뉴 — 이름·역할 바꾸기 · 새 대화 · 폴더 열기 · 지우기 */
+/** 패널 머리의 … 메뉴 — 이름·역할 바꾸기 · 새 대화 · 폴더 열기 · 항상 허용한 일 · 지우기 */
 export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
   const [open, setOpen] = useState(false)
   const [ask, setAsk] = useState<Ask>(null)
@@ -106,6 +107,11 @@ export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
             <FolderOpen className="i" aria-hidden="true" />
             폴더 열기
           </button>
+          <button type="button" role="menuitem" className="mi" onClick={choose(() => setAsk('always'))}>
+            <ShieldCheck className="i" aria-hidden="true" />
+            <span className="mi-tx">항상 허용한 일</span>
+            {agent.alwaysAllow.length > 0 && <span className="mi-n">{agent.alwaysAllow.length}</span>}
+          </button>
           <div className="pop-sep" role="separator" />
           <button type="button" role="menuitem" className="mi dng-t" onClick={choose(() => setAsk('remove'))}>
             <Trash2 className="i" aria-hidden="true" />
@@ -129,6 +135,7 @@ export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
         onConfirm={remove}
         onCancel={() => setAsk(null)}
       />
+      <AlwaysAllowDialog open={ask === 'always'} agent={agent} onClose={() => setAsk(null)} />
     </span>
   )
 }
