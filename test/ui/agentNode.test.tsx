@@ -591,3 +591,15 @@ describe('AgentNode — 흘끗 보기 카드', () => {
     expect(card.querySelector('.st-l')!.textContent).toBe('작업 중')
   })
 })
+
+describe('AgentNode — 계획 요청', () => {
+  it('계획 요청이면 앰버 칸에 제목과 패널에서 보기만', async () => {
+    snapshot.agents = [agent('p', { name: '기획', status: 'awaiting' })]
+    snapshot.requests = [request({ agentId: 'p', toolName: 'ExitPlanMode', kind: 'plan', input: { plan: '# 계획' } })]
+    const { card, store } = await renderCard('p')
+    expect(card.querySelector('.ap-t')!.textContent).toBe('기획이 계획을 세웠어요')
+    expect(Array.from(card.querySelectorAll('.ap button')).map(b => b.textContent)).toEqual(['패널에서 보기'])
+    fireEvent.click(screen.getByRole('button', { name: '패널에서 보기' }))
+    expect(store.getState().selectedAgentId).toBe('p')
+  })
+})

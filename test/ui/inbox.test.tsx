@@ -110,6 +110,15 @@ describe('내가 할 일 패널', () => {
     expect(store.getState().selectedAgentId).toBe('d')
   })
 
+  it('계획 요청은 목록에 계획 카드로 — 이대로 진행', async () => {
+    snapshot.requests = [request({ id: 'pl1', agentId: 'p', kind: 'plan', toolName: 'ExitPlanMode', input: { plan: '# 헤더 줄이기\n- 높이' }, createdAt: Date.now() })]
+    await renderInbox()
+    expect(screen.getByText('기획이 계획을 세웠어요 — 보고 정해 주세요')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '헤더 줄이기' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '이대로 진행' }))
+    expect((window as any).dure.answerRequest).toHaveBeenCalledWith('pl1', { type: 'allow' })
+  })
+
   it('지금 하는 일 — 단계 말과 지난 시간', async () => {
     const { store } = await renderInbox()
     expect(screen.queryByText('지금 하는 일')).toBeNull()

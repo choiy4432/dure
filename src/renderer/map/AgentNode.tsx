@@ -155,6 +155,18 @@ function CreateAgentAsk({ agent, request }: { agent: AgentView; request: Pending
   )
 }
 
+/** 계획 칸 — 제목과 '패널에서 보기' 만. 계획 전체는 길어 패널 카드에서 읽고 정한다 */
+function PlanAsk({ agent }: { agent: AgentView }) {
+  return (
+    <div className="ap nodrag" onClick={stop}>
+      <b className="ap-t">{`${agent.name}${josa(agent.name, '이/가')} 계획을 세웠어요`}</b>
+      <button type="button" className="lk" onClick={() => getStore().selectAgent(agent.id)}>
+        패널에서 보기
+      </button>
+    </div>
+  )
+}
+
 /** 관계도 카드 몸통(시안 .nd) — 스토어에서 그 에이전트의 상태를 읽어 그린다 */
 export function AgentCard({ agentId }: { agentId: AgentId }) {
   const v = useCardView(agentId)
@@ -227,6 +239,8 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
             {QUESTION_LINK}
           </button>
         </div>
+      ) : request?.kind === 'plan' ? (
+        <PlanAsk agent={agent} />
       ) : request?.kind === 'create-agent' ? (
         <CreateAgentAsk agent={agent} request={request} />
       ) : request ? (

@@ -11,6 +11,7 @@ import { createAgentPlan, requestTitle } from '../lib/toolSummary'
 import { FRESH_WORD, PHASE_WORD, ago, elapsed } from '../lib/words'
 import { Clamp } from '../lib/Clamp'
 import { MessageCard, pinOpen } from './cards/MessageCard'
+import { PlanCard } from './cards/PlanCard'
 import { PermissionCard } from './cards/PermissionCard'
 import { HeldChainCard } from './cards/HeldChainCard'
 import { readQuestions } from './cards/QuestionCard'
@@ -126,6 +127,8 @@ export function Inbox() {
           if (!a) return null
           return r.kind === 'question' ? (
             <QuestionItem key={r.id} request={r} name={a.name} now={now} />
+          ) : r.kind === 'plan' ? (
+            <PlanCard key={r.id} request={r} agent={a} now={now} inInbox />
           ) : r.kind === 'create-agent' ? (
             <CreateItem key={r.id} request={r} name={a.name} now={now} />
           ) : (

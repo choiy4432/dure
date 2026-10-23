@@ -9,6 +9,7 @@ import { PanelHeader } from './PanelHeader'
 import type { Described } from './ModelPicker'
 import { MessageCard, pinOpen, type ShownState } from './cards/MessageCard'
 import { PermissionCard } from './cards/PermissionCard'
+import { PlanCard } from './cards/PlanCard'
 import { CreateAgentCard } from './cards/CreateAgentCard'
 import { QuestionCard } from './cards/QuestionCard'
 import { HeldChainCard } from './cards/HeldChainCard'
@@ -102,6 +103,8 @@ function Pins({ agentId, open, onOpenChange }: {
         {requests.map(r =>
           r.kind === 'question' ? (
             <QuestionCard key={r.id} request={r} now={now} />
+          ) : r.kind === 'plan' ? (
+            <PlanCard key={r.id} request={r} agent={agent} now={now} />
           ) : r.kind === 'create-agent' ? (
             <CreateAgentCard key={r.id} request={r} agent={agent} now={now} />
           ) : (

@@ -60,3 +60,13 @@ describe('badgeText', () => {
     expect(badgeText(12)).toBe('9+')
   })
 })
+
+describe('계획 알림', () => {
+  const plan = { kind: 'plan', toolName: 'ExitPlanMode', input: { plan: '\n# 헤더 줄이기\n1. …' } } as const
+  it('askNotice — 첫 비지 않은 줄, 앞 # 과 공백 뺌', () => {
+    expect(askNotice(req({ ...plan }), { name: '웹', folder: 'C:/w' })).toEqual({ title: '웹이 계획을 세웠어요', body: '헤더 줄이기' })
+  })
+  it('announceAsk — 같은 제목', () => {
+    expect(announceAsk(req({ ...plan }), '웹')).toBe('웹이 계획을 세웠어요')
+  })
+})

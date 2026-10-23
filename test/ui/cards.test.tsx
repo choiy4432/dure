@@ -36,7 +36,7 @@ const QUESTIONS = {
 
 let snapshot: Snapshot
 let handlers: Record<string, ((p: any) => void)[]>
-let api: Record<'approveMessage' | 'dismissMessage' | 'continueHeld' | 'answerRequest', ReturnType<typeof vi.fn>>
+let api: Record<'approveMessage' | 'dismissMessage' | 'continueHeld' | 'answerRequest' | 'interrupt', ReturnType<typeof vi.fn>>
 
 const emit = <K extends keyof EngineEventMap>(k: K, p: EngineEventMap[K]) => act(() => (handlers[k] ?? []).forEach(f => f(p)))
 
@@ -60,6 +60,7 @@ beforeEach(() => {
     dismissMessage: vi.fn(async (_id: string) => {}),
     continueHeld: vi.fn(async (_roomId: string) => {}),
     answerRequest: vi.fn(async (_id: string, _d: Decision) => {}),
+    interrupt: vi.fn(async (_id: string) => {}),
   }
   ;(window as any).dure = {
     ...api,
@@ -603,5 +604,42 @@ describe('Markdown', () => {
     expect(el.querySelector('table')).not.toBeNull()
     expect(el.querySelector('del')!.textContent).toBe('지움')
     expect(el.querySelector('pre code')!.textContent).toBe('npm test\n')
+  })
+})
+
+describe('계획 카드', () => {
+  const PLAN = '# 헤더 줄이기\n\n- 높이를 줄여요\n- 로고를 옮겨요'
+  const make = () => request({ id: 'pl1', agentId: 'p', toolName: 'ExitPlanMode', kind: 'plan', input: { plan: PLAN } })
+  const TITLE = '기획이 계획을 세웠어요 — 보고 정해 주세요'
+
+  it('계획 카드 — 계획 전체를 그리고 [이대로 진행]=허용', async () => {
+    snapshot.requests = [make()]
+    await renderPanel('p')
+    const c = card(TITLE)
+    expect(within(c).getByRole('heading', { name: '헤더 줄이기' })).toBeInTheDocument()
+    expect(within(c).getByText('높이를 줄여요')).toBeInTheDocument()
+    fireEvent.click(within(c).getByRole('button', { name: '이대로 진행' }))
+    expect(api.answerRequest).toHaveBeenCalledWith('pl1', { type: 'allow' })
+  })
+
+  it('고쳐 달라고 하기 — 입력칸, 빈 글이면 보내기 막힘, 보내면 그 글로 거절', async () => {
+    snapshot.requests = [make()]
+    await renderPanel('p')
+    const c = card(TITLE)
+    fireEvent.click(within(c).getByRole('button', { name: '고쳐 달라고 하기' }))
+    const box = within(c).getByRole('textbox', { name: '고칠 점' })
+    expect(within(c).getByRole('button', { name: '보내기' })).toBeDisabled()
+    fireEvent.change(box, { target: { value: '   ' } })
+    expect(within(c).getByRole('button', { name: '보내기' })).toBeDisabled()
+    fireEvent.change(box, { target: { value: '로고는 그대로 둬요' } })
+    fireEvent.click(within(c).getByRole('button', { name: '보내기' }))
+    expect(api.answerRequest).toHaveBeenCalledWith('pl1', { type: 'deny', message: '로고는 그대로 둬요' })
+  })
+
+  it('그만 = 멈추기', async () => {
+    snapshot.requests = [make()]
+    await renderPanel('p')
+    fireEvent.click(within(card(TITLE)).getByRole('button', { name: '그만' }))
+    expect(api.interrupt).toHaveBeenCalledWith('p')
   })
 })
