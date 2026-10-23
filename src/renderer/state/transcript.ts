@@ -28,7 +28,8 @@ export type ClaudePart =
   | { type: 'subagents'; key: string; ids: string[]; description: string | null; counts: { running: number; done: number; bad: number } }
 
 export type ChatLine =
-  | { kind: 'me'; text: string; images: number; at: number }
+  /** images = 붙인 그림의 저장 이름 차례대로(저장하기 전에 보낸 그림은 null) */
+  | { kind: 'me'; text: string; images: (string | null)[]; at: number }
   | { kind: 'relay'; from: string; text: string; at: number; messageId?: string }
   | { kind: 'claude'; text: string; actions: ActionLine[]; parts: ClaudePart[]; at: number }
   | { kind: 'notice'; text: string; at: number }
@@ -154,7 +155,7 @@ export function buildTranscript(
       case 'user': {
         flush()
         const text = userText(it)
-        const images = it.parts.filter((p) => p.type === 'image').length
+        const images = it.parts.flatMap((p) => (p.type === 'image' ? [p.file ?? null] : []))
         const relay = it.source === 'relay' ? stripRelay(text) : null
         if (relay) all.push({ kind: 'relay', from: relay.from, text: relay.body, at: it.t, ...(it.messageId ? { messageId: it.messageId } : {}) })
         else all.push({ kind: 'me', text, images, at: it.t })

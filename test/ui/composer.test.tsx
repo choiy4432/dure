@@ -495,6 +495,21 @@ describe('Composer — 이미지', () => {
     expect(sendButton()).toBeDisabled()
   })
 
+  it('붙인 썸네일을 누르면 크게 — 여러 장이면 누른 것부터, 지우기(×)는 그대로', async () => {
+    prep.mockResolvedValueOnce(ready('QQ==')).mockResolvedValueOnce(ready('Qg=='))
+    const { container } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [png('a.png'), png('b.png')] } })
+    await settle()
+    expect(chips()).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: '붙인 이미지 2 크게 보기' }))
+    const dlg = screen.getByRole('dialog', { name: '이미지 보기' })
+    expect(dlg.querySelector('.iv-img')).toHaveAttribute('src', chips()[1].getAttribute('src'))
+    expect(dlg).toHaveTextContent('2 / 2')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getAllByRole('button', { name: '이미지 지우기' })).toHaveLength(2)
+  })
+
   it('못 붙이면 그 문구 — 칩도 없고 원본도 보내지 않는다', async () => {
     prep.mockResolvedValue({ error: '이미지가 너무 커요 — 더 작은 이미지를 붙여 주세요' })
     const { container } = await renderPanel()

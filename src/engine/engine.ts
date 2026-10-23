@@ -5,6 +5,7 @@ import path from 'node:path';
 import { openStore, renameRetrying, type Store } from './store';
 import { openMessageLog, type MessageLog } from './messageLog';
 import { capPatch, openHistory, patchFromInput, trimToolInput, type History } from './history';
+import { openImageStore, type ImageStore } from './imageStore';
 import { buildArgs, buildMcpConfig, buildUsageArgs, CREATE_AGENT_TOOL, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
 import { ClaudeSession } from './claudeSession';
@@ -137,6 +138,8 @@ export interface Engine extends EventEmitter {
   /** 화면이 사용량을 볼 때 — 마지막 값이 1분보다 오래됐으면 다시 묻는다 */
   refreshUsage(): void;
   history(id: AgentId, o?: { all?: boolean; limit?: number }): HistoryItem[];
+  /** 사람이 보낸 그림(기록의 file) — data URL. 이름이 틀리거나 없으면 null, 없는 에이전트면 던진다 */
+  image(id: AgentId, file: string): Promise<string | null>;
   messages(f?: Parameters<MessageLog['list']>[0]): RelayMessage[];
   approveMessage(id: string): void;
   dismissMessage(id: string): void;
@@ -336,8 +339,11 @@ class EngineImpl extends EventEmitter implements Engine {
   private mcp!: McpServerHandle;
   private watcher: UsageWatcher | null;
 
+  private images: ImageStore;
+
   constructor(private o: EngineOptions, private store: Store, private log: MessageLog, private hist: History) {
     super();
+    this.images = openImageStore(o.dataDir);
     this.limit = this.loadLimit(o.autoChainLimit ?? AUTO_CHAIN_LIMIT);
     this.allow = this.readSettings().allowBypass === true;
     this.watcher =
@@ -515,6 +521,7 @@ class EngineImpl extends EventEmitter implements Engine {
       }
       this.store.removeAgent(id);
       this.hist.remove(id);
+      this.images.remove(id);
     } finally {
       this.removing.delete(id);
       this.shown.delete(id);
@@ -776,6 +783,11 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     return this.hist.read(id, { sinceBoundary: !o.all, limit: o.limit ?? (o.all ? Infinity : 500) });
   }
+  async image(id: AgentId, file: string): Promise<string | null> {
+    this.need(id);
+    const img = typeof file === 'string' ? this.images.read(id, file) : null;
+    return img ? `data:${img.mediaType};base64,${img.base64}` : null;
+  }
   messages(f?: Parameters<MessageLog['list']>[0]) { return this.log.list(f); }
   approveMessage(id: string) { this.router.approve(id); }
   dismissMessage(id: string) { this.router.dismiss(id); }
@@ -978,10 +990,23 @@ class EngineImpl extends EventEmitter implements Engine {
       this.record(id, {
         kind: 'user',
         source: item.kind === 'relay' ? 'relay' : 'human',
-        parts: parts.map(toHistoryPart),
+        parts: parts.map((p) => this.historyPart(id, p)),
         ...(item.kind === 'relay' ? { messageId: item.messageId } : {}),
       }),
     );
+  }
+
+  /** 기록 한 칸 — 그림은 내용을 그림 칸에 따로 두고 기록엔 크기·이름만(저장을 못 하면 이름 없이, 보내기는 막지 않는다) */
+  private historyPart(id: AgentId, p: UserPart): HistoryPart {
+    if (p.type === 'text') return { type: 'text', text: p.text };
+    const part: HistoryPart = { type: 'image', mediaType: p.mediaType, bytes: Buffer.from(p.base64, 'base64').length };
+    try {
+      const file = this.images.save(id, p.mediaType, p.base64);
+      if (file) part.file = file;
+    } catch {
+      // 디스크가 막혀도 대화는 이어진다 — 그 그림만 다시 볼 수 없다
+    }
+    return part;
   }
 
   private record(id: AgentId, item: HistoryItem | (Omit<HistoryItem, 't'> & { t?: number })): void {
@@ -1792,12 +1817,6 @@ function effortSaid(text: string): EffortLevel | null {
   return m ? (m[1] as EffortLevel) : null;
 }
 
-function toHistoryPart(p: UserPart): HistoryPart {
-  // 이미지는 크기만 남긴다 — 내용은 저장하지 않는다
-  return p.type === 'text'
-    ? { type: 'text', text: p.text }
-    : { type: 'image', mediaType: p.mediaType, bytes: Buffer.from(p.base64, 'base64').length };
-}
 
 function toDescription(p: any): AgentDescription {
   // 필요한 필드만 골라 담는다 — account(이메일)는 읽지도 남기지도 않는다

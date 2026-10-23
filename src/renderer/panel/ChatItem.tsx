@@ -1,6 +1,6 @@
 import { memo, useId, useState, type ComponentType } from 'react'
 import {
-  ArrowRight, Bot, ChevronDown, ChevronRight, File, Globe, Image as ImageIcon, MessageCircleQuestion, Pencil, Search, Send, ShieldCheck,
+  ArrowRight, Bot, ChevronDown, ChevronRight, File, Globe, MessageCircleQuestion, Pencil, Search, Send, ShieldCheck,
   SquareTerminal, Wrench, type LucideProps,
 } from 'lucide-react'
 import type { AgentId } from '../../engine/types'
@@ -14,6 +14,7 @@ import { ExpandBox } from '../lib/ExpandBox'
 import { Presence } from '../lib/presence'
 import { firstLine, localSummary } from '../lib/words'
 import { DiffView } from './DiffView'
+import { MeImages } from './MeImages'
 
 const ICONS: Record<ToolIcon, ComponentType<LucideProps>> = {
   file: File,
@@ -178,12 +179,7 @@ function ChatItemView({ line, folded = false, index, agentId }: Props) {
     case 'me':
       return (
         <div className="me" data-line={index}>
-          {line.images > 0 && (
-            <span className="me-img">
-              <ImageIcon className="i" aria-hidden="true" />
-              이미지 {line.images}개
-            </span>
-          )}
+          {line.images.length > 0 && <MeImages agentId={agentId} files={line.images} />}
           {line.text && <p>{line.text}</p>}
         </div>
       )
@@ -267,6 +263,9 @@ function samePart(p: ClaudePart, q: ClaudePart): boolean {
 }
 
 /** 기록이 하나 늘 때마다 줄 객체는 새로 만들어진다 — 내용이 같으면 다시 그리지 않는다(마크다운을 다시 읽지 않게) */
+/** 그림 이름 목록 — 줄 객체가 새로 만들어져도 같은 이름 차례면 같다 */
+const sameList = (x: (string | null)[], y: (string | null)[]) => x.length === y.length && x.every((v, i) => v === y[i])
+
 function sameLine(prev: Props, next: Props): boolean {
   if (!!prev.folded !== !!next.folded || prev.index !== next.index || prev.agentId !== next.agentId) return false
   const a = prev.line
@@ -275,7 +274,7 @@ function sameLine(prev: Props, next: Props): boolean {
   if (a.kind !== b.kind || a.text !== b.text) return false
   switch (a.kind) {
     case 'me':
-      return a.images === (b as typeof a).images && a.at === (b as typeof a).at
+      return sameList(a.images, (b as typeof a).images) && a.at === (b as typeof a).at
     case 'relay':
       return a.from === (b as typeof a).from && a.at === (b as typeof a).at && a.messageId === (b as typeof a).messageId
     case 'claude': {

@@ -56,6 +56,8 @@ export interface DureApi {
   refreshUsage(): Promise<void>
   describe(id: AgentId): Promise<AgentDescription>
   history(id: AgentId, o?: { all?: boolean }): Promise<HistoryItem[]>
+  /** 보낸 그림(기록의 image file) — data URL, 없으면 null */
+  image(id: AgentId, file: string): Promise<string | null>
   approveMessage(id: string): Promise<void>
   dismissMessage(id: string): Promise<void>
   continueHeld(roomId: RoomId): Promise<void>
@@ -81,7 +83,7 @@ export const CHANNEL = { invoke: 'dure:invoke', event: 'dure:event' } as const
 /** invoke 로 부를 수 있는 이름 — DureApi 의 메서드 중 on 만 빠진다(on 은 preload 안에서 처리) */
 export const METHODS = [
   'snapshot', 'addRoom', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
-  'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history',
+  'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'image',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
   'setAllowBypass', 'setNotify', 'setBypass',
   'pickFolder', 'openFolder', 'setTaskbar', 'flashWindow', 'focusWindow',

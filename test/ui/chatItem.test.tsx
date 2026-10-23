@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import '@testing-library/jest-dom/vitest'
-import { render, screen, within, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, within, cleanup, fireEvent, act as settle } from '@testing-library/react'
 import { ChatItem } from '../../src/renderer/panel/ChatItem'
 import type { ActionLine, ChatLine, ClaudePart } from '../../src/renderer/state/transcript'
 
@@ -201,5 +201,49 @@ describe('ChatItem — 하는 일 "수정"을 펼치면 바뀐 줄(diff)', () =>
     expect(container.querySelector('.act-out pre')).toHaveTextContent(DONE)
     rerender(<ChatItem line={line(edit())} index={0} />)
     expect(container.querySelector('.act-out .df')).not.toBeNull()
+  })
+})
+
+describe('ChatItem — 내 말의 그림은 썸네일', () => {
+  beforeEach(async () => {
+    ;(await import('../../src/renderer/panel/savedImage')).forgetSavedImages()
+    ;(window as any).dure = { image: vi.fn(async (_id: string, file: string) => `data:image/png;base64,${file}`) }
+  })
+  const me = (images: (string | null)[]): ChatLine => ({ kind: 'me', text: '이거 봐 줘', images, at: 1 })
+  const thumbs = (c: HTMLElement) => [...c.querySelectorAll('.me-th')] as HTMLElement[]
+
+  it('그림마다 누를 수 있는 썸네일 — 누른 그림부터 크게', async () => {
+    const { container } = render(<ChatItem line={me(['a.png', 'b.png'])} index={0} agentId="w" />)
+    await settle(async () => {})
+    expect(thumbs(container)).toHaveLength(2)
+    expect(container.querySelector('.me-img')).toBeNull() // 옛 '이미지 N개' 칩은 없다
+    expect(thumbs(container)[1].querySelector('img')).toHaveAttribute('src', 'data:image/png;base64,b.png')
+    fireEvent.click(screen.getByRole('button', { name: '이미지 2/2 크게 보기' }))
+    await settle(async () => {})
+    const dlg = screen.getByRole('dialog', { name: '이미지 보기' })
+    expect(dlg.querySelector('.iv-img')).toHaveAttribute('src', 'data:image/png;base64,b.png')
+    expect(dlg).toHaveTextContent('2 / 2')
+  })
+
+  it('다섯 장부터는 세 장 + 나머지 수 칸 — 그 칸을 누르면 네 번째부터', async () => {
+    const files = ['1.png', '2.png', '3.png', '4.png', '5.png', '6.png']
+    const { container } = render(<ChatItem line={me(files)} index={0} agentId="w" />)
+    await settle(async () => {})
+    expect(thumbs(container)).toHaveLength(4)
+    const more = screen.getByRole('button', { name: '이미지 4/6 크게 보기 · 3장 더' })
+    expect(more).toHaveTextContent('+3')
+    fireEvent.click(more)
+    await settle(async () => {})
+    expect(screen.getByRole('dialog')).toHaveTextContent('4 / 6')
+  })
+
+  it('저장하기 전에 보낸 그림은 빈 칸 — 눌러도 안내만', async () => {
+    const { container } = render(<ChatItem line={me([null])} index={0} agentId="w" />)
+    await settle(async () => {})
+    const th = thumbs(container)[0]
+    expect(th.querySelector('img')).toBeNull()
+    expect(th).toHaveAttribute('title', '저장하기 전에 보낸 그림이라 볼 수 없어요')
+    fireEvent.click(th)
+    expect(screen.getByRole('dialog')).toHaveTextContent('저장하기 전에 보낸 그림이라 볼 수 없어요')
   })
 })

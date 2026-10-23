@@ -2284,17 +2284,58 @@ code {
   margin: 0;
 }
 
-.me-img {
+/* 내 말의 그림 — 작은 썸네일 줄, 누르면 크게(.iv-bd) */
+.me-ims {
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--muted);
 }
 
-.me-img + p {
-  margin-top: 4px;
+.me-ims + p {
+  margin-top: 8px;
+}
+
+.me-th {
+  position: relative;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--subtle);
+  color: var(--muted);
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.me-th:hover {
+  border-color: var(--border-strong);
+}
+
+.me-th img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.me-th.wait {
+  animation: att-wait 1.2s ease-in-out infinite alternate;
+}
+
+/* 넘친 그림 수 — 네 번째 썸네일 위에 */
+.me-more {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--overlay);
+  color: var(--on-overlay);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 /* 말한 쪽 이름 — 'Claude' */
@@ -3107,6 +3148,17 @@ code {
   }
 }
 
+/* 붙인 그림을 누르면 크게 — 썸네일 전체가 누르는 자리, 지우기(×)는 그 위 */
+.att-view {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--radius-ctl) - 1px);
+  background: none;
+  cursor: zoom-in;
+}
+
 .att-x {
   position: absolute;
   top: -7px;
@@ -3319,6 +3371,132 @@ code {
   font-size: 13px;
   line-height: 20px;
   color: var(--muted);
+}
+
+/* 그림 크게 보기 — 대화상자 막에 살짝 흐림, 그림은 창의 90% 안(작은 그림은 키우지 않는다) */
+.iv-bd {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 56px 72px;
+  background: var(--overlay);
+  backdrop-filter: blur(var(--overlay-blur));
+}
+
+.iv-bd:focus {
+  outline: none;
+}
+
+.iv-stage {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 0;
+}
+
+.iv-img {
+  display: block;
+  max-width: min(90vw, calc(100vw - 144px));
+  max-height: min(90vh, calc(100vh - 112px));
+  border-radius: var(--radius-ctl);
+  background: var(--bg);
+  box-shadow: var(--shadow-dlg);
+  user-select: none;
+}
+
+/* 그림 자리의 안내 — 읽는 중 · 볼 수 없음 */
+.iv-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+  padding: 24px 28px;
+  border-radius: var(--radius-node);
+  background: var(--bg);
+  box-shadow: var(--shadow-dlg);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+}
+
+.iv-note p {
+  margin: 0;
+}
+
+.iv-note .i {
+  color: var(--muted);
+}
+
+.iv-note.wait {
+  width: 160px;
+  height: 120px;
+  animation: att-wait 1.2s ease-in-out infinite alternate;
+}
+
+/* 막 위 둥근 단추 — 넘기기 · 닫기 */
+.iv-nav,
+.iv-x {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-dot);
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+}
+
+.iv-nav {
+  top: 50%;
+  width: 40px;
+  height: 40px;
+  transform: translateY(-50%);
+}
+
+.iv-nav.prev {
+  left: 16px;
+}
+
+.iv-nav.next {
+  right: 16px;
+}
+
+.iv-x {
+  top: 16px;
+  right: 16px;
+  width: 36px;
+  height: 36px;
+}
+
+.iv-nav:hover:not(:disabled),
+.iv-x:hover {
+  background: var(--hover);
+}
+
+.iv-nav:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.iv-count {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  margin: 0;
+  padding: 3px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--shadow-sm);
+  transform: translateX(-50%);
 }
 
 /* 확인 대화상자 */

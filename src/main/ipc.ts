@@ -76,6 +76,7 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   refreshUsage: (e) => e.refreshUsage(),
   describe: (e, _d, id) => e.describe(id),
   history: (e, _d, id, o) => e.history(id, o),
+  image: (e, _d, id, file) => e.image(id, file),
   approveMessage: (e, _d, id) => e.approveMessage(id),
   dismissMessage: (e, _d, id) => e.dismissMessage(id),
   continueHeld: (e, _d, roomId) => e.continueHeld(roomId),

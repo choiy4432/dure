@@ -13,6 +13,7 @@ import { ConfirmDialog } from '../shell/ConfirmDialog'
 import type { Described } from './ModelPicker'
 import { matchCommands, slashOptionId, SlashMenu, type SlashEntry } from './SlashMenu'
 import { Presence } from '../lib/presence'
+import { ImageViewer } from './ImageViewer'
 import { getDraft, nextAttachKey, updateDraft, useDraft, type Attached } from './drafts'
 
 /** 본문 줄 높이(px, base.css 와 같다) — 입력창은 8줄까지 늘고 그 뒤로는 안에서 스크롤 */
@@ -55,6 +56,8 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
   const setText = (next: string) => updateDraft(agentId, d => (d.text === next ? d : { ...d, text: next }))
   const setAttached = (fn: (list: Attached[]) => Attached[]) => updateDraft(agentId, d => ({ ...d, attached: fn(d.attached) }))
   const [error, setError] = useState<string | null>(null)
+  /** 크게 보고 있는 붙인 그림(준비가 끝난 것 가운데 몇 번째) */
+  const [viewing, setViewing] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
   const [dismissed, setDismissed] = useState(false)
   const [active, setActive] = useState(0)
@@ -257,6 +260,11 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     addFiles(files)
   }
 
+  // 크게 보기는 준비가 끝난 그림만 — 썸네일과 같은 차례
+  const ready = attached.flatMap(a => (a.state === 'ready' ? [a] : []))
+  const readyKeys = ready.map(a => a.key)
+  // 보내거나 다 지워 그림이 없어지면 보기도 닫는다 — 다음에 붙일 때 저절로 열리지 않게
+  if (viewing !== null && ready.length === 0) setViewing(null)
   let shown = 0
   return (
     <div className="cmp">
@@ -287,6 +295,12 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
                   <img src={a.url} alt={`붙인 이미지 ${++shown}`} />
                   <button
                     type="button"
+                    className="att-view"
+                    aria-label={`붙인 이미지 ${shown} 크게 보기`}
+                    onClick={() => setViewing(readyKeys.indexOf(a.key))}
+                  />
+                  <button
+                    type="button"
                     className="att-x"
                     aria-label="이미지 지우기"
                     title="지우기"
@@ -297,6 +311,13 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
                 </span>
               ),
             )}
+            <ImageViewer
+              open={viewing !== null}
+              sources={ready.map(a => ({ url: a.url }))}
+              index={viewing ?? 0}
+              onIndex={setViewing}
+              onClose={() => setViewing(null)}
+            />
           </div>
         )}
         <textarea

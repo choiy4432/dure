@@ -78,6 +78,8 @@
   --shadow-pop: 0 1px 2px rgba(15, 23, 42, 0.05), 0 12px 28px -8px rgba(15, 23, 42, 0.18);   /* 떠 있는 목록(모델·메뉴) */
   --shadow-dlg: 0 1px 2px rgba(15, 23, 42, 0.06), 0 24px 48px -12px rgba(15, 23, 42, 0.28);  /* 대화상자 */
   --overlay: rgba(15, 23, 42, 0.32);   /* 대화상자 뒤 막 */
+  --overlay-blur: 6px;                 /* 그림 크게 보기 뒤 막의 흐림 */
+  --on-overlay: #FFFFFF;               /* 막 위 글(썸네일 '+N') */
 
   /* 글꼴 */
   --font: 'Noto Sans KR', system-ui, sans-serif;

@@ -49,6 +49,10 @@ export const PHASE_WORD: Record<Phase, string> = {
 /** 준비하는 중에 마우스를 올리면 — 이 동안은 Claude 가 아직 질문을 받지 않았다 */
 export const PREPARING_HINT = '아직 Claude에게 질문을 보내기 전이에요'
 
+/** 보낸 그림을 볼 수 없을 때 — 썸네일 풀이와 크게 보기가 같은 말을 쓴다 */
+export const IMAGE_OLD = '저장하기 전에 보낸 그림이라 볼 수 없어요'
+export const IMAGE_GONE = '그림을 찾을 수 없어요'
+
 /** 새 대화 확인 — 에이전트 메뉴의 '새 대화'와 입력창의 /clear 가 같은 말을 쓴다 */
 export const RENEW_CONFIRM = {
   title: '지금까지 대화를 접고 새로 시작할까요?',

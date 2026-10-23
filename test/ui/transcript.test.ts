@@ -61,7 +61,7 @@ describe('buildTranscript', () => {
       [human('옛 말', 1), asst([{ type: 'text', text: '옛 답' }], 2), { t: 3, kind: 'boundary' }, human('새 말', 4)],
       undefined,
     )
-    expect(lines).toEqual([{ kind: 'me', text: '새 말', images: 0, at: 4 }])
+    expect(lines).toEqual([{ kind: 'me', text: '새 말', images: [], at: 4 }])
     expect(buildTranscript([human('옛 말', 1), { t: 2, kind: 'boundary' }], undefined).lines).toEqual([])
   })
   it('결과 없으면 진행 중', () => {
@@ -163,16 +163,22 @@ describe('buildTranscript', () => {
     const { lines } = buildTranscript([asst([{ type: 'tool_use', id: 'd', name: 'Bash', input: {} }]), res('d', msg, true)], undefined)
     expect((lines[0] as any).actions[0]).toMatchObject({ denied: true, allowed: false })
   })
-  it('이미지는 개수로, 알림·로컬 출력은 줄로', () => {
+  it('이미지는 저장한 파일 이름 차례대로(저장 전에 보낸 그림은 null), 알림·로컬 출력은 줄로', () => {
     const { lines } = buildTranscript(
       [
-        { t: 1, kind: 'user', source: 'human', parts: [{ type: 'text', text: 'a' }, { type: 'image', mediaType: 'image/png', bytes: 3 }, { type: 'text', text: 'b' }] },
+        {
+          t: 1, kind: 'user', source: 'human',
+          parts: [
+            { type: 'text', text: 'a' }, { type: 'image', mediaType: 'image/png', bytes: 3, file: 'x.png' },
+            { type: 'image', mediaType: 'image/png', bytes: 3 }, { type: 'text', text: 'b' },
+          ],
+        },
         { t: 2, kind: 'notice', text: '멈춤' },
         { t: 3, kind: 'local-output', text: 'out' },
       ],
       undefined,
     )
-    expect(lines[0]).toEqual({ kind: 'me', text: 'a\n\nb', images: 1, at: 1 })
+    expect(lines[0]).toEqual({ kind: 'me', text: 'a\n\nb', images: ['x.png', null], at: 1 })
     expect(lines[1]).toEqual({ kind: 'notice', text: '멈춤', at: 2 })
     expect(lines[2]).toEqual({ kind: 'local', text: 'out', at: 3 })
   })

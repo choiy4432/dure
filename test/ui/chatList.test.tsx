@@ -195,12 +195,17 @@ describe('ChatList — 줄마다', () => {
     })
   })
 
-  it('이미지가 붙은 내 말은 이미지 수를 함께', async () => {
+  it('이미지가 붙은 내 말은 썸네일 — 저장한 그림을 엔진에서 읽어 온다', async () => {
+    ;(window as any).dure.image = vi.fn(async () => 'data:image/png;base64,QUJD')
     history.mockResolvedValueOnce([
-      { t: 1, kind: 'user', source: 'human', parts: [{ type: 'image', mediaType: 'image/png', bytes: 1200 }, { type: 'text', text: '이거 봐 줘' }] },
+      { t: 1, kind: 'user', source: 'human', parts: [{ type: 'image', mediaType: 'image/png', bytes: 1200, file: 'f.png' }, { type: 'text', text: '이거 봐 줘' }] },
     ] satisfies HistoryItem[])
     await renderPanel()
-    expect(conv().querySelector('.me')).toHaveTextContent('이미지 1개')
+    await settle()
+    const th = within(conv()).getByRole('button', { name: '이미지 1/1 크게 보기' })
+    expect(th.querySelector('img')).toHaveAttribute('src', 'data:image/png;base64,QUJD')
+    expect((window as any).dure.image).toHaveBeenCalledWith('w', 'f.png')
+    expect(conv().querySelector('.me')).toHaveTextContent('이거 봐 줘')
   })
 
   it('흐르는 글은 맨 끝에 깜빡이는 커서와 함께 — 기록 항목이 오면 사라진다', async () => {

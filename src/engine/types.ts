@@ -115,7 +115,8 @@ export type StreamEvent =
   | { kind: 'compacted' }
   | { kind: 'ignored'; type: string };
 
-export type HistoryPart = { type: 'text'; text: string } | { type: 'image'; mediaType: string; bytes: number };
+/** 그림의 file = 그림 칸(images/<에이전트>/)에 저장한 이름 — 저장 전에 보낸 그림·저장을 못 한 그림엔 없다 */
+export type HistoryPart = { type: 'text'; text: string } | { type: 'image'; mediaType: string; bytes: number; file?: string };
 export type HistoryItem = { t: number } & (
   | { kind: 'user'; source: 'human' | 'relay'; parts: HistoryPart[]; messageId?: string }
   | { kind: 'assistant'; blocks: AssistantBlock[]; parent?: string }

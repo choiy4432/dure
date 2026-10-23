@@ -1074,7 +1074,7 @@ test('수정이 아닌 일(만듦)엔 structuredPatch 가 와도 바뀐 줄을 �
   expect(file).not.toContain('const c = 4');
 });
 
-test('engine: 이미지는 바이트 수만 기록', async () => {
+test('engine: 이미지는 그림 칸에 저장하고 기록엔 바이트 수와 파일 이름만 — image() 로 다시 읽는다', async () => {
   const e = await start();
   const { a } = setup(e);
   const bytes = Buffer.alloc(1234, 7);
@@ -1082,12 +1082,28 @@ test('engine: 이미지는 바이트 수만 기록', async () => {
   const done = resultOf(e, a.id);
   await e.sendUser(a.id, [{ type: 'text', text: '봐 줘' }, { type: 'image', mediaType: 'image/png', base64 }]);
   await done;
-  expect(e.history(a.id)[0]).toMatchObject({
+  const item = e.history(a.id)[0];
+  expect(item).toMatchObject({
     kind: 'user',
-    parts: [{ type: 'text', text: '봐 줘' }, { type: 'image', mediaType: 'image/png', bytes: 1234 }],
+    parts: [{ type: 'text', text: '봐 줘' }, { type: 'image', mediaType: 'image/png', bytes: 1234, file: expect.stringMatching(/^[0-9a-f]{32}\.png$/) }],
   });
   const file = path.join(dataDir, 'history', `${a.id}.jsonl`);
   expect(fs.readFileSync(file, 'utf8')).not.toContain(base64);
+  const name = item.kind === 'user' && item.parts[1].type === 'image' ? item.parts[1].file! : '';
+  expect(await e.image(a.id, name)).toBe(`data:image/png;base64,${base64}`);
+  expect(await e.image(a.id, '../state.json')).toBeNull();
+  await expect(e.image('없는-에이전트', name)).rejects.toThrow();
+});
+
+test('engine: 에이전트를 지우면 그 에이전트가 보낸 그림도 지운다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'image', mediaType: 'image/png', base64: Buffer.alloc(10, 1).toString('base64') }]);
+  await done;
+  expect(fs.readdirSync(path.join(dataDir, 'images', a.id))).toHaveLength(1);
+  await e.removeAgent(a.id);
+  expect(fs.existsSync(path.join(dataDir, 'images', a.id))).toBe(false);
 });
 
 test('engine: newConversation 뒤 history() 는 boundary 이후만, all:true 는 전부', async () => {
