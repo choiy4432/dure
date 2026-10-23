@@ -248,7 +248,7 @@ describe('권한 카드', () => {
   it.each([
     ['허용', { type: 'allow' }],
     ['거절', { type: 'deny' }],
-    ['이 에이전트에선 항상 허용', { type: 'allow-always' }],
+    ['앞으로 디자인의 파일 고치기는 묻지 않기', { type: 'allow-always' }],
   ] as const)('[%s] → answerRequest(id, %o)', async (name, decision) => {
     snapshot.requests = [request()]
     await renderPanel('d')
@@ -263,7 +263,7 @@ describe('권한 카드', () => {
     const { getStore } = await import('../../src/renderer/state/store')
     await act(async () => { await getStore().init() })
     render(<PermissionCard request={request()} agent={{ name: '디자인', folder: 'C:\w' }} now={Date.now()} inInbox />)
-    expect(screen.queryByRole('button', { name: '이 에이전트에선 항상 허용' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /묻지 않기/ })).toBeNull()
     expect(screen.getByRole('button', { name: '허용' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '대화 보기' }))
     expect(getStore().getState().selectedAgentId).toBe('d')
@@ -288,18 +288,43 @@ describe('권한 카드', () => {
     expect(document.querySelector('.nd .ap-t')!.textContent).toBe('디자인의 서브에이전트가 파일을 고치려 해요')
   })
 
-  it('대상은 mono(폴더 기준 경로), 자세히는 입력 JSON 을 접어 둔다', async () => {
+  it('대상은 mono(폴더 기준 경로), 자세히는 칸별로 접어 둔다 — JSON 글자는 없다', async () => {
     snapshot.requests = [request()]
     await renderPanel('d')
     const c = card('디자인이 파일을 고치려 해요')
     expect(c.querySelector('code')!.textContent).toBe('src/styles/tokens.css')
     const more = within(c).getByRole('button', { name: '자세히' })
     expect(more.getAttribute('aria-expanded')).toBe('false')
-    expect(c.querySelector('pre')).toBeNull()
+    expect(c.querySelector('dl')).toBeNull()
     await act(async () => { fireEvent.click(more) })
     expect(more.getAttribute('aria-expanded')).toBe('true')
-    const pre = c.querySelector('pre')!
-    expect(JSON.parse(pre.textContent!)).toEqual(request().input)
+    expect(c.querySelector('pre')).toBeNull()
+    expect([...c.querySelectorAll('dt')].map(t => t.textContent)).toEqual(['파일', '바꿀 글', '새 글'])
+  })
+
+  it('설명 줄 · 명령 첫 줄과 +N줄 · 자세히는 칸별(명령·설명·제한 시간)', async () => {
+    snapshot.requests = [request({
+      id: 'b', agentId: 'w', toolName: 'Bash',
+      input: { command: 'npm install\nnpm run build\nnpm test', description: '의존성을 설치하고 빌드·시험해요', timeout: 120000 },
+    })]
+    await renderPanel('w')
+    const c = card('웹 화면이 명령을 실행하려 해요')
+    expect(c.textContent).toContain('의존성을 설치하고 빌드·시험해요')
+    expect(c.textContent).toContain('npm install')
+    expect(c.textContent).toContain('+2줄')
+    expect(c.textContent).not.toContain('npm run build')
+    await act(async () => { fireEvent.click(within(c).getByRole('button', { name: '자세히' })) })
+    expect([...c.querySelectorAll('dt')].map(t => t.textContent)).toEqual(['명령', '설명', '제한 시간'])
+    expect([...c.querySelectorAll('dd')].map(t => t.textContent)[2]).toBe('2분')
+    expect(c.textContent).not.toContain('"command"')
+  })
+
+  it("'항상'은 범위를 말한다 — 앞으로 웹 화면의 명령 실행은 묻지 않기", async () => {
+    snapshot.requests = [request({ id: 'b', agentId: 'w', toolName: 'Bash', input: { command: 'ls' } })]
+    await renderPanel('w')
+    const c = card('웹 화면이 명령을 실행하려 해요')
+    await act(async () => { fireEvent.click(within(c).getByRole('button', { name: '앞으로 웹 화면의 명령 실행은 묻지 않기' })) })
+    expect(api.answerRequest).toHaveBeenCalledWith('b', { type: 'allow-always' })
   })
 
   it('답이 실패하면(이미 끝난 요청) 엔진 문구를 보여 주고 버튼을 다시 연다', async () => {

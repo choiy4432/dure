@@ -1,25 +1,13 @@
 import { useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import type { Decision, PendingRequest } from '../../../engine/types'
-import { requestTarget, requestTitle } from '../../lib/toolSummary'
+import { alwaysAllowLabel, requestTarget, requestTitle } from '../../lib/toolSummary'
+import { commandLines, detailRows, requestWhy } from '../../lib/requestDetails'
 import { ago } from '../../lib/words'
 import { getStore } from '../../state/store'
 import { useCall } from './useCall'
 import { useMotion } from '../../lib/presence'
 import { MOTION } from '../../lib/motion'
-
-// 자세히 — 파일 전체를 쓰는 입력은 아주 길 수 있다. 앞부분만
-const DETAIL_MAX = 4000
-
-function inputText(input: unknown): string {
-  let text: string
-  try {
-    text = JSON.stringify(input, null, 2) ?? String(input)
-  } catch {
-    text = String(input)
-  }
-  return text.length > DETAIL_MAX ? `${text.slice(0, DETAIL_MAX)}\n…` : text
-}
 
 interface Props {
   request: PendingRequest
@@ -29,7 +17,7 @@ interface Props {
   inInbox?: boolean
 }
 
-/** 권한 카드 — 관계도 카드의 앰버 칸과 같은 제목(서브에이전트가 물은 것이면 그렇다고)·대상, 자세히(입력 접힘) · [허용] [거절] · 항상 허용 */
+/** 권한 카드 — 관계도 카드의 앰버 칸과 같은 제목(서브에이전트가 물은 것이면 그렇다고) · 설명 · 명령 첫 줄/대상 · 자세히(칸별, 접힘) · [허용] [거절] · 범위를 밝힌 '앞으로 … 묻지 않기' */
 export function PermissionCard({ request, agent, now, inInbox = false }: Props) {
   const { busy, error, call } = useCall()
   const root = useRef<HTMLElement>(null)
@@ -38,6 +26,9 @@ export function PermissionCard({ request, agent, now, inInbox = false }: Props) 
   // 서브에이전트가 물은 것이면 '디자인의 서브에이전트가 …' — 관계도 카드의 승인 칸과 같은 제목
   const title = requestTitle(agent.name, request.toolName, request.input, request.fromSubagent)
   const target = requestTarget(request.toolName, request.input, agent.folder)
+  const why = requestWhy(request.input)
+  // 명령이면 첫 줄만 코드 판에 — 나머지는 '+N줄'과 자세히로
+  const cmd = commandLines(request.toolName, request.input)
   // 성공하면 엔진이 요청을 지워 카드가 사라진다 — 그동안 버튼은 막아 둔다
   const answer = (d: Decision) => call(() => window.dure.answerRequest(request.id, d), 'hold')
 
@@ -47,18 +38,41 @@ export function PermissionCard({ request, agent, now, inInbox = false }: Props) 
         <b className="ask-t">{title}</b>
         <span className="pin-t">{ago(request.createdAt, now)}</span>
       </div>
+      {why && (
+        <p className="ask-why trunc" title={why}>
+          {why}
+        </p>
+      )}
       <div className="ask-row">
-        {target && (
-          <code className="trunc" title={target}>
-            {target}
-          </code>
+        {cmd ? (
+          <>
+            <code className="ask-cmd trunc" title={cmd.first}>
+              {cmd.first}
+            </code>
+            {cmd.more > 0 && <span className="ask-n">+{cmd.more}줄</span>}
+          </>
+        ) : (
+          target && (
+            <code className="trunc" title={target}>
+              {target}
+            </code>
+          )
         )}
         <button type="button" className="lk ask-more" aria-expanded={more} onClick={() => setMore(m => !m)}>
           자세히
           <ChevronDown className="i" size={14} aria-hidden="true" />
         </button>
       </div>
-      {more && <pre className="ask-json">{inputText(request.input)}</pre>}
+      {more && (
+        <dl className="ask-dl">
+          {detailRows(request.toolName, request.input, agent.folder).map((r, i) => (
+            <div key={i} className="ask-dr">
+              <dt>{r.label}</dt>
+              <dd className={r.mono ? 'mono' : undefined}>{r.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
       <div className="ab">
         <button type="button" className="btn pri sm" disabled={busy} onClick={() => answer({ type: 'allow' })}>
           허용
@@ -73,7 +87,7 @@ export function PermissionCard({ request, agent, now, inInbox = false }: Props) 
           </button>
         ) : (
           <button type="button" className="lk" disabled={busy} onClick={() => answer({ type: 'allow-always' })}>
-            이 에이전트에선 항상 허용
+            {alwaysAllowLabel(agent.name, request.toolName)}
           </button>
         )}
       </div>

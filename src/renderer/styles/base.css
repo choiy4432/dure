@@ -1650,15 +1650,13 @@ code {
 }
 
 .pnl-pins::-webkit-scrollbar,
-.pin-b::-webkit-scrollbar,
-.ask-json::-webkit-scrollbar {
+.pin-b::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 .pnl-pins::-webkit-scrollbar-thumb,
-.pin-b::-webkit-scrollbar-thumb,
-.ask-json::-webkit-scrollbar-thumb {
+.pin-b::-webkit-scrollbar-thumb {
   background: var(--border-strong);
   border-radius: var(--radius-box);
   border: 3px solid transparent;
@@ -1921,21 +1919,74 @@ code {
   transform: rotate(180deg);
 }
 
-.ask-json {
-  margin: 8px 0 0;
-  max-height: 220px;
-  overflow: auto;
-  padding: 8px 10px;
-  border: 1px solid var(--warn-border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
+/* 에이전트가 적은 '왜' 한 줄 — 제목 바로 아래, 한 줄 말줄임 */
+.ask-why {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-2);
+}
+
+/* 명령 첫 줄 — 회색 코드 판 */
+.ask-row code.ask-cmd {
+  flex: 0 1 auto;
+  padding: 4px 8px;
+  border-radius: var(--radius-ctl);
+  background: var(--code-bg);
+  color: var(--text);
   font-family: var(--mono);
   font-size: 12px;
+  line-height: 16px;
+}
+
+/* 첫 줄 뒤에 더 있는 줄 수 */
+.ask-n {
+  flex: none;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  color: var(--text-3);
+  font-size: 11px;
   line-height: 18px;
-  letter-spacing: 0;
+}
+
+/* 자세히 — 칸 이름(왼쪽 64px) · 값 2단 */
+.ask-dl {
+  margin: 8px 0 0;
+  display: grid;
+  gap: 6px;
+}
+
+.ask-dr {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ask-dr dt {
+  flex: none;
+  width: 64px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.ask-dr dd {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 18px;
   color: var(--text-2);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.ask-dr dd.mono {
+  font-family: var(--mono);
+  letter-spacing: 0;
 }
 
 /* 새 에이전트 만들기 카드 — 권한 카드 판 위에 '새 이름 · 역할' → 폴더(.ask-row 코드) → 첫 할 일.
@@ -1957,7 +2008,7 @@ code {
   font-weight: 700;
 }
 
-/* 첫 할 일 — 보낼 메시지라 판 안의 흰 상자(권한 카드 '자세히'의 도구 입력 상자 .ask-json 과 같은 테두리)에 받은 메시지 카드처럼 '보낼 쪽 → 받을 쪽'과 접힌 본문 */
+/* 첫 할 일 — 보낼 메시지라 판 안의 흰 상자(권한 카드 '자세히'와 같은 테두리)에 받은 메시지 카드처럼 '보낼 쪽 → 받을 쪽'과 접힌 본문 */
 .ca-task {
   margin-top: 8px;
   padding: 8px 10px 10px;
