@@ -5,7 +5,7 @@ import type { AgentView, DureApi, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, roomId = 'r1', over: Partial<AgentView> = {}): AgentView => ({
   id, roomId, name: id, role: '', folder: '/x', sessionId: '', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, subagentsRunning: [], ...over,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [], ...over,
 })
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   claudeMissing: false,
@@ -86,6 +86,18 @@ describe('store events', () => {
     emit('flags', { agentId: 'a', bypass: true, bySettings: false, pending: false })
     emit('held-input', { agentId: 'a', count: 2 })
     expect(s.getState().agents[0]).toMatchObject({ status: 'error', errorText: '멈춤', bypass: true, heldInput: 2 })
+  })
+
+  it('plan-mode·hold 사건이 에이전트 보기를 바꾼다', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    const hold = { since: 1, items: [] }
+    emit('plan-mode', { agentId: 'a', on: true })
+    emit('hold', { agentId: 'a', hold })
+    expect(s.getState().agents[0]).toMatchObject({ planMode: true, hold })
+    emit('hold', { agentId: 'a', hold: null })
+    expect(s.getState().agents[0].hold).toBeNull()
   })
 
   it('statusSince — 표시 상태가 바뀐 status 이벤트를 받은 시각, 같은 상태 반복엔 그대로', async () => {

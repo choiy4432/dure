@@ -1,5 +1,5 @@
 import type {
-  Agent, AgentDescription, AgentId, EffortLevel, EngineEventMap, AgentStatus, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, ThemePref, UserPart,
+  Agent, AgentDescription, AgentId, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, ThemePref, UserPart,
 } from '../engine/types'
 
 export interface AgentView extends Agent {
@@ -12,6 +12,10 @@ export interface AgentView extends Agent {
   /** 켜려고 그 차례 뒤의 다시 띄우기를 기다리는 중(허용 전에 띄운 세션) — 실제 모드는 아직 그대로, 스위치는 바뀌는 중 */
   bypassPending: boolean
   heldInput: number
+  /** 계획 모드 중인가 */
+  planMode: boolean
+  /** 붙잡힌 입력 — 없으면 null */
+  hold: Hold | null
   /** Claude 에게 마지막으로 읽은 지금 effort — 모르면 null */
   effortNow: EffortLevel | null
   /** 차례의 init 에서 읽은, 지금 실제로 쓰는 모델 id(예: claude-opus-5-5) — 모르면 null */
@@ -50,7 +54,14 @@ export interface DureApi {
   removeAgent(id: AgentId): Promise<void>
   /** 화면에서 고른 에이전트(없으면 null) — 엔진이 claude 를 미리 띄운다 */
   setSelected(id: AgentId | null): Promise<void>
-  sendUser(id: AgentId, parts: UserPart[]): Promise<void>
+  sendUser(id: AgentId, parts: UserPart[], o?: { plan?: boolean }): Promise<void>
+  setPlanMode(id: AgentId, on: boolean): Promise<void>
+  /** 붙잡힌 입력을 이어서 보낸다 */
+  resumeHold(id: AgentId): Promise<void>
+  dropHoldItem(id: AgentId, itemId: string): Promise<void>
+  dropHold(id: AgentId): Promise<void>
+  /** 늘 허용에서 그 도구를 뺀다 */
+  revokeAlwaysAllow(id: AgentId, toolName: string): Promise<Agent>
   interrupt(id: AgentId): Promise<void>
   newConversation(id: AgentId): Promise<void>
   setModel(id: AgentId, model: string | null): Promise<void>
@@ -90,6 +101,7 @@ export const METHODS = [
   'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'image',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
   'setAllowBypass', 'setNotify', 'setTheme', 'setBypass',
+  'setPlanMode', 'resumeHold', 'dropHoldItem', 'dropHold', 'revokeAlwaysAllow',
   'pickFolder', 'openFolder', 'setTaskbar', 'flashWindow', 'focusWindow',
 ] as const satisfies readonly Exclude<keyof DureApi, 'on'>[]
 

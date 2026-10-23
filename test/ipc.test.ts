@@ -31,6 +31,8 @@ function fakeEngine() {
     effortNow: () => 'high',
     modelNow: () => 'claude-opus-5-5',
     subagentsRunning: () => ['toolu_1', 'toolu_2'],
+    planMode: () => true,
+    hold: () => ({ since: 1, items: [] }),
     usage: () => ({ windows: [{ key: 'session', label: '5시간', percent: 40, resetsAt: null }], at: 1 }),
     setEffort: rec('setEffort', Promise.resolve()),
     refreshUsage: rec('refreshUsage'),
@@ -59,6 +61,11 @@ function fakeEngine() {
     setNotify: rec('setNotify'),
     setAllowBypass: rec('setAllowBypass', Promise.resolve()),
     setBypass: rec('setBypass', Promise.resolve()),
+    setPlanMode: rec('setPlanMode', Promise.resolve()),
+    resumeHold: rec('resumeHold'),
+    dropHoldItem: rec('dropHoldItem'),
+    dropHold: rec('dropHold'),
+    revokeAlwaysAllow: rec('revokeAlwaysAllow', agent),
   })
   return { engine: e as Engine & EventEmitter, calls }
 }
@@ -111,11 +118,12 @@ describe('registerIpc', () => {
     const args: Record<string, unknown[]> = {
       addRoom: ['방'], renameRoom: ['r1', '새'], removeRoom: ['r1'],
       addAgent: [{ roomId: 'r1', name: 'n', role: 'r', folder: 'f' }], updateAgent: ['a1', { auto: true }],
-      removeAgent: ['a1'], setSelected: ['a1'], sendUser: ['a1', [{ type: 'text', text: 'hi' }]], interrupt: ['a1'],
+      removeAgent: ['a1'], setSelected: ['a1'], sendUser: ['a1', [{ type: 'text', text: 'hi' }], { plan: true }], interrupt: ['a1'],
       newConversation: ['a1'], setModel: ['a1', null], describe: ['a1'], history: ['a1', { all: true }], image: ['a1', 'f.png'],
       approveMessage: ['m1'], dismissMessage: ['m1'], continueHeld: ['r1'],
       answerRequest: ['q1', { type: 'allow' }], setAutoChainLimit: [5],
       setEffort: ['a1', 'high'], refreshUsage: [], setAllowBypass: [true], setNotify: [{ finished: true }], setTheme: ['dark'], setBypass: ['a1', false],
+      setPlanMode: ['a1', true], resumeHold: ['a1'], dropHoldItem: ['a1', 'i1'], dropHold: ['a1'], revokeAlwaysAllow: ['a1', 'Bash'],
     }
     for (const [m, a] of Object.entries(args)) {
       const r = await call(m, ...a)
@@ -143,7 +151,7 @@ describe('registerIpc', () => {
       notify: { asks: false, finished: true },
       theme: 'dark',
       rooms: [{ id: 'r1' }],
-      agents: [{ id: 'a1', status: 'idle', errorText: null, bypassOn: true, bypass: true, bypassBySettings: false, bypassPending: true, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5', subagentsRunning: ['toolu_1', 'toolu_2'] }],
+      agents: [{ id: 'a1', status: 'idle', errorText: null, bypassOn: true, bypass: true, bypassBySettings: false, bypassPending: true, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5', subagentsRunning: ['toolu_1', 'toolu_2'], planMode: true, hold: { since: 1, items: [] } }],
       usage: { windows: [{ key: 'session', percent: 40 }] },
     })
   })

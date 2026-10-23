@@ -74,7 +74,7 @@ type Ev = { [K in keyof EngineEventMap]: { name: K; payload: EngineEventMap[K] }
 
 const EVENTS: (keyof EngineEventMap)[] = [
   'agent-event', 'status', 'message', 'request', 'request-resolved', 'flags', 'history', 'held-input',
-  'usage', 'context', 'effort', 'model-now', 'subagents', 'agent-added',
+  'usage', 'context', 'effort', 'model-now', 'subagents', 'agent-added', 'plan-mode', 'hold',
 ]
 
 const sameItem = (a: HistoryItem, b: HistoryItem) => JSON.stringify(a) === JSON.stringify(b)
@@ -176,6 +176,16 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       case 'held-input': {
         const p = ev.payload
         state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, heldInput: p.count } : a)) }
+        break
+      }
+      case 'plan-mode': {
+        const p = ev.payload
+        state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, planMode: p.on } : a)) }
+        break
+      }
+      case 'hold': {
+        const p = ev.payload
+        state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, hold: p.hold } : a)) }
         break
       }
       case 'usage':

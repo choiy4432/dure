@@ -128,6 +128,7 @@ export interface Engine extends EventEmitter {
    * 그 차례 뒤, 서브에이전트가 돌면 그 일이 끝난 뒤 — 그동안 flags.pending · 대화 안내 한 줄, 끄면 거둔다).
    * 끄기: 내 Claude 설정의 기본 모드로. 실패는 던지지 않는다 — engine-error · 대화 안내 한 줄 · flags(실제 모드)로 알린다
    */
+  revokeAlwaysAllow(id: AgentId, toolName: string): Agent;
   setBypass(id: AgentId, on: boolean): Promise<void>;
   errorText(id: AgentId): string | null;
   /**
@@ -897,6 +898,13 @@ class EngineImpl extends EventEmitter implements Engine {
     this.emitEffort(id);
     const s = this.sessions.get(id);
     if (s) this.applyEffort(id, s);
+  }
+
+  /** 늘 허용에서 그 도구를 뺀다 — 다음 요청부터 다시 묻는다. 없는 도구면 그대로 */
+  revokeAlwaysAllow(id: AgentId, toolName: string): Agent {
+    const a = this.need(id);
+    if (!a.alwaysAllow.includes(toolName)) return a;
+    return this.store.updateAgent(id, { alwaysAllow: a.alwaysAllow.filter((t) => t !== toolName) });
   }
 
   async setBypass(id: AgentId, on: boolean) {
