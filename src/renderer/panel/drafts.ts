@@ -11,9 +11,11 @@ export type Attached =
 export interface Draft {
   text: string
   attached: Attached[]
+  /** '계획 먼저' — 다음 한 번만 계획부터 세우게 보낸다 */
+  plan: boolean
 }
 
-export const EMPTY_DRAFT: Draft = { text: '', attached: [] }
+export const EMPTY_DRAFT: Draft = { text: '', attached: [], plan: false }
 
 // 에이전트마다 쓰던 입력 — 카드를 오가며 입력창이 다시 그려져도 남는다. 준비가 늦게 끝난 이미지도 그 에이전트 것으로 들어간다
 const drafts = new Map<AgentId, Draft>()
@@ -37,7 +39,7 @@ export function updateDraft(id: AgentId, fn: (d: Draft) => Draft): void {
   if (after === before) return
   const kept = urlsOf(after)
   for (const url of urlsOf(before)) if (!kept.has(url)) URL.revokeObjectURL(url)
-  if (after.text === '' && after.attached.length === 0) drafts.delete(id)
+  if (after.text === '' && after.attached.length === 0 && !after.plan) drafts.delete(id)
   else drafts.set(id, after)
   watchAgents()
   listeners.forEach(fn => fn())

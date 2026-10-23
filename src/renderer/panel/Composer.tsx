@@ -2,7 +2,7 @@ import {
   useEffect, useId, useLayoutEffect, useRef, useState,
   type ChangeEvent, type ClipboardEvent, type DragEvent, type KeyboardEvent,
 } from 'react'
-import { ArrowUp, Image as ImageIcon, X } from 'lucide-react'
+import { ArrowUp, Image as ImageIcon, ListChecks, X } from 'lucide-react'
 import type { AgentId, UserPart } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { displayStatus } from '../state/selectors'
@@ -52,7 +52,10 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     const d = displayStatus(a, s.requests)
     return d === 'working' || d === 'awaiting'
   })
-  const { text, attached } = useDraft(agentId)
+  const planMode = useDure(s => s.agents.find(a => a.id === agentId)?.planMode ?? false)
+  const { text, attached, plan } = useDraft(agentId)
+  // 켬 = 에이전트가 이미 계획 모드이거나 다음 한 번을 계획부터로 정해 둔 것
+  const planOn = planMode || plan
   const setText = (next: string) => updateDraft(agentId, d => (d.text === next ? d : { ...d, text: next }))
   const setAttached = (fn: (list: Attached[]) => Attached[]) => updateDraft(agentId, d => ({ ...d, attached: fn(d.attached) }))
   const [error, setError] = useState<string | null>(null)
@@ -142,9 +145,11 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     setError(null)
     try {
       // 보낸 말은 기록(history 이벤트)으로 목록에 붙는다 — 일하는 중이면 엔진이 차례를 기다리게 둔다
-      await window.dure.sendUser(agentId, parts)
+      // 계획 먼저는 한 번짜리 — 이미 계획 모드인 에이전트에겐 따로 정하지 않는다
+      if (plan && !planMode) await window.dure.sendUser(agentId, parts, { plan: true })
+      else await window.dure.sendUser(agentId, parts)
       // 이 에이전트의 쓰던 입력을 비운다(보낸 이미지의 미리보기는 drafts 가 놓아 준다)
-      updateDraft(agentId, d => ({ text: '', attached: d.attached.filter(a => !sent.has(a.key)) }))
+      updateDraft(agentId, d => ({ text: '', attached: d.attached.filter(a => !sent.has(a.key)), plan: false }))
       onSent?.(agentId)
     } catch (e) {
       setError(errorMessage(e))
@@ -170,6 +175,20 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     } else {
       edit(`/${c.name} `)
       area.current?.focus()
+    }
+  }
+
+  /** '계획 먼저' 단추 — 계획 모드 중이면 끄고(엔진), 아니면 다음 한 번의 표시를 뒤집는다 */
+  const togglePlan = async () => {
+    if (!planMode) {
+      updateDraft(agentId, d => ({ ...d, plan: !d.plan }))
+      return
+    }
+    setError(null)
+    try {
+      await window.dure.setPlanMode(agentId, false)
+    } catch (e) {
+      setError(errorMessage(e))
     }
   }
 
@@ -202,6 +221,12 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
           return
         }
       }
+    }
+    // 목록이 없을 때의 Esc — 일하는 중·승인 대기면 멈춘다
+    if (e.key === 'Escape' && working) {
+      e.preventDefault()
+      void window.dure.interrupt(agentId).catch(err => setError(errorMessage(err)))
+      return
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -269,7 +294,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
   return (
     <div className="cmp">
       <div
-        className={`box${dragging ? ' drop' : ''}`}
+        className={`box${dragging ? ' drop' : ''}${planOn ? ' plan' : ''}`}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}
@@ -325,7 +350,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
           rows={2}
           value={text}
           readOnly={busy}
-          placeholder={`${name}에게 일 시키기… ( / 명령 )`}
+          placeholder={planOn ? `${name}에게 계획부터 세워 달라고 하기…` : `${name}에게 일 시키기… ( / 명령 )`}
           aria-label={`${name}에게 보낼 메시지`}
           aria-autocomplete="list"
           aria-controls={menuOpen ? listId : undefined}
@@ -344,6 +369,16 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
           >
             <ImageIcon className="i" aria-hidden="true" />
           </button>
+          <button
+            type="button"
+            className={`plan-btn${planOn ? ' on' : ''}`}
+            aria-pressed={planOn}
+            title="계획부터 세워 달라고 하기"
+            onClick={() => void togglePlan()}
+          >
+            <ListChecks className="i" size={14} aria-hidden="true" />
+            계획 먼저
+          </button>
           <input ref={filePick} type="file" accept={IMAGE_TYPES.join(',')} multiple hidden onChange={onPick} />
           <span className="tb-sp" />
           {heldInput > 0 && <span className="held-in">보낼 차례를 기다리는 입력 {heldInput}개</span>}
@@ -353,6 +388,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
           </button>
         </div>
       </div>
+      {planOn && <p className="cmp-note">계획을 보고 승인하기 전에는 파일을 고치거나 명령을 실행하지 않아요</p>}
       {error && (
         <p className="cmp-err" role="alert">
           {error}

@@ -37,7 +37,7 @@ const DESC: AgentDescription = {
 
 let snapshot: Snapshot
 let handlers: Record<string, ((p: any) => void)[]>
-let api: Record<'sendUser' | 'describe' | 'newConversation' | 'setModel', ReturnType<typeof vi.fn>>
+let api: Record<'sendUser' | 'describe' | 'newConversation' | 'setModel' | 'setPlanMode' | 'interrupt', ReturnType<typeof vi.fn>>
 
 const emit = <K extends keyof EngineEventMap>(k: K, p: EngineEventMap[K]) => act(() => (handlers[k] ?? []).forEach(f => f(p)))
 const settle = () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
@@ -67,6 +67,8 @@ beforeEach(() => {
     describe: vi.fn(async (_id: string) => DESC),
     newConversation: vi.fn(async (_id: string) => {}),
     setModel: vi.fn(async (_id: string, _model: string | null) => {}),
+    setPlanMode: vi.fn(async (_id: string, _on: boolean) => {}),
+    interrupt: vi.fn(async (_id: string) => {}),
   }
   ;(window as any).dure = {
     ...api,
@@ -719,5 +721,81 @@ describe('Composer — context 링', () => {
     fireEvent.click(screen.getByRole('button', { name: '대화 공간 34% 사용' }))
     expect(screen.getByRole('button', { name: '지금 요약하기' })).toBeDisabled()
     expect(screen.getByText('일이 끝나면 요약할 수 있어요')).toBeInTheDocument()
+  })
+})
+
+describe('Composer — 계획 먼저 · Esc 멈추기', () => {
+  const planBtn = () => screen.getByRole('button', { name: '계획 먼저' })
+  const NOTE = '계획을 보고 승인하기 전에는 파일을 고치거나 명령을 실행하지 않아요'
+
+  it('계획 먼저 — 켜고 보내면 sendUser 에 {plan:true}, 보낸 뒤 꺼짐 · 자리표시·안내 줄', async () => {
+    await renderPanel()
+    expect(planBtn()).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByText(NOTE)).toBeNull()
+    fireEvent.click(planBtn())
+    expect(planBtn()).toHaveAttribute('aria-pressed', 'true')
+    expect(input()).toHaveAttribute('placeholder', '웹 화면에게 계획부터 세워 달라고 하기…')
+    expect(screen.getByText(NOTE)).toBeInTheDocument()
+    type('로그인 만들어 줘')
+    key('Enter')
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledWith('w', [{ type: 'text', text: '로그인 만들어 줘' }], { plan: true })
+    expect(planBtn()).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByText(NOTE)).toBeNull()
+    type('다음 일')
+    key('Enter')
+    await settle()
+    expect(api.sendUser).toHaveBeenLastCalledWith('w', [{ type: 'text', text: '다음 일' }])
+  })
+
+  it('에이전트가 계획 모드면 켜진 채 — 누르면 setPlanMode(false)', async () => {
+    snapshot.agents[0] = agent('w', { name: '웹 화면', planMode: true })
+    await renderPanel()
+    expect(planBtn()).toHaveAttribute('aria-pressed', 'true')
+    type('이어서')
+    key('Enter')
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledWith('w', [{ type: 'text', text: '이어서' }]) // 이미 계획 모드 — plan 옵션 없이
+    fireEvent.click(planBtn())
+    await settle()
+    expect(api.setPlanMode).toHaveBeenCalledWith('w', false)
+  })
+
+  it('계획 모드를 못 끄면 입력창 아래에 오류 글', async () => {
+    snapshot.agents[0] = agent('w', { name: '웹 화면', planMode: true })
+    await renderPanel()
+    api.setPlanMode.mockRejectedValueOnce(new Error('못 껐어요'))
+    fireEvent.click(planBtn())
+    await settle()
+    expect(screen.getByRole('alert')).toBeInTheDocument()
+  })
+
+  it('계획 먼저 켬은 다른 에이전트에 갔다 와도 그대로(초안)', async () => {
+    const { store } = await renderPanel('w')
+    fireEvent.click(planBtn())
+    await act(async () => { store.selectAgent('p') })
+    await settle()
+    expect(planBtn()).toHaveAttribute('aria-pressed', 'false')
+    await act(async () => { store.selectAgent('w') })
+    await settle()
+    expect(planBtn()).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('Esc — 일하는 중이면 멈추기, 쉬는 중·/ 목록이 열렸으면 아님', async () => {
+    await renderPanel()
+    key('Escape')
+    expect(api.interrupt).not.toHaveBeenCalled() // 쉬는 중
+    cleanup()
+    snapshot.agents[0] = agent('w', { name: '웹 화면', status: 'working' })
+    await renderPanel()
+    key('Escape', { isComposing: true })
+    expect(api.interrupt).not.toHaveBeenCalled()
+    type('/co')
+    await settle()
+    key('Escape')
+    expect(api.interrupt).not.toHaveBeenCalled() // 목록만 닫힌다
+    type('')
+    key('Escape')
+    expect(api.interrupt).toHaveBeenCalledWith('w')
   })
 })
