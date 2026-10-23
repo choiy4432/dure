@@ -203,6 +203,8 @@ export interface EngineEventMap {
   'engine-error': { agentId: string | null; message: string };
   history: { agentId: AgentId; item: HistoryItem };
   'held-input': { agentId: AgentId; count: number };
+  /** 늘 허용 목록이 바뀔 때마다(승인 카드의 '앞으로 … 묻지 않기' · 되돌리기) — 바뀐 뒤의 목록 전체 */
+  'always-allow': { agentId: AgentId; alwaysAllow: string[] };
   /** 붙잡기가 바뀔 때마다(붙잡음 · 항목이 붙거나 빠짐) — 풀리면(이어서 보내기·다 빠짐·에이전트 지움) null */
   hold: { agentId: AgentId; hold: Hold | null };
   usage: PlanUsage | null;

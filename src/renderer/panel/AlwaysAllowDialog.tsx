@@ -1,18 +1,20 @@
-import { useId, useRef, useState, type PointerEvent } from 'react'
+import { useEffect, useId, useRef, useState, type PointerEvent } from 'react'
 import { createPortal } from 'react-dom'
 import type { AgentView } from '../../shared/ipcContract'
-import { getStore } from '../state/store'
 import { errorMessage, josa } from '../lib/words'
 import { toolNoun } from '../lib/toolSummary'
 import { useDialogFocus } from '../lib/dialog'
 import { MOTION } from '../lib/motion'
-import { Presence, useMotion } from '../lib/presence'
+import { Presence, PresenceList, useMotion } from '../lib/presence'
 
 interface Props {
   open: boolean
   agent: AgentView
   onClose: () => void
 }
+
+/** 되돌린 뒤 초점을 옮길 곳 — 남은 줄의 [되돌리기](그 도구) 또는 [닫기] */
+type FocusTo = { tool: string } | 'close'
 
 /** '항상 허용한 일' — 승인 카드에서 '앞으로 … 묻지 않기' 로 쌓인 도구를 보고 하나씩 되돌린다 */
 export function AlwaysAllowDialog(props: Props) {
@@ -24,21 +26,40 @@ function Dialog({ agent, onClose }: Props) {
   const backdrop = useRef<HTMLDivElement>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [focusTo, setFocusTo] = useState<FocusTo | null>(null)
   const titleId = useId()
   useMotion(backdrop, MOTION.backdrop)
   useMotion(ref, MOTION.dialog)
 
   useDialogFocus(ref, onClose, box => box.querySelector<HTMLElement>('[data-undo], [data-close]'))
 
-  // 되돌리기는 이벤트를 보내지 않는다 — 끝나면 스냅샷을 다시 받아 목록을 바꾼다
+  // 되돌린 줄은 나가며 inert 가 되고 누르던 단추는 막혀 있었다 — 초점이 body 로 떨어지지 않게 다음 줄(마지막이면 앞 줄)이나 [닫기]로
+  useEffect(() => {
+    if (!focusTo || busy !== null) return
+    const box = ref.current
+    if (!box) return
+    const target =
+      focusTo === 'close'
+        ? box.querySelector<HTMLElement>('[data-close]')
+        : [...box.querySelectorAll<HTMLElement>('[data-undo]')].find(b => b.dataset.undo === focusTo.tool && !b.closest('[inert]'))
+    target?.focus()
+    setFocusTo(null)
+  }, [focusTo, busy])
+
+  // 목록은 엔진의 always-allow 사건으로 바뀐다(스냅샷을 다시 받지 않는다) — 이 대화상자는 늘 지금 에이전트를 읽는다
   const undo = async (tool: string) => {
+    const list = agent.alwaysAllow
+    const at = list.indexOf(tool)
+    const rest = list.filter(t => t !== tool)
+    const next = rest[at] ?? rest[at - 1]
     setError(null)
     setBusy(tool)
     try {
       await window.dure.revokeAlwaysAllow(agent.id, tool)
-      await getStore().refresh()
+      setFocusTo(next !== undefined ? { tool: next } : 'close')
     } catch (e) {
       setError(errorMessage(e))
+      setFocusTo({ tool })
     } finally {
       setBusy(null)
     }
@@ -64,15 +85,12 @@ function Dialog({ agent, onClose }: Props) {
           </div>
         ) : (
           <ul className="aa-list">
-            {agent.alwaysAllow.map(tool => (
-              <li key={tool} className="aa-row">
-                <span className="aa-noun">{toolNoun(tool)}</span>
-                <span className="aa-name">{tool}</span>
-                <button type="button" className="btn sec sm" data-undo disabled={busy !== null} onClick={() => undo(tool)}>
-                  되돌리기
-                </button>
-              </li>
-            ))}
+            {/* 되돌린 줄은 MOTION.line 으로 나간다 — 마지막 줄이면 목록 대신 빈 안내가 바로 선다 */}
+            <PresenceList>
+              {agent.alwaysAllow.map(tool => (
+                <Row key={tool} tool={tool} disabled={busy !== null} onUndo={() => void undo(tool)} />
+              ))}
+            </PresenceList>
           </ul>
         )}
         {error && <p className="dlg-err">{error}</p>}
@@ -83,5 +101,20 @@ function Dialog({ agent, onClose }: Props) {
         </div>
       </div>
     </div>
+  )
+}
+
+/** 늘 허용한 도구 한 줄 — 도구 뜻 · 영문 이름 · [되돌리기] */
+function Row({ tool, disabled, onUndo }: { tool: string; disabled: boolean; onUndo: () => void }) {
+  const ref = useRef<HTMLLIElement>(null)
+  useMotion(ref, MOTION.line)
+  return (
+    <li ref={ref} className="aa-row">
+      <span className="aa-noun">{toolNoun(tool)}</span>
+      <span className="aa-name">{tool}</span>
+      <button type="button" className="btn sec sm" data-undo={tool} disabled={disabled} onClick={onUndo}>
+        되돌리기
+      </button>
+    </li>
   )
 }

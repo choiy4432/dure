@@ -100,6 +100,18 @@ describe('store events', () => {
     expect(s.getState().agents[0].hold).toBeNull()
   })
 
+  it('always-allow 사건이 그 에이전트의 늘 허용 목록을 바꾼다 — 스냅샷을 다시 받지 않는다', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('always-allow', { agentId: 'b', alwaysAllow: ['Bash', 'Edit'] })
+    expect(s.getState().agents.find(a => a.id === 'b')!.alwaysAllow).toEqual(['Bash', 'Edit'])
+    expect(s.getState().agents.find(a => a.id === 'a')!.alwaysAllow).toEqual([])
+    emit('always-allow', { agentId: 'b', alwaysAllow: ['Edit'] })
+    expect(s.getState().agents.find(a => a.id === 'b')!.alwaysAllow).toEqual(['Edit'])
+    expect(api.snapshot).toHaveBeenCalledTimes(1)
+  })
+
   it('statusSince — 표시 상태가 바뀐 status 이벤트를 받은 시각, 같은 상태 반복엔 그대로', async () => {
     const { api, emit } = fake({ snapshot: async () => snap({ agents: [agent('a', 'r1', { status: 'working' }), agent('b')] }) })
     const s = createStore(api)

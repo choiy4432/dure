@@ -54,17 +54,30 @@ test('없으면 대기 → answer allow → allow', async () => {
   expect(resolved).toEqual([{ id: req.id, agentId: a1 }]);
 });
 
-test('allow-always → allow + store 의 alwaysAllow 에 도구 이름 추가(중복 없이)', async () => {
+test('allow-always → allow + store 의 alwaysAllow 에 도구 이름 추가(중복 없이) · 더했을 때만 always-allow 사건', async () => {
+  const always: unknown[] = [];
+  perms.on('always-allow', (p) => always.push(p));
   const p1 = perms.request(a1, { tool_name: 'Bash', input: {} });
   perms.answer(lastPending().id, { type: 'allow-always' });
   expect((await p1).behavior).toBe('allow');
   expect(store.agent(a1)!.alwaysAllow).toEqual(['Bash']);
-  // 대기 중에 이미 목록에 들어간 경우에도 중복 없이
+  expect(always).toEqual([{ agentId: a1, alwaysAllow: ['Bash'] }]);
+  // 대기 중에 이미 목록에 들어간 경우에도 중복 없이 — 목록이 그대로라 사건도 없다
   const p2 = perms.request(a2, { tool_name: 'Edit', input: {} });
   store.updateAgent(a2, { alwaysAllow: ['Edit'] });
   perms.answer(lastPending().id, { type: 'allow-always' });
   await p2;
   expect(store.agent(a2)!.alwaysAllow).toEqual(['Edit']);
+  expect(always).toHaveLength(1);
+  // 듣는 쪽이 던져도 답은 간다
+  perms.removeAllListeners('always-allow');
+  perms.on('always-allow', () => {
+    throw new Error('듣는 쪽 오류');
+  });
+  const p3 = perms.request(a1, { tool_name: 'Write', input: {} });
+  perms.answer(lastPending().id, { type: 'allow-always' });
+  expect((await p3).behavior).toBe('allow');
+  expect(store.agent(a1)!.alwaysAllow).toEqual(['Bash', 'Write']);
 });
 
 test('deny → message 기본값 DENY_DEFAULT, 지정하면 그 글', async () => {

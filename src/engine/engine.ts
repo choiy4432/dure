@@ -66,6 +66,7 @@ export interface EngineOptions {
 //  'plan-mode'   { agentId; on }   (planMode() 가 바뀔 때만 — 세션의 실제 모드가 plan 인가. 세션이 없거나 아직 모드를 모르면 바라는 값)
 //  'history'     { agentId; item: HistoryItem }   (대화 기록에 한 항목이 더해질 때마다 — text-delta·thinking·init·rate-limit 은 기록하지 않는다)
 //  'held-input'  { agentId; count }   (보낼 차례를 기다리는 사람 입력 수가 바뀔 때마다 — 붙잡힌 것은 세지 않는다)
+//  'always-allow' { agentId; alwaysAllow }   (늘 허용 목록이 바뀔 때마다 — 승인 카드의 allow-always · 되돌리기. 바뀐 뒤의 목록)
 //  'hold'        { agentId; hold: Hold | null }   (붙잡기가 바뀔 때마다 — 멈춰서 붙잡음 · 항목이 붙거나 빠짐. 풀리면 null)
 //  'effort'      { agentId; effort; effortNow }   (고른 값이 바뀌거나 Claude 에게 지금 값을 읽을 때마다)
 //  'context'     { agentId; value: ContextUsage | null }   (차례 끝에 대화 공간을 받았을 때 · 요약·새 대화 직후엔 null)
@@ -122,13 +123,14 @@ export interface Engine extends EventEmitter {
    * 돌린다(다시 띄우지 않는다). 다음에 띄울 때는 옵션 없이
    */
   setAllowBypass(on: boolean): Promise<void>;
+  /** 늘 허용에서 그 도구를 뺀다 — 다음 요청부터 다시 묻는다. 없는 도구면 그대로, 바뀌면 'always-allow' */
+  revokeAlwaysAllow(id: AgentId, toolName: string): Agent;
   /**
    * 에이전트의 '묻지 않음' — 저장하고 살아 있는 세션에 적용한다. 허용이 꺼져 있으면 켜기는 던진다.
    * 켜기: 옵션으로 떠 있으면 바로 set_permission_mode, 옵션 없이 떠 있으면 쉴 때 --resume 으로 다시 띄운다(일하는·승인 기다리는 중이면
    * 그 차례 뒤, 서브에이전트가 돌면 그 일이 끝난 뒤 — 그동안 flags.pending · 대화 안내 한 줄, 끄면 거둔다).
    * 끄기: 내 Claude 설정의 기본 모드로. 실패는 던지지 않는다 — engine-error · 대화 안내 한 줄 · flags(실제 모드)로 알린다
    */
-  revokeAlwaysAllow(id: AgentId, toolName: string): Agent;
   setBypass(id: AgentId, on: boolean): Promise<void>;
   errorText(id: AgentId): string | null;
   /**
@@ -459,6 +461,7 @@ class EngineImpl extends EventEmitter implements Engine {
         this.pump(r.agentId);
       });
     });
+    this.perms.on('always-allow', (p: EngineEventMap['always-allow']) => this.guard(p.agentId, () => this.emit('always-allow', p)));
     this.router.on('message', (m: RelayMessage) => {
       this.guard(null, () => this.emit('message', m));
       this.guard(m.to, () => this.noteHoldMessage(m));
@@ -900,11 +903,13 @@ class EngineImpl extends EventEmitter implements Engine {
     if (s) this.applyEffort(id, s);
   }
 
-  /** 늘 허용에서 그 도구를 뺀다 — 다음 요청부터 다시 묻는다. 없는 도구면 그대로 */
+  /** 늘 허용에서 그 도구를 뺀다 — 다음 요청부터 다시 묻는다. 없는 도구면 그대로(사건 없음). 바뀌면 'always-allow' */
   revokeAlwaysAllow(id: AgentId, toolName: string): Agent {
     const a = this.need(id);
     if (!a.alwaysAllow.includes(toolName)) return a;
-    return this.store.updateAgent(id, { alwaysAllow: a.alwaysAllow.filter((t) => t !== toolName) });
+    const next = this.store.updateAgent(id, { alwaysAllow: a.alwaysAllow.filter((t) => t !== toolName) });
+    this.guard(id, () => this.emit('always-allow', { agentId: id, alwaysAllow: [...next.alwaysAllow] }));
+    return next;
   }
 
   async setBypass(id: AgentId, on: boolean) {

@@ -19,7 +19,8 @@ interface Entry {
   detach?: () => void; // signal 에 단 abort 듣는 쪽을 뗀다
 }
 
-// 권한·되묻기 대기열. 이벤트: 'request'(PendingRequest) · 'resolved'({ id, agentId })
+// 권한·되묻기 대기열. 이벤트: 'request'(PendingRequest) · 'resolved'({ id, agentId }) ·
+// 'always-allow'({ agentId, alwaysAllow }) — allow-always 로 늘 허용 목록에 더했을 때(바뀐 뒤의 목록)
 export class Permissions extends EventEmitter {
   private entries = new Map<string, Entry>();
   private asked = new Set<string>();
@@ -96,6 +97,7 @@ export class Permissions extends EventEmitter {
       throw new Error('되묻기에는 allow 로 답할 수 없습니다.');
     }
     let result: ApproveResult;
+    let always: string[] | null = null; // 늘 허용에 더했으면 바뀐 뒤의 목록
     if (d.type === 'deny') {
       result = { behavior: 'deny', message: d.message ?? (req.kind === 'create-agent' ? DENY.createAgentDenied : DENY_DEFAULT) };
     } else if (d.type === 'answer') {
@@ -104,11 +106,19 @@ export class Permissions extends EventEmitter {
     } else {
       if (d.type === 'allow-always') {
         const cur = this.store.agent(req.agentId)?.alwaysAllow;
-        if (cur && !cur.includes(req.toolName)) this.store.updateAgent(req.agentId, { alwaysAllow: [...cur, req.toolName] });
+        if (cur && !cur.includes(req.toolName)) always = this.store.updateAgent(req.agentId, { alwaysAllow: [...cur, req.toolName] }).alwaysAllow;
       }
       result = { behavior: 'allow', updatedInput: req.input };
     }
     this.finish(entry, result);
+    // 화면의 '항상 허용한 일'(메뉴의 수·대화상자)이 다음 스냅샷을 기다리지 않게 — 답을 보낸 뒤 알린다(듣는 쪽이 던져도 답은 이미 갔다)
+    if (always) {
+      try {
+        this.emit('always-allow', { agentId: req.agentId, alwaysAllow: [...always] });
+      } catch {
+        /* 듣는 쪽 오류로 답을 잃지 않는다 */
+      }
+    }
   }
 
   /** 그 에이전트의 대기를 message 로 거절한다 — keep 이 true 인 요청은 남긴다(차례가 끝나도 도는 서브에이전트가 물은 것) */

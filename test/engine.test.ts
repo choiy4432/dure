@@ -4555,15 +4555,21 @@ test('settings.json 의 알림 값이 불리언이 아니면 기본값', async (
 test('alwaysAllow: 되돌리면 다음 요청부터 다시 묻는다 · 없는 도구는 그대로 · 없는 에이전트는 던진다', async () => {
   const e = await start();
   const { a } = setup(e);
+  // 늘 허용 목록이 바뀔 때마다 사건 — 화면의 메뉴 수·대화상자가 스냅샷을 기다리지 않게
+  const always: { agentId: string; alwaysAllow: string[] }[] = [];
+  e.on('always-allow', (p: { agentId: string; alwaysAllow: string[] }) => always.push(p));
   const ask1 = requestOf(e, a.id);
   const asked1 = resultOf(e, a.id);
   await e.sendUser(a.id, text('ASK Bash'));
   e.answerRequest((await ask1).id, { type: 'allow-always' });
+  expect(always).toEqual([{ agentId: a.id, alwaysAllow: ['Bash'] }]); // 답한 그 자리에서
   await asked1;
   expect(agentOf(e, a.id).alwaysAllow).toEqual(['Bash']);
 
   expect(e.revokeAlwaysAllow(a.id, 'Write').alwaysAllow).toEqual(['Bash']); // 없는 도구는 그대로
+  expect(always).toHaveLength(1); // 바뀌지 않았으면 사건도 없다
   expect(e.revokeAlwaysAllow(a.id, 'Bash').alwaysAllow).toEqual([]);
+  expect(always).toEqual([{ agentId: a.id, alwaysAllow: ['Bash'] }, { agentId: a.id, alwaysAllow: [] }]);
   expect(agentOf(e, a.id).alwaysAllow).toEqual([]);
   expect(() => e.revokeAlwaysAllow('없는-에이전트', 'Bash')).toThrow();
 
