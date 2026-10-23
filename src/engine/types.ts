@@ -176,6 +176,10 @@ export interface EngineEventMap {
    * pending = 옵션 없이 뜬 세션을 켜려고 그 차례 뒤의 다시 띄우기를 기다리는 중(실제 모드는 아직 그대로)
    */
   flags: { agentId: AgentId; bypass: boolean; bySettings: boolean; pending: boolean };
+  /**
+   * 계획 모드 — 그 에이전트 세션의 실제 모드가 plan 인가(세션이 없거나 아직 모드를 모르면 바라는 값 — 띄울 때 맞춘다). 바뀔 때만
+   */
+  'plan-mode': { agentId: AgentId; on: boolean };
   'engine-error': { agentId: string | null; message: string };
   history: { agentId: AgentId; item: HistoryItem };
   'held-input': { agentId: AgentId; count: number };
