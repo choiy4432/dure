@@ -131,11 +131,16 @@ function relativeTo(path: string, folder: string | undefined): string {
   return p.toLowerCase().startsWith(base.toLowerCase()) ? p.slice(base.length) : p
 }
 
+/** 파일 도구 입력의 경로(폴더 기준) — 승인 대상 줄과 자세히 의 '파일' 칸이 같은 규칙을 쓴다 */
+export function filePathTarget(input: unknown, folder?: string): string | null {
+  const path = field(input, 'file_path') ?? field(input, 'notebook_path')
+  return path ? relativeTo(path, folder) : null
+}
+
 /** 승인 요청의 대상 — 파일 경로(폴더 기준)나 명령 첫 줄. 잘림 없이 — 화면이 말줄임을 맡는다 */
 export function requestTarget(toolName: string, input: unknown, folder?: string): string | null {
   if (FILE_TOOLS.has(toolName)) {
-    const path = field(input, 'file_path') ?? field(input, 'notebook_path')
-    return path ? relativeTo(path, folder) : null
+    return filePathTarget(input, folder)
   }
   if (toolName === 'Bash' || toolName === 'PowerShell') {
     const cmd = field(input, 'command')
@@ -156,4 +161,26 @@ export function createAgentPlan(input: unknown): CreateAgentInput {
     folder: field(input, 'folder') ?? '',
     task: task && task.trim() ? task : null,
   }
+}
+
+const NOUN: Record<string, string> = {
+  Bash: '명령 실행',
+  PowerShell: '명령 실행',
+  Edit: '파일 고치기',
+  MultiEdit: '파일 고치기',
+  NotebookEdit: '파일 고치기',
+  Write: '파일 만들기',
+  WebFetch: '웹 읽기',
+  WebSearch: '웹 검색',
+}
+
+/** '항상 허용' 범위 문구에 쓰는 도구 이름 — 어려운 도구 이름 대신 하는 일로 */
+export function toolNoun(toolName: string): string {
+  return NOUN[toolName] ?? `${toolName} 사용`
+}
+
+/** '항상' 버튼 글 — 어느 에이전트의 어떤 일을 더는 안 묻는지 범위를 밝힌다 */
+export function alwaysAllowLabel(agentName: string, toolName: string): string {
+  const noun = toolNoun(toolName)
+  return `앞으로 ${agentName}의 ${noun}${josa(noun, '은/는')} 묻지 않기`
 }

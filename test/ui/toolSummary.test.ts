@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createAgentPlan, ongoing, requestTarget, requestTitle, toolSummary } from '../../src/renderer/lib/toolSummary'
+import { alwaysAllowLabel, createAgentPlan, ongoing, requestTarget, requestTitle, toolSummary } from '../../src/renderer/lib/toolSummary'
 
 describe('toolSummary', () => {
   it('파일 도구는 마지막 조각만', () => {
@@ -114,5 +114,13 @@ describe('createAgentPlan', () => {
   it('모양이 틀린 입력은 빈 글로 — 화면이 깨지지 않게', () => {
     expect(createAgentPlan(null)).toEqual({ name: '', role: '', folder: '', task: null })
     expect(createAgentPlan({ name: 5, role: null, task: {} })).toEqual({ name: '', role: '', folder: '', task: null })
+  })
+})
+
+describe('alwaysAllowLabel', () => {
+  it('항상 허용 범위 문구', () => {
+    expect(alwaysAllowLabel('웹', 'Bash')).toBe('앞으로 웹의 명령 실행은 묻지 않기')
+    expect(alwaysAllowLabel('웹', 'Edit')).toBe('앞으로 웹의 파일 고치기는 묻지 않기')
+    expect(alwaysAllowLabel('기획', 'Foo')).toBe('앞으로 기획의 Foo 사용은 묻지 않기')
   })
 })
