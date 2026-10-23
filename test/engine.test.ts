@@ -2867,19 +2867,24 @@ test('plan: 묻지 않음이 켜진 에이전트는 계획 승인 뒤 다시 byp
   const { a } = setup(e);
   await e.setAllowBypass(true);
   await e.setBypass(a.id, true);
+  const got = planEvents(e, a.id);
+  const flags = flagEvents(e);
   const req = planRequest(e, a.id);
-  await e.sendUser(a.id, text('PLAN 헤더'), { plan: true });
+  await e.sendUser(a.id, text('PLAN 헤더'), { plan: true }); // 세션 없이 — 띄울 때 bypass 대신 plan 을 보낸다
   const r = await req;
   expect(e.planMode(a.id)).toBe(true);
   expect(e.flags(a.id).bypass).toBe(false); // 계획 모드 동안은 묻지 않고 실행하지 않는다
+  expect(got).toEqual([true]); // 깜박이지 않는다
+  expect(flags.filter((f) => f.agentId === a.id && f.bypass)).toEqual([]);
 
   const done = resultOf(e, a.id);
   e.answerRequest(r.id, { type: 'allow' });
   await done;
   await until('다시 bypass', () => e.flags(a.id).bypass);
   expect(e.planMode(a.id)).toBe(false);
+  expect(got).toEqual([true, false]);
   expect(agentOf(e, a.id).bypassOn).toBe(true);
-  expect(modeLines('A')).toEqual([['mode:bypassPermissions', 'mode:plan', 'PLAN 헤더', 'mode:bypassPermissions']]);
+  expect(modeLines('A')).toEqual([['mode:plan', 'PLAN 헤더', 'mode:bypassPermissions']]);
   await turn(e, a.id, 'echo 하나');
   expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false, pending: false });
   expect(lastSpawnOf('A').argv).not.toContain('--dangerously-skip-permissions');
@@ -3007,6 +3012,37 @@ test('plan: 오류 뒤·effort 다시 띄우기에도 계획 모드를 다시 �
   expect(e.planMode(b.id)).toBe(false);
   expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false, pending: false });
 }, 20_000);
+
+test('plan: 막 띄운 세션(새로 띄움·미리 띄움)의 계획 모드 요청은 띄울 때의 한도로 기다린다 — 늦은 답을 실패로 치지 않는다', async () => {
+  // 첫 계획 모드 요청의 답이 1.5 초 뒤(시작·대화 읽기가 느린 CLI) — 평소 한도(0.5 초)는 넘고 띄울 때 한도(4 초) 안이다
+  const e = await start({ FAKE_SET_MODE_LATE_MS: '1500', FAKE_SET_MODE_LATE_MODE: 'plan' }, false, {
+    bypassTimeoutMs: 500, bypassSpawnTimeoutMs: 4000,
+  });
+  const { a, b } = setup(e);
+  const errs: string[] = [];
+  e.on('engine-error', (x: { message: string }) => errs.push(x.message));
+  const results: string[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.event.kind === 'result' && results.push(x.event.text));
+
+  // 새로 띄움 — 세션 없이 계획 먼저로 보낸다
+  await e.sendUser(a.id, text('SLOW'), { plan: true });
+  // 미리 띄움 — 골라서 띄운 뒤(아직 아무 줄도 안 받았다) 계획 먼저로 보낸다
+  e.setSelected(b.id);
+  await until('B 띄움', () => spawnsOf('B').length === 1);
+  await e.sendUser(b.id, text('SLOW'), { plan: true });
+
+  await sleep(1000); // 평소 한도(0.5 초)를 넉넉히 지났다 — 그 한도였다면 이미 실패로 쳐 멈췄다
+  // 늦은 답이 왔다 — SLOW 차례의 init(default) 뒤 status 줄로 plan
+  await until('계획 모드', () => e.planMode(a.id) && e.planMode(b.id), 6000);
+  expect(errs).toEqual([]);
+  expect(noticesOf(e, a.id)).toEqual([]);
+  expect(noticesOf(e, b.id)).toEqual([]);
+  expect(results).toEqual([]); // 멈추지 않았다 — 두 SLOW 차례가 그대로 돈다
+  expect(e.status(a.id)).toBe('working');
+  expect(e.status(b.id)).toBe('working');
+  expect(modeLines('A')).toEqual([['mode:plan', 'SLOW']]);
+  expect(modeLines('B')).toEqual([['mode:plan', 'SLOW']]);
+}, 15_000);
 
 test('plan: 계획 모드로 바꾸지 못하면 알리고 그 차례를 멈춘다 — 계획 없이 일하지 않는다', async () => {
   const e = await start({ FAKE_SET_MODE_FAIL: 'plan' });

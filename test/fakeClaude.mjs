@@ -690,6 +690,7 @@ async function control(msg) {
     //   FAKE_SET_MODE_SILENT    끝내 답하지 않음(모드는 그대로)
     //   FAKE_SET_MODE_LATE_MS=<ms>  첫 bypassPermissions 요청을 그만큼 늦게 적용하고 답한다(엔진의 한도를 넘겨 늦게 적용되는 켜기).
     //                               그 뒤의 set_permission_mode 는 진짜처럼 차례대로 — 늦은 요청이 끝난 뒤에 처리된다
+    //   FAKE_SET_MODE_LATE_MODE=<모드>  늦출 모드(기본 bypassPermissions) — plan 이면 첫 계획 모드 요청을 늦춘다(막 떠 늦게 답하는 CLI 흉내)
     // 늦은 요청이 없으면 모드는 기다리지 않고(await 전에) 바꾼다 — 바로 뒤에 온 사용자 줄의 init 이 새 모드를 알리게
     const mode = msg.request.mode;
     if (knobHits('FAKE_SET_MODE_SILENT', mode)) return;
@@ -710,7 +711,7 @@ async function control(msg) {
       return ok({ mode: permissionMode });
     };
     const late = Number(process.env.FAKE_SET_MODE_LATE_MS ?? 0);
-    if (late && mode === 'bypassPermissions' && !lateUsed) {
+    if (late && mode === (process.env.FAKE_SET_MODE_LATE_MODE || 'bypassPermissions') && !lateUsed) {
       lateUsed = true;
       queueMode(sleep(late).then(apply));
       return;

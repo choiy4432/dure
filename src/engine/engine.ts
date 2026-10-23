@@ -37,6 +37,8 @@ export interface EngineOptions {
    * 띄울 때 보낸 것은 BYPASS_SPAWN_TIMEOUT_MS. 주면 둘 다 이 값(시험은 짧게)
    */
   bypassTimeoutMs?: number;
+  /** 띄울 때(아직 모드를 알리지 않은 세션에) 보낸 set_permission_mode 의 한도만 따로 — 없으면 bypassTimeoutMs, 그것도 없으면 BYPASS_SPAWN_TIMEOUT_MS. 시험용 */
+  bypassSpawnTimeoutMs?: number;
   /** 세션 하나를 끌 때 기다리는 상한(ms) — 없으면 STOP_LIMIT_MS. 시험용 */
   stopLimitMs?: number;
   /** 승인·두레 도구를 부른 tool_use id 를 이 세션 스트림에서 아직 못 봤을 때 기다리는 한도(ms) — 없으면 SEEN_WAIT_MS. 시험은 짧게 */
@@ -1218,13 +1220,14 @@ class EngineImpl extends EventEmitter implements Engine {
     if (allow) this.optioned.add(s);
     // 사용자가 켠 에이전트만(허용 + 스위치) — 어떤 입력(/effort 포함)보다, 상태 알림보다도 먼저 제어 요청을 쓴다(듣는 쪽이 바로 보내도 뒤에 선다).
     // 오류 뒤·새 대화·다시 띄우기가 모두 여기를 지난다. 띄운 직후엔 CLI 시작·--resume 대화 읽기 뒤에야 답하니 /effort 만큼 기다린다.
-    // 계획 모드였던 에이전트는 같은 자리에서 plan 으로 다시 맞춘다 — bypass 는 계획을 승인하거나 끈 뒤로(settleNormal) 미룬다
-    // (계획 없이 파일이 고쳐지는 틈을 두지 않는다)
-    const timeoutMs = this.o.bypassTimeoutMs ?? BYPASS_SPAWN_TIMEOUT_MS;
-    const sending = this.planWant.has(id)
-      ? this.enterPlan(id, s, timeoutMs)
+    // 계획 모드였던 에이전트, 또는 맨 앞에 기다리는 입력이 계획 먼저면 같은 자리에서 plan 으로 맞춘다(그 입력을 쓸 때 pump 는 바꾸는 중이라 건너뛴다) —
+    // bypass 는 계획을 승인하거나 끈 뒤로(settleNormal) 미룬다(계획 없이 파일이 고쳐지는 틈을 두지 않는다)
+    const sending = this.planWant.has(id) || this.held.get(id)?.[0]?.plan
+      ? this.enterPlan(id, s)
       : allow && agent.bypassOn
-        ? this.sendMode(id, s, BYPASS_MODE, { seq: this.nextModeSeq(id), timeoutMs, failed: () => this.modeFailed(id, s, true, false) })
+        ? this.sendMode(id, s, BYPASS_MODE, {
+          seq: this.nextModeSeq(id), timeoutMs: this.spawnModeTimeout(), failed: () => this.modeFailed(id, s, true, false),
+        })
         : null;
     if (sending) {
       // 끝나면(답·실패 처리까지) 지운다 — 가는 동안만 flags 가 다음 모드를 알린다
@@ -1362,6 +1365,11 @@ class EngineImpl extends EventEmitter implements Engine {
   // ── 묻지 않음(bypass) ──
   private bypassTimeout(): number {
     return this.o.bypassTimeoutMs ?? BYPASS_TIMEOUT_MS;
+  }
+
+  /** 막 띄운 세션에 보낸 set_permission_mode 의 한도 — CLI 시작·--resume 대화 읽기 뒤에야 답한다 */
+  private spawnModeTimeout(): number {
+    return this.o.bypassSpawnTimeoutMs ?? this.o.bypassTimeoutMs ?? BYPASS_SPAWN_TIMEOUT_MS;
   }
 
   private nextModeSeq(id: AgentId): number {
@@ -1611,9 +1619,14 @@ class EngineImpl extends EventEmitter implements Engine {
     return this.allow && this.store.agent(id)?.bypassOn && this.optioned.has(s) ? BYPASS_MODE : DEFAULT_MODE;
   }
 
-  /** 살아 있는 세션을 계획 모드로 — 바라는 값을 남기고(다시 띄울 때 쓴다) set_permission_mode plan. 실패는 planOnFailed. 던지지 않는다 */
-  private enterPlan(id: AgentId, s: ClaudeSession, timeoutMs?: number): Promise<void> {
+  /**
+   * 살아 있는 세션을 계획 모드로 — 바라는 값을 남기고(다시 띄울 때 쓴다) set_permission_mode plan. 아직 모드를 알린 적 없는 세션
+   * (막 띄움·미리 띄운 뒤 아무 줄도 안 받음)은 시작·대화 읽기 중일 수 있어 띄울 때의 한도로 기다린다 — 늦은 답을 실패로 쳐 멈추지 않게.
+   * 실패는 planOnFailed. 던지지 않는다
+   */
+  private enterPlan(id: AgentId, s: ClaudeSession): Promise<void> {
     this.wantPlan(id, true);
+    const timeoutMs = this.modes.get(s) === undefined ? this.spawnModeTimeout() : undefined;
     return this.sendMode(id, s, PLAN_MODE, { seq: this.nextModeSeq(id), timeoutMs, failed: () => this.planOnFailed(id, s) });
   }
 
