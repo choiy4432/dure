@@ -3026,9 +3026,10 @@ test('plan: 오류 뒤·effort 다시 띄우기에도 계획 모드를 다시 �
 }, 20_000);
 
 test('plan: 막 띄운 세션(새로 띄움·미리 띄움)의 계획 모드 요청은 띄울 때의 한도로 기다린다 — 늦은 답을 실패로 치지 않는다', async () => {
-  // 첫 계획 모드 요청의 답이 1.5 초 뒤(시작·대화 읽기가 느린 CLI) — 평소 한도(0.5 초)는 넘고 띄울 때 한도(4 초) 안이다
+  // 첫 계획 모드 요청의 답이 1.5 초 뒤(시작·대화 읽기가 느린 CLI) — 평소 한도(0.5 초)는 넘고 띄울 때 한도(10 초) 안이다.
+  // 띄울 때 한도는 가짜 claude 의 시작 시간까지 들어가니 넉넉히 — 평소 한도보다 훨씬 길기만 하면 된다
   const e = await start({ FAKE_SET_MODE_LATE_MS: '1500', FAKE_SET_MODE_LATE_MODE: 'plan' }, false, {
-    bypassTimeoutMs: 500, bypassSpawnTimeoutMs: 4000,
+    bypassTimeoutMs: 500, bypassSpawnTimeoutMs: 10_000,
   });
   const { a, b } = setup(e);
   const errs: string[] = [];
@@ -3069,6 +3070,139 @@ test('plan: 계획 모드로 바꾸지 못하면 알리고 그 차례를 멈춘�
   expect(got).toEqual([true, false]);
   expect(errs).toEqual([PLAN_ON_FAILED]);
   expect(noticesOf(e, a.id)).toEqual([PLAN_ON_FAILED_STOPPED_NOTICE]);
+});
+
+/** 묻지 않음을 켜고 옵션으로 띄워 bypass 인 세션 — 'echo 하나' 차례까지 */
+async function bypassSession(e: Engine, id: string): Promise<void> {
+  await e.setAllowBypass(true);
+  await e.setBypass(id, true);
+  await turn(e, id, 'echo 하나');
+  expect(e.flags(id).bypass).toBe(true);
+}
+
+test('plan: 묻지 않음이 켜진 에이전트가 계획 모드를 끄거나 멈추면 다시 bypass', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await bypassSession(e, a.id);
+  // 끄기
+  await e.setPlanMode(a.id, true);
+  expect(e.planMode(a.id)).toBe(true);
+  expect(e.flags(a.id).bypass).toBe(false);
+  await e.setPlanMode(a.id, false);
+  expect(e.planMode(a.id)).toBe(false);
+  expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false, pending: false });
+  // 멈추기 — 계획을 세워 승인을 기다리는 중에
+  const req = planRequest(e, a.id);
+  await e.sendUser(a.id, text('PLAN 헤더'), { plan: true });
+  await req;
+  await e.interrupt(a.id);
+  await until('다시 bypass', () => e.flags(a.id).bypass);
+  expect(e.planMode(a.id)).toBe(false);
+  expect(agentOf(e, a.id).bypassOn).toBe(true);
+  expect(modeLines('A')).toEqual([
+    ['mode:bypassPermissions', 'echo 하나', 'mode:plan', 'mode:bypassPermissions', 'mode:plan', 'PLAN 헤더', 'mode:bypassPermissions'],
+  ]);
+});
+
+test('plan: 묻지 않고 실행하는 세션에 계획 먼저 — 계획 모드 답이 온 뒤에야 그 입력을 쓴다(그 전엔 아무 차례도 돌지 않는다)', async () => {
+  // 계획 모드 요청의 답이 1.5 초 뒤 — 그 사이 입력을 쓰면 bypass 그대로 차례가 돈다(가짜는 계획 모드가 아니면 PLAN 을 보통 글로 받는다)
+  const e = await start({ FAKE_SET_MODE_LATE_MS: '1500', FAKE_SET_MODE_LATE_MODE: 'plan' });
+  const { a } = setup(e);
+  await bypassSession(e, a.id);
+  const results: string[] = [];
+  const inits: string[] = [];
+  e.on('agent-event', (x: AgentEvent) => {
+    if (x.agentId !== a.id) return;
+    if (x.event.kind === 'result') results.push(x.event.text);
+    if (x.event.kind === 'init') inits.push(x.event.permissionMode);
+  });
+  const req = planRequest(e, a.id);
+  await e.sendUser(a.id, text('PLAN 헤더'), { plan: true });
+  expect(e.status(a.id)).toBe('working'); // 쥔 입력 — 보낸 것과 같다
+  expect(e.heldInput(a.id)).toBe(0);
+  await sleep(800);
+  expect(userTexts()).not.toContain('PLAN 헤더'); // 답 전엔 쓰지 않았다
+  expect(inits).toEqual([]);
+  expect(results).toEqual([]);
+  const r = await req;
+  expect(inits).toEqual(['plan']); // 그 차례는 계획 모드로 시작했다
+  expect(results).toEqual([]);
+  expect(modeLines('A')).toEqual([['mode:bypassPermissions', 'echo 하나', 'mode:plan', 'PLAN 헤더']]);
+  // 승인하면 다시 bypass
+  const done = resultOf(e, a.id);
+  e.answerRequest(r.id, { type: 'allow' });
+  expect(await resultText(done)).toBe('approved');
+  await until('다시 bypass', () => e.flags(a.id).bypass);
+}, 15_000);
+
+test('plan: 묻지 않고 실행하는 세션이 계획 모드로 못 바꾸면 그 입력을 쓰지 않고 붙잡는다', async () => {
+  const e = await start({ FAKE_SET_MODE_FAIL: 'plan' });
+  const { a } = setup(e);
+  await bypassSession(e, a.id);
+  const errs: string[] = [];
+  e.on('engine-error', (x: { message: string }) => errs.push(x.message));
+  await e.sendUser(a.id, text('PLAN 헤더'), { plan: true });
+  await until('붙잡음', () => e.hold(a.id) !== null);
+  expect(e.hold(a.id)!.items).toEqual([expect.objectContaining({ source: 'human', text: 'PLAN 헤더' })]);
+  expect(userTexts()).not.toContain('PLAN 헤더');
+  expect(errs).toEqual([PLAN_ON_FAILED]);
+  expect(noticesOf(e, a.id)).toEqual([PLAN_ON_FAILED_STOPPED_NOTICE]);
+  expect(e.planMode(a.id)).toBe(false);
+  expect(e.flags(a.id).bypass).toBe(true); // 묻지 않음은 그대로
+  expect(e.status(a.id)).toBe('idle');
+  expect(e.heldInput(a.id)).toBe(0);
+});
+
+test('plan: 계획 모드를 기다리는 동안 묻지 않음을 끄고 계획 모드로 못 바꾸면 — 입력은 붙잡고 두레가 켠 bypass 는 걷는다', async () => {
+  // 계획 모드 요청에 끝내 답이 없다(1 초 한도) — 그 사이 스위치를 끈다(계획 모드 중이라 끄기는 보내지 않고 미룬다)
+  const e = await start({ FAKE_SET_MODE_SILENT: 'plan' }, false, { bypassTimeoutMs: 1000, bypassSpawnTimeoutMs: 10_000 });
+  const { a } = setup(e);
+  await bypassSession(e, a.id);
+  await e.sendUser(a.id, text('PLAN 헤더'), { plan: true });
+  await e.setBypass(a.id, false);
+  await until('붙잡음', () => e.hold(a.id) !== null);
+  await until('bypass 걷힘', () => !e.flags(a.id).bypass);
+  expect(agentOf(e, a.id).bypassOn).toBe(false);
+  expect(e.planMode(a.id)).toBe(false);
+  expect(userTexts()).not.toContain('PLAN 헤더');
+  expect(noticesOf(e, a.id)).toEqual([PLAN_ON_FAILED_STOPPED_NOTICE]);
+  expect(modeLines('A')).toEqual([['mode:bypassPermissions', 'echo 하나', 'mode:plan', 'mode:default']]);
+}, 15_000);
+
+test('plan: 계획 모드 답을 기다리며 쥔 입력은 멈추면 붙잡는다 — 늦게 온 답이 쓰지 않는다', async () => {
+  const e = await start({ FAKE_SET_MODE_LATE_MS: '1000', FAKE_SET_MODE_LATE_MODE: 'plan' });
+  const { a } = setup(e);
+  await bypassSession(e, a.id);
+  await e.sendUser(a.id, text('PLAN 헤더'), { plan: true });
+  await e.interrupt(a.id);
+  expect(e.hold(a.id)!.items.map((i) => i.text)).toEqual(['PLAN 헤더']);
+  expect(e.heldInput(a.id)).toBe(0);
+  await until('다시 bypass', () => e.flags(a.id).bypass && !e.planMode(a.id));
+  await sleep(300);
+  expect(userTexts()).not.toContain('PLAN 헤더');
+  expect(e.status(a.id)).toBe('idle');
+  expect(noticesOf(e, a.id)).toEqual(['멈췄어요']);
+}, 15_000);
+
+test('plan: 계획 모드 요청이 실패하면 그사이 차례 번호가 올랐어도 알린다 — 바라는 값이 남아 다음 계획 먼저가 계획 없이 나가지 않는다', async () => {
+  const e = await start({ FAKE_SET_MODE_FAIL: 'plan:once' });
+  const { a } = setup(e);
+  await turn(e, a.id, 'echo 하나'); // 허용 없이 뜬 세션(옵션 없음)
+  const errs: string[] = [];
+  e.on('engine-error', (x: { message: string }) => errs.push(x.message));
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('SLOW'), { plan: true });
+  // 옵션 없이 뜬 세션의 끄기 — 보낼 것이 없다(전엔 여기서 차례 번호만 올라 위 실패를 말없이 넘겼다)
+  await e.setBypass(a.id, false);
+  expect(await resultText(done)).toBe('interrupted'); // 계획 없이 돌던 차례를 멈췄다
+  expect(errs).toEqual([PLAN_ON_FAILED]);
+  expect(e.planMode(a.id)).toBe(false);
+  // 바라는 값이 남지 않았다 — 다음 계획 먼저 입력은 다시 계획 모드를 청한다
+  const req = planRequest(e, a.id);
+  await e.sendUser(a.id, text('PLAN 헤더'), { plan: true });
+  await req;
+  expect(e.planMode(a.id)).toBe(true);
+  expect(modeLines('A')).toEqual([['echo 하나', 'mode:plan', 'SLOW', 'mode:plan', 'PLAN 헤더']]);
 });
 
 // ── 붙잡기(멈추면 기다리던 내 입력·전달 대기 메시지를 사람이 고를 때까지 보내지 않는다) ──

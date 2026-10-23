@@ -141,6 +141,7 @@ export interface Engine extends EventEmitter {
   setSelected(id: AgentId | null): void;
   /**
    * 사람 입력 — 차례 중·승인 대기면 그 차례 뒤에. plan(계획 먼저): 그 입력을 쓰기 직전에 set_permission_mode plan(이미 계획 모드면 생략).
+   * 묻지 않고 실행하는 세션(bypass)이면 그 답을 기다렸다 쓴다 — 못 바꾸면 쓰지 않고 붙잡는다(hold).
    * Claude 는 계획을 ExitPlanMode 승인 요청(kind plan)으로 올리고, 허용하면 CLI 가 스스로 기본 모드로 간다(probe16)
    */
   sendUser(id: AgentId, parts: UserPart[], o?: { plan?: boolean }): Promise<void>;
@@ -378,6 +379,11 @@ class EngineImpl extends EventEmitter implements Engine {
   // 끌 때·멈출 때·새 대화에서 뺀다. 세션을 다시 띄우면 띄운 뒤 plan 으로 다시 맞춘다(메모리만)
   private planWant = new Set<AgentId>();
   private planShown = new Map<AgentId, boolean>(); // 마지막으로 알린 계획 모드 — 바뀔 때만 'plan-mode'
+  private planEntering = new WeakMap<ClaudeSession, Promise<void>>(); // 가는 중인 계획 모드 요청(답·실패 처리까지) — 마지막 것
+  private planSeq = new Map<AgentId, number>(); // 마지막 계획 모드 요청의 차례 번호 — 그 실패는 다른 모드 바꾸기가 끼어도 알린다
+  // 계획 먼저 입력을 쥐고 계획 모드 답을 기다리는 중 — 묻지 않고 실행하는 세션(bypass)에 답 전에 쓰면 그 차례가 계획 없이 돌 수 있다.
+  // 답이 와 계획 모드가 되면 쓰고, 못 되면 붙잡는다. 멈추기·세션 끝은 기다리는 줄 맨 앞으로 돌려놓는다
+  private planGates = new WeakMap<ClaudeSession, HeldInput>();
   // 묻지 않음: 허용이면 --allow-dangerously-skip-permissions 로 띄우고(그것만으론 평소 모드), 켠 에이전트만 set_permission_mode 로 켠다(probe10·11)
   private optioned = new WeakSet<ClaudeSession>(); // 그 옵션으로 뜬 세션 — 실행 중에 bypass 로 바꿀 수 있다
   // 권한 모드 때문에 다시 띄울 세션 — 쉴 때(pump) --resume 으로. 둘 중 하나: 옵션 없이 떠서 켜려면 다시 띄워야 한다(flags.pending),
@@ -623,6 +629,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.held.delete(id); // 기다리던 사람 입력은 에이전트와 함께 버린다
       this.settingsDefaultOf.delete(id);
       this.modeSeq.delete(id);
+      this.planSeq.delete(id);
       this.planWant.delete(id);
       this.planShown.delete(id);
       this.effortNows.delete(id);
@@ -640,6 +647,8 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     if (!s) return this.errors.has(id) ? 'error' : 'idle';
     if (s.status !== 'idle') return s.status;
+    // 계획 모드 답을 기다리며 쥔 내 입력 — 이미 보낸 것과 같다(답이 오면 바로 쓴다)
+    if (this.planGates.has(s)) return 'working';
     // 부모 차례는 끝났어도 서브에이전트가 돌면 작업 중 — 끝난 뒤 Claude 가 스스로 열 차례를 기다리는 동안도(대기로 깜박이지 않게)
     if (this.subagents.has(id) || this.autoTurns.has(id)) return 'working';
     // 엔진이 보낸 /effort 차례 중에 사람 입력이 기다리면 작업 중 — 첫 입력이 멈춘 듯 보이지 않게(멈추기도 켜진다)
@@ -781,6 +790,8 @@ class EngineImpl extends EventEmitter implements Engine {
 
   async interrupt(id: AgentId) {
     this.need(id);
+    // 계획 모드 답을 기다리며 쥔 입력도 기다리던 것 — 줄 맨 앞으로 돌려놓아 아래에서 함께 붙잡는다(늦게 온 답이 쓰지 않게)
+    const gated = this.ungate(id, this.sessions.get(id));
     const hadInput = (this.held.get(id)?.length ?? 0) > 0; // 아래 /effort 다시 띄우기의 근거 — 붙잡으면 줄이 빈다
     // 멈춤 = 하던 일 끊기 + 대기열 붙잡기. 승인 카드를 치우기 전에 붙잡는다 — 치우면 pump 가 돌아 기다리던 것을 보낼 수 있다
     this.holdQueue(id);
@@ -797,7 +808,7 @@ class EngineImpl extends EventEmitter implements Engine {
       return leaving;
     }
     // 부모 차례와 도는 서브에이전트 모두(spec §4.6) — 서브에이전트만 돌아도 interrupt 하나로 멈춘다(끝 알림 stopped, probe14 C)
-    const wasWorking = s.status === 'working' || this.subagents.has(id);
+    const wasWorking = s.status === 'working' || this.subagents.has(id) || gated;
     await s.interrupt();
     await leaving;
     if (wasWorking) this.guard(id, () => this.record(id, { kind: 'notice', text: STOPPED_NOTICE }));
@@ -1116,12 +1127,17 @@ class EngineImpl extends EventEmitter implements Engine {
    */
   private waiting(id: AgentId): boolean {
     const s = this.sessions.get(id);
-    return s?.status === 'working' || (!!s && (this.effortTurn.has(s) || this.restartWant.has(s))) || this.parentAsking(id);
+    return (
+      s?.status === 'working' || (!!s && (this.effortTurn.has(s) || this.restartWant.has(s) || this.planBlocked(id, s))) || this.parentAsking(id)
+    );
   }
 
-  /** 쉬는 중 — 차례 중도 아니고(엔진이 보낸 /effort 차례 포함), 부모가 사람 답을 기다리지도 않는다(서브에이전트가 물은 것은 세지 않는다) */
+  /**
+   * 쉬는 중 — 차례 중도 아니고(엔진이 보낸 /effort 차례 포함), 부모가 사람 답을 기다리지도 않는다(서브에이전트가 물은 것은 세지 않는다).
+   * 묻지 않고 실행하는 세션이 계획 모드 답을 기다리는 동안도 쉬지 않는다 — 그 사이 쓴 줄은 계획 없이 묻지 않고 돈다
+   */
   private resting(id: AgentId, s: ClaudeSession): boolean {
-    return s.status === 'idle' && !this.effortTurn.has(s) && !this.parentAsking(id);
+    return s.status === 'idle' && !this.effortTurn.has(s) && !this.parentAsking(id) && !this.planBlocked(id, s);
   }
 
   /** 부모가 물은 승인·질문이 떠 있다 — 서브에이전트가 물은 것(fromSubagent)은 부모 차례와 상관없이 남는다(spec §4.4) */
@@ -1164,9 +1180,54 @@ class EngineImpl extends EventEmitter implements Engine {
       // 계획 먼저 — 그 입력을 쓰기 직전에 계획 모드로(제어 요청이 먼저 줄에 들어가 그 입력보다 먼저 처리된다 — 띄울 때의 bypass 와 같은 길).
       // 이미 계획 모드거나 그리 바꾸는 중이면 생략
       if (next.plan && !this.inPlan(id, s)) void this.enterPlan(id, s);
+      // 묻지 않고 실행하는 세션이면 계획 모드 답을 기다렸다 쓴다 — 차례가 먼저 시작되면 계획 없이 묻지 않고 돈다(답이 오면 planSettled 가)
+      if (this.planBlocked(id, s)) {
+        this.planGates.set(s, next);
+        this.emitStatus(id);
+        return;
+      }
       this.sendTo(id, s, next.parts, { kind: 'human', input: next });
     }
     else if (!this.holds.has(id)) this.router.onIdle(id);
+  }
+
+  /**
+   * 묻지 않고 실행하는 세션이 계획 모드 답을 기다린다 — 그동안은 쉬지 않는다(사람 입력·받은 메시지를 쓰지 않는다).
+   * 지금 모드가 bypass, 또는 아직 모드를 모르는데 내 Claude 설정의 기본 모드가 bypass(그 모드로 시작한다)
+   */
+  private planBlocked(id: AgentId, s: ClaudeSession): boolean {
+    if (!this.planEntering.has(s)) return false;
+    const now = this.modes.get(s);
+    return now === BYPASS_MODE || (now === undefined && (this.settingsDefaults.get(s) ?? this.settingsDefaultOf.get(id)) === BYPASS_MODE);
+  }
+
+  /**
+   * 계획 모드 요청이 끝났다(답·실패 처리까지) — 아직 다른 계획 모드 요청이 가면 그 끝에서. 쥔 입력은 계획 모드가 됐으면 쓰고,
+   * 못 됐으면(planOnFailed 가 알렸다) 계획 없이 보내지 않고 붙잡는다(기다리던 것도 함께 — 순서를 바꾸지 않는다). 그다음 다시 pump
+   */
+  private planSettled(id: AgentId, s: ClaudeSession): void {
+    if (!this.live(id, s) || this.planEntering.has(s)) return;
+    const input = this.planGates.get(s);
+    if (input) {
+      this.planGates.delete(s);
+      if (this.modes.get(s) === PLAN_MODE) this.sendTo(id, s, input.parts, { kind: 'human', input });
+      else {
+        this.heldOf(id).unshift(input);
+        this.holdQueue(id);
+      }
+    }
+    this.pump(id);
+    this.emitStatus(id);
+  }
+
+  /** 계획 모드 답을 기다리며 쥔 입력을 기다리는 줄 맨 앞으로 돌려놓는다(멈추기 — 곧 붙잡는다 · 세션 끝 — 다음 세션이 받는다). 있었으면 true */
+  private ungate(id: AgentId, s: ClaudeSession | undefined): boolean {
+    const input = s && this.planGates.get(s);
+    if (!s || !input) return false;
+    this.planGates.delete(s);
+    this.heldOf(id).unshift(input);
+    this.emitHeld(id);
+    return true;
   }
 
   private sendTo(id: AgentId, s: ClaudeSession, parts: UserPart[], item: InFlight): void {
@@ -1350,6 +1411,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.guard(id, () => {
         if (this.sessions.get(id) !== s) return; // 엔진이 끝낸 세션은 endSession 이 정리
         this.sessions.delete(id);
+        this.guard(id, () => this.ungate(id, s)); // 계획 모드 답을 기다리며 쥔 입력 — 다음 실행에(보낸 줄을 되살리는 것과 같다)
         this.endEffortTurn(s); // /effort 차례 중이었으면 그 타이머도(다음에 띄울 때 다시 보낸다)
         this.forgetSeen(s);
         this.edits.delete(s);
@@ -1577,11 +1639,11 @@ class EngineImpl extends EventEmitter implements Engine {
       if (this.restartWant.delete(s)) this.pump(id);
       return; // 차례 번호도 그대로 — 가는 중인 계획 모드 바꾸기의 실패를 덮지 않게
     }
-    const seq = this.nextModeSeq(id);
+    // 차례 번호는 실제로 요청을 보내는 길에서만 올린다 — 보내는 것 없이 올리면 가는 중인 요청(계획 모드 등)의 실패를 말없이 덮는다
     if (on) {
       if (this.optioned.has(s)) {
         const deferred = this.restartWant.delete(s); // 끄기 실패로 미뤄 둔 다시 띄우기 — 다시 켜니 필요 없다
-        await this.sendMode(id, s, BYPASS_MODE, { seq, failed: () => this.modeFailed(id, s, true, false) });
+        await this.sendMode(id, s, BYPASS_MODE, { seq: this.nextModeSeq(id), failed: () => this.modeFailed(id, s, true, false) });
         if (deferred) this.pump(id); // 미뤄 둔 다시 띄우기가 막던 입력(아래와 같다)
         return;
       }
@@ -1596,7 +1658,7 @@ class EngineImpl extends EventEmitter implements Engine {
       return;
     }
     const deferred = this.restartWant.delete(s);
-    if (this.optioned.has(s)) await this.settleOff(id, s, seq);
+    if (this.optioned.has(s)) await this.settleOff(id, s, this.nextModeSeq(id));
     // 서브에이전트가 돌아 쉬는 채로 미뤄 둔 다시 띄우기가 입력·받은 메시지를 막고 있었다 — 거뒀으니 보낸다(차례 중이면 그 result 가)
     if (deferred) this.pump(id);
   }
@@ -1634,10 +1696,14 @@ class EngineImpl extends EventEmitter implements Engine {
    * set_permission_mode 를 쓴다 — 제어 요청이라 부르는 순간 줄에 들어간다(띄울 때 어떤 입력보다 먼저 쓰려고 ensure 가 바로 부른다).
    * 답의 mode 가 실제 모드다(manual → default, probe10) — 쉬는 세션도 다음 차례를 기다리지 않고 flags 로 알린다.
    * 실패(오류 응답·한도 안에 답 없음)는 failed(묻지 않음이면 modeFailed, 계획 모드면 planOnFailed·planOffFailed) — 그 세션이 이미 끝났거나
-   * 그새 다시 바꿨으면 조용히 넘어간다(그 뒤에 보낸 요청이 claude 에서도 뒤에 처리되어 이긴다). failed 는 던지지 않아야 한다 — 이것도 던지지 않는다
+   * 그새 다시 바꿨으면 조용히 넘어간다(그 뒤에 보낸 요청이 claude 에서도 뒤에 처리되어 이긴다) — stillMine 이 참이면 그래도 알린다(계획 모드 요청).
+   * failed 는 던지지 않아야 한다 — 이것도 던지지 않는다
    */
   private sendMode(
-    id: AgentId, s: ClaudeSession, mode: string, o: { seq: number; timeoutMs?: number; failed: () => Promise<void> | void },
+    id: AgentId,
+    s: ClaudeSession,
+    mode: string,
+    o: { seq: number; timeoutMs?: number; failed: () => Promise<void> | void; stillMine?: () => boolean },
   ): Promise<void> {
     return s.request({ subtype: 'set_permission_mode', mode }, o.timeoutMs ?? this.bypassTimeout()).then(
       (res: any) => {
@@ -1646,7 +1712,8 @@ class EngineImpl extends EventEmitter implements Engine {
         this.guard(id, () => this.setModeNow(id, now));
       },
       () => {
-        if (!this.live(id, s) || this.modeSeq.get(id) !== o.seq) return;
+        if (!this.live(id, s)) return;
+        if (this.modeSeq.get(id) !== o.seq && !o.stillMine?.()) return;
         return o.failed();
       },
     );
@@ -1788,7 +1855,22 @@ class EngineImpl extends EventEmitter implements Engine {
   private enterPlan(id: AgentId, s: ClaudeSession): Promise<void> {
     this.wantPlan(id, true);
     const timeoutMs = this.modes.get(s) === undefined ? this.spawnModeTimeout() : undefined;
-    return this.sendMode(id, s, PLAN_MODE, { seq: this.nextModeSeq(id), timeoutMs, failed: () => this.planOnFailed(id, s) });
+    const seq = this.nextModeSeq(id);
+    this.planSeq.set(id, seq);
+    const sent = this.sendMode(id, s, PLAN_MODE, {
+      seq,
+      timeoutMs,
+      failed: () => this.planOnFailed(id, s),
+      // 그새 다른 모드 바꾸기(묻지 않음 등)가 차례 번호를 올렸어도, 이것이 마지막 계획 모드 요청이고 아직 계획 모드를 바라는데 아니면 알린다 —
+      // 말없이 넘기면 바라는 값이 남아(inPlan) 다음 계획 먼저 입력이 계획 모드 없이 나간다
+      stillMine: () => this.planSeq.get(id) === seq && this.planWant.has(id) && this.modes.get(s) !== PLAN_MODE,
+    });
+    const entering: Promise<void> = sent.finally(() => {
+      if (this.planEntering.get(s) === entering) this.planEntering.delete(s);
+      this.guard(id, () => this.planSettled(id, s));
+    });
+    this.planEntering.set(s, entering);
+    return entering;
   }
 
   /**
@@ -1814,15 +1896,20 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * 계획 모드로 바꾸지 못했다(오류 응답·답 없음) — 바라는 값을 거두고 알린다. 차례가 도는 중이면 멈춘다: 그 차례는 계획 모드를 바라고 쓴 입력이다
-   * (계획 없이 파일을 고치거나 명령을 실행하지 않게). 띄울 때 미룬 bypass 는 지금 맞춘다. 던지지 않는다
+   * (계획 없이 파일을 고치거나 명령을 실행하지 않게). 답을 기다리며 쥔 입력(planGates)은 쓰지 않고 붙잡는다(planSettled).
+   * 띄울 때 미룬 bypass 는 지금 맞춘다. 던지지 않는다
    */
   private async planOnFailed(id: AgentId, s: ClaudeSession): Promise<void> {
     this.wantPlan(id, false);
     const working = s.status === 'working';
+    // 쥐고 기다리던 계획 먼저 입력은 보내지 않고 붙잡는다(planSettled) — 그 차례를 멈춘 것과 같다
+    const stopped = working || this.planGates.has(s);
     this.guard(id, () => this.emit('engine-error', { agentId: id, message: PLAN_ON_FAILED }));
-    this.guard(id, () => this.record(id, { kind: 'notice', text: working ? PLAN_ON_FAILED_STOPPED_NOTICE : PLAN_ON_FAILED_NOTICE }));
+    this.guard(id, () => this.record(id, { kind: 'notice', text: stopped ? PLAN_ON_FAILED_STOPPED_NOTICE : PLAN_ON_FAILED_NOTICE }));
     if (working) await s.interrupt().catch(() => undefined);
     await this.settleNormal(id, s);
+    // 계획 모드를 기다리는 동안 묻지 않음을 껐다(계획 모드 중이라 끄기를 보내지 않았다) — 아직 두레가 켠 bypass 면 내 기본 모드로
+    if (this.live(id, s) && this.modes.get(s) === BYPASS_MODE) await this.reconcile(id);
   }
 
   /** 계획 모드를 끄지 못했다 — 아직 계획 모드면 바라는 값을 되살리고(실제와 같게 — 다시 띄워도 계획 모드) 알린다. 던지지 않는다 */
@@ -2119,6 +2206,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private async endSession(id: AgentId): Promise<void> {
     const s = this.sessions.get(id);
     this.sessions.delete(id);
+    this.ungate(id, s); // 계획 모드 답을 기다리며 쥔 입력 — 쓰지 않았으니 다음 세션이 받는다(기다리는 줄 맨 앞)
     if (s) this.endEffortTurn(s); // /effort 차례 중이었으면 그 타이머도
     if (s) this.forgetSeen(s);
     if (s) this.edits.delete(s); // 결과를 기다리던 고친 일 — 끝낸 세션의 결과는 오지 않는다
