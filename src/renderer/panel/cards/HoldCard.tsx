@@ -15,7 +15,7 @@ interface Props {
 
 /**
  * 붙잡기 카드 — 멈춘 에이전트가 붙잡고 있는 입력(내가 친 것 · 다른 에이전트가 보낸 것).
- * 줄마다 [빼기] → [이어서 보내기](한 번에 보냄) · [모두 버리기]. 줄이 빠지면 MOTION.line 으로 나간다.
+ * 줄마다 테두리 상자 한 줄(보낸 쪽 · 글 말줄임 · [빼기]) → [이어서 보내기](한 번에 보냄) · [모두 버리기]. 줄이 빠지면 MOTION.line 으로 나간다.
  */
 export function HoldCard({ agent, hold, nameOf, now }: Props) {
   const { busy, error, call } = useCall()
@@ -36,10 +36,8 @@ export function HoldCard({ agent, hold, nameOf, now }: Props) {
             const from = it.source === 'human' ? '나' : `${who ?? '다른 에이전트'}에게서`
             return (
               <MotionDiv key={it.id} motion={MOTION.line} className="hd-row">
-                <div className="hd-main">
-                  <span className="hd-from">{from}</span>
-                  <span className="hd-text">{it.text !== '' ? it.text : `그림 ${it.images}장`}</span>
-                </div>
+                <span className="hd-from">{from}</span>
+                <span className="hd-text">{it.text !== '' ? it.text : `그림 ${it.images}장`}</span>
                 <button
                   type="button"
                   className="lk"

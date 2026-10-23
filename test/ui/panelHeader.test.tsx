@@ -500,6 +500,25 @@ describe('PanelHeader — 맡기는 정도 스위치', () => {
     expect(lv().getAttribute('title')).toBe(title)
   })
 
+  it('묻지 않음을 켠 채 계획 모드 — 실제 모드는 plan(bypass 아님)이어도 2 로 보이고 title 이 잠시 묻는다고 말한다 · 내리면 setBypass(false)', async () => {
+    withAllow({ auto: true, bypassOn: true, bypass: false, planMode: true })
+    await renderPanel()
+    expect(text()).toBe('묻지 않음')
+    expect(lv().getAttribute('aria-valuenow')).toBe('2')
+    expect(lv().getAttribute('title')).toBe('계획을 세우는 동안은 묻고, 계획을 승인하면 다시 묻지 않아요')
+    await press('Home') // 끔 — 계획을 승인한 뒤 묻지 않고 실행하지 않게 켜짐을 거둔다
+    expect(api.setBypass).toHaveBeenCalledWith('w', false)
+    expect(api.updateAgent).toHaveBeenCalledWith('w', { auto: false })
+    cleanup()
+    vi.resetModules()
+    api.setBypass.mockClear()
+    // 묻지 않음을 켜지 않은 에이전트의 계획 모드는 그대로 자동
+    withAllow({ auto: true, bypassOn: false, bypass: false, planMode: true })
+    await renderPanel()
+    expect(text()).toBe('자동')
+    expect(lv().getAttribute('title')).toBe('받은 메시지는 바로 시작하고, 권한은 물어요')
+  })
+
   it('0 → 2: updateAgent(auto:true) 다음 setBypass(true)', async () => {
     withAllow({ auto: false })
     await renderPanel()

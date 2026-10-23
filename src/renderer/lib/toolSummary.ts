@@ -60,6 +60,9 @@ export function toolSummary(name: string, input: unknown): ToolSummary {
       return { verb: '에이전트 만듦', target: field(input, 'name'), icon: 'handoff' }
     case 'AskUserQuestion':
       return { verb: '물어봄', target: null, icon: 'question' }
+    case 'ExitPlanMode':
+      // 계획 모드에서 세운 계획을 사람에게 올린다(계획 카드) — 도구 이름 대신 한 일로
+      return { verb: '계획 보여 줌', target: null, icon: 'other' }
     case 'Skill': {
       // 이름이 없는 옛 기록(엔진이 skill 칸을 남기기 전)은 아래 '그 밖' 과 같은 줄로
       const skill = field(input, 'skill')
@@ -86,6 +89,7 @@ const INTENT: Record<string, string> = {
   '동료 확인': '동료를 확인하려',
   '에이전트 만듦': '새 에이전트를 만들려',
   물어봄: '물어보려',
+  '계획 보여 줌': '계획을 보여 주려',
   '스킬 사용': '스킬을 쓰려',
 }
 const INTENT_OTHER = '도구를 쓰려'
@@ -112,6 +116,7 @@ const ONGOING: Record<string, string> = {
   '동료 확인': '동료 확인하는 중',
   '에이전트 만듦': '에이전트 만드는 중',
   물어봄: '묻는 중',
+  '계획 보여 줌': '계획 보여 주는 중',
   '스킬 사용': '스킬 쓰는 중',
   사용: '쓰는 중',
 }

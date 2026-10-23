@@ -12,10 +12,17 @@ const TITLES = [
   '바로 시작하고, 권한도 안 물어요',
 ] as const
 const LOCKED = 'Claude 설정이 전부 허용이라 이미 묻지 않아요'
+/** 묻지 않음을 켠 채 계획 모드 — 계획을 승인하면 다시 묻지 않는다(그동안 실제 모드는 plan 이라 bypass 가 아니다) */
+const PLAN_PAUSED = '계획을 세우는 동안은 묻고, 계획을 승인하면 다시 묻지 않아요'
 
-/** 보이는 단계 — 저장값이 아니라 화면 상태에서. 두 스위치를 따로 켜 둔 옛 상태(auto 꺼짐 + 묻지 않음 켜짐)도 2 */
+/**
+ * 보이는 단계 — 저장값이 아니라 화면 상태에서. 두 스위치를 따로 켜 둔 옛 상태(auto 꺼짐 + 묻지 않음 켜짐)도 2.
+ * 계획 모드 동안엔 실제 모드가 plan 이라 bypass 가 아니지만 묻지 않음을 켜 둔 에이전트는 2 — 승인하면 엔진이 bypass 로 되돌리니,
+ * 여기서 내리면 setBypass(false) 로 그 켜짐을 거둬야 한다(자동으로만 보이면 끔으로 옮겨도 승인 뒤 묻지 않고 실행한다)
+ */
 export function levelOf(agent: AgentView): Step {
   if (!agent.bypassBySettings && (agent.bypass || agent.bypassPending)) return 2
+  if (agent.planMode && agent.bypassOn) return 2
   return agent.auto ? 1 : 0
 }
 
@@ -33,6 +40,7 @@ export function LevelSwitch({ agent, onError }: Props) {
   const locked = agent.bypassBySettings
   const now = levelOf(agent)
   const max: Step = locked ? 1 : 2
+  const paused = now === 2 && agent.planMode && !agent.bypass
 
   // 옮기기 — 응답을 기다리는 동안 두 번 누르기는 막는다. 묻지 않음이 걸린 옮기기만 흐리게 보인다
   const move = async (target: number) => {
@@ -116,7 +124,7 @@ export function LevelSwitch({ agent, onError }: Props) {
         aria-valuetext={NAMES[now]}
         aria-busy={busy || agent.bypassPending || undefined}
         aria-describedby={locked ? lockId : undefined}
-        title={locked ? LOCKED : TITLES[now]}
+        title={locked ? LOCKED : paused ? PLAN_PAUSED : TITLES[now]}
         onKeyDown={onKey}
         onClick={onClick}
       >

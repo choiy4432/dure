@@ -625,18 +625,32 @@ describe('계획 카드', () => {
     expect(api.answerRequest).toHaveBeenCalledWith('pl1', { type: 'allow' })
   })
 
-  it('고쳐 달라고 하기 — 입력칸, 빈 글이면 보내기 막힘, 보내면 그 글로 거절', async () => {
+  it('고쳐 달라고 하기 — 입력칸(초점이 옮겨 간다), 빈 글이면 보내기 막힘, 보내면 그 글로 거절', async () => {
     snapshot.requests = [make()]
     await renderPanel('p')
     const c = card(TITLE)
     fireEvent.click(within(c).getByRole('button', { name: '고쳐 달라고 하기' }))
     const box = within(c).getByRole('textbox', { name: '고칠 점' })
-    expect(within(c).getByRole('button', { name: '보내기' })).toBeDisabled()
+    expect(document.activeElement).toBe(box) // 누른 단추가 사라져도 초점이 body 로 떨어지지 않는다
+    // 입력창의 [보내기] 와 다른 이름 — 보이는 글은 '보내기' 그대로
+    const send = within(c).getByRole('button', { name: '고칠 점 보내기' })
+    expect(send.textContent).toBe('보내기')
+    expect(send).toBeDisabled()
     fireEvent.change(box, { target: { value: '   ' } })
-    expect(within(c).getByRole('button', { name: '보내기' })).toBeDisabled()
+    expect(send).toBeDisabled()
     fireEvent.change(box, { target: { value: '로고는 그대로 둬요' } })
-    fireEvent.click(within(c).getByRole('button', { name: '보내기' }))
+    fireEvent.click(send)
     expect(api.answerRequest).toHaveBeenCalledWith('pl1', { type: 'deny', message: '로고는 그대로 둬요' })
+  })
+
+  it('고쳐 달라고 하기 [취소] — 입력칸이 닫히고 초점은 다시 고쳐 달라고 하기', async () => {
+    snapshot.requests = [make()]
+    await renderPanel('p')
+    const c = card(TITLE)
+    fireEvent.click(within(c).getByRole('button', { name: '고쳐 달라고 하기' }))
+    fireEvent.click(within(c).getByRole('button', { name: '취소' }))
+    expect(within(c).queryByRole('textbox', { name: '고칠 점' })).toBeNull()
+    expect(document.activeElement).toBe(within(c).getByRole('button', { name: '고쳐 달라고 하기' }))
   })
 
   it('그만 = 멈추기', async () => {

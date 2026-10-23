@@ -22,6 +22,11 @@ describe('toolSummary', () => {
     expect(toolSummary('Agent', { description: '조사' }).verb).toBe('서브에이전트에게 맡김')
     expect(toolSummary('AskUserQuestion', {})).toEqual({ verb: '물어봄', target: null, icon: 'question' })
   })
+  it("계획(ExitPlanMode)은 도구 이름 대신 '계획 보여 줌' — 계획 글은 대상에 싣지 않는다", () => {
+    expect(toolSummary('ExitPlanMode', { plan: '# 헤더 줄이기\n1. 첫 단계', planFilePath: 'C:/x/plan.md' })).toEqual({ verb: '계획 보여 줌', target: null, icon: 'other' })
+    expect(ongoing('계획 보여 줌')).toBe('계획 보여 주는 중')
+    expect(requestTitle('기획', 'ExitPlanMode', {})).toBe('기획이 계획을 보여 주려 해요')
+  })
   it('스킬은 이름까지 — 이름이 없으면(옛 기록) 도구 이름', () => {
     expect(toolSummary('Skill', { skill: 'superpowers:brainstorming', args: '긴 인자' })).toEqual({ verb: '스킬 사용', target: 'superpowers:brainstorming', icon: 'other' })
     expect(toolSummary('Skill', {})).toEqual({ verb: '사용', target: 'Skill', icon: 'other' })

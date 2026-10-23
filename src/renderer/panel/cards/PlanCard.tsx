@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AgentId, PendingRequest } from '../../../engine/types'
 import { ago, josa } from '../../lib/words'
 import { Markdown } from '../../lib/Markdown'
@@ -30,6 +30,15 @@ export function PlanCard({ request, agent, now, inInbox }: Props) {
   useMotion(root, MOTION.line)
   const [revising, setRevising] = useState(false)
   const [note, setNote] = useState('')
+  const noteBox = useRef<HTMLTextAreaElement>(null)
+  const reviseButton = useRef<HTMLButtonElement>(null)
+  const wasRevising = useRef(false)
+  // 누른 단추가 사라진다 — 열면 입력칸으로, [취소]로 닫으면 다시 '고쳐 달라고 하기'로(초점이 body 로 떨어지지 않게)
+  useEffect(() => {
+    if (revising) noteBox.current?.focus()
+    else if (wasRevising.current) reviseButton.current?.focus()
+    wasRevising.current = revising
+  }, [revising])
   const title = `${agent.name}${josa(agent.name, '이/가')} 계획을 세웠어요 — 보고 정해 주세요`
   const message = note.trim()
 
@@ -44,6 +53,7 @@ export function PlanCard({ request, agent, now, inInbox }: Props) {
       </div>
       {revising && (
         <textarea
+          ref={noteBox}
           className="pl-note"
           rows={3}
           aria-label="고칠 점"
@@ -59,6 +69,7 @@ export function PlanCard({ request, agent, now, inInbox }: Props) {
             <button
               type="button"
               className="btn pri sm"
+              aria-label="고칠 점 보내기"
               disabled={busy || message === ''}
               onClick={() => call(() => window.dure.answerRequest(request.id, { type: 'deny', message }), 'hold')}
             >
@@ -78,7 +89,7 @@ export function PlanCard({ request, agent, now, inInbox }: Props) {
             >
               이대로 진행
             </button>
-            <button type="button" className="btn sec sm" disabled={busy} onClick={() => setRevising(true)}>
+            <button ref={reviseButton} type="button" className="btn sec sm" disabled={busy} onClick={() => setRevising(true)}>
               고쳐 달라고 하기
             </button>
           </>
