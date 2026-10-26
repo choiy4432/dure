@@ -12,7 +12,7 @@ import { useFrameValue } from '../lib/useFrameValue'
 import { Clamp } from '../lib/Clamp'
 import { ExpandBox } from '../lib/ExpandBox'
 import { Presence } from '../lib/presence'
-import { firstLine, localSummary } from '../lib/words'
+import { localSummary } from '../lib/words'
 import { DiffView } from './DiffView'
 import { MeImages } from './MeImages'
 
@@ -165,8 +165,6 @@ function LiveLine({ text }: { text: string }) {
 
 interface Props {
   line: ChatLine
-  /** 전달된 메시지가 위 고정 카드에 펼쳐져 있다 — 한 줄(누구에게서 온 메시지 + 첫 줄)로 접는다 */
-  folded?: boolean
   /** 줄 번호(앞에 숨긴 줄 포함) — 뿌리 요소의 data-line. 새 줄이 들어올 때 ChatList 가 집는다 */
   index?: number
   /** 이 대화의 에이전트 — 서브에이전트 요약 줄을 누르면 그 에이전트의 서브에이전트 탭으로 간다 */
@@ -174,7 +172,7 @@ interface Props {
 }
 
 /** 대화 한 줄 — 사람 말풍선 · 전달된 메시지 · Claude 블록(+ 하는 일 · 서브에이전트 요약) · 알림 · 명령 출력 · 흐르는 글 */
-function ChatItemView({ line, folded = false, index, agentId }: Props) {
+function ChatItemView({ line, index, agentId }: Props) {
   switch (line.kind) {
     case 'me':
       return (
@@ -185,30 +183,19 @@ function ChatItemView({ line, folded = false, index, agentId }: Props) {
       )
     case 'relay': {
       // '기획에게서 온 메시지' 한 마디 — 이름만 굵게, 이름과 조사 사이를 나누지 않는다(한 칸 안에)
-      const who = (
-        <div className="who">
-          <span className="who-p">
-            {line.from ? (
-              <>
-                <b>{line.from}</b>에게서 온 메시지
-              </>
-            ) : (
-              '전달된 메시지'
-            )}
-          </span>
-        </div>
-      )
-      if (folded) {
-        return (
-          <div className="ci-relay fold" data-line={index} data-msg={line.messageId}>
-            {who}
-            <p className="fold-t trunc">{firstLine(line.text)}</p>
-          </div>
-        )
-      }
       return (
         <div className="ci-relay" data-line={index} data-msg={line.messageId}>
-          {who}
+          <div className="who">
+            <span className="who-p">
+              {line.from ? (
+                <>
+                  <b>{line.from}</b>에게서 온 메시지
+                </>
+              ) : (
+                '전달된 메시지'
+              )}
+            </span>
+          </div>
           <Clamp className="clamp-md">
             <Markdown text={line.text} />
           </Clamp>
@@ -267,7 +254,7 @@ function samePart(p: ClaudePart, q: ClaudePart): boolean {
 const sameList = (x: (string | null)[], y: (string | null)[]) => x.length === y.length && x.every((v, i) => v === y[i])
 
 function sameLine(prev: Props, next: Props): boolean {
-  if (!!prev.folded !== !!next.folded || prev.index !== next.index || prev.agentId !== next.agentId) return false
+  if (prev.index !== next.index || prev.agentId !== next.agentId) return false
   const a = prev.line
   const b = next.line
   if (a === b) return true

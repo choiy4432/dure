@@ -2773,27 +2773,6 @@ code {
   font-weight: 700;
 }
 
-/* 위 고정 카드에 펼쳐져 있는 그 메시지 — 한 줄로 접힘: 누구에게서 온 메시지 + 첫 줄(말줄임) */
-.ci-relay.fold {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 8px 14px;
-}
-
-.ci-relay.fold .who {
-  flex: none;
-  margin-bottom: 0;
-}
-
-.fold-t {
-  flex: 1;
-  margin: 0;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--text-2);
-}
-
 /* 하는 일 목록 — 접힌 한 줄씩 */
 .acts {
   list-style: none;

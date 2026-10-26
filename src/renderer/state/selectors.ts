@@ -52,16 +52,6 @@ export function messagesOf(agentId: AgentId, messages: RelayMessage[]): RelayMes
   return messages.filter(m => m.from === agentId || m.to === agentId).sort((a, b) => b.createdAt - a.createdAt)
 }
 
-/** 이 에이전트가 받은 메시지 중 가장 최근에 전달된 것 — 패널 고정 카드 자리의 '최근 전달' 한 장 */
-export function latestDelivered(agentId: AgentId, messages: RelayMessage[]): RelayMessage | null {
-  let hit: RelayMessage | null = null
-  for (const m of messages) {
-    if (m.to !== agentId || m.state !== 'delivered') continue
-    if (!hit || m.updatedAt > hit.updatedAt) hit = m
-  }
-  return hit
-}
-
 type FreshInput = SummaryInput & { fresh?: Record<AgentId, number> }
 
 /** 새 결과 = 확인 안 한 결과가 있고, 지금은 작업 중도 승인 기다림도 아닌 것 */

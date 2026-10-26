@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, cleanup, waitFor } from '@testing-library/react'
 import { animate } from 'animejs'
-import type { EngineEventMap, PendingRequest, RelayMessage } from '../../src/engine/types'
+import type { EngineEventMap, PendingRequest } from '../../src/engine/types'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 import { allowMotion, fastMotion } from './motion'
 
@@ -20,10 +20,6 @@ const perm = (id: string, agentId = 'w'): PendingRequest => ({
 const ask = (id: string, agentId = 'w'): PendingRequest => ({
   id, agentId, toolName: 'AskUserQuestion', kind: 'question', createdAt: Date.now(),
   input: { questions: [{ question: '색은?', header: '색', options: [{ label: '파랑', description: '' }], multiSelect: false }] },
-})
-
-const relay = (state: RelayMessage['state'], updatedAt = 10): RelayMessage => ({
-  id: 'm1', roomId: 'r1', from: 'p', to: 'w', text: '긴 본문\n\n'.repeat(6), createdAt: 5, state, updatedAt,
 })
 
 /**
@@ -73,14 +69,12 @@ function fakePinsLayout(max = Infinity): () => void {
 let snapshot: Snapshot
 let handlers: Record<string, ((p: any) => void)[]>
 const answerRequest = vi.fn(async () => {})
-const approveMessage = vi.fn(async () => {})
 const emit = <K extends keyof EngineEventMap>(k: K, p: EngineEventMap[K]) => act(() => (handlers[k] ?? []).forEach(f => f(p)))
 const settle = () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
 
 beforeEach(() => {
   vi.resetModules()
   answerRequest.mockClear()
-  approveMessage.mockClear()
   handlers = {}
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '방', createdAt: 1 }],
@@ -92,7 +86,6 @@ beforeEach(() => {
     history: async () => [],
     describe: async () => ({ commands: [], models: [], permissionMode: 'default' }),
     answerRequest,
-    approveMessage,
     on: (k: string, fn: (p: any) => void) => {
       ;(handlers[k] ??= []).push(fn)
       return () => {}
@@ -216,32 +209,6 @@ describe('고정 카드 자리 — 넘침 표시(.more)와 들어오는 카드',
     expect(card.style.transform).toContain('translateY(12px)')
     expect(pins().classList.contains('more')).toBe(false)
     expect(card.hasAttribute('inert')).toBe(false)
-  })
-
-  it('일 시키기로 전달되면 같은 카드가 그 자리에 남는다 — 나갔다 다시 들어오지 않고 넘침 표시도 오가지 않는다', async () => {
-    allowMotion()
-    restoreLayout = fakePinsLayout()
-    snapshot.messages = [relay('pending')]
-    await renderPanel()
-    const card = pins().querySelector('.pin') as HTMLElement
-    expect(card.textContent).toContain('내 확인 필요')
-    vi.mocked(animate).mockClear()
-
-    await act(async () => screen.getByRole('button', { name: '일 시키기' }).click())
-    expect(approveMessage).toHaveBeenCalledWith('m1')
-    // 엔진 차례 그대로 — queued → 받는 쪽 기록에 넘김 줄 · 작업 중 → delivered
-    await emit('message', relay('queued', 11))
-    await emit('history', { agentId: 'w', item: { t: 12, kind: 'user', source: 'relay', messageId: 'm1', parts: [{ type: 'text', text: '긴 본문' }] } })
-    await emit('status', { agentId: 'w', status: 'working', errorText: null })
-    await emit('message', relay('delivered', 13))
-
-    const now = pins().querySelectorAll('.pin')
-    expect(now).toHaveLength(1)
-    expect(now[0]).toBe(card)
-    expect(card.hasAttribute('inert')).toBe(false)
-    expect(card.textContent).toContain('전달됨')
-    expect(pinCalls()).toHaveLength(0)
-    expect(pins().classList.contains('more')).toBe(false)
   })
 
   it('카드가 정말 칸(60% 상한)보다 많으면 넘침 표시가 붙고, 줄면 떨어진다', async () => {

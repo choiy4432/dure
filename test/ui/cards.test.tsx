@@ -83,7 +83,8 @@ afterEach(() => {
 
 const settle = () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
 
-async function renderPanel(select: string, withCard?: string) {
+/** select 가 null 이면 에이전트를 고르지 않는다 — 패널은 할 일 목록 */
+async function renderPanel(select: string | null, withCard?: string) {
   const { getStore } = await import('../../src/renderer/state/store')
   const { AgentPanel } = await import('../../src/renderer/panel/AgentPanel')
   const { AgentCard } = await import('../../src/renderer/map/AgentNode')
@@ -94,7 +95,7 @@ async function renderPanel(select: string, withCard?: string) {
       {withCard && <AgentCard agentId={withCard} />}
     </>,
   )
-  await act(async () => { getStore().selectAgent(select) })
+  if (select) await act(async () => { getStore().selectAgent(select) })
   await settle()
   return { ...r, store: getStore() }
 }
@@ -103,12 +104,13 @@ const pins = () => Array.from(document.querySelectorAll<HTMLElement>('.pnl-pins 
 const card = (name: string) => screen.getByRole('region', { name })
 const toggle = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('button[aria-expanded]')!
 
+// 받은 메시지 카드는 할 일 목록(에이전트를 안 골랐을 때 패널)에만 — 에이전트 패널은 고정하지 않는다
 describe('받은 메시지 카드', () => {
   it('긴 본문은 3줄만 보이고 흐려진다', async () => {
     vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) { return this.classList.contains('clamp-box') ? 300 : 0 })
     vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) { return this.classList.contains('clamp-box') ? 54 : 0 })
     snapshot.messages = [msg({ id: 'm1', text: '긴 줄 '.repeat(200) })]
-    await renderPanel('s')
+    await renderPanel(null)
     const c = card('웹 화면이 보낸 메시지')
     expect(c.querySelector('.pin-b .clamp-box')).toHaveClass('clamped')
     expect(c.querySelector('.pin-b .clamp-box')).toHaveClass('clamp-md') // 문단 사이 여백만큼 더(접기 기준)
@@ -117,7 +119,7 @@ describe('받은 메시지 카드', () => {
 
   it('머리에 보낸 이름 → 받는 이름 · 시간 · 확인 대기, 본문은 마크다운(파일 이름은 mono)', async () => {
     snapshot.messages = [msg({ id: 'm1', text: '파일은 `src/api/user.ts` 의 **응답** 이에요' })]
-    await renderPanel('s')
+    await renderPanel(null)
     const c = card('웹 화면이 보낸 메시지')
     const head = c.querySelector('.pin-h')!
     expect(head.textContent).toContain('웹 화면')
@@ -131,14 +133,14 @@ describe('받은 메시지 카드', () => {
 
   it('보낸 에이전트가 지워졌으면 이름 자리에 "지워진 에이전트"(관계도의 메시지 창과 같은 말)', async () => {
     snapshot.messages = [msg({ id: 'm1', from: 'gone' })]
-    await renderPanel('s')
+    await renderPanel(null)
     const c = card('지워진 에이전트가 보낸 메시지')
     expect(c.querySelector('.pin-h')!.textContent).toContain('지워진 에이전트')
   })
 
   it('[일 시키기] 는 approveMessage 를 그 메시지 id 로', async () => {
     snapshot.messages = [msg({ id: 'm1' })]
-    await renderPanel('s')
+    await renderPanel(null)
     await act(async () => { fireEvent.click(within(card('웹 화면이 보낸 메시지')).getByRole('button', { name: '일 시키기' })) })
     expect(api.approveMessage).toHaveBeenCalledTimes(1)
     expect(api.approveMessage).toHaveBeenCalledWith('m1')
@@ -148,7 +150,7 @@ describe('받은 메시지 카드', () => {
   it('일 시키기가 실패하면 엔진 문구를 보여 주고 다시 누를 수 있다', async () => {
     snapshot.messages = [msg({ id: 'm1' })]
     api.approveMessage.mockRejectedValueOnce(new Error('이미 처리된 메시지입니다.'))
-    await renderPanel('s')
+    await renderPanel(null)
     const btn = within(card('웹 화면이 보낸 메시지')).getByRole('button', { name: '일 시키기' }) as HTMLButtonElement
     await act(async () => { fireEvent.click(btn) })
     await settle()
@@ -156,18 +158,17 @@ describe('받은 메시지 카드', () => {
     expect(btn.disabled).toBe(false)
   })
 
-  it('전달이 허락되면(queued) 작업 끝 대기 — 버튼은 사라진다', async () => {
+  it('전달이 허락되면(queued) 내 할 일이 아니다 — 카드가 사라진다', async () => {
     snapshot.messages = [msg({ id: 'm1' })]
-    await renderPanel('s')
+    await renderPanel(null)
+    expect(card('웹 화면이 보낸 메시지').querySelector('.tag')!.textContent).toBe('내 확인 필요')
     await emit('message', msg({ id: 'm1', state: 'queued', updatedAt: Date.now() }))
-    const c = card('웹 화면이 보낸 메시지')
-    expect(c.querySelector('.tag')!.textContent).toBe('끝나면 전달')
-    expect(within(c).queryByRole('button', { name: '일 시키기' })).toBeNull()
+    expect(screen.queryByRole('region', { name: '웹 화면이 보낸 메시지' })).toBeNull()
   })
 
-  it("[나중에] 는 접기만 — API 를 부르지 않고 배지는 그대로, 다른 에이전트에 갔다 와도 접힌 채", async () => {
+  it('[나중에] 는 접기만 — API 를 부르지 않고 배지는 그대로', async () => {
     snapshot.messages = [msg({ id: 'm1' })]
-    const { store } = await renderPanel('s', 's')
+    await renderPanel(null, 's')
     const c = () => card('웹 화면이 보낸 메시지')
     expect(document.querySelector('.um b')!.textContent).toBe('1')
 
@@ -179,9 +180,6 @@ describe('받은 메시지 카드', () => {
     expect(api.dismissMessage).not.toHaveBeenCalled()
     expect(document.querySelector('.um b')!.textContent).toBe('1')
 
-    await act(async () => store.selectAgent('p'))
-    await act(async () => store.selectAgent('s'))
-    expect(c().querySelector('.md')).toBeNull()
 
     // 머리를 누르면 다시 펼친다
     await act(async () => { fireEvent.click(toggle(c())) })
@@ -191,7 +189,7 @@ describe('받은 메시지 카드', () => {
 
   it('메뉴의 버리기는 확인을 거친다 — 취소면 안 부르고, [버리기] 를 눌러야 dismissMessage', async () => {
     snapshot.messages = [msg({ id: 'm1' })]
-    await renderPanel('s')
+    await renderPanel(null)
     const openMenu = async () => {
       await act(async () => { fireEvent.click(within(card('웹 화면이 보낸 메시지')).getByRole('button', { name: '메시지 메뉴' })) })
       await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: '버리기' })) })
@@ -216,35 +214,23 @@ describe('받은 메시지 카드', () => {
 
   it('버린 메시지(dismissed)는 카드가 사라진다', async () => {
     snapshot.messages = [msg({ id: 'm1' })]
-    await renderPanel('s')
+    await renderPanel(null)
     await emit('message', msg({ id: 'm1', state: 'dismissed', updatedAt: Date.now() }))
     expect(screen.queryByRole('region', { name: '웹 화면이 보낸 메시지' })).toBeNull()
   })
 
-  it('최근 전달된 메시지 1장 — 전달됨(파랑), 5분이 지나면 접혀 있고 머리를 누르면 펼친다', async () => {
+  it('에이전트 패널(대화 탭 위)엔 받은 메시지 카드를 고정하지 않는다 — 확인 필요·끝나면 전달·전달됨 모두 메시지 탭에(확인 필요면 탭에 점)', async () => {
     snapshot.messages = [
-      msg({ id: 'old', from: 'p', to: 'w', state: 'delivered', createdAt: Date.now() - 30 * MIN, updatedAt: Date.now() - 30 * MIN, text: '예전 것' }),
-      msg({ id: 'new', from: 'p', to: 'w', state: 'delivered', createdAt: Date.now() - 20_000, updatedAt: Date.now() - 20_000, text: '배너 문구를 바꿔 주세요' }),
+      msg({ id: 'ask', from: 'p', to: 'w' }),
+      msg({ id: 'wait', from: 'd', to: 'w', state: 'queued' }),
+      msg({ id: 'done', from: 's', to: 'w', state: 'delivered', updatedAt: Date.now() - 20_000 }),
     ]
-    const { store } = await renderPanel('w')
-    expect(pins()).toHaveLength(1)
-    const c = card('기획이 보낸 메시지')
-    const tag = c.querySelector('.tag')!
-    expect(tag.textContent).toBe('전달됨')
-    expect(tag.classList.contains('ok')).toBe(true)
-    expect(c.querySelector('.md')!.textContent).toBe('배너 문구를 바꿔 주세요')
-    expect(within(c).queryByRole('button', { name: '일 시키기' })).toBeNull()
-    expect(within(c).queryByRole('button', { name: '메시지 메뉴' })).toBeNull()
-
-    snapshot.messages = [
-      msg({ id: 'old', from: 'p', to: 'w', state: 'delivered', createdAt: 1, updatedAt: Date.now() - 6 * MIN, text: '예전 것' }),
-    ]
-    await act(async () => { await store.refresh() })
-    const folded = card('기획이 보낸 메시지')
-    expect(folded.querySelector('.md')).toBeNull()
-    expect(toggle(folded).getAttribute('aria-expanded')).toBe('false')
-    await act(async () => { fireEvent.click(toggle(folded)) })
-    expect(card('기획이 보낸 메시지').querySelector('.md')!.textContent).toBe('예전 것')
+    await renderPanel('w')
+    expect(pins()).toHaveLength(0)
+    expect(screen.queryByRole('region', { name: /보낸 메시지$/ })).toBeNull()
+    const tab = screen.getByRole('tab', { name: /메시지/ })
+    expect(tab.textContent).toContain('3')
+    expect(within(tab).getByRole('img', { name: '내 확인 필요' })).toBeTruthy()
   })
 })
 
@@ -544,7 +530,7 @@ describe('자동 상한 카드', () => {
 })
 
 describe('고정 카드 순서', () => {
-  it('권한·질문(먼저 온 것부터) → 받은 메시지(오래된 순) → 자동 상한 → 최근 전달 1장', async () => {
+  it('권한·질문(먼저 온 것부터) → 자동 상한 — 받은 메시지는 고정하지 않는다', async () => {
     const now = Date.now()
     snapshot.requests = [
       request({ id: 'perm', agentId: 's', toolName: 'Bash', input: { command: 'npm test' }, createdAt: now - 5_000 }),
@@ -562,12 +548,8 @@ describe('고정 카드 순서', () => {
     expect(pins().map(el => el.getAttribute('aria-label'))).toEqual([
       '질문이 있어요',
       '서버가 명령을 실행하려 해요',
-      '기획이 보낸 메시지',
-      '디자인이 보낸 메시지',
       '자동 전달이 3번 이어졌어요 — 계속할까요?',
-      '웹 화면이 보낸 메시지',
     ])
-    expect(pins()[5].querySelector('.tag')!.textContent).toBe('전달됨')
   })
 
   it('카드가 없으면 고정 자리는 비어 있다', async () => {

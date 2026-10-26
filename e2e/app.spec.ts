@@ -285,17 +285,20 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await expect(page.locator('.el')).toHaveText('내 확인 필요')
       await expect(node(page, WEB.name).locator('.um')).toHaveText(/받은 메시지\s*1/)
 
+      // 받은 메시지는 패널 위에 고정하지 않는다 — 메시지 탭(내 확인 필요는 펼친 채)에서 일 시키기
       await node(page, WEB.name).locator('.nh').click()
       const web = panel(page, WEB.name)
-      const card = web.getByRole('region', { name: `${PLAN.name}이 보낸 메시지` })
-      await expect(card).toContainText(HANDOFF_TEXT)
-      await card.getByRole('button', { name: '일 시키기' }).click()
+      await expect(web.locator('.pin.msg')).toHaveCount(0)
+      await web.getByRole('tab', { name: /메시지/ }).click()
+      const row = web.locator('.mrow', { hasText: HANDOFF_TEXT })
+      await row.getByRole('button', { name: '일 시키기' }).click()
+      await expect(row.locator('.tag')).toHaveText('전달됨')
+      await web.getByRole('tab', { name: '대화' }).click()
 
       const relay = web.locator('.ci-relay')
       await expect(relay).toContainText(HANDOFF_TEXT)
       await expect(relay.locator('.who')).toContainText(PLAN.name)
       await expect(page.locator('.el')).toHaveText(/^전달됨/)
-      await expect(card).toContainText('전달됨')
       await expect(node(page, WEB.name).locator('.um')).toHaveCount(0)
     })
 
@@ -391,7 +394,7 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await expect(web.locator('.acts li', { hasText: '만듦' })).toHaveCount(1)
       // 다시 켜도 보낸 그림은 썸네일로 열린다(그림 칸에 저장돼 있다)
       await expect(web.locator('.me', { hasText: IMAGE_TEXT }).getByRole('button', { name: '이미지 1/1 크게 보기' }).locator('img')).toHaveAttribute('src', /^data:image\//)
-      await expect(web.getByRole('region', { name: `${PLAN.name}이 보낸 메시지` })).toContainText('전달됨')
+      await expect(web.locator('.pin.msg')).toHaveCount(0)
       // 지난 승인 요청은 남지 않는다
       await expect(page.locator('.ap')).toHaveCount(0)
       await expect(page.locator('.el')).toHaveText(/^전달됨/)
@@ -467,15 +470,19 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await page.keyboard.press('Escape')
     })
 
-    await test.step('8. 받은 메시지 접기 — 한 줄 문단 셋은 그대로, 여섯은 3줄 + 흐림', async () => {
+    await test.step('8. 받은 메시지 접기(할 일 목록) — 한 줄 문단 셋은 그대로, 여섯은 3줄 + 흐림', async () => {
       await node(page, PLAN.name).locator('.nh').click()
       await expect(panel(page, PLAN.name)).toBeVisible()
       await say(page, PLAN.name, `SEND ${WEB.name}: ${THREE_PARAS.join('\n\n')}`)
+      // 첫 SEND 차례가 끝난 뒤에 — 일하는 중에 보낸 말은 같은 차례에 끼어드는데, 가짜 claude 는 끼어든 SEND 를 실행하지 않는다
+      await expect(node(page, PLAN.name).locator('.nd')).toHaveAttribute('data-status', 'idle')
       await say(page, PLAN.name, `SEND ${WEB.name}: ${SIX_PARAS.join('\n\n')}`)
-      await node(page, WEB.name).locator('.nh').click()
-      const web = panel(page, WEB.name)
-      const short = web.locator('.pin', { hasText: THREE_PARAS[2] })
-      const long = web.locator('.pin', { hasText: SIX_PARAS[0] })
+      await expect(node(page, PLAN.name).locator('.nd')).toHaveAttribute('data-status', 'idle')
+      // 받은 메시지 카드는 할 일 목록에 — 위 띠의 할 일 단추가 고른 에이전트를 풀어 패널을 돌린다
+      await page.locator('.top').getByRole('button', { name: /^할 일/ }).click()
+      const inbox = page.locator('aside.pnl[aria-label="에이전트"]')
+      const short = inbox.locator('.pin', { hasText: THREE_PARAS[2] })
+      const long = inbox.locator('.pin', { hasText: SIX_PARAS[0] })
       await expect(short.locator('.md p')).toHaveCount(3)
       await expect(long.locator('.md p')).toHaveCount(6)
       await page.evaluate(() => document.fonts.ready.then(() => undefined))

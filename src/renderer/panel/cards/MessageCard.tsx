@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
-import { ArrowRight, Check, ChevronDown, Clock, Ellipsis, Pin, Trash2 } from 'lucide-react'
+import { ArrowRight, ChevronDown, Clock, Ellipsis, Pin, Trash2 } from 'lucide-react'
 import type { RelayMessage } from '../../../engine/types'
 import { Markdown } from '../../lib/Markdown'
 import { Clamp } from '../../lib/Clamp'
@@ -11,22 +11,9 @@ import { ago, josa, MESSAGE_WORD } from '../../lib/words'
 import { ConfirmDialog } from '../../shell/ConfirmDialog'
 import { useCall } from './useCall'
 
-/** 패널에 카드로 보이는 메시지 상태 — 상한 대기(held)는 방 하나에 한 장인 자동 상한 카드가 맡는다 */
-export type ShownState = 'pending' | 'queued' | 'delivered'
-
-/** 최근 전달된 메시지 카드는 5분이 지나면 접힌 채로 보인다 */
-export const FOLD_AFTER = 5 * 60_000
-
-/**
- * 고정 카드가 펼쳐져 있나 — 사람이 정한 게 먼저('나중에'·머리 누르기), 아니면 기다리는 건 펼침, 전달된 건 5분 동안만.
- * 패널의 고정 카드와 대화 목록(같은 메시지를 한 줄로 접을지)이 같은 셈을 쓴다.
- */
-export function pinOpen(m: { id: string; state: RelayMessage['state']; updatedAt: number }, open: Record<string, boolean>, now: number): boolean {
-  return open[m.id] ?? (m.state !== 'delivered' || now - m.updatedAt < FOLD_AFTER)
-}
-
 interface Props {
-  message: RelayMessage & { state: ShownState }
+  /** 내 확인 필요(pending) 메시지 — 할 일 목록만 카드로 보인다. 끝나면 전달·전달됨은 메시지 탭에서 본다 */
+  message: RelayMessage
   fromName: string
   toName: string
   /** 지금 시각 — 패널이 한 번 재서 모든 카드에 준다 */
@@ -35,16 +22,17 @@ interface Props {
   onOpenChange: (open: boolean) => void
 }
 
-/** 받은 메시지 카드(시안 .pin) — 머리 '보낸 → 받는 · 시간 · 상태', 본문 마크다운, 확인 필요면 [일 시키기] [나중에] */
+/**
+ * 받은 메시지 카드(시안 .pin, 할 일 목록) — 머리 '보낸 → 받는 · 보낸 때 · 내 확인 필요', 본문 마크다운, [일 시키기] [나중에].
+ * 펼침은 할 일 목록이 들고 있다('나중에'·머리 누르기로 접고, 정한 적 없으면 펼침).
+ */
 export function MessageCard({ message, fromName, toName, now, open, onOpenChange }: Props) {
   const { busy, error, call } = useCall()
   const root = useRef<HTMLElement>(null)
   useMotion(root, MOTION.line)
   const [asking, setAsking] = useState(false)
-  const { id, state } = message
-  const pending = state === 'pending'
-  // 전달된 것은 전달된 때, 기다리는 것은 보낸 때
-  const time = ago(state === 'delivered' ? message.updatedAt : message.createdAt, now)
+  const { id } = message
+  const time = ago(message.createdAt, now)
   const label = `${fromName}${josa(fromName, '이/가')} 보낸 메시지`
 
   const dismiss = async () => {
@@ -71,15 +59,11 @@ export function MessageCard({ message, fromName, toName, now, open, onOpenChange
           <span className="pin-t">· {time}</span>
           {!open && <ChevronDown className="i pin-cv" aria-hidden="true" />}
         </button>
-        <span className={`tag${state === 'delivered' ? ' ok' : ''}`}>
-          {state === 'delivered' ? (
-            <Check className="i" size={14} strokeWidth={2} aria-hidden="true" />
-          ) : (
-            <Clock className="i" size={14} strokeWidth={2} aria-hidden="true" />
-          )}
-          {MESSAGE_WORD[state]}
+        <span className="tag">
+          <Clock className="i" size={14} strokeWidth={2} aria-hidden="true" />
+          {MESSAGE_WORD.pending}
         </span>
-        {state !== 'delivered' && <MessageMenu onDismiss={() => setAsking(true)} />}
+        <MessageMenu onDismiss={() => setAsking(true)} />
       </div>
       {/* 본문 — 아래 여백 6px(.pin-open::after)까지 이 상자 안에 있다 */}
       <Presence show={open}>
@@ -89,21 +73,19 @@ export function MessageCard({ message, fromName, toName, now, open, onOpenChange
               <Markdown text={message.text} />
             </Clamp>
           </div>
-          {pending && (
-            <div className="ab pin-ab">
-              <button
-                type="button"
-                className="btn pri sm"
-                disabled={busy}
-                onClick={() => call(() => window.dure.approveMessage(id))}
-              >
-                일 시키기
-              </button>
-              <button type="button" className="btn sec sm" onClick={() => onOpenChange(false)}>
-                나중에
-              </button>
-            </div>
-          )}
+          <div className="ab pin-ab">
+            <button
+              type="button"
+              className="btn pri sm"
+              disabled={busy}
+              onClick={() => call(() => window.dure.approveMessage(id))}
+            >
+              일 시키기
+            </button>
+            <button type="button" className="btn sec sm" onClick={() => onOpenChange(false)}>
+              나중에
+            </button>
+          </div>
           {error && (
             <p className="pin-err" role="alert">
               {error}

@@ -146,53 +146,19 @@ describe('ChatList — 줄마다', () => {
     expect(within(conv()).getByText('멈췄어요')).toHaveClass('note')
   })
 
-  describe('위 고정 카드에 펼쳐 보이는 메시지와 같으면 한 줄로 접는다', () => {
+  it('전달된 메시지는 대화에서 늘 다 보인다 — 위에 고정 카드가 없다(메시지 탭에서 본다)', async () => {
     const BODY = '배너 문구를 ‘여름, 같이 걸어요’로 바꿔 주세요.\n\n바꾼 뒤 줄바꿈이 두 줄 안에 들어가는지 확인 부탁해요.'
-    const relayItem = (messageId: string): HistoryItem => ({
-      t: 1, kind: 'user', source: 'relay', messageId,
+    const t = Date.now() - 10_000
+    snapshot.messages = [{ id: 'm1', roomId: 'r1', from: 'p', to: 'w', text: BODY, createdAt: t - 1000, state: 'delivered', updatedAt: t }]
+    history.mockResolvedValueOnce([{
+      t: 1, kind: 'user', source: 'relay', messageId: 'm1',
       parts: [{ type: 'text', text: `[두레 메시지 — 보낸 쪽: 기획(기획서 · 문구)]\n${BODY}` }],
-    })
-    const delivered = (id: string, ago: number) => {
-      const t = Date.now() - ago
-      return { id, roomId: 'r1', from: 'p', to: 'w', text: BODY, createdAt: t - 1000, state: 'delivered' as const, updatedAt: t }
-    }
-
-    it('고정 카드가 펼쳐져 있으면 "기획에게서 온 메시지 · 첫 줄" 한 줄 — 카드를 접으면 대화에서 다시 다 보인다', async () => {
-      snapshot.messages = [delivered('m1', 10_000)]
-      history.mockResolvedValueOnce([relayItem('m1')])
-      await renderPanel()
-      const relay = conv().querySelector('.ci-relay') as HTMLElement
-      expect(relay).toHaveClass('fold')
-      expect(relay).toHaveTextContent('기획에게서 온 메시지')
-      expect(relay).toHaveTextContent('배너 문구를 ‘여름, 같이 걸어요’로 바꿔 주세요.')
-      expect(relay).not.toHaveTextContent('줄바꿈이 두 줄') // 둘째 문단은 위 카드에만
-      expect(relay.querySelector('.fold-t')).toHaveClass('trunc')
-
-      // 고정 카드를 접는다 — 대화의 같은 메시지가 다 펼쳐진다
-      const pin = screen.getByRole('region', { name: '기획이 보낸 메시지' })
-      fireEvent.click(pin.querySelector<HTMLButtonElement>('button[aria-expanded]')!)
-      const full = conv().querySelector('.ci-relay') as HTMLElement
-      expect(full).not.toHaveClass('fold')
-      expect(full).toHaveTextContent('줄바꿈이 두 줄')
-    })
-
-    it('카드가 접힌 채(전달된 지 5분 넘음)면 대화에서 다 보인다', async () => {
-      snapshot.messages = [delivered('m1', 6 * 60_000)]
-      history.mockResolvedValueOnce([relayItem('m1')])
-      await renderPanel()
-      const relay = conv().querySelector('.ci-relay') as HTMLElement
-      expect(relay).not.toHaveClass('fold')
-      expect(relay).toHaveTextContent('줄바꿈이 두 줄')
-    })
-
-    it('카드에 있는 것과 다른 메시지는 그대로 다 보인다', async () => {
-      snapshot.messages = [delivered('m2', 10_000)]
-      history.mockResolvedValueOnce([relayItem('m1')])
-      await renderPanel()
-      const relay = conv().querySelector('.ci-relay') as HTMLElement
-      expect(relay).not.toHaveClass('fold')
-      expect(relay).toHaveTextContent('줄바꿈이 두 줄')
-    })
+    }])
+    await renderPanel()
+    const relay = conv().querySelector('.ci-relay') as HTMLElement
+    expect(relay).toHaveTextContent('기획에게서 온 메시지')
+    expect(relay).toHaveTextContent('줄바꿈이 두 줄')
+    expect(screen.queryByRole('region', { name: '기획이 보낸 메시지' })).toBeNull()
   })
 
   it('이미지가 붙은 내 말은 썸네일 — 저장한 그림을 엔진에서 읽어 온다', async () => {

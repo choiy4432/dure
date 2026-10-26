@@ -10,7 +10,7 @@ import { MOTION } from '../lib/motion'
 import { createAgentPlan, requestTitle } from '../lib/toolSummary'
 import { FRESH_WORD, PHASE_WORD, ago, elapsed } from '../lib/words'
 import { Clamp } from '../lib/Clamp'
-import { MessageCard, pinOpen } from './cards/MessageCard'
+import { MessageCard } from './cards/MessageCard'
 import { PlanCard } from './cards/PlanCard'
 import { PermissionCard } from './cards/PermissionCard'
 import { HeldChainCard } from './cards/HeldChainCard'
@@ -138,11 +138,11 @@ export function Inbox() {
         {view.messages.map(m => (
           <MessageCard
             key={m.id}
-            message={m as typeof m & { state: 'pending' }}
+            message={m}
             fromName={nameOf(m.from)}
             toName={nameOf(m.to)}
             now={now}
-            open={pinOpen(m as typeof m & { state: 'pending' }, open, now)}
+            open={open[m.id] ?? true}
             onOpenChange={o => setOpen(c => ({ ...c, [m.id]: o }))}
           />
         ))}

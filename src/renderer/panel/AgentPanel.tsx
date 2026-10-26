@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
-import type { AgentId, HistoryItem, RelayMessage } from '../../engine/types'
+import type { AgentId, HistoryItem } from '../../engine/types'
 import { getStore, useDure, type PanelTab } from '../state/store'
-import { latestDelivered, messagesOf, unreadFor } from '../state/selectors'
+import { messagesOf, unreadFor } from '../state/selectors'
 import { buildSubagentTree } from '../state/subagents'
 import { errorMessage } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { PanelHeader } from './PanelHeader'
 import type { Described } from './ModelPicker'
-import { MessageCard, pinOpen, type ShownState } from './cards/MessageCard'
 import { PermissionCard } from './cards/PermissionCard'
 import { PlanCard } from './cards/PlanCard'
 import { CreateAgentCard } from './cards/CreateAgentCard'
@@ -24,8 +23,6 @@ import { MessageList } from './MessageList'
 
 const IDLE: Described = { state: 'idle' }
 
-type Shown = RelayMessage & { state: ShownState }
-const isWaiting = (m: RelayMessage): m is Shown => m.state === 'pending' || m.state === 'queued'
 const byCreated = (a: { createdAt: number }, b: { createdAt: number }) => a.createdAt - b.createdAt
 
 const px = (v: string) => parseFloat(v) || 0
@@ -65,42 +62,22 @@ function useOverflows(ref: RefObject<HTMLElement | null>): boolean {
 }
 
 /**
- * 고정 카드 — 권한·질문·새 에이전트 만들기(먼저 온 것부터) → 받은 메시지(오래된 순) → 자동 상한(방에 한 장) → 최근 전달된 메시지 1장.
+ * 고정 카드 — 권한·질문·계획·새 에이전트 만들기(먼저 온 것부터) → 붙잡기 → 자동 상한(방에 한 장).
+ * 받은 메시지는 고정하지 않는다 — 끝나면 전달이 쌓이면 대화가 가려졌다. 메시지 탭에 다 있고(내 확인 필요면 탭에 점), 확인 필요는 할 일 목록에도.
  * 카드가 없으면 자리도 없다(.pnl-pins:empty).
  */
-function Pins({ agentId, open, onOpenChange }: {
-  agentId: AgentId
-  open: Record<string, boolean>
-  onOpenChange: (messageId: string, open: boolean) => void
-}) {
+function Pins({ agentId }: { agentId: AgentId }) {
   // 바뀌지 않으면 같은 배열 — 흐르는 글(text-delta)마다 다시 그리지 않는다
   const v = useDure(s => ({ agents: s.agents, messages: s.messages, requests: s.requests, limit: s.autoChainLimit }))
-  // 메시지 탭에선 메시지 카드를 내린다 — 같은 메시지가 탭 목록에도 있다(승인·질문·계획·붙잡기·자동 상한 카드는 그대로)
-  const onMessages = useDure(s => s.panelTab[agentId] === 'messages')
   const now = useNow()
   const box = useRef<HTMLDivElement>(null)
   const over = useOverflows(box)
   const agent = v.agents.find(a => a.id === agentId)
   if (!agent) return <div className="pnl-pins" />
 
-  const nameOf = (id: AgentId) => v.agents.find(a => a.id === id)?.name ?? '지워진 에이전트'
   const holdName = (id: AgentId) => v.agents.find(a => a.id === id)?.name ?? null
   const requests = v.requests.filter(r => r.agentId === agentId).sort(byCreated)
-  const inbox = v.messages.filter(m => m.to === agentId && isWaiting(m)).sort(byCreated) as Shown[]
   const held = v.messages.some(m => m.roomId === agent.roomId && m.state === 'held')
-  const delivered = latestDelivered(agentId, v.messages) as Shown | null
-
-  const card = (m: Shown) => (
-    <MessageCard
-      key={m.id}
-      message={m}
-      fromName={nameOf(m.from)}
-      toName={agent.name}
-      now={now}
-      open={pinOpen(m, open, now)}
-      onOpenChange={o => onOpenChange(m.id, o)}
-    />
-  )
 
   return (
     <div ref={box} className={`pnl-pins${over ? ' more' : ''}`}>
@@ -117,9 +94,7 @@ function Pins({ agentId, open, onOpenChange }: {
           ),
         )}
         {agent.hold && <HoldCard key="hold" agent={agent} hold={agent.hold} nameOf={holdName} now={now} />}
-        {!onMessages && inbox.map(card)}
         {held && <HeldChainCard key="held" roomId={agent.roomId} limit={v.limit} />}
-        {!onMessages && delivered && card(delivered)}
       </PresenceList>
     </div>
   )
@@ -258,12 +233,6 @@ export function AgentPanel() {
   // 모델 목록 — 머리의 칩이나 입력창의 /model 이 연다
   const [modelOpenFor, setModelOpenFor] = useState<AgentId | null>(null)
 
-  // 메시지 카드를 펼치고 접은 것('나중에' 포함) — 메시지 id 로, 이번 실행 동안만(다른 에이전트로 갔다 와도 그대로)
-  const [cardOpen, setCardOpen] = useState<Record<string, boolean>>({})
-  const setOpen = useCallback((messageId: string, open: boolean) => {
-    setCardOpen(c => ({ ...c, [messageId]: open }))
-  }, [])
-
   // 내가 보낼 때마다 오르는 수(보낸 에이전트와 함께) — 대화 목록이 맨 아래로 붙어 내 말이 보이게(입력창은 대화 탭에만 있다)
   const [sent, setSent] = useState<{ agentId: AgentId | null; n: number }>({ agentId: null, n: 0 })
   const onSent = useCallback((agentId: AgentId) => setSent(s => ({ agentId, n: s.n + 1 })), [])
@@ -294,8 +263,8 @@ export function AgentPanel() {
         agentId={sel.id}
         name={sel.name}
         seen={seenFocus}
-        pins={<Pins agentId={sel.id} open={cardOpen} onOpenChange={setOpen} />}
-        chat={<ChatList key={`c-${sel.id}`} agentId={sel.id} pin={sent.agentId === sel.id ? sent.n : 0} cardOpen={cardOpen} />}
+        pins={<Pins agentId={sel.id} />}
+        chat={<ChatList key={`c-${sel.id}`} agentId={sel.id} pin={sent.agentId === sel.id ? sent.n : 0} />}
         composer={
           <Composer
             key={`i-${sel.id}`}

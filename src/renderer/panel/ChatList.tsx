@@ -2,10 +2,8 @@ import { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } f
 import type { AgentId, HistoryItem } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { buildTranscript } from '../state/transcript'
-import { displayStatus, latestDelivered } from '../state/selectors'
-import { useNow } from '../lib/useNow'
+import { displayStatus } from '../state/selectors'
 import { ChatItem } from './ChatItem'
-import { pinOpen } from './cards/MessageCard'
 import { WorkingRow } from './WorkingRow'
 import { enteringLines, type LineSnap } from './newLines'
 import { Presence, playEnter } from '../lib/presence'
@@ -20,13 +18,11 @@ const PAGE = 300
 const STICK_PX = 24
 const NONE: HistoryItem[] = []
 const NO_IDS: string[] = []
-const NO_CHOICE: Record<string, boolean> = {}
 
 /**
  * 대화 목록(시안 .conv) — 고른 에이전트의 기록을 buildTranscript 로 줄로 바꿔 그린다.
  * 최근 300줄만 그리고 위에 '이전 대화 N개 더 보기'. 새 줄이 오면 맨 아래에 붙어 있을 때만 따라 내려간다.
  * pin 이 오르면(내가 보냄) 위로 올려 읽던 중이어도 맨 아래에 다시 붙는다.
- * 위 고정 카드에 펼쳐 보이는 '최근 전달된 메시지'와 같은 줄은 한 줄로 접는다(cardOpen = 패널이 들고 있는 카드 펼침).
  * 에이전트가 일하는 동안(표시 상태 '작업 중' — 승인 기다림은 승인 카드가 알린다) 맨 끝에 '작업 중…' 줄.
  * 서브에이전트가 돌면 부모 차례가 끝나도 작업 중이다(엔진) — 그 줄에 도는 수를 함께 적는다.
  * Claude 가 생각하는 동안은 그 줄이 '생각하는 중…'과 생각한 추정 토큰 수.
@@ -34,11 +30,7 @@ const NO_CHOICE: Record<string, boolean> = {}
  * 위로 올려 읽는 동안엔 화면 맨 위에 걸친 차례를 연 말(내 말 · 전달된 메시지)이 위에 고정된다(StickyPrompt — 누르면 그 말로).
  * 메시지 탭의 '대화에서 보기'(messageFocus)면 그 메시지 줄로 가서 다시 들어오게 보이고 초점을 옮긴 뒤 요청을 지운다.
  */
-export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
-  agentId: AgentId
-  pin?: number
-  cardOpen?: Record<string, boolean>
-}) {
+export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number }) {
   const v = useDure(s => ({
     items: s.history[agentId] ?? NONE,
     status: s.historyStatus[agentId]?.state ?? 'loading',
@@ -57,12 +49,6 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   const focus = useDure(s => (s.messageFocus?.agentId === agentId ? s.messageFocus : null))
   const runningSet = useMemo(() => new Set(running), [running])
   const [limit, setLimit] = useState(PAGE)
-  const latest = useDure(s => {
-    const m = latestDelivered(agentId, s.messages)
-    return m ? { id: m.id, updatedAt: m.updatedAt } : null
-  })
-  const now = useNow()
-  const pinned = latest && pinOpen({ ...latest, state: 'delivered' }, cardOpen, now) ? latest.id : null
 
   // 흐르는 글은 따로 — 글자가 올 때마다 기록 전체를 다시 줄로 바꾸지 않는다(줄 객체가 그대로라 다시 그리지도 않는다).
   // 도는 목록을 넘겨야 요약 줄의 '도는 중'이 맞다(끝 기록이 없는데 돌지도 않으면 끊김)
@@ -229,13 +215,7 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
         )}
         {lines.map((line, i) => (
           // 줄 번호(앞에 숨긴 줄 포함)는 새 줄이 붙어도 그대로 — 펼친 하는 일이 닫히지 않는다
-          <ChatItem
-            key={hiddenBefore + i}
-            index={hiddenBefore + i}
-            line={line}
-            agentId={agentId}
-            folded={line.kind === 'relay' && !!line.messageId && line.messageId === pinned}
-          />
+          <ChatItem key={hiddenBefore + i} index={hiddenBefore + i} line={line} agentId={agentId} />
         ))}
         {v.streaming && <ChatItem line={{ kind: 'streaming', text: v.streaming }} />}
         <Presence show={work.on}>

@@ -96,9 +96,9 @@ describe('메시지 탭', () => {
     expect(within(list[1]).getByText('쿠폰 API')).toBeInTheDocument()
   })
 
-  it('메시지 탭에선 메시지 고정 카드와 입력창을 숨긴다', async () => {
+  it('메시지는 어느 탭에서도 위에 고정하지 않는다 · 메시지 탭에선 입력창을 숨긴다', async () => {
     const { container } = await renderPanel()
-    expect(container.querySelectorAll('.pin.msg').length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('.pin.msg')).toHaveLength(0)
     fireEvent.click(msgTab())
     await settle()
     expect(container.querySelectorAll('.pin.msg')).toHaveLength(0)
