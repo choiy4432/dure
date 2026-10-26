@@ -939,6 +939,27 @@ describe('store 서브에이전트', () => {
     s.showSubagents('b', 'toolu_X')
     expect(s.getState().subagentFocus).toEqual({ agentId: 'b', key: 'toolu_X', n: 3 })
   })
+
+  it('showMessage 는 그 에이전트를 골라 대화 탭으로 바꾸고 messageFocus 를 둔다 — 대화 목록이 간 뒤 doneMessageFocus 로 지운다', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    s.setPanelTab('a', 'messages')
+    s.showMessage('a', 'm1')
+    expect(s.getState().selectedAgentId).toBe('a')
+    expect(s.getState().panelTab.a).toBe('chat')
+    expect(s.getState().messageFocus).toEqual({ agentId: 'a', messageId: 'm1', n: 1 })
+    s.showMessage('b', 'm2') // 보낸 메시지 — 받은 에이전트의 대화로
+    expect(s.getState().selectedAgentId).toBe('b')
+    expect(s.getState().messageFocus).toEqual({ agentId: 'b', messageId: 'm2', n: 2 })
+    s.doneMessageFocus(1) // 지난 것 — 그 사이 새로 누른 것은 남긴다
+    expect(s.getState().messageFocus?.n).toBe(2)
+    s.doneMessageFocus(2)
+    expect(s.getState().messageFocus).toBeNull()
+    s.showMessage('없는 에이전트', 'm3')
+    expect(s.getState().selectedAgentId).toBe('b')
+  })
 })
 
 describe('store 끝남 · 새 결과', () => {

@@ -32,6 +32,11 @@ export function unreadFor(agentId: AgentId, messages: RelayMessage[]): number {
   return messages.filter(m => m.to === agentId && isUnread(m)).length
 }
 
+/** 이 에이전트가 주고받은 메시지(받은 것 + 보낸 것) — 패널 메시지 탭. 새것부터(보낸 때) */
+export function messagesOf(agentId: AgentId, messages: RelayMessage[]): RelayMessage[] {
+  return messages.filter(m => m.from === agentId || m.to === agentId).sort((a, b) => b.createdAt - a.createdAt)
+}
+
 /** 이 에이전트가 받은 메시지 중 가장 최근에 전달된 것 — 패널 고정 카드 자리의 '최근 전달' 한 장 */
 export function latestDelivered(agentId: AgentId, messages: RelayMessage[]): RelayMessage | null {
   let hit: RelayMessage | null = null

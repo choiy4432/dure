@@ -37,6 +37,8 @@ export type UiState = Snapshot & {
   panelTab: Record<AgentId, PanelTab>
   /** 대화의 서브에이전트 요약 줄을 눌렀다 — 지도가 key(노드 id)가 든 차례로 간다. n 은 누를 때마다 오른다 */
   subagentFocus: { agentId: AgentId; key: string; n: number } | null
+  /** 메시지 탭의 '대화에서 보기'를 눌렀다 — 그 에이전트의 대화가 messageId 메시지 줄로 간다. 간 뒤엔 대화 목록이 지운다(다시 열려도 또 가지 않게) */
+  messageFocus: { agentId: AgentId; messageId: string; n: number } | null
   /**
    * 에이전트가 만든 새 에이전트 → 만든 에이전트(agent-added 사건). 관계도가 자리 없는 새 에이전트를 만든 쪽 가까이 놓는 데 쓴다.
    * 앱을 끄면 잊는다 — 사건을 놓친 새 에이전트(다시 켬)는 지금처럼 첫 빈 칸
@@ -51,7 +53,7 @@ export type UiState = Snapshot & {
   roomMenuRequest: number
 }
 
-export type PanelTab = 'chat' | 'subagents'
+export type PanelTab = 'chat' | 'subagents' | 'messages'
 
 export interface Store {
   getState(): UiState
@@ -64,6 +66,10 @@ export interface Store {
   setPanelTab(id: AgentId, tab: PanelTab): void
   /** 서브에이전트 탭으로 바꾸고 key(노드 id)가 든 차례를 보이게 한다 */
   showSubagents(id: AgentId, key: string): void
+  /** 그 에이전트를 고르고(다른 에이전트면 그 방으로 · 기록도 불러온다) 대화 탭에서 messageId 메시지 줄을 보이게 한다. 모르는 id 면 아무것도 안 한다 */
+  showMessage(id: AgentId, messageId: string): void
+  /** 대화 목록이 messageFocus(n)로 갔다 — 지운다. 그 사이 새로 누른 것(n 이 다르면)은 남긴다 */
+  doneMessageFocus(n: number): void
   /** 그 에이전트의 방으로 바꾸고(다르면) 고른다 — 기록도 불러온다. 모르는 id 면 아무것도 안 한다 */
   focusAgent(id: AgentId): void
   /** 방 목록을 열어 달라고 요청한다 — roomMenuRequest 가 하나 오른다 */
@@ -108,7 +114,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
-    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, placeNear: {}, fresh: {}, roomMenuRequest: 0,
+    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, placeNear: {}, fresh: {}, roomMenuRequest: 0,
   }
   const listeners = new Set<() => void>()
   let buffer: { ev: Ev; at: number }[] | null = null // 스냅샷을 기다리는 동안 온 이벤트(받은 시각과 함께)
@@ -483,6 +489,28 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
         panelTab: { ...state.panelTab, [id]: 'subagents' },
         subagentFocus: { agentId: id, key, n: (state.subagentFocus?.n ?? 0) + 1 },
       })
+    },
+    showMessage(id, messageId) {
+      const a = state.agents.find(x => x.id === id)
+      if (!a) return
+      const other = state.selectedAgentId !== id
+      const roomId = state.rooms.some(r => r.id === a.roomId) ? a.roomId : state.roomId
+      set({
+        ...state,
+        roomId,
+        selectedAgentId: id,
+        fresh: without(state.fresh, id),
+        panelTab: { ...state.panelTab, [id]: 'chat' },
+        messageFocus: { agentId: id, messageId, n: (state.messageFocus?.n ?? 0) + 1 },
+      })
+      if (other) {
+        tellSelected(id)
+        void loadHistory(id)
+      }
+    },
+    doneMessageFocus(n) {
+      if (state.messageFocus?.n !== n) return
+      set({ ...state, messageFocus: null })
     },
   }
 }

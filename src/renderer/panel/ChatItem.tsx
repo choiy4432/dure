@@ -200,14 +200,14 @@ function ChatItemView({ line, folded = false, index, agentId }: Props) {
       )
       if (folded) {
         return (
-          <div className="ci-relay fold" data-line={index}>
+          <div className="ci-relay fold" data-line={index} data-msg={line.messageId}>
             {who}
             <p className="fold-t trunc">{firstLine(line.text)}</p>
           </div>
         )
       }
       return (
-        <div className="ci-relay" data-line={index}>
+        <div className="ci-relay" data-line={index} data-msg={line.messageId}>
           {who}
           <Clamp className="clamp-md">
             <Markdown text={line.text} />

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import type { AgentId, HistoryItem, RelayMessage } from '../../engine/types'
-import { getStore, useDure } from '../state/store'
-import { latestDelivered } from '../state/selectors'
+import { getStore, useDure, type PanelTab } from '../state/store'
+import { latestDelivered, messagesOf, unreadFor } from '../state/selectors'
 import { buildSubagentTree } from '../state/subagents'
 import { errorMessage } from '../lib/words'
 import { useNow } from '../lib/useNow'
@@ -20,6 +20,7 @@ import { Composer } from './Composer'
 import { PanelTabs, ViewShown, panelId, tabId } from './PanelTabs'
 import { SubagentMap } from './SubagentMap'
 import { Inbox } from './Inbox'
+import { MessageList } from './MessageList'
 
 const IDLE: Described = { state: 'idle' }
 
@@ -74,6 +75,8 @@ function Pins({ agentId, open, onOpenChange }: {
 }) {
   // 바뀌지 않으면 같은 배열 — 흐르는 글(text-delta)마다 다시 그리지 않는다
   const v = useDure(s => ({ agents: s.agents, messages: s.messages, requests: s.requests, limit: s.autoChainLimit }))
+  // 메시지 탭에선 메시지 카드를 내린다 — 같은 메시지가 탭 목록에도 있다(승인·질문·계획·붙잡기·자동 상한 카드는 그대로)
+  const onMessages = useDure(s => s.panelTab[agentId] === 'messages')
   const now = useNow()
   const box = useRef<HTMLDivElement>(null)
   const over = useOverflows(box)
@@ -114,9 +117,9 @@ function Pins({ agentId, open, onOpenChange }: {
           ),
         )}
         {agent.hold && <HoldCard key="hold" agent={agent} hold={agent.hold} nameOf={holdName} now={now} />}
-        {inbox.map(card)}
+        {!onMessages && inbox.map(card)}
         {held && <HeldChainCard key="held" roomId={agent.roomId} limit={v.limit} />}
-        {delivered && card(delivered)}
+        {!onMessages && delivered && card(delivered)}
       </PresenceList>
     </div>
   )
@@ -126,7 +129,8 @@ const NO_ITEMS: HistoryItem[] = []
 const NO_IDS: string[] = []
 
 /**
- * 머리 아래 — [대화 | 서브에이전트 N] 탭(지금 대화에 서브에이전트가 하나라도 있었을 때만) → 고정 카드 → 대화 목록 또는 서브에이전트 지도 → 입력창.
+ * 머리 아래 — [대화 | 서브에이전트 N | 메시지 N] 탭(서브에이전트는 지금 대화에 하나라도 있었을 때, 메시지는 주고받은 게 있을 때만) → 고정 카드 →
+ * 대화 목록 · 서브에이전트 지도 · 메시지 목록 → 입력창.
  * pins·chat·composer 는 AgentPanel 이 만든 요소 그대로 받는다 — 기록이 늘어 이 칸이 다시 그려져도 셋은 다시 그리지 않는다(제 구독으로 그린다).
  * 입력창은 대화 탭에만 보인다 — 서브에이전트 탭에선 숨겨 두기만 해서(hidden) 쓰던 글·붙인 이미지가 그대로 남는다.
  * 대화 칸은 탭이 생기고 사라져도 같은 요소라 대화 목록이 다시 붙지 않는다. 탭이 있으면 두 칸을 함께 그려 두고 고르지 않은 칸은 숨긴다(hidden) —
@@ -151,24 +155,33 @@ function PanelBody({ agentId, name, pins, chat, composer, seen }: {
       focus: f && f.agentId === agentId ? f : null,
     }
   })
+  // 메시지 탭의 수·점 — 받은 것 + 보낸 것 / 이 에이전트가 받은 것 가운데 내 확인 필요(관계도 카드의 받은 메시지와 같은 셈)
+  const msg = useDure(s => ({ total: messagesOf(agentId, s.messages).length, attention: unreadFor(agentId, s.messages) > 0 }))
   // 지금 대화(마지막 새 대화 경계 뒤)의 나무 — 탭 숫자(안쪽 포함)와 지도가 같은 것을 쓴다
   const tree = useMemo(() => buildSubagentTree(v.items, new Set(v.running)), [v.items, v.running])
-  const tabs = tree.total > 0
-  const tab = tabs ? v.tab : 'chat'
+  const shownTabs = useMemo(() => {
+    const t: PanelTab[] = ['chat']
+    if (tree.total > 0) t.push('subagents')
+    if (msg.total > 0) t.push('messages')
+    return t
+  }, [tree.total, msg.total])
+  const tabs = shownTabs.length > 1
+  const tab = shownTabs.includes(v.tab) ? v.tab : 'chat'
   const base = useId()
 
-  // 새 대화로 서브에이전트가 0 이 되면 대화 탭으로 — 다음에 서브에이전트가 생겨도 대화를 보던 그대로
+  // 새 대화로 서브에이전트가 0 이 되면(메시지가 없어져도) 대화 탭으로 — 다음에 다시 생겨도 대화를 보던 그대로
   useEffect(() => {
-    if (!tabs && v.ready && v.tab === 'subagents') getStore().setPanelTab(agentId, 'chat')
-  }, [tabs, v.ready, v.tab, agentId])
+    if ((v.ready || v.tab === 'messages') && !shownTabs.includes(v.tab)) getStore().setPanelTab(agentId, 'chat')
+  }, [shownTabs, v.ready, v.tab, agentId])
 
   return (
     <>
       {tabs && (
         <PanelTabs
           tab={tab}
-          total={tree.total}
-          running={tree.running > 0 || v.running.length > 0}
+          tabs={shownTabs}
+          subagents={{ total: tree.total, running: tree.running > 0 || v.running.length > 0 }}
+          messages={msg}
           base={base}
           onChange={t => getStore().setPanelTab(agentId, t)}
         />
@@ -181,7 +194,7 @@ function PanelBody({ agentId, name, pins, chat, composer, seen }: {
       >
         <ViewShown value={tab === 'chat'}>{chat}</ViewShown>
       </div>
-      {tabs && (
+      {shownTabs.includes('subagents') && (
         <div
           className="pnl-view"
           hidden={tab !== 'subagents'}
@@ -190,6 +203,17 @@ function PanelBody({ agentId, name, pins, chat, composer, seen }: {
           aria-labelledby={tabId(base, 'subagents')}
         >
           <SubagentMap key={agentId} name={name} turns={tree.turns} focus={v.focus} seen={seen} active={tab === 'subagents'} />
+        </div>
+      )}
+      {shownTabs.includes('messages') && (
+        <div
+          className="pnl-view"
+          hidden={tab !== 'messages'}
+          role="tabpanel"
+          id={panelId(base, 'messages')}
+          aria-labelledby={tabId(base, 'messages')}
+        >
+          <MessageList agentId={agentId} />
         </div>
       )}
       <div className="pnl-cmp" hidden={tab !== 'chat'}>

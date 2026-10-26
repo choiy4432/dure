@@ -32,6 +32,7 @@ const NO_CHOICE: Record<string, boolean> = {}
  * Claude 가 생각하는 동안은 그 줄이 '생각하는 중…'과 생각한 추정 토큰 수.
  * 서브에이전트 탭으로 가면 숨을 뿐 그대로다(펼친 줄·불러온 이전 대화) — 다시 보이면 읽던 자리로(ViewShown).
  * 위로 올려 읽는 동안엔 화면 맨 위에 걸친 차례를 연 말(내 말 · 전달된 메시지)이 위에 고정된다(StickyPrompt — 누르면 그 말로).
+ * 메시지 탭의 '대화에서 보기'(messageFocus)면 그 메시지 줄로 가서 다시 들어오게 보이고 초점을 옮긴 뒤 요청을 지운다.
  */
 export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   agentId: AgentId
@@ -53,6 +54,7 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   const thinking = useDure(s => s.thinking[agentId] ?? null)
   // 생각 전 기다림 — 준비하는 중·Claude 답 받는 중·대화를 정리하는 중
   const phase = useDure(s => s.phase[agentId])
+  const focus = useDure(s => (s.messageFocus?.agentId === agentId ? s.messageFocus : null))
   const runningSet = useMemo(() => new Set(running), [running])
   const [limit, setLimit] = useState(PAGE)
   const latest = useDure(s => {
@@ -147,6 +149,29 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
     keep.current = null
     if (visible.current) el.scrollTop = el.scrollHeight
   }, [pin])
+
+  // 메시지 탭에서 '대화에서 보기' — 그 메시지 줄이 대화 칸 윗 여백 바로 아래에 오게 가고, 새 줄처럼 다시 들어오며 초점도 그 줄로.
+  // 기록을 아직 못 받았으면 받은 뒤에(줄이 바뀔 때 다시 본다). 다 받았는데 그린 줄에 없으면(앞에 숨긴 줄) 요청만 지운다.
+  // 따라 내려가기·다시 보이기 효과 뒤에 둔다 — 같은 그리기에서 이것이 이긴다
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!focus || !el || !visible.current) return
+    const node = Array.from(el.querySelectorAll<HTMLElement>(':scope > [data-msg]')).find(n => n.dataset.msg === focus.messageId)
+    if (!node) {
+      if (v.status === 'ready') getStore().doneMessageFocus(focus.n)
+      return
+    }
+    stick.current = false
+    keep.current = null
+    const pad = parseFloat(getComputedStyle(el).paddingTop) || 0
+    el.scrollTop += node.getBoundingClientRect().top - el.getBoundingClientRect().top - pad
+    top.current = el.scrollTop
+    if (!reducedMotion()) playEnter(node, MOTION.line.enter)
+    node.tabIndex = -1
+    node.focus({ preventScroll: true })
+    measure()
+    getStore().doneMessageFocus(focus.n)
+  }, [focus, lines, v.status, shown, measure])
 
   // 칸이 줄어도(창 크기 · 위에 카드가 생김) 맨 아래에 붙어 있었으면 바닥을 지킨다 — 줄어드는 건 스크롤 이벤트가 안 온다.
   // 숨을 때(크기 0)는 건드리지 않는다
