@@ -800,3 +800,70 @@ ${LONG}` }] },
     })
   })
 })
+
+describe('ChatList — 위 고정(지금 보는 차례를 연 말)', () => {
+  const TWO: HistoryItem[] = [
+    { t: 1, kind: 'user', source: 'human', parts: [{ type: 'text', text: '헤더 높이 줄여 줘.' }] },
+    { t: 2, kind: 'assistant', blocks: [{ type: 'text', text: '줄였어요.' }] },
+    { t: 3, kind: 'result', ok: true, subtype: 'success' },
+    { t: 4, kind: 'user', source: 'human', parts: [{ type: 'text', text: '쿠폰 칸도\n같이 넣어 줘.' }] },
+    { t: 5, kind: 'assistant', blocks: [{ type: 'text', text: '긴 답이에요.' }] },
+    { t: 6, kind: 'result', ok: true, subtype: 'success' },
+  ]
+  /** jsdom 은 배치를 하지 않는다 — 대화 칸 맨 위는 100, 차례를 연 줄들의 자리를 정해 준다 */
+  function place(el: HTMLElement, spots: [number, number][]) {
+    Object.defineProperty(el, 'getBoundingClientRect', { configurable: true, value: () => ({ top: 100, bottom: 500 }) })
+    el.querySelectorAll<HTMLElement>('.me, .ci-relay').forEach((n, i) => {
+      const [top, bottom] = spots[i]
+      Object.defineProperty(n, 'getBoundingClientRect', { configurable: true, value: () => ({ top, bottom }) })
+    })
+  }
+  const stuck = () => screen.queryByRole('button', { name: /로 가기/ })
+
+  it('차례를 연 내 말이 화면 위로 다 지나가면 위에 한 줄로 고정되고, 누르면 그 말로 간다', async () => {
+    history.mockResolvedValue(TWO)
+    await renderPanel()
+    const el = conv()
+    const to = vi.fn()
+    ;(el as any).scrollTo = to
+    el.scrollTop = 800
+    place(el, [[-500, -460], [-120, -80]])
+    fireEvent.scroll(el)
+    const b = stuck()
+    expect(b).not.toBeNull()
+    expect(b).toHaveAccessibleName('내 메시지로 가기 — 쿠폰 칸도 같이 넣어 줘.')
+    expect(b).toHaveTextContent('쿠폰 칸도 같이 넣어 줘.')
+    fireEvent.click(b!)
+    expect(to).toHaveBeenCalledWith({ top: 800 + -120 - 100, behavior: 'auto' })
+    expect(document.activeElement).toBe(el.querySelectorAll('.me')[1])
+  })
+
+  it('그 말이 조금이라도 보이거나 대화 맨 위면 없다', async () => {
+    history.mockResolvedValue(TWO)
+    await renderPanel()
+    const el = conv()
+    place(el, [[-500, -460], [60, 110]])
+    fireEvent.scroll(el)
+    expect(stuck()).toBeNull()
+    place(el, [[120, 160], [400, 440]])
+    fireEvent.scroll(el)
+    expect(stuck()).toBeNull()
+    // 둘째 말로 가서 그 말이 상자 자리(맨 위 100 에서 116 안)에 보이면 첫 차례 상자가 덮지 않는다
+    place(el, [[-500, -460], [124, 164]])
+    fireEvent.scroll(el)
+    expect(stuck()).toBeNull()
+  })
+
+  it('다른 에이전트가 보낸 메시지로 연 차례면 보낸 이름을 붙인다', async () => {
+    history.mockResolvedValue([
+      { t: 1, kind: 'user', source: 'relay', parts: [{ type: 'text', text: '[두레 메시지 — 보낸 쪽: 기획(기획서 · 문구)]\n## 시안 세 벌\n만들어 주세요' }] },
+      { t: 2, kind: 'assistant', blocks: [{ type: 'text', text: '만들게요.' }] },
+    ])
+    await renderPanel()
+    const el = conv()
+    place(el, [[-200, -140]])
+    fireEvent.scroll(el)
+    expect(stuck()).toHaveTextContent('기획에게서')
+    expect(stuck()).toHaveAccessibleName('기획에게서 온 메시지로 가기 — 시안 세 벌')
+  })
+})

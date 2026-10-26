@@ -1,4 +1,4 @@
-import { useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { AgentId, HistoryItem } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { buildTranscript } from '../state/transcript'
@@ -11,6 +11,8 @@ import { enteringLines, type LineSnap } from './newLines'
 import { Presence, playEnter } from '../lib/presence'
 import { MOTION, reducedMotion } from '../lib/motion'
 import { ViewShown } from './PanelTabs'
+import { StickyPrompt } from './StickyPrompt'
+import { STICKY_ZONE_PX, stickyPromptIndex, type PromptBox, type PromptLine } from './turnStart'
 
 /** 처음에 그리는 줄 수 · '더 보기' 한 번에 늘리는 수 */
 const PAGE = 300
@@ -29,6 +31,7 @@ const NO_CHOICE: Record<string, boolean> = {}
  * 서브에이전트가 돌면 부모 차례가 끝나도 작업 중이다(엔진) — 그 줄에 도는 수를 함께 적는다.
  * Claude 가 생각하는 동안은 그 줄이 '생각하는 중…'과 생각한 추정 토큰 수.
  * 서브에이전트 탭으로 가면 숨을 뿐 그대로다(펼친 줄·불러온 이전 대화) — 다시 보이면 읽던 자리로(ViewShown).
+ * 위로 올려 읽는 동안엔 화면 맨 위에 걸친 차례를 연 말(내 말 · 전달된 메시지)이 위에 고정된다(StickyPrompt — 누르면 그 말로).
  */
 export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   agentId: AgentId
@@ -72,11 +75,25 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   const visible = useRef(shown)
   const top = useRef(0)
 
+  // 위 고정 — 화면 맨 위에 걸친 차례를 연 줄 번호(앞에 숨긴 줄 포함). 스크롤·줄·크기가 바뀔 때 잰다(값이 같으면 다시 그리지 않는다)
+  const [stuck, setStuck] = useState<number | null>(null)
+  const measure = useCallback(() => {
+    const el = box.current
+    if (!el || !visible.current) return
+    const boxes: PromptBox[] = []
+    for (const n of el.querySelectorAll<HTMLElement>(':scope > .me, :scope > .ci-relay')) {
+      const r = n.getBoundingClientRect()
+      boxes.push({ index: Number(n.dataset.line), top: r.top, bottom: r.bottom })
+    }
+    setStuck(stickyPromptIndex(boxes, el.getBoundingClientRect().top, STICKY_ZONE_PX))
+  }, [])
+
   const onScroll = () => {
     const el = box.current
     if (!el || !visible.current) return // 숨으며 0 으로 돌아간 자리는 읽던 자리가 아니다
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX
     top.current = el.scrollTop
+    measure()
   }
 
   // 다시 보였다 — 맨 아래에 붙어 있었으면 맨 아래(숨은 동안 온 줄까지), 아니면 읽던 자리로.
@@ -87,7 +104,8 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
     const el = box.current
     if (!shown || !el) return
     el.scrollTop = stick.current ? el.scrollHeight : top.current
-  }, [shown])
+    measure()
+  }, [shown, measure])
 
   useLayoutEffect(() => {
     const el = box.current
@@ -99,7 +117,8 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
       el.scrollTop = el.scrollHeight
     }
     top.current = el.scrollTop // 옮긴 자리도 읽던 자리 — 스크롤 이벤트가 오기 전에 숨어도
-  }, [lines, v.streaming, v.status, work.on])
+    measure()
+  }, [lines, v.streaming, v.status, work.on, measure])
 
   // 보는 동안 새로 온 줄만 아래에서 들어온다 — 처음 그린 것 · 더 보기 · 기록 다시 받기 · 흐르던 글이 줄이 된 것은 아니다
   const snap = useRef<LineSnap | null>(null)
@@ -136,10 +155,27 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
     if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
       if (visible.current && stick.current && keep.current === null) el.scrollTop = el.scrollHeight
+      measure()
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [measure])
+
+  // 위 고정 줄 — 그린 줄 가운데 차례를 연 줄일 때만(앞에 숨긴 줄은 그리지 않아 잴 수도 없다)
+  const stuckLine = stuck === null ? null : lines[stuck - hiddenBefore]
+  const prompt: PromptLine | null = stuckLine && (stuckLine.kind === 'me' || stuckLine.kind === 'relay') ? stuckLine : null
+  // 그 말로 간다 — 말이 대화 칸 윗 여백 바로 아래에 오게. 초점도 그 말로(상자가 사라지며 초점이 몸통으로 떨어지지 않게)
+  const jumpTo = () => {
+    const el = box.current
+    const node = stuck === null ? null : el?.querySelector<HTMLElement>(`:scope > [data-line="${stuck}"]`)
+    if (!el || !node) return
+    const pad = parseFloat(getComputedStyle(el).paddingTop) || 0
+    const to = el.scrollTop + node.getBoundingClientRect().top - el.getBoundingClientRect().top - pad
+    if (typeof el.scrollTo === 'function') el.scrollTo({ top: to, behavior: reducedMotion() ? 'auto' : 'smooth' })
+    else el.scrollTop = to
+    node.tabIndex = -1
+    node.focus({ preventScroll: true })
+  }
 
   const showMore = () => {
     const el = box.current
@@ -150,6 +186,7 @@ export function ChatList({ agentId, pin = 0, cardOpen = NO_CHOICE }: {
   return (
     // 바깥 칸 — 위 끝에 바탕색으로 사라지는 짧은 막(.conv-wrap::before). 고정 카드 바로 아래로 스크롤되는 글이 줄처럼 끊겨 보이지 않게
     <div className="conv-wrap">
+      <Presence show={prompt !== null}>{prompt && <StickyPrompt line={prompt} onJump={jumpTo} />}</Presence>
       <section ref={box} className="conv" aria-label="대화" onScroll={onScroll}>
         {v.status === 'loading' && v.items.length === 0 && <p className="conv-st">대화를 불러오는 중…</p>}
         {v.status === 'error' && (

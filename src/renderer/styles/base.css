@@ -2306,6 +2306,70 @@ code {
   pointer-events: none;
 }
 
+/*
+ * 위 고정(StickyPrompt) — 지금 화면 맨 위에 걸친 차례를 연 말 한 줄. 위·왼쪽 간격은 대화 여백과 같은 20px.
+ * 둘레 막은 상자 아래 8px 까지 바탕색, 그 아래 48px 동안 사라진다 — 밑으로 지나가는 글이 상자 글과 겹쳐 읽히지 않는다.
+ * 막은 누름을 통과시키고(글 고르기도 그대로) 상자만 누른다. 스크롤 막대(10px)는 덮지 않는다.
+ */
+.stk {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  right: 10px;
+  padding: 20px 20px 56px;
+  background: linear-gradient(var(--bg) calc(100% - 48px), transparent);
+  pointer-events: none;
+}
+
+.stk-c {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  background: var(--hover);
+  box-shadow: var(--shadow-box);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stk-c:hover {
+  border-color: var(--border-strong);
+}
+
+.stk-who {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stk-who b {
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.stk-t {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stk-tm {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .conv {
   flex: 1;
   min-height: 0;
