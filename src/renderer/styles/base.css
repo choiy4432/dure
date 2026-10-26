@@ -282,12 +282,13 @@ code {
   padding: 0 6px;
 }
 
-/* 왼쪽 위 두레 아이콘(resources/icon/dure-24.svg) — 22px, 끌어도 그림이 안 집히게 */
+/* 왼쪽 위 두레 마크(shell/BrandMark — 판 없는 D) — 22px, 테마 색 */
 .brand {
   display: block;
   flex: none;
   width: 22px;
   height: 22px;
+  color: var(--brand);
   user-select: none;
 }
 
@@ -4971,43 +4972,42 @@ code {
   }
 }
 
+/* 판 없는 D — 둘레를 잘라 크게 보이고, 받는 쪽 고리가 번지는 자리는 잘리지 않게 */
 .spl svg {
   width: 72px;
   height: 72px;
-}
-
-.spl-tile {
-  fill: var(--primary);
+  overflow: visible;
 }
 
 .spl-track,
 .spl-trail {
   fill: none;
-  stroke: var(--on-primary);
+  stroke: var(--brand);
   stroke-width: 14;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .spl-track {
-  stroke-opacity: 0.32;
+  stroke-opacity: 0.25;
 }
 
+/* 위 고리 속은 바탕색 — 고리로 들어가는 길이 비치지 않게 */
 .spl-top {
-  fill: var(--primary);
-  stroke: var(--on-primary);
+  fill: var(--bg);
+  stroke: var(--brand);
   stroke-width: 12;
 }
 
 .spl-top-fill,
 .spl-bot,
 .spl-dot {
-  fill: var(--on-primary);
+  fill: var(--brand);
 }
 
 .spl-ring {
   fill: none;
-  stroke: var(--on-primary);
+  stroke: var(--brand);
   stroke-width: 4;
 }
 
