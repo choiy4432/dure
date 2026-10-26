@@ -148,7 +148,14 @@ describe('buildTranscript', () => {
     }
     expect(buildTranscript([it], undefined).lines[0]).toEqual({ kind: 'relay', from: '기획', text: '본문\n둘째 줄', at: 5 })
   })
-  it('전달된 메시지의 id 를 줄에 남긴다 — 위 고정 카드와 같은 메시지인지 알아보게', () => {
+  it('늦게 간 메시지의 머리(" · 34분 전에 보냄")도 이름을 읽는다 — 역할 안 가운뎃점은 상관없다', () => {
+    const it: HistoryItem = {
+      t: 5, kind: 'user', source: 'relay', messageId: 'm8',
+      parts: [{ type: 'text', text: '[두레 메시지 — 보낸 쪽: 기획(기획서 · 문구) · 1시간 5분 전에 보냄]\n본문' }],
+    }
+    expect(buildTranscript([it], undefined).lines[0]).toEqual({ kind: 'relay', from: '기획', text: '본문', at: 5, messageId: 'm8' })
+  })
+  it('전달된 메시지의 id 를 줄에 남긴다 — 메시지 탭의 대화에서 보기가 그 줄로 가게', () => {
     const it: HistoryItem = {
       t: 5, kind: 'user', source: 'relay', messageId: 'm7',
       parts: [{ type: 'text', text: '[두레 메시지 — 보낸 쪽: 기획(기획서 · 문구)]\n본문' }],

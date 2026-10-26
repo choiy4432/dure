@@ -13,7 +13,7 @@ import { startMcpServer, type McpServerHandle } from './mcpServer';
 import { Permissions } from './permissions';
 import { DENY } from '../shared/denyTexts';
 import { josa } from '../shared/josa';
-import { Router, AUTO_CHAIN_LIMIT } from './router';
+import { Router, AUTO_CHAIN_LIMIT, joinDeliveries, type Delivery } from './router';
 import { EFFORT_LEVELS, THEME_PREFS, type EffortLevel, type NotifyPrefs, type ThemePref } from './types';
 import { toContextUsage } from './usage';
 import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
@@ -311,7 +311,8 @@ interface HoldState {
 
 /** 프로세스에 써 넣었지만 아직 아무 이벤트도 안 온 줄 — 읽기 전에 죽으면 되살린다 */
 /** 보내고 아직 Claude 가 읽지 않은 줄 — mid: 차례 도중에 보낸 사람 말(그 되돌림으로만 읽은 것으로 본다, probe17) */
-type InFlight = ({ kind: 'relay'; messageId: string } | { kind: 'human'; input: HeldInput }) & { mid?: true };
+/** 보낸 줄 — 전달 메시지는 한 줄에 여럿(묶음)일 수 있고 text 는 쓴 글 그대로(차례 도중에 끼운 줄의 되돌림을 맞춘다) */
+type InFlight = ({ kind: 'relay'; messageIds: string[]; text: string } | { kind: 'human'; input: HeldInput }) & { mid?: true };
 
 /** 도는 서브에이전트 — background: 부모가 도는 중에 그 Agent 의 결과(Async agent launched)를 받았다. 끝나면 Claude 가 스스로 차례를 연다(probe13) */
 interface RunningSubagent {
@@ -456,14 +457,19 @@ class EngineImpl extends EventEmitter implements Engine {
       store,
       log,
       limit: this.limit,
-      deliver: (id, text, messageId) => {
+      deliver: (id, batch, mid) => {
         const s = this.ensure(id);
         // 막 띄운 세션이 /effort 차례 중 — 던지면 queued 로 남고, 그 차례가 끝나면 pump → onIdle 이 꺼낸다(두 줄을 동시에 쓰지 않는다)
         if (this.effortTurn.has(s)) throw new Error(EFFORT_BUSY);
-        this.sendTo(id, s, [{ type: 'text', text }], { kind: 'relay', messageId });
+        this.sendRelay(id, s, batch, mid);
       },
       // 붙잡힌 에이전트도 바쁨 — 전달 대기 메시지는 queued 로 남아 붙잡기 목록에 붙는다
       isBusy: (id) => this.waiting(id) || (this.held.get(id)?.length ?? 0) > 0 || this.holds.has(id),
+      // 일하는 중이면 사람 말처럼 지금 차례에 끼워 넣는다 — '멈춰라' 같은 말이 그 차례가 끝날 때까지 묶여 있지 않게
+      canInterject: (id) => {
+        const s = this.sessions.get(id);
+        return !!s && this.canInterject(id, s);
+      },
     });
     // 아래 알림은 프로세스 이벤트·MCP 요청 처리 중에도 불린다 — 듣는 쪽이 던져도 남은 일(상태·다음 입력)은 한다
     this.perms.on('request', (r: PendingRequest) => {
@@ -1162,14 +1168,18 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /**
-   * 사람 말을 지금 차례에 끼워 보낼 수 있나 — Claude 차례가 도는 중(사람 승인 대기 포함)이고, 엔진이 몰래 연 차례(/effort)·다시 띄우기·
-   * 계획 모드로 바꾸는 중이 아니고, 먼저 기다리는 입력·붙잡기가 없고(차례를 앞지르지 않게), 슬래시 명령이 아닐 때(명령은 쉴 때 차례로)
+   * 지금 차례에 줄을 끼워 보낼 수 있나 — Claude 차례가 도는 중(사람 승인 대기 포함)이고, 엔진이 몰래 연 차례(/effort)·다시 띄우기·
+   * 계획 모드로 바꾸는 중이 아니고, 먼저 기다리는 입력·붙잡기가 없을 때(차례를 앞지르지 않게). 사람 말·전달 메시지 둘 다
    */
-  private canSendMid(id: AgentId, s: ClaudeSession, parts: UserPart[]): boolean {
+  private canInterject(id: AgentId, s: ClaudeSession): boolean {
     if (!this.live(id, s) || s.status !== 'working') return false;
     if (this.effortTurn.has(s) || this.restartWant.has(s) || this.planEntering.has(s) || this.planGates.has(s)) return false;
-    if ((this.held.get(id)?.length ?? 0) > 0 || this.holds.has(id)) return false;
-    return !inputText(parts).trimStart().startsWith('/');
+    return (this.held.get(id)?.length ?? 0) === 0 && !this.holds.has(id);
+  }
+
+  /** 사람 말을 지금 차례에 끼워 보낼 수 있나 — 위 조건에 슬래시 명령이 아닐 때(명령은 쉴 때 차례로) */
+  private canSendMid(id: AgentId, s: ClaudeSession, parts: UserPart[]): boolean {
+    return this.canInterject(id, s) && !inputText(parts).trimStart().startsWith('/');
   }
 
   /**
@@ -1188,7 +1198,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const list = this.inFlight.get(s);
     if (!list?.length) return false;
     if (ev.kind === 'replay') {
-      const i = list.findIndex((x) => x.mid && x.kind === 'human' && inputText(x.input.parts) === ev.text);
+      const i = list.findIndex((x) => x.mid && (x.kind === 'human' ? inputText(x.input.parts) : x.text) === ev.text);
       if (i < 0) return false;
       list.splice(i, 1);
       if (!this.midUnread(s)) this.clearMidGrace(s);
@@ -1312,21 +1322,30 @@ class EngineImpl extends EventEmitter implements Engine {
     return true;
   }
 
-  private sendTo(id: AgentId, s: ClaudeSession, parts: UserPart[], item: InFlight): void {
+  private sendTo(id: AgentId, s: ClaudeSession, parts: UserPart[], item: Extract<InFlight, { kind: 'human' }>): void {
+    this.write(s, parts, item);
+    // 실제로 쓴 줄만 기록한다 — 대기 중인 입력은 보낼 때 나타난다
+    this.guard(id, () => this.record(id, { kind: 'user', source: 'human', parts: parts.map((p) => this.historyPart(id, p)) }));
+  }
+
+  /**
+   * 받은 메시지를 넘긴다 — 여럿이면 한 줄로 묶어(Claude 는 다 읽고 한 번에 처리), 기록은 메시지마다 따로(대화의 넘겨받은 줄·'대화에서 보기').
+   * mid 면 지금 차례에 끼워 넣는다(다음 걸음에서 읽는다 — 되돌림이 와야 읽힌 것)
+   */
+  private sendRelay(id: AgentId, s: ClaudeSession, batch: Delivery[], mid: boolean): void {
+    const text = joinDeliveries(batch.map((d) => d.text));
+    this.write(s, [{ type: 'text', text }], { kind: 'relay', messageIds: batch.map((d) => d.messageId), text, ...(mid ? { mid: true as const } : {}) });
+    for (const d of batch) {
+      this.guard(id, () => this.record(id, { kind: 'user', source: 'relay', parts: [{ type: 'text', text: d.text }], messageId: d.messageId }));
+    }
+  }
+
+  private write(s: ClaudeSession, parts: UserPart[], item: InFlight): void {
     s.send(parts);
     const list = this.inFlight.get(s) ?? [];
     list.push(item);
     this.inFlight.set(s, list);
     this.prewarmed.delete(s); // 일을 받은 세션 — 고르지 않게 돼도 끄지 않는다(앱을 끌 때까지)
-    // 실제로 쓴 줄만 기록한다 — 대기 중인 입력은 보낼 때 나타난다
-    this.guard(id, () =>
-      this.record(id, {
-        kind: 'user',
-        source: item.kind === 'relay' ? 'relay' : 'human',
-        parts: parts.map((p) => this.historyPart(id, p)),
-        ...(item.kind === 'relay' ? { messageId: item.messageId } : {}),
-      }),
-    );
   }
 
   /** 기록 한 칸 — 그림은 내용을 그림 칸에 따로 두고 기록엔 크기·이름만(저장을 못 하면 이름 없이, 보내기는 막지 않는다) */
@@ -2326,7 +2345,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.clearMidGrace(s);
     const inputs: HeldInput[] = [];
     for (const x of lost) {
-      if (x.kind === 'relay') this.router.requeue(x.messageId);
+      if (x.kind === 'relay') for (const m of x.messageIds) this.router.requeue(m);
       else inputs.push(x.input);
     }
     if (inputs.length) {

@@ -397,10 +397,11 @@ async function echo(text) {
   if (replayUser && process.env.FAKE_REPLAY_OFF !== '1') await emit({ type: 'user', isReplay: true, message: { role: 'user', content: [{ type: 'text', text }] }, session_id: sessionId, parent_tool_use_id: null });
 }
 
-async function turn(text) {
+/** pending — 이 차례 안에서 읽을 줄(멈춘 차례 도중에 쌓인 둘째 줄부터 — 진짜처럼 하나씩 되돌린다) */
+async function turn(text, pending = []) {
   const effort = /^\/effort(?:\s+(\S+))?$/.exec(text.trim());
   if (effort) return effortCommand(effort[1] ?? '');
-  const tok = { ended: false, queue: [] };
+  const tok = { ended: false, queue: [...pending] };
   current = tok;
   const finish = async (t, extra) => {
     if (tok.ended) return;
@@ -765,7 +766,7 @@ async function control(msg) {
       current = null;
       await result('interrupted', { is_error: true, subtype: 'error_during_execution' });
       // 멈춘 차례 도중에 온 말은 버리지 않는다 — 진짜(probe17)처럼 곧바로 그 말로 새 차례를 연다
-      if (queued.length) void turn(queued.join('\n'));
+      if (queued.length) void turn(queued[0], queued.slice(1));
     }
   } else {
     await emit({ type: 'control_response', response: { subtype: 'error', request_id: rid, error: `unknown ${sub}` } });

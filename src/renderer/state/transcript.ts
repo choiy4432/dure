@@ -39,12 +39,12 @@ export type ChatLine =
 const OUTPUT_MAX = 2000
 const RELAY_PREFIX = '[두레 메시지 — 보낸 쪽: '
 
-// 첫 줄이 '[두레 메시지 — 보낸 쪽: 이름(역할)]' 이어야 한다. 이름 = 첫 '(' 앞이라 역할 안 괄호는 상관없다.
+// 첫 줄이 '[두레 메시지 — 보낸 쪽: 이름(역할)]'(늦게 갔으면 ' · 34분 전에 보냄]') 이어야 한다. 이름 = 첫 '(' 앞이라 역할 안 괄호는 상관없다.
 // 읽지 못하면 이름 없이 통째로 — 전달된 글이 '내 말'로 둔갑하지 않게.
 export function stripRelay(text: string): { from: string; body: string } {
   const nl = text.indexOf('\n')
   const first = nl === -1 ? text : text.slice(0, nl)
-  if (first.startsWith(RELAY_PREFIX) && first.endsWith(')]')) {
+  if (first.startsWith(RELAY_PREFIX) && (first.endsWith(')]') || / · [^·\]]+ 전에 보냄\]$/.test(first))) {
     const inner = first.slice(RELAY_PREFIX.length, -1)
     const paren = inner.indexOf('(')
     if (paren !== -1) return { from: inner.slice(0, paren).trim(), body: nl === -1 ? '' : text.slice(nl + 1) }

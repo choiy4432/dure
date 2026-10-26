@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createEngine, type Agent, type AgentStatus, type Engine, type EngineOptions, type HistoryItem, type Hold, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
 import { openMessageLog } from '../src/engine/messageLog';
+import { joinDeliveries } from '../src/engine/router';
 import { openStore } from '../src/engine/store';
 import { DENY } from '../src/shared/denyTexts';
 
@@ -290,7 +291,7 @@ test('차례가 끝나면 그 에이전트에 남은 승인 요청을 정리한�
 const resultTextIs = (e: Engine, agentId: string, t: string) =>
   waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === agentId && x.event.kind === 'result' && x.event.text === t);
 
-test('일하는 중 사람이 또 입력하면 바로 보낸다 — 지금 차례에 끼어든다(probe17), 대기 메시지는 그 뒤', async () => {
+test('일하는 중엔 사람 말도 받은 메시지도 바로 지금 차례에 끼어든다(probe17) — 멈추면 끼어든 줄로 곧바로 새 차례, 붙잡을 것이 없다', async () => {
   const e = await start();
   const { a, b } = setup(e);
   e.updateAgent(a.id, { auto: true });
@@ -302,30 +303,32 @@ test('일하는 중 사람이 또 입력하면 바로 보낸다 — 지금 차�
   expect(e.history(a.id).filter((x) => x.kind === 'user')).toHaveLength(2); // 보낸 줄은 그때 기록된다
   const bDone = resultOf(e, b.id);
   await e.sendUser(b.id, text('SEND A: 셋째'));
-  expect(await resultText(bDone)).toBe('A 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+  expect(await resultText(bDone)).toBe('A 에게 전달했습니다. 지금 하는 일 사이에 읽습니다.');
+  const delivery = '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n셋째';
   const aTexts = () => userTexts().filter((t) => t !== 'SEND A: 셋째');
-  expect(aTexts()).toEqual(['SLOW', 'echo 둘째']); // 둘째는 바로 · 셋째(메시지)는 아직
+  expect(aTexts()).toEqual(['SLOW', 'echo 둘째', delivery]); // 둘 다 바로
+  expect(e.history(a.id).flatMap((x) => (x.kind === 'user' ? [x.source] : []))).toEqual(['human', 'human', 'relay']);
 
-  // 멈추면 하던 차례는 끝나고, 끼어든 둘째로 새 차례가 곧바로 열린다(probe17) — 메시지는 붙잡혔다가 이어서 보내면 그 뒤
+  // 멈추면 하던 차례는 끝나고, 끼어든 둘째로 새 차례가 곧바로 열려 그 안에서 메시지까지 읽는다(probe17)
   const second = resultTextIs(e, a.id, '받음: echo 둘째');
   await e.interrupt(a.id);
+  expect(e.hold(a.id)).toBeNull();
   await second;
-  const delivery = '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n셋째';
-  const third = resultTextIs(e, a.id, `받음: ${delivery}`);
-  e.resumeHold(a.id);
-  await third;
-  expect(aTexts()).toEqual(['SLOW', 'echo 둘째', delivery]);
-  expect(e.status(a.id)).toBe('idle');
+  await until('쉼', () => e.status(a.id) === 'idle');
+  expect(aTexts()).toEqual(['SLOW', 'echo 둘째', delivery]); // 다시 보내지 않았다
+  expect(e.messages({ to: a.id }).map((m) => m.state)).toEqual(['delivered']);
 });
 
-test('일하는 중에 끼어든 말이 안 읽힌 채 차례가 끝나면 그 말의 차례까지 쉬지 않는다 — 전달 메시지가 그 사이에 끼지 않는다', async () => {
+test('일하는 중에 끼어든 줄이 안 읽힌 채 차례가 끝나면 그 줄의 차례까지 쉬지 않는다 — 받은 메시지도 같이 끼어 그 차례에서 읽는다', async () => {
   const e = await start();
   const { a, b } = setup(e);
   e.updateAgent(a.id, { auto: true });
   await e.sendUser(a.id, text('SLOW'));
   await waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === a.id && x.event.kind === 'init');
   await e.sendUser(a.id, text('echo 끼어듦'));
-  await relayTo(e, b.id, 'SEND A: 메시지');
+  const bDone = resultOf(e, b.id);
+  await e.sendUser(b.id, text('SEND A: 메시지'));
+  expect(await resultText(bDone)).toBe('A 에게 전달했습니다. 지금 하는 일 사이에 읽습니다.');
   const first = resultOf(e, a.id);
   const own = resultTextIs(e, a.id, '받음: echo 끼어듦');
   const statuses: string[] = [];
@@ -333,8 +336,33 @@ test('일하는 중에 끼어든 말이 안 읽힌 채 차례가 끝나면 그 �
   await e.interrupt(a.id);
   expect(await resultText(first)).toBe('interrupted');
   await own;
-  expect(statuses).toEqual(['idle']); // 끼어든 말의 차례가 끝난 뒤 한 번 — 멈춘 차례와 그 차례 사이에 쉬는 틈이 없었다
-  expect(userTexts().filter((t) => t !== 'SEND A: 메시지')).toEqual(['SLOW', 'echo 끼어듦']); // 메시지는 붙잡혀 아직
+  expect(statuses).toEqual(['idle']); // 끼어든 줄의 차례가 끝난 뒤 한 번 — 멈춘 차례와 그 차례 사이에 쉬는 틈이 없었다
+  expect(userTexts().filter((t) => t !== 'SEND A: 메시지')).toEqual(['SLOW', 'echo 끼어듦', '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n메시지']);
+});
+
+test('받는 쪽이 끼워 넣을 수 없는 동안(먼저 기다리는 입력) 쌓인 메시지는 쉴 때 한 줄로 묶어 — 기록은 메시지마다', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  const c = e.addAgent({ roomId: agentOf(e, a.id).roomId, name: 'C', role: '검수', folder: a.folder });
+  e.updateAgent(a.id, { auto: true });
+  await slowTurn(e, a.id);
+  await e.sendUser(a.id, text('/대기')); // 줄에 서는 입력 — 그 뒤 메시지는 끼어들지 않는다(차례를 앞지르지 않게)
+  await relayTo(e, b.id, 'SEND A: 첫 지시');
+  const cDone = resultOf(e, c.id);
+  await e.sendUser(c.id, text('SEND A: 앞 지시 취소'));
+  expect(await resultText(cDone)).toBe('A 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+  const first = '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n첫 지시';
+  const second = '[두레 메시지 — 보낸 쪽: C(검수)]\n앞 지시 취소';
+  const joined = joinDeliveries([first, second]);
+  const both = resultTextIs(e, a.id, `받음: ${joined}`);
+  await e.interrupt(a.id);
+  e.resumeHold(a.id); // 붙잡힌 '/대기'·메시지 둘 — 이어서 보내면 내 입력 먼저, 메시지는 한 번에
+  await both;
+  expect(textsToA().filter((t) => t !== 'SEND A: 앞 지시 취소')).toEqual(['SLOW', '/대기', joined]);
+  const relays = e.history(a.id).filter((x) => x.kind === 'user' && x.source === 'relay');
+  expect(relays.map((x) => (x.kind === 'user' ? x.messageId : null))).toEqual(e.messages({ to: a.id }).map((m) => m.id));
+  expect(relays.map((x) => (x.kind === 'user' ? x.parts : null))).toEqual([[{ type: 'text', text: first }], [{ type: 'text', text: second }]]);
+  expect(e.messages({ to: a.id }).map((m) => m.state)).toEqual(['delivered', 'delivered']);
 });
 
 test('끼어든 말의 되돌림이 안 오면(맞추지 못함) 차례가 끝난 뒤 midGraceMs 기다렸다가 다시 쉰다', async () => {
@@ -499,12 +527,12 @@ test('newConversation 때 남은 사람 입력은 새 대화로 보내고 idle �
   expect(e.status(b.id)).toBe('working'); // 이어서 기다리던 SLOW
   const aDone = resultOf(e, a.id);
   await e.sendUser(a.id, text('SEND B: 이어서'));
-  expect(await resultText(aDone)).toBe('B 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+  expect(await resultText(aDone)).toBe('B 에게 전달했습니다. 지금 하는 일 사이에 읽습니다.'); // SLOW 차례에 끼어든다
 
   const delivery = '[두레 메시지 — 보낸 쪽: A(기획)]\n이어서';
   const last = resultTextIs(e, b.id, `받음: ${delivery}`);
-  await e.interrupt(b.id);
-  e.resumeHold(b.id); // 멈추면 전달 대기 메시지가 붙잡힌다 — 이어서 보낸다
+  await e.interrupt(b.id); // 멈추면 끼어든 메시지로 곧바로 새 차례(probe17) — 붙잡을 것이 없다
+  expect(e.hold(b.id)).toBeNull();
   await last;
   expect(e.status(b.id)).toBe('idle');
   // 첫 줄은 mute 프로세스가 받기만 한 기록
@@ -558,7 +586,7 @@ test('Claude 가 죽을 때 기다리던 사람 입력은 남고, 다음 입력 
   expect(flagValue(lastSpawnOf('A').argv, '--resume')).toBe(a.sessionId);
 });
 
-test('재시작 유지: queued 메시지가 있는 채로 shutdown → createEngine 다시 → 받는 쪽에 전달됨', async () => {
+test('재시작 유지: 끼어들었지만 못 읽은 메시지가 있는 채로 shutdown → queued 로 남고 → createEngine 다시 → 받는 쪽에 전달됨', async () => {
   const e1 = await start();
   const { a, b } = setup(e1);
   e1.updateAgent(b.id, { auto: true });
@@ -569,8 +597,8 @@ test('재시작 유지: queued 메시지가 있는 채로 shutdown → createEng
 
   const aDone = resultOf(e1, a.id);
   await e1.sendUser(a.id, text('SEND B: 이어서 해 줘'));
-  expect(await resultText(aDone)).toBe('B 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
-  expect(e1.messages()[0].state).toBe('queued');
+  expect(await resultText(aDone)).toBe('B 에게 전달했습니다. 지금 하는 일 사이에 읽습니다.');
+  expect(e1.messages()[0].state).toBe('delivered'); // 끼어들었다 — 아직 안 읽음
   await e1.shutdown();
   expect(openMessageLog(dataDir).list()[0].state).toBe('queued');
 
@@ -598,7 +626,7 @@ test('CRASH: status error, 승인 대기 정리, 다음 sendUser 는 --resume <�
   const r = await req;
   const bDone = resultOf(e, b.id);
   await e.sendUser(b.id, text('SEND A: 이것도 봐 줘'));
-  expect(await resultText(bDone)).toBe('A 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+  expect(await resultText(bDone)).toBe('A 에게 전달했습니다. 지금 하는 일 사이에 읽습니다.'); // 승인 대기도 차례 중 — 끼어든다
 
   const resolved = waitFor(e, 'request-resolved');
   const errored = waitFor<StatusEvent>(e, 'status', (s) => s.agentId === a.id && s.status === 'error');
@@ -3328,16 +3356,35 @@ test('hold: 전달 대기 메시지도 붙잡고 보낸 쪽을 적는다', async
   const { a, b } = setup(e);
   e.updateAgent(a.id, { auto: true });
   await slowTurn(e, a.id);
+  await e.sendUser(a.id, text('/대기')); // 줄에 서는 입력 — 그 뒤 메시지는 끼어들지 않고 queued
   await relayTo(e, b.id, 'SEND A: 셋째\n둘째 줄');
   const [m] = e.messages({ to: a.id });
   expect(m.state).toBe('queued');
   const done = resultOf(e, a.id);
   await e.interrupt(a.id);
-  expect(e.hold(a.id)!.items).toEqual([{ id: m.id, source: 'relay', from: b.id, text: '셋째', images: 0 }]);
+  expect(e.hold(a.id)!.items.slice(1)).toEqual([{ id: m.id, source: 'relay', from: b.id, text: '셋째', images: 0 }]);
   await done;
   expect(e.status(a.id)).toBe('idle');
   expect(e.messages({ to: a.id }).map((x) => x.state)).toEqual(['queued']);
   expect(textsToA()).toEqual(['SLOW']);
+});
+
+test('hold: 일하는 중에 온 메시지는 끼어들어 붙잡을 것이 없다 — 멈추면 그 메시지로 곧바로 이어서', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  e.updateAgent(a.id, { auto: true });
+  await slowTurn(e, a.id);
+  const bDone = resultOf(e, b.id);
+  await e.sendUser(b.id, text('SEND A: 멈춰'));
+  expect(await resultText(bDone)).toBe('A 에게 전달했습니다. 지금 하는 일 사이에 읽습니다.');
+  const delivery = '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n멈춰';
+  expect(textsToA()).toEqual(['SLOW', delivery]);
+  const next = resultTextIs(e, a.id, `받음: ${delivery}`);
+  await e.interrupt(a.id);
+  expect(e.hold(a.id)).toBeNull();
+  await next;
+  await until('쉼', () => e.status(a.id) === 'idle');
+  expect(textsToA()).toEqual(['SLOW', delivery]);
 });
 
 test('hold: 이어서 보내기 = 내 입력 먼저 그다음 메시지, 붙잡기 풀림', async () => {

@@ -23,6 +23,15 @@ describe('buildRoomPrompt', () => {
     );
     expect(p).toContain('만들 때 첫 할 일(task)을 같이 넘기면, 새 에이전트가 그 메시지 하나만 읽고 바로 시작할 수 있게 쓴다.');
   });
+  test('메시지 주고받기 규칙 — 늦게 온 것은 지금 상태부터 · 여럿이면 다 읽고 한 번에 · 확인만 하는 답장 금지 · 정정은 첫 줄에', () => {
+    const p = buildRoomPrompt(mk('a', 'r'), []);
+    expect(p).toContain('네가 일하는 도중에 끼어들어 올 수도 있다');
+    expect(p).toContain('"· 34분 전에 보냄"');
+    expect(p).toContain('이미 끝난 일이면 다시 하지도 답하지도 않는다');
+    expect(p).toContain('다 읽은 뒤 한 번에 처리한다');
+    expect(p).toContain('뿐인 답장은 보내지 않는다');
+    expect(p).toContain('앞 메시지 취소');
+  });
   test('동료가 없으면 안내', () => {
     expect(buildRoomPrompt(mk('a', 'r'), [])).toContain('아직 같은 방에 다른 에이전트가 없습니다');
   });
