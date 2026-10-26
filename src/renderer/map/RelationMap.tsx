@@ -50,7 +50,7 @@ const ARIA = {
 
 /**
  * 관계도 — 그 방의 에이전트 카드와 넘김 엣지. 방을 바꾸면 처음부터 다시 그린다(화면 맞춤 포함).
- * onAddAgent — 확대 조절 옆 '에이전트 추가'(App 이 추가 대화상자를 연다)
+ * onAddAgent — 오른쪽 아래 '에이전트 추가'(App 이 추가 대화상자를 연다)
  */
 export function RelationMap({ onAddAgent }: { onAddAgent?: () => void } = {}) {
   const roomId = useDure(s => s.roomId)
@@ -337,17 +337,18 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
       </ReactFlow>
       <SummaryChips roomId={roomId} />
       <OffscreenPill roomId={roomId} nodes={nodes} wrap={wrap} />
-      {/* 왼쪽 아래 한 줄 — 확대 조절 · 선 보기 · 에이전트 추가(카드가 생기는 곳 옆) */}
+      {/* 왼쪽 아래 한 줄 — 확대 조절 · 선 보기 */}
       <div className="mbl">
         <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => fitOn('fit-all')} onUserZoom={() => fitOn('user-move')} />
         <EdgeModeControl />
-        {onAddAgent && (
-          <button type="button" className="btn pri" onClick={onAddAgent}>
-            <Plus className="i" />
-            에이전트 추가
-          </button>
-        )}
       </div>
+      {/* 오른쪽 아래 — 에이전트 추가(주 동작, 보기 도구와 떨어뜨린다) */}
+      {onAddAgent && (
+        <button type="button" className="btn pri mbr" onClick={onAddAgent}>
+          <Plus className="i" />
+          에이전트 추가
+        </button>
+      )}
       {/* 다른 떠 있는 목록처럼 — 닫으면(pair = null) 마지막 모습으로 남아 가라앉는다 */}
       <Presence show={pair !== null}>
         {pair && <PairPopover key={`${pair.a}>${pair.b}`} at={pair} bounds={wrap} onClose={closePair} />}

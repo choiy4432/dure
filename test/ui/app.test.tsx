@@ -99,14 +99,15 @@ describe('App 셸', () => {
     expect(document.querySelector('header.top')).toBeTruthy()
   })
 
-  it('에이전트가 있으면 관계도 왼쪽 아래(확대 조절 옆)에 에이전트 추가 — 누르면 추가 대화상자', async () => {
+  it('에이전트가 있으면 관계도 오른쪽 아래에 에이전트 추가(확대 조절 줄과 따로) — 누르면 추가 대화상자', async () => {
     snapshot = { ...snapshot, rooms: [room('r1')], agents: [agent('a1', 'r1', '웹 화면')] }
     ;(window as any).dure.pickFolder = async () => null
     await renderApp()
     const map = screen.getByRole('main', { name: '관계도' })
     const add = within(map).getByRole('button', { name: '에이전트 추가' })
     const zoom = within(map).getByRole('group', { name: '확대 조절' })
-    expect(add.parentElement).toBe(zoom.parentElement)
+    expect(add.classList.contains('mbr')).toBe(true)
+    expect(zoom.parentElement!.contains(add)).toBe(false)
     fireEvent.click(add)
     expect(screen.getByRole('dialog', { name: '에이전트 추가' })).toBeTruthy()
   })

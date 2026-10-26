@@ -690,7 +690,7 @@ code {
   z-index: 5;
 }
 
-/* 관계도 왼쪽 아래 한 줄 — 확대 조절 · 에이전트 추가(높이를 확대 조절에 맞춘다) */
+/* 관계도 왼쪽 아래 한 줄 — 확대 조절 · 선 보기 */
 .mbl {
   position: absolute;
   left: 16px;
@@ -701,8 +701,13 @@ code {
   gap: 8px;
 }
 
-.mbl .btn {
-  height: auto;
+/* 관계도 오른쪽 아래 — 에이전트 추가. 높이는 왼쪽 아래 확대 조절 상자(38px)와 같게 — 아래 선이 나란하다 */
+.mbr {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 5;
+  height: 38px;
   box-shadow: var(--shadow-sm);
 }
 
@@ -1342,7 +1347,7 @@ code {
 }
 
 .op.bottom {
-  /* 왼쪽 아래 줄(확대 조절 · 에이전트 추가)과 겹치지 않게 그 위로 */
+  /* 아래 양쪽(확대 조절 · 에이전트 추가)과 겹치지 않게 그 위로 */
   bottom: 64px;
   left: 50%;
   transform: translateX(-50%);
