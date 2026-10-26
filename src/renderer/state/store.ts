@@ -1,7 +1,7 @@
 import { useRef, useSyncExternalStore } from 'react'
 import type { AgentId, AgentStatus, EngineEventMap, HistoryItem, RoomId } from '../../engine/types'
 import type { DureApi, Snapshot } from '../../shared/ipcContract'
-import { displayStatus, type Phase } from './selectors'
+import { displayStatus, type EdgeMode, type Phase } from './selectors'
 import { markFresh } from '../map/freshNodes'
 
 export type UiState = Snapshot & {
@@ -39,6 +39,8 @@ export type UiState = Snapshot & {
   subagentFocus: { agentId: AgentId; key: string; n: number } | null
   /** 메시지 탭의 '대화에서 보기'를 눌렀다 — 그 에이전트의 대화가 messageId 메시지 줄로 간다. 간 뒤엔 대화 목록이 지운다(다시 열려도 또 가지 않게) */
   messageFocus: { agentId: AgentId; messageId: string; n: number } | null
+  /** 관계도 선 보기 — 이 PC 에 기억한다(EDGE_MODE_KEY), 처음엔 최근 */
+  edgeMode: EdgeMode
   /**
    * 에이전트가 만든 새 에이전트 → 만든 에이전트(agent-added 사건). 관계도가 자리 없는 새 에이전트를 만든 쪽 가까이 놓는 데 쓴다.
    * 앱을 끄면 잊는다 — 사건을 놓친 새 에이전트(다시 켬)는 지금처럼 첫 빈 칸
@@ -55,6 +57,19 @@ export type UiState = Snapshot & {
 
 export type PanelTab = 'chat' | 'subagents' | 'messages'
 
+/** 관계도 선 보기를 기억하는 자리(이 PC) */
+export const EDGE_MODE_KEY = 'dure.edges'
+const EDGE_MODES: EdgeMode[] = ['recent', 'all', 'off']
+
+function readEdgeMode(): EdgeMode {
+  try {
+    const v = localStorage.getItem(EDGE_MODE_KEY)
+    return EDGE_MODES.includes(v as EdgeMode) ? (v as EdgeMode) : 'recent'
+  } catch {
+    return 'recent'
+  }
+}
+
 export interface Store {
   getState(): UiState
   subscribe(fn: () => void): () => void
@@ -70,6 +85,8 @@ export interface Store {
   showMessage(id: AgentId, messageId: string): void
   /** 대화 목록이 messageFocus(n)로 갔다 — 지운다. 그 사이 새로 누른 것(n 이 다르면)은 남긴다 */
   doneMessageFocus(n: number): void
+  /** 관계도 선 보기를 바꾸고 이 PC 에 기억한다 */
+  setEdgeMode(mode: EdgeMode): void
   /** 그 에이전트의 방으로 바꾸고(다르면) 고른다 — 기록도 불러온다. 모르는 id 면 아무것도 안 한다 */
   focusAgent(id: AgentId): void
   /** 방 목록을 열어 달라고 요청한다 — roomMenuRequest 가 하나 오른다 */
@@ -114,7 +131,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
-    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, placeNear: {}, fresh: {}, roomMenuRequest: 0,
+    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0,
   }
   const listeners = new Set<() => void>()
   let buffer: { ev: Ev; at: number }[] | null = null // 스냅샷을 기다리는 동안 온 이벤트(받은 시각과 함께)
@@ -511,6 +528,15 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     doneMessageFocus(n) {
       if (state.messageFocus?.n !== n) return
       set({ ...state, messageFocus: null })
+    },
+    setEdgeMode(mode) {
+      if (state.edgeMode === mode) return
+      set({ ...state, edgeMode: mode })
+      try {
+        localStorage.setItem(EDGE_MODE_KEY, mode)
+      } catch {
+        // 저장을 못 해도 이번 실행에선 그대로 쓴다
+      }
     },
   }
 }

@@ -20,6 +20,7 @@ import { HandoffEdge, MARKER_TONES, markerId, type HandoffFlowEdge } from './Han
 import { SummaryChips } from './SummaryChips'
 import { OffscreenPill } from './OffscreenPill'
 import { FIT_OPTIONS, ZoomControls } from './ZoomControls'
+import { EdgeModeControl } from './EdgeModeControl'
 import { fitPolicy, movedEnough, type Viewport, type FitReason, type FitState } from './fitPolicy'
 import { AUTO_FIT_MIN, arrange, columnsFor, isUnplaced, placeMissing, type Point } from './layout'
 
@@ -32,7 +33,6 @@ const nodeTypes: NodeTypes = { agent: AgentNode }
 const edgeTypes: EdgeTypes = { handoff: HandoffEdge }
 
 /** 같은 두 카드를 반대로 잇는 선이 비키는 거리 */
-const PAIR_SHIFT = 12
 /**
  * 누르는 동안 이만큼(px)까지 손이 흔들려도 클릭이고, 끌기는 이보다 더 움직여야 시작한다.
  * React Flow 기본은 클릭 0px·끌기 1px 이라, 1px 만 흔들려도 클릭이 버려져 카드를 두 번 눌러야 열렸다(그 흔들림으로 자리도 저장됐다).
@@ -73,7 +73,11 @@ const seatsEqual = (a: Seat[], b: Seat[]) =>
 
 const edgesEqual = (a: EdgeView[], b: EdgeView[]) =>
   a.length === b.length &&
-  a.every((x, i) => x.id === b[i].id && x.state === b[i].state && x.at === b[i].at && x.count === b[i].count)
+  a.every((x, i) => {
+    const y = b[i]
+    return x.id === y.id && x.state === y.state && x.at === y.at && x.count === y.count && x.ab === y.ab && x.ba === y.ba &&
+      x.from === y.from && x.to === y.to && x.age === y.age
+  })
 
 interface PairAt {
   a: AgentId
@@ -87,7 +91,9 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
     s => s.agents.filter(a => a.roomId === roomId).map(a => ({ id: a.id, name: a.name, role: a.role, pos: a.pos })),
     seatsEqual,
   )
-  const views = useDure(s => edgeViews(roomId, s.agents, s.messages), edgesEqual)
+  // 선 나이(30분 · 24시간)가 지나면 다시 셈한다 — 15초마다 다시 그려 지금 시각으로
+  const now = useNow()
+  const views = useDure(s => edgeViews(roomId, s.agents, s.messages, { now, mode: s.edgeMode }), edgesEqual)
   // 에이전트가 만든 새 에이전트 → 만든 쪽(agent-added) — 자리 없는 새 에이전트를 그 가까이 놓는다
   const placeNear = useDure(s => s.placeNear)
   const wrap = useRef<HTMLDivElement>(null)
@@ -240,22 +246,18 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
     return () => window.removeEventListener('keydown', onEsc)
   }, [])
 
-  const flowEdges = useMemo<HandoffFlowEdge[]>(() => {
-    const ids = new Set(views.map(v => v.id))
-    return views.map(v => ({
-      id: v.id,
-      source: v.from,
-      target: v.to,
-      type: 'handoff',
-      data: {
-        state: v.state,
-        at: v.at,
-        count: v.count,
-        shift: ids.has(`${v.to}>${v.from}`) ? (v.from < v.to ? -PAIR_SHIFT : PAIR_SHIFT) : 0,
-        onOpen: openPair,
-      },
-    }))
-  }, [views, openPair])
+  // 쌍마다 한 줄 — 정렬한 앞(a) → 뒤(b)로 그리고 오간 방향에만 화살촉(HandoffEdge)
+  const flowEdges = useMemo<HandoffFlowEdge[]>(
+    () =>
+      views.map(v => ({
+        id: v.id,
+        source: v.a,
+        target: v.b,
+        type: 'handoff',
+        data: { state: v.state, from: v.from, to: v.to, at: v.at, count: v.count, ab: v.ab, ba: v.ba, age: v.age, onOpen: openPair },
+      })),
+    [views, openPair],
+  )
 
   // 키보드로 카드를 고르기 — 카드(노드)에 포커스가 있을 때 Enter·스페이스
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -282,7 +284,7 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
               markerWidth="10"
               markerHeight="10"
               markerUnits="userSpaceOnUse"
-              orient="auto"
+              orient="auto-start-reverse"
             >
               <path d="M1.5 1.5 9 5 1.5 8.5z" className={`mk ${tone}`} />
             </marker>
@@ -330,9 +332,10 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
       </ReactFlow>
       <SummaryChips roomId={roomId} />
       <OffscreenPill roomId={roomId} nodes={nodes} wrap={wrap} />
-      {/* 왼쪽 아래 한 줄 — 확대 조절 · 에이전트 추가(카드가 생기는 곳 옆) */}
+      {/* 왼쪽 아래 한 줄 — 확대 조절 · 선 보기 · 에이전트 추가(카드가 생기는 곳 옆) */}
       <div className="mbl">
         <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => fitOn('fit-all')} onUserZoom={() => fitOn('user-move')} />
+        <EdgeModeControl />
         {onAddAgent && (
           <button type="button" className="btn pri" onClick={onAddAgent}>
             <Plus className="i" />

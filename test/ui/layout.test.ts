@@ -274,6 +274,13 @@ describe('edgeEnds', () => {
     expect(e.target).toEqual({ x: 448 + W / 2, y: 272 + H + 5 })
   })
 
+  it('시작에도 화살촉이면(두 방향을 한 줄로) 시작점도 화살촉 자리만큼 띄우고, 고리 자리는 테두리 그대로', () => {
+    const e = edgeEnds(rect(0, 0), rect(600, 40), 0, true)
+    expect(e.sourcePort).toEqual({ x: W, y: H / 2 })
+    expect(e.source).toEqual({ x: W + 5, y: H / 2 })
+    expect(edgeEnds(rect(0, 0), rect(600, 40)).source).toEqual({ x: W, y: H / 2 })
+  })
+
   it('반대 방향 엣지는 옆으로 비켜 겹치지 않는다', () => {
     const ab = edgeEnds(rect(0, 0), rect(600, 0), -12)
     const ba = edgeEnds(rect(600, 0), rect(0, 0), 12)

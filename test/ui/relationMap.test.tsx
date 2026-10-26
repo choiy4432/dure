@@ -181,6 +181,27 @@ describe('RelationMap — 확대 조절', () => {
   })
 })
 
+describe('RelationMap — 선 보기', () => {
+  it("'선 최근' 단추 — 위로 펼친 목록에서 고르면 바뀌고 이 PC 에 기억한다, Esc 면 닫고 단추로 초점", async () => {
+    localStorage.removeItem('dure.edges')
+    snapshot.agents = [agent('a', { pos: { x: 64, y: 64 } })]
+    const { store } = await renderMap()
+    const b = screen.getByRole('button', { name: '선 보기: 최근' })
+    fireEvent.click(b)
+    const menu = screen.getByRole('menu', { name: '선 보기' })
+    expect(Array.from(menu.querySelectorAll('[role="menuitemradio"]')).map(x => x.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false'])
+    expect(document.activeElement).toBe(menu.querySelector('[aria-checked="true"]'))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /^끔/ }))
+    expect(store.getState().edgeMode).toBe('off')
+    expect(localStorage.getItem('dure.edges')).toBe('off')
+    expect(screen.getByRole('button', { name: '선 보기: 끔' })).toBe(document.activeElement)
+    fireEvent.click(screen.getByRole('button', { name: '선 보기: 끔' }))
+    fireEvent.keyDown(screen.getByRole('menu', { name: '선 보기' }), { key: 'Escape' })
+    expect(screen.getByRole('button', { name: '선 보기: 끔' }).getAttribute('aria-expanded')).toBe('false')
+    localStorage.removeItem('dure.edges')
+  })
+})
+
 describe('RelationMap — +/- 도 사용자 조작', () => {
   afterEach(() => { vi.doUnmock('../../src/renderer/map/fitPolicy'); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 

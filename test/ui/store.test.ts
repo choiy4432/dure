@@ -940,6 +940,18 @@ describe('store 서브에이전트', () => {
     expect(s.getState().subagentFocus).toEqual({ agentId: 'b', key: 'toolu_X', n: 3 })
   })
 
+  it('관계도 선 보기 — 처음엔 최근, 바꾸면 이 PC 에 기억해 다음 스토어도 그 값으로 시작한다(모르는 값이면 최근)', async () => {
+    localStorage.removeItem('dure.edges')
+    const s = createStore(fake().api)
+    expect(s.getState().edgeMode).toBe('recent')
+    s.setEdgeMode('off')
+    expect(s.getState().edgeMode).toBe('off')
+    expect(createStore(fake().api).getState().edgeMode).toBe('off')
+    localStorage.setItem('dure.edges', '이상한 값')
+    expect(createStore(fake().api).getState().edgeMode).toBe('recent')
+    localStorage.removeItem('dure.edges')
+  })
+
   it('showMessage 는 그 에이전트를 골라 대화 탭으로 바꾸고 messageFocus 를 둔다 — 대화 목록이 간 뒤 doneMessageFocus 로 지운다', async () => {
     const { api } = fake()
     const s = createStore(api)
