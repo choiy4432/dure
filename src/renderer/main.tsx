@@ -7,6 +7,7 @@ import './styles/base.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { Splash } from './shell/Splash'
 import { getStore } from './state/store'
 
 // 파일을 입력창 밖에 떨어뜨리면 창이 그 파일로 넘어가 버린다 — 막는다(입력창은 스스로 받는다)
@@ -15,7 +16,8 @@ window.addEventListener('drop', e => e.preventDefault())
 
 const root = createRoot(document.getElementById('root')!)
 
-// 처음 상태를 받은 뒤 그린다 — 받기 전의 빈 상태('첫 방을 만들어 보세요')가 잠깐 비치지 않게
+// 처음 상태를 받은 뒤 그린다 — 받기 전의 빈 상태('첫 방을 만들어 보세요')가 잠깐 비치지 않게. 그 사이엔 여는 중(움직이는 아이콘)
+root.render(<Splash />)
 getStore()
   .init()
   .catch(err => console.error('두레: 처음 상태를 받지 못했어요', err))

@@ -4943,3 +4943,68 @@ code {
 .hd-row .lk:hover:not(:disabled) {
   color: var(--text);
 }
+
+/*
+ * 여는 중(Splash) — 처음 상태를 받기 전 창 가운데 움직이는 아이콘(D 넘김). 빨리 열리면 안 보이게 250ms 뒤 240ms 동안 나타난다.
+ * 모양은 resources/icon/dure.svg 와 같다(타일 = primary, 획·점 = on-primary).
+ */
+.spl {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  animation: spl-in 240ms ease-out 250ms backwards;
+}
+
+@keyframes spl-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.spl svg {
+  width: 72px;
+  height: 72px;
+}
+
+.spl-tile {
+  fill: var(--primary);
+}
+
+.spl-track,
+.spl-trail {
+  fill: none;
+  stroke: var(--on-primary);
+  stroke-width: 14;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.spl-track {
+  stroke-opacity: 0.32;
+}
+
+.spl-top {
+  fill: var(--primary);
+  stroke: var(--on-primary);
+  stroke-width: 12;
+}
+
+.spl-top-fill,
+.spl-bot,
+.spl-dot {
+  fill: var(--on-primary);
+}
+
+.spl-ring {
+  fill: none;
+  stroke: var(--on-primary);
+  stroke-width: 4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spl {
+    animation: none;
+  }
+}

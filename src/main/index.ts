@@ -33,6 +33,8 @@ function e2eFolders(raw: string | undefined): (() => string | null) | null {
 if (process.platform === 'win32') app.setAppUserModelId(process.execPath)
 
 const indexFile = join(__dirname, '../renderer/index.html')
+/** 앱 아이콘(D 넘김) — 창·작업표시줄. 굽는 법은 scripts/icon/build.mjs */
+const appIcon = join(__dirname, '../../resources/icon.ico')
 /** 두레 화면 자신의 주소인가 — IPC 요청·창 안 이동을 이걸로 가린다 */
 const isAppPage = appPageMatcher({ devUrl: process.env.ELECTRON_RENDERER_URL, indexFile })
 
@@ -57,6 +59,7 @@ function createWindow(): BrowserWindow {
     titleBarStyle: 'hidden',
     titleBarOverlay: { color: c.bg, symbolColor: c.symbol, height: TITLE_BAR_HEIGHT },
     autoHideMenuBar: true,
+    icon: appIcon,
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),

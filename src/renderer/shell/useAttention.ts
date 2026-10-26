@@ -3,6 +3,7 @@ import type { AgentId } from '../../engine/types'
 import { todoCounts } from '../state/attention'
 import { getStore, type UiState } from '../state/store'
 import { announceAsk, announceMessage, askNotice, badgeText, finishedNotice, windowTitle } from './attentionText'
+import appIcon from '../../../resources/icon.png'
 
 type NotifyFn = (title: string, o: { body: string; tag: string; onClick: () => void }) => void
 
@@ -21,7 +22,7 @@ const defaultNotify: NotifyFn = (title, { body, tag, onClick }) => {
   try {
     if (typeof Notification === 'undefined') return
     // 같은 tag 가 옛 알림을 바꿀 때도 다시 알리게 renotify — TS DOM 라이브러리의 NotificationOptions 엔 아직 없다
-    const n = new Notification(title, { body, tag, renotify: true } as NotificationOptions)
+    const n = new Notification(title, { body, tag, icon: appIcon, renotify: true } as NotificationOptions)
     n.onclick = onClick
   } catch {
     // 알림을 못 띄워도 앱은 그대로
