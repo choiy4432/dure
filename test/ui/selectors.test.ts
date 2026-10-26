@@ -73,24 +73,25 @@ describe('edges', () => {
   const MIN = 60_000
   const recent = { now: NOW, mode: 'recent' as const }
 
-  it('두 방향을 한 줄로 — 쌍 id 는 정렬한 두 id, 화살촉은 오간 방향에만', () => {
-    const ms = [msg('b', 'a', 'delivered', { createdAt: NOW - 5 * MIN, updatedAt: NOW - 5 * MIN }), msg('a', 'b', 'delivered', { createdAt: NOW - 9 * MIN, updatedAt: NOW - 9 * MIN })]
-    expect(edges('r1', agents, ms, recent)).toEqual([
-      { id: 'a|b', a: 'a', b: 'b', ab: true, ba: true, from: 'b', to: 'a', state: 'delivered', at: NOW - 5 * MIN, count: 2, age: 'recent' },
-    ])
-    const one = edges('r1', agents, [msg('b', 'a', 'delivered', { createdAt: NOW, updatedAt: NOW })], recent)[0]
-    expect(one).toMatchObject({ id: 'a|b', a: 'a', b: 'b', ab: false, ba: true })
+  it('방향마다 한 줄 — 같은 방향은 하나로 묶고, 반대 방향은 다른 엣지', () => {
+    const ms = [
+      msg('a', 'b', 'delivered', { createdAt: NOW - 9 * MIN, updatedAt: NOW - 9 * MIN }),
+      msg('a', 'b', 'delivered', { createdAt: NOW - 5 * MIN, updatedAt: NOW - 5 * MIN }),
+      msg('b', 'a', 'delivered', { createdAt: NOW - 2 * MIN, updatedAt: NOW - 2 * MIN }),
+    ]
+    const out = edges('r1', agents, ms, recent)
+    expect(out.map(e => e.id).sort()).toEqual(['a>b', 'b>a'])
+    expect(out.find(e => e.id === 'a>b')).toEqual({ id: 'a>b', from: 'a', to: 'b', state: 'delivered', at: NOW - 5 * MIN, count: 2, age: 'recent' })
   })
 
   it('알약은 가장 급한 것 — 내 확인 필요 → 자동 멈춤 → 끝나면 전달, 없으면 가장 최근 전달', () => {
     const ms = [
       msg('a', 'b', 'queued', { createdAt: NOW - 3 * MIN }),
-      msg('b', 'a', 'delivered', { createdAt: NOW - MIN, updatedAt: NOW - MIN }),
+      msg('a', 'b', 'delivered', { createdAt: NOW - MIN, updatedAt: NOW - MIN }),
       msg('a', 'b', 'pending', { createdAt: NOW - 50 * MIN, updatedAt: NOW - 50 * MIN }),
     ]
-    expect(edges('r1', agents, ms, recent)[0]).toMatchObject({ from: 'a', to: 'b', state: 'pending', age: 'live', count: 3 })
-    const noPending = ms.filter(m => m.state !== 'pending')
-    expect(edges('r1', agents, noPending, recent)[0]).toMatchObject({ state: 'queued', age: 'live' })
+    expect(edges('r1', agents, ms, recent)[0]).toMatchObject({ state: 'pending', age: 'live', count: 3 })
+    expect(edges('r1', agents, ms.filter(m => m.state !== 'pending'), recent)[0]).toMatchObject({ state: 'queued', age: 'live' })
   })
 
   it('전달된 선의 나이 — 30분 안 recent, 그 뒤 old(알약 없이 옅게), 24시간 넘으면 안 그림(할 일은 오래돼도 그림)', () => {
@@ -101,12 +102,12 @@ describe('edges', () => {
     expect(edges('r1', agents, [msg('a', 'b', 'pending', { createdAt: NOW - 25 * 60 * MIN })], recent)[0].age).toBe('live')
   })
 
-  it('24시간 넘은 전달은 방향·수에도 안 센다', () => {
+  it('24시간 넘은 전달은 수에도 안 센다', () => {
     const ms = [
       msg('a', 'b', 'delivered', { createdAt: NOW - 25 * 60 * MIN, updatedAt: NOW - 25 * 60 * MIN }),
-      msg('b', 'a', 'delivered', { createdAt: NOW - MIN, updatedAt: NOW - MIN }),
+      msg('a', 'b', 'delivered', { createdAt: NOW - MIN, updatedAt: NOW - MIN }),
     ]
-    expect(edges('r1', agents, ms, recent)[0]).toMatchObject({ ab: false, ba: true, count: 1 })
+    expect(edges('r1', agents, ms, recent)[0]).toMatchObject({ count: 1, at: NOW - MIN })
   })
 
   it("'전부'면 오래된 것도 옅게, '끔'이면 아무것도 안 그림", () => {
@@ -122,7 +123,7 @@ describe('edges', () => {
       msg('a', 'c', 'queued', { createdAt: 40 }),
     ]
     const out = edges('r1', agents, ms, recent)
-    expect(out.map(e => e.id)).toEqual(['a|c'])
+    expect(out.map(e => e.id)).toEqual(['a>c'])
     expect(out[0]).toMatchObject({ state: 'queued', count: 1 })
   })
 
@@ -133,7 +134,7 @@ describe('edges', () => {
 })
 
 describe('label', () => {
-  const e = (state: MessageState, at = 0): EdgeView => ({ id: 'a|b', a: 'a', b: 'b', ab: true, ba: false, from: 'a', to: 'b', state, at, count: 1, age: 'recent' })
+  const e = (state: MessageState, at = 0): EdgeView => ({ id: 'a>b', from: 'a', to: 'b', state, at, count: 1, age: 'recent' })
 
   it('전달됨은 60초 경계에서 방금 → N분 전', () => {
     expect(label(e('delivered', 0), 59_000)).toBe('전달됨 · 방금')

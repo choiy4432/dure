@@ -33,6 +33,7 @@ const nodeTypes: NodeTypes = { agent: AgentNode }
 const edgeTypes: EdgeTypes = { handoff: HandoffEdge }
 
 /** 같은 두 카드를 반대로 잇는 선이 비키는 거리 */
+const PAIR_SHIFT = 12
 /**
  * 누르는 동안 이만큼(px)까지 손이 흔들려도 클릭이고, 끌기는 이보다 더 움직여야 시작한다.
  * React Flow 기본은 클릭 0px·끌기 1px 이라, 1px 만 흔들려도 클릭이 버려져 카드를 두 번 눌러야 열렸다(그 흔들림으로 자리도 저장됐다).
@@ -75,8 +76,7 @@ const edgesEqual = (a: EdgeView[], b: EdgeView[]) =>
   a.length === b.length &&
   a.every((x, i) => {
     const y = b[i]
-    return x.id === y.id && x.state === y.state && x.at === y.at && x.count === y.count && x.ab === y.ab && x.ba === y.ba &&
-      x.from === y.from && x.to === y.to && x.age === y.age
+    return x.id === y.id && x.state === y.state && x.at === y.at && x.count === y.count && x.age === y.age
   })
 
 interface PairAt {
@@ -246,18 +246,23 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
     return () => window.removeEventListener('keydown', onEsc)
   }, [])
 
-  // 쌍마다 한 줄 — 정렬한 앞(a) → 뒤(b)로 그리고 오간 방향에만 화살촉(HandoffEdge)
-  const flowEdges = useMemo<HandoffFlowEdge[]>(
-    () =>
-      views.map(v => ({
-        id: v.id,
-        source: v.a,
-        target: v.b,
-        type: 'handoff',
-        data: { state: v.state, from: v.from, to: v.to, at: v.at, count: v.count, ab: v.ab, ba: v.ba, age: v.age, onOpen: openPair },
-      })),
-    [views, openPair],
-  )
+  const flowEdges = useMemo<HandoffFlowEdge[]>(() => {
+    const ids = new Set(views.map(v => v.id))
+    return views.map(v => ({
+      id: v.id,
+      source: v.from,
+      target: v.to,
+      type: 'handoff',
+      data: {
+        state: v.state,
+        at: v.at,
+        count: v.count,
+        shift: ids.has(`${v.to}>${v.from}`) ? (v.from < v.to ? -PAIR_SHIFT : PAIR_SHIFT) : 0,
+        age: v.age,
+        onOpen: openPair,
+      },
+    }))
+  }, [views, openPair])
 
   // 키보드로 카드를 고르기 — 카드(노드)에 포커스가 있을 때 Enter·스페이스
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -284,7 +289,7 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
               markerWidth="10"
               markerHeight="10"
               markerUnits="userSpaceOnUse"
-              orient="auto-start-reverse"
+              orient="auto"
             >
               <path d="M1.5 1.5 9 5 1.5 8.5z" className={`mk ${tone}`} />
             </marker>

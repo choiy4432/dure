@@ -16,16 +16,12 @@ export const EDGE_RECENT_MS = 30 * 60_000
 export const EDGE_KEEP_MS = 24 * 3_600_000
 
 /**
- * 관계도 선 한 줄 — 두 에이전트 쌍마다 하나(두 방향을 한 줄로). 선은 a → b 로 그리고 오간 방향(ab · ba)에만 화살촉.
- * 알약·선 모양은 쌍의 대표 메시지(할 일이 있으면 그것, 없으면 가장 최근 전달)의 방향·상태·바뀐 시각.
+ * 관계도 선 한 줄 — 보낸 쪽 → 받는 쪽 방향마다 하나(반대 방향은 따로 그리고 서로 비킨다).
+ * 알약·선 모양은 그 방향의 대표 메시지(할 일이 있으면 그것, 없으면 가장 최근 전달)의 상태·바뀐 시각.
  */
 export interface EdgeView {
-  /** 정렬한 두 에이전트 id 'a|b' */
+  /** '보낸>받는' — 스토어의 lastDelivered 열쇠와 같다 */
   id: string
-  a: AgentId
-  b: AgentId
-  ab: boolean
-  ba: boolean
   from: AgentId
   to: AgentId
   state: MessageState
@@ -106,8 +102,8 @@ export function nextAgent(kind: ChipKind, s: FreshInput, roomId: RoomId, after: 
 const ACTION_RANK: Partial<Record<MessageState, number>> = { pending: 0, held: 1, queued: 2 }
 
 /**
- * 방의 관계도 선 — 쌍마다 하나. 버린 메시지와 지워진 에이전트가 낀 메시지는 빼고, '최근' 보기에선 24시간이 지난 전달도 뺀다
- * (방향·수에도 안 센다). 대표 = 할 일(내 확인 필요 → 자동 멈춤 → 끝나면 전달, 같으면 나중에 보낸 것), 없으면 가장 최근 전달.
+ * 방의 관계도 선 — 방향마다 하나. 버린 메시지와 지워진 에이전트가 낀 메시지는 빼고, '최근' 보기에선 24시간이 지난 전달도 뺀다(수에도 안 센다).
+ * 대표 = 할 일(내 확인 필요 → 자동 멈춤 → 끝나면 전달, 같으면 나중에 보낸 것), 없으면 가장 최근 전달.
  */
 export function edges(roomId: RoomId, agents: AgentView[], messages: RelayMessage[], o: { now: number; mode: EdgeMode }): EdgeView[] {
   if (o.mode === 'off') return []
@@ -118,22 +114,21 @@ export function edges(roomId: RoomId, agents: AgentView[], messages: RelayMessag
     const ry = ACTION_RANK[y.state] ?? 9
     return rx !== ry ? rx < ry : newer(x, y)
   }
-  const byPair = new Map<string, { a: AgentId; b: AgentId; ab: boolean; ba: boolean; rep: RelayMessage; count: number }>()
+  const byPair = new Map<string, { rep: RelayMessage; count: number }>()
   for (const m of messages) {
     if (m.roomId !== roomId || m.state === 'dismissed') continue
     if (!alive.has(m.from) || !alive.has(m.to)) continue
     if (o.mode === 'recent' && m.state === 'delivered' && o.now - m.updatedAt >= EDGE_KEEP_MS) continue
-    const [a, b] = m.from < m.to ? [m.from, m.to] : [m.to, m.from]
-    const id = `${a}|${b}`
-    const cur = byPair.get(id) ?? { a, b, ab: false, ba: false, rep: m, count: 0 }
-    if (m.from === a) cur.ab = true
-    else cur.ba = true
-    cur.count++
-    if (cur.count > 1 && better(m, cur.rep)) cur.rep = m
-    byPair.set(id, cur)
+    const id = `${m.from}>${m.to}`
+    const cur = byPair.get(id)
+    if (!cur) byPair.set(id, { rep: m, count: 1 })
+    else {
+      cur.count++
+      if (better(m, cur.rep)) cur.rep = m
+    }
   }
-  return [...byPair].map(([id, { a, b, ab, ba, rep, count }]) => ({
-    id, a, b, ab, ba, from: rep.from, to: rep.to, state: rep.state, at: rep.updatedAt, count,
+  return [...byPair].map(([id, { rep, count }]) => ({
+    id, from: rep.from, to: rep.to, state: rep.state, at: rep.updatedAt, count,
     age: rep.state !== 'delivered' ? 'live' : o.now - rep.updatedAt < EDGE_RECENT_MS ? 'recent' : 'old',
   }))
 }

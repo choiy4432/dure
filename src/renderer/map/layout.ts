@@ -139,11 +139,9 @@ export function placeMissing(agents: { id: string; pos: Point; by?: string }[], 
 
 export type Side = 'left' | 'right' | 'top' | 'bottom'
 export interface EdgeEnds {
-  /** 선이 시작하는 점 — 보낸 카드 테두리(시작에도 화살촉이면 그 길이만큼 밖) */
+  /** 선이 시작하는 점(보낸 카드 테두리) */
   source: Point
   sourcePosition: Side
-  /** 보낸 카드 테두리 위의 점(작은 고리 자리) */
-  sourcePort: Point
   /** 선이 끝나는 점 — 화살촉 길이만큼 받는 카드 밖 */
   target: Point
   targetPosition: Side
@@ -176,19 +174,16 @@ function facing(from: Rect, to: Rect): Side {
 /**
  * 두 카드를 잇는 선의 끝점 — 양쪽 카드가 각자 상대를 보는 변의 가운데(시안처럼 오른쪽 → 아래 같은 꺾임도 된다).
  * shift 는 같은 두 카드를 반대로 잇는 선이 겹치지 않게 변을 따라 비키는 거리.
- * startArrow 면 시작에도 화살촉 자리를 둔다(두 방향을 한 줄로 그린 선).
  */
-export function edgeEnds(s: Rect, t: Rect, shift = 0, startArrow = false): EdgeEnds {
+export function edgeEnds(s: Rect, t: Rect, shift = 0): EdgeEnds {
   const sourcePosition = facing(s, t)
   const targetPosition = facing(t, s)
-  const sourcePort = sidePoint(s, sourcePosition, shift)
+  const source = sidePoint(s, sourcePosition, shift)
   const targetPort = sidePoint(t, targetPosition, shift)
   const out = OUT[targetPosition]
-  const back = OUT[sourcePosition]
   return {
-    source: startArrow ? { x: sourcePort.x + back.x * ARROW_GAP, y: sourcePort.y + back.y * ARROW_GAP } : sourcePort,
+    source,
     sourcePosition,
-    sourcePort,
     target: { x: targetPort.x + out.x * ARROW_GAP, y: targetPort.y + out.y * ARROW_GAP },
     targetPosition,
     targetPort,
