@@ -219,7 +219,7 @@ describe('ChatList — 흐르는 글의 마크다운', () => {
     expect(live.querySelector('pre code .caret')).not.toBeNull()
     expect(live.querySelectorAll('.caret')).toHaveLength(1)
     expect(live.querySelector('pre code .caret')!.previousSibling!.textContent).toBe('const a = 1')
-    expect(live.querySelector('pre')!.nextElementSibling).toBeNull()
+    expect(live.querySelector('.md-code')!.nextElementSibling).toBeNull() // 상자 뒤 새 문단 없음(상자 안 복사 단추는 상자 것)
   })
 
   it('델타가 빠르게 열 번 와도 마지막까지 다 그린다', async () => {

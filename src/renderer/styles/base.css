@@ -2474,6 +2474,37 @@ code {
   background: none;
 }
 
+/* 코드 상자 + 오른쪽 위 복사 단추(Markdown CodeBlock). 단추 자리만큼 오른쪽을 비운다 */
+.md-code {
+  position: relative;
+  margin: 8px 0 0;
+}
+
+.md > .md-code:first-child {
+  margin-top: 0;
+}
+
+.md .md-code > pre {
+  margin: 0;
+  padding-right: 40px;
+}
+
+/* 글 상자(마크다운·글·언어 없음) — 옆으로 밀지 않고 줄을 바꿔 아래로 */
+.md pre.wrap {
+  overflow-x: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.md-copy.ib {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 28px;
+  height: 28px;
+  background: var(--bg);
+}
+
 .md blockquote {
   padding-left: 12px;
   border-left: 3px solid var(--border);
