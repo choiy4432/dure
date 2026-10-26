@@ -29,6 +29,8 @@ export function buildArgs(a: {
   return [
     '-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
     '--verbose', '--include-partial-messages',
+    // 보낸 말을 Claude 가 읽은 순간 되돌려 준다 — 일하는 중에 보낸 말이 언제 읽혔는지 안다(probe17: 끼어든 말은 다음 요청 때 읽힌다)
+    '--replay-user-messages',
     a.resume ? '--resume' : '--session-id', a.sessionId,
     '--mcp-config', a.mcpConfigPath,
     '--permission-prompts', 'host',

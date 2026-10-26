@@ -41,6 +41,8 @@ function patchOf(obj: any): { patch?: DiffHunk[] } {
 
 function parseUser(obj: any): StreamEvent {
   const content = obj.message?.content;
+  // 보낸 말의 되돌림 — Claude 가 그 말을 읽은 순간(probe17). 글 조각만 이어 붙여 보낸 말과 맞춘다
+  if (obj.isReplay === true) return { kind: 'replay', text: replayText(content) };
   if (typeof content === 'string') {
     const m = LOCAL_OUT.exec(content.trim());
     return m ? { kind: 'local-output', text: m[1] } : ignored('user');
@@ -60,6 +62,12 @@ function parseUser(obj: any): StreamEvent {
     }
   }
   return ignored('user');
+}
+
+function replayText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.filter((c: any) => c && c.type === 'text' && typeof c.text === 'string').map((c: any) => c.text).join('\n');
 }
 
 function parseAssistant(obj: any): StreamEvent {

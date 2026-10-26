@@ -91,6 +91,8 @@ const defaultMode = process.env.FAKE_PERMISSION_MODE || 'default';
 let permissionMode = process.env.FAKE_START_MODE || defaultMode; // set_permission_mode 가 바꾸고, 다음 init 이 알린다
 // 진짜(probe10)처럼 이 옵션으로 띄워야 실행 중에 bypassPermissions 로 바꿀 수 있다
 const allowBypass = argv.includes('--allow-dangerously-skip-permissions');
+// 진짜(probe17)처럼 이 옵션이면 사람 말을 읽은 순간 되돌려 준다(isReplay) — 차례 첫 말은 init 뒤, 차례 도중에 온 말은 다음 걸음에서
+const replayUser = argv.includes('--replay-user-messages');
 let mcp = null;
 try {
   const cfg = JSON.parse(fs.readFileSync(flag('--mcp-config'), 'utf8'));
@@ -343,12 +345,17 @@ async function selfTurn(report) {
   const late = Number(process.env.FAKE_SELF_TURN_MS ?? 0);
   if (late) await sleep(late);
   while (current || muted()) await sleep(20);
-  const tok = { ended: false };
+  const tok = { ended: false, queue: [] };
   current = tok;
   await init();
   const said = `전달: ${report}`;
   await assistant([{ type: 'text', text: said }]);
   if (tok.ended) return;
+  while (tok.queue.length) {
+    const q = tok.queue.shift();
+    await echo(q);
+    await assistant([{ type: 'text', text: `이어서 받음: ${q}` }]);
+  }
   tok.ended = true;
   current = null;
   turnsDone++;
@@ -384,13 +391,25 @@ async function effortCommand(arg) {
   await result(said, { total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
 }
 
+/** 읽은 사람 말을 되돌린다(--replay-user-messages) */
+async function echo(text) {
+  // FAKE_REPLAY_OFF=1 — 옵션이 있어도 되돌리지 않는다(엔진이 되돌림을 못 맞출 때를 흉내)
+  if (replayUser && process.env.FAKE_REPLAY_OFF !== '1') await emit({ type: 'user', isReplay: true, message: { role: 'user', content: [{ type: 'text', text }] }, session_id: sessionId, parent_tool_use_id: null });
+}
+
 async function turn(text) {
   const effort = /^\/effort(?:\s+(\S+))?$/.exec(text.trim());
   if (effort) return effortCommand(effort[1] ?? '');
-  const tok = { ended: false };
+  const tok = { ended: false, queue: [] };
   current = tok;
   const finish = async (t, extra) => {
     if (tok.ended) return;
+    // 차례 도중에 온 말 — 진짜(probe17)처럼 끝내기 전에 읽어(되돌림) 같은 차례에서 답한다
+    while (tok.queue.length) {
+      const q = tok.queue.shift();
+      await echo(q);
+      await assistant([{ type: 'text', text: `이어서 받음: ${q}` }]);
+    }
     tok.ended = true;
     current = null;
     turnsDone++;
@@ -412,6 +431,7 @@ async function turn(text) {
     });
   }
   await init();
+  await echo(text);
   if (text.startsWith('SLOW')) return; // interrupt 가 올 때까지 대기
   if (text.startsWith('CRASH')) {
     process.stderr.write('fake crash\n');
@@ -740,9 +760,12 @@ async function control(msg) {
     if (process.env.FAKE_INTERRUPT_SPARES_TASKS !== '1') await killTasks(); // 진짜(probe14 C)처럼 제어 응답보다 먼저
     await ok();
     if (current && !current.ended) {
+      const queued = current.queue ?? [];
       current.ended = true;
       current = null;
       await result('interrupted', { is_error: true, subtype: 'error_during_execution' });
+      // 멈춘 차례 도중에 온 말은 버리지 않는다 — 진짜(probe17)처럼 곧바로 그 말로 새 차례를 연다
+      if (queued.length) void turn(queued.join('\n'));
     }
   } else {
     await emit({ type: 'control_response', response: { subtype: 'error', request_id: rid, error: `unknown ${sub}` } });
@@ -771,7 +794,9 @@ if (hang) {
         .filter((c) => c.type === 'text')
         .map((c) => c.text)
         .join('\n');
-      void turn(text);
+      // 차례 도중에 온 말 — 새 차례를 열지 않고 지금 차례에 붙는다(probe17). 차례가 끝날 때 읽거나, 멈추면 새 차례로
+      if (current && !current.ended && current.queue) current.queue.push(text);
+      else void turn(text);
     }
   });
   // FAKE_IGNORE_STDIN_END=1 — stdin 이 닫혀도 안 꺼진다(엔진이 끝까지 기다리다 죽이는지 보려고)

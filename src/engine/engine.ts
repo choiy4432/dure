@@ -48,6 +48,11 @@ export interface EngineOptions {
    * 그동안 다시 띄우기·/effort 를 미루고 화면은 작업 중. 시험은 짧게
    */
   autoTurnGraceMs?: number;
+  /**
+   * 차례 도중에 보낸 말을 Claude 가 아직 읽지 않았는데 차례가 끝났을 때, 그 말로 새 차례가 열리기를 기다리는 시간(ms) — 없으면 MID_GRACE_MS.
+   * 지나면 읽은 것으로 본다(되돌림을 못 맞춘 경우 쉬지 못하고 멈춰 있지 않게). 시험은 짧게
+   */
+  midGraceMs?: number;
   /** 미리 띄웠지만 아무 줄도 안 받은 세션을 고르지 않게 된 뒤 끄기까지(ms) — 없으면 PREWARM_IDLE_MS. 시험은 짧게 */
   prewarmIdleMs?: number;
 }
@@ -237,6 +242,8 @@ function fromGitBashPath(p: string): string {
 const SEEN_WAIT_MS = 2000;
 /** 끝 알림 뒤 스스로 시작한 차례는 곧바로 온다(probe13) — 멈추기로 끝났으면 오지 않으니(probe14 C) 짧게만 기다린다 */
 const AUTO_TURN_GRACE_MS = 1500;
+/** 차례 도중에 보낸 말이 안 읽힌 채 차례가 끝났을 때 그 말의 차례를 기다리는 시간 — 멈추면 곧바로 열린다(probe17) */
+const MID_GRACE_MS = 5000;
 /** 미리 띄웠지만 아무 줄도 안 받은 세션 — 고르지 않게 된 뒤 이만큼 지나면 끈다(둘러보기만 한 에이전트의 프로세스가 쌓이지 않게) */
 const PREWARM_IDLE_MS = 5 * 60_000;
 const EFFORT_UNKNOWN = '알 수 없는 effort 예요.';
@@ -303,7 +310,8 @@ interface HoldState {
 }
 
 /** 프로세스에 써 넣었지만 아직 아무 이벤트도 안 온 줄 — 읽기 전에 죽으면 되살린다 */
-type InFlight = { kind: 'relay'; messageId: string } | { kind: 'human'; input: HeldInput };
+/** 보내고 아직 Claude 가 읽지 않은 줄 — mid: 차례 도중에 보낸 사람 말(그 되돌림으로만 읽은 것으로 본다, probe17) */
+type InFlight = ({ kind: 'relay'; messageId: string } | { kind: 'human'; input: HeldInput }) & { mid?: true };
 
 /** 도는 서브에이전트 — background: 부모가 도는 중에 그 Agent 의 결과(Async agent launched)를 받았다. 끝나면 Claude 가 스스로 차례를 연다(probe13) */
 interface RunningSubagent {
@@ -368,7 +376,9 @@ class EngineImpl extends EventEmitter implements Engine {
   private errors = new Map<AgentId, string>(); // 세션 없이 남은 오류(비정상 종료·폴더 없음) — 다음 실행까지
   private shown = new Map<AgentId, { status: AgentStatus; errorText: string | null }>();
   private described = new WeakMap<ClaudeSession, Promise<AgentDescription>>();
-  private inFlight = new WeakMap<ClaudeSession, InFlight>();
+  private inFlight = new WeakMap<ClaudeSession, InFlight[]>();
+  // 차례 도중에 보낸 말이 안 읽힌 채 차례가 끝났다 — 그 말의 차례를 기다리는 타이머(MID_GRACE_MS)
+  private midGrace = new WeakMap<ClaudeSession, NodeJS.Timeout>();
   private removing = new Set<AgentId>();
   // 미리 띄우기 — 화면에서 고른 에이전트는 첫 메시지 전에 claude 를 띄워 둔다(시작·대화 읽기 시간을 앞당긴다, 토큰 없음)
   private selected: AgentId | null = null;
@@ -649,6 +659,8 @@ class EngineImpl extends EventEmitter implements Engine {
     if (s.status !== 'idle') return s.status;
     // 계획 모드 답을 기다리며 쥔 내 입력 — 이미 보낸 것과 같다(답이 오면 바로 쓴다)
     if (this.planGates.has(s)) return 'working';
+    // 차례 도중에 보낸 말이 안 읽힌 채 차례가 끝났다 — 곧 그 말로 새 차례가 열린다(probe17, 쉬는 틈으로 깜박이지 않게)
+    if (this.midUnread(s)) return 'working';
     // 부모 차례는 끝났어도 서브에이전트가 돌면 작업 중 — 끝난 뒤 Claude 가 스스로 열 차례를 기다리는 동안도(대기로 깜박이지 않게)
     if (this.subagents.has(id) || this.autoTurns.has(id)) return 'working';
     // 엔진이 보낸 /effort 차례 중에 사람 입력이 기다리면 작업 중 — 첫 입력이 멈춘 듯 보이지 않게(멈추기도 켜진다)
@@ -773,6 +785,13 @@ class EngineImpl extends EventEmitter implements Engine {
   async sendUser(id: AgentId, parts: UserPart[], o?: { plan?: boolean }) {
     const agent = this.need(id);
     this.router.humanInput(agent.roomId);
+    // 일하는 중이면 바로 보낸다 — Claude Code 처럼 지금 차례에 끼어든다(다음 걸음에서 읽는다, probe17)
+    const s = this.sessions.get(id);
+    if (s && o?.plan !== true && this.canSendMid(id, s, parts)) {
+      this.sendTo(id, s, parts, { kind: 'human', input: { id: crypto.randomUUID(), parts }, mid: true });
+      this.emitStatus(id);
+      return;
+    }
     const q = this.heldOf(id);
     // 계획 먼저는 그 입력에 붙여 둔다 — 차례 중이면 지금 차례를 계획 모드로 바꾸지 않고, 그 입력을 쓸 때(pump) 바꾼다
     // 붙잡힌 동안 새로 친 말도 여기로 — 붙잡기를 거치지 않고 보통처럼 나간다(사람이 지금 하는 말이 가장 급하다)
@@ -1128,7 +1147,9 @@ class EngineImpl extends EventEmitter implements Engine {
   private waiting(id: AgentId): boolean {
     const s = this.sessions.get(id);
     return (
-      s?.status === 'working' || (!!s && (this.effortTurn.has(s) || this.restartWant.has(s) || this.planBlocked(id, s))) || this.parentAsking(id)
+      s?.status === 'working' ||
+      (!!s && (this.effortTurn.has(s) || this.restartWant.has(s) || this.planBlocked(id, s) || this.midUnread(s))) ||
+      this.parentAsking(id)
     );
   }
 
@@ -1137,7 +1158,68 @@ class EngineImpl extends EventEmitter implements Engine {
    * 묻지 않고 실행하는 세션이 계획 모드 답을 기다리는 동안도 쉬지 않는다 — 그 사이 쓴 줄은 계획 없이 묻지 않고 돈다
    */
   private resting(id: AgentId, s: ClaudeSession): boolean {
-    return s.status === 'idle' && !this.effortTurn.has(s) && !this.parentAsking(id) && !this.planBlocked(id, s);
+    return s.status === 'idle' && !this.effortTurn.has(s) && !this.parentAsking(id) && !this.planBlocked(id, s) && !this.midUnread(s);
+  }
+
+  /**
+   * 사람 말을 지금 차례에 끼워 보낼 수 있나 — Claude 차례가 도는 중(사람 승인 대기 포함)이고, 엔진이 몰래 연 차례(/effort)·다시 띄우기·
+   * 계획 모드로 바꾸는 중이 아니고, 먼저 기다리는 입력·붙잡기가 없고(차례를 앞지르지 않게), 슬래시 명령이 아닐 때(명령은 쉴 때 차례로)
+   */
+  private canSendMid(id: AgentId, s: ClaudeSession, parts: UserPart[]): boolean {
+    if (!this.live(id, s) || s.status !== 'working') return false;
+    if (this.effortTurn.has(s) || this.restartWant.has(s) || this.planEntering.has(s) || this.planGates.has(s)) return false;
+    if ((this.held.get(id)?.length ?? 0) > 0 || this.holds.has(id)) return false;
+    return !inputText(parts).trimStart().startsWith('/');
+  }
+
+  /**
+   * 차례 도중에 보낸 말을 Claude 가 아직 읽지 않았다 — 그동안은 쉬지 않는다(다른 줄이 끼어들지 않게). 다음 걸음에서 읽거나,
+   * 멈췄으면 곧바로 그 말로 새 차례가 열린다(probe17)
+   */
+  private midUnread(s: ClaudeSession): boolean {
+    return this.inFlight.get(s)?.some((x) => x.mid) ?? false;
+  }
+
+  /**
+   * 보낸 줄을 읽었나 — 차례 도중에 보낸 말은 그 되돌림(replay, 같은 글)으로만, 쉴 때 보낸 줄은 Claude 의 첫 줄로
+   * (그 줄의 init 이 되돌림보다 먼저 온다). 읽은 줄을 목록에서 뺀다
+   */
+  private noteRead(s: ClaudeSession, ev: StreamEvent): boolean {
+    const list = this.inFlight.get(s);
+    if (!list?.length) return false;
+    if (ev.kind === 'replay') {
+      const i = list.findIndex((x) => x.mid && x.kind === 'human' && inputText(x.input.parts) === ev.text);
+      if (i < 0) return false;
+      list.splice(i, 1);
+      if (!this.midUnread(s)) this.clearMidGrace(s);
+      return true;
+    }
+    if (!readsInput(ev) || list[0].mid) return false;
+    list.shift();
+    return true;
+  }
+
+  private clearMidGrace(s: ClaudeSession): void {
+    const t = this.midGrace.get(s);
+    if (t) clearTimeout(t);
+    this.midGrace.delete(s);
+  }
+
+  /**
+   * 차례가 끝났는데 차례 도중에 보낸 말이 아직 안 읽혔다 — 그 말로 새 차례가 곧 열린다(probe17). 열리지 않으면(되돌림을 못 맞춘 경우)
+   * 기다린 뒤 읽은 것으로 보고 다시 쉰다
+   */
+  private armMidGrace(id: AgentId, s: ClaudeSession): void {
+    if (!this.midUnread(s) || this.midGrace.has(s)) return;
+    const timer = setTimeout(() => {
+      this.midGrace.delete(s);
+      if (this.sessions.get(id) !== s || s.status !== 'idle' || !this.midUnread(s)) return;
+      this.inFlight.set(s, (this.inFlight.get(s) ?? []).filter((x) => !x.mid));
+      this.guard(id, () => this.pump(id));
+      this.emitStatus(id);
+    }, this.o.midGraceMs ?? MID_GRACE_MS);
+    timer.unref?.();
+    this.midGrace.set(s, timer);
   }
 
   /** 부모가 물은 승인·질문이 떠 있다 — 서브에이전트가 물은 것(fromSubagent)은 부모 차례와 상관없이 남는다(spec §4.4) */
@@ -1232,7 +1314,9 @@ class EngineImpl extends EventEmitter implements Engine {
 
   private sendTo(id: AgentId, s: ClaudeSession, parts: UserPart[], item: InFlight): void {
     s.send(parts);
-    this.inFlight.set(s, item);
+    const list = this.inFlight.get(s) ?? [];
+    list.push(item);
+    this.inFlight.set(s, list);
     this.prewarmed.delete(s); // 일을 받은 세션 — 고르지 않게 돼도 끄지 않는다(앱을 끌 때까지)
     // 실제로 쓴 줄만 기록한다 — 대기 중인 입력은 보낼 때 나타난다
     this.guard(id, () =>
@@ -1387,9 +1471,11 @@ class EngineImpl extends EventEmitter implements Engine {
     // 세션 콜백 안에서 던지면 stdout 처리 중 잡히지 않은 예외가 되어 앱이 죽는다 — 모두 guard 로 감싼다
     s.on('event', (ev: StreamEvent) =>
       this.guard(id, () => {
-        // 부모의 줄이 오면 보낸 줄을 읽은 것 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
-        const answered = readsInput(ev) && this.inFlight.delete(s);
+        // 보낸 줄을 읽었나 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
+        const answered = this.noteRead(s, ev);
         if (this.sessions.get(id) !== s) return;
+        if (ev.kind === 'replay') return; // 되돌림은 읽었다는 표시일 뿐 — 기록·화면엔 보낼 때 이미 있다
+        if (ev.kind === 'init') this.clearMidGrace(s); // 멈춘 뒤 안 읽힌 말로 새 차례가 열렸다
         // 본 하는 일 — 승인·두레 도구를 부른 쪽을 가르는 근거(/effort 차례 중에 온 줄도)
         if (ev.kind === 'assistant') this.seen.get(s)?.note(ev);
         // 권한 모드가 바뀌었다는 status 줄(probe16 — 계획 승인으로 CLI 가 스스로 기본 모드로 갈 때도) — 차례 밖이어도, /effort 차례 중에도 받는다
@@ -1397,7 +1483,7 @@ class EngineImpl extends EventEmitter implements Engine {
         if (ev.kind !== 'control-response' && this.effortTurn.has(s)) this.onEffortEvent(id, s, ev);
         else {
           // 차례의 init — 보낸 줄 없이 왔으면 Claude 가 스스로 연 차례: 서브에이전트가 끝난 뒤 기다리던 것 하나(그 result 가 pump 한다)
-          if (ev.kind === 'init') this.turnStarted(id, !answered);
+          if (ev.kind === 'init') this.turnStarted(id, !answered && !this.midUnread(s));
           this.onEvent(id, ev);
         }
       }),
@@ -2011,6 +2097,7 @@ class EngineImpl extends EventEmitter implements Engine {
         } else {
           void this.fetchContext(id, cur);
         }
+        this.armMidGrace(id, cur);
       }
       this.pump(id);
     }
@@ -2234,11 +2321,16 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /** 보낸 줄을 읽기 전에 끝났다 — 메시지는 queued 로, 사람 입력은 기다리는 줄 맨 앞으로(다음 실행·flushAll 때 다시) */
   private restoreInFlight(id: AgentId, s: ClaudeSession): void {
-    const lost = this.inFlight.get(s);
+    const lost = this.inFlight.get(s) ?? [];
     this.inFlight.delete(s);
-    if (lost?.kind === 'relay') this.router.requeue(lost.messageId);
-    else if (lost) {
-      this.heldOf(id).unshift(lost.input);
+    this.clearMidGrace(s);
+    const inputs: HeldInput[] = [];
+    for (const x of lost) {
+      if (x.kind === 'relay') this.router.requeue(x.messageId);
+      else inputs.push(x.input);
+    }
+    if (inputs.length) {
+      this.heldOf(id).unshift(...inputs); // 보낸 차례대로 맨 앞에
       this.emitHeld(id);
     }
   }
@@ -2265,6 +2357,11 @@ function sameFlags(x: Flags, y: Flags): boolean {
  * 보낸 줄과 상관없이 온다(부모 차례가 끝난 뒤에도 서브에이전트는 돈다). 생각 신호(thinking)·API 상태(api-status)도 치지 않는다 —
  * 늘 그 차례의 init 뒤에 오니 읽은 표시는 init 이 이미 했다
  */
+/** 보낸 말의 글 — 되돌림(replay)과 맞출 때. 글 조각만 줄바꿈으로(되돌림도 같은 꼴) */
+function inputText(parts: UserPart[]): string {
+  return parts.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('\n');
+}
+
 function readsInput(ev: StreamEvent): boolean {
   if (
     ev.kind === 'control-response' || ev.kind === 'task-started' || ev.kind === 'task-ended' || ev.kind === 'ignored' || ev.kind === 'thinking' ||

@@ -113,6 +113,8 @@ export type StreamEvent =
   | { kind: 'task-started'; taskId: string; toolUseId: string; description: string; subagentType: string | null; parentTaskId: string | null }
   | { kind: 'task-ended'; taskId: string; toolUseId: string; status: SubagentEnd; summary: string; toolUses: number | null; durationMs: number | null }
   | { kind: 'local-output'; text: string } // 로컬 명령(/model 등) 출력 에코
+  // 보낸 사람 말을 Claude 가 읽었다(--replay-user-messages 의 되돌림) — 글 조각만. 화면·기록엔 안 나간다(보낼 때 기록했다)
+  | { kind: 'replay'; text: string }
   | { kind: 'result'; ok: boolean; subtype: string; text: string; denials: { toolName: string; toolUseId: string }[] }
   | { kind: 'control-response'; requestId: string; ok: boolean; payload: any }
   | { kind: 'rate-limit'; info: unknown }

@@ -27,6 +27,8 @@ describe('buildArgs', () => {
     expect(a).not.toContain('--model');
     expect(a).not.toContain('--bare');
     expect(a).not.toContain('--strict-mcp-config');
+    // 보낸 말을 Claude 가 읽은 순간 되돌려 받는다 — 일하는 중에 보낸 말이 언제 읽혔는지(probe17)
+    expect(a).toContain('--replay-user-messages');
   });
   test('resume 이면 --resume S, 모델 있으면 --model', () => {
     const a = buildArgs({ ...base, resume: true, model: 'opus' });

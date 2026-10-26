@@ -2,6 +2,10 @@ import { describe, expect, test } from 'vitest';
 import { encodeControl, encodeUser, parseLine } from '../src/engine/streamProtocol.js';
 
 describe('parseLine', () => {
+  test('되돌린 사람 말(isReplay) → replay — 글 조각만 이어 붙인다(그림은 뺀다), 문자열 내용도', () => {
+    expect(parseLine('{"type":"user","isReplay":true,"message":{"role":"user","content":[{"type":"text","text":"하나"},{"type":"image","source":{}},{"type":"text","text":"둘"}]}}')).toEqual({ kind: 'replay', text: '하나\n둘' });
+    expect(parseLine('{"type":"user","isReplay":true,"message":{"role":"user","content":"그냥 글"}}')).toEqual({ kind: 'replay', text: '그냥 글' });
+  });
   test('init', () =>
     expect(
       parseLine('{"type":"system","subtype":"init","session_id":"S","model":"m","permissionMode":"default","slash_commands":["compact"],"tools":[]}'),
