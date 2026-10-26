@@ -48,7 +48,7 @@ describe('App 셸', () => {
   it('에이전트가 없으면 관계도 자리에 첫 에이전트 안내, 위 띠에 방 이름', async () => {
     snapshot = { ...snapshot, rooms: [room('r1', '여름 캠페인')] }
     await renderApp()
-    expect(screen.getByText('두레')).toBeTruthy()
+    expect(screen.getByRole('img', { name: '두레' })).toBeTruthy()
     expect(screen.getByRole('button', { name: '여름 캠페인' })).toBeTruthy()
     // 에이전트가 없는 방은 빈 화면의 '추가'가 그 자리 — 관계도 단추는 카드가 생긴 뒤에
     expect(screen.queryByRole('button', { name: '에이전트 추가' })).toBeNull()

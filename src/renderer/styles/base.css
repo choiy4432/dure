@@ -282,10 +282,13 @@ code {
   padding: 0 6px;
 }
 
+/* 왼쪽 위 두레 아이콘(resources/icon/dure-24.svg) — 22px, 끌어도 그림이 안 집히게 */
 .brand {
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  display: block;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  user-select: none;
 }
 
 .room {
@@ -3470,6 +3473,9 @@ code {
 
 /* 보낼 차례를 기다리는 입력 N개 */
 .held-in {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 12px;
   line-height: 18px;
   color: var(--muted);
@@ -3569,9 +3575,11 @@ code {
 
 /* 계획 먼저 — 이미지 단추 옆 알약(시안 f-composer: 꺼짐 = border 테두리 · text-3 글, 켬 = Blue Wash). 켜면 상자에 고리만(테두리는 그대로) */
 .plan-btn {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  white-space: nowrap;
   height: 28px;
   padding: 0 10px;
   border: 1px solid var(--border);

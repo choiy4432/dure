@@ -68,6 +68,15 @@ function createWindow(): BrowserWindow {
       sandbox: true,
     },
   })
+  // 작업표시줄 단추의 아이콘·이름 — 고정(pin)할 때도 이 아이콘으로(개발 실행은 electron.exe 라 이게 없으면 Electron 아이콘)
+  if (process.platform === 'win32') {
+    win.setAppDetails({
+      appId: process.execPath,
+      appIconPath: appIcon,
+      relaunchCommand: process.argv.map(a => `"${a}"`).join(' '),
+      relaunchDisplayName: '두레',
+    })
+  }
   win.once('ready-to-show', () => win.show())
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
