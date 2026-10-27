@@ -5,13 +5,13 @@ import type { AgentView, DureApi, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, roomId = 'r1', over: Partial<AgentView> = {}): AgentView => ({
   id, roomId, name: id, role: '', folder: '/x', sessionId: '', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [], ...over,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [], ...over,
 })
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   claudeMissing: false,
   rooms: [{ id: 'r1', name: '첫 방', createdAt: 2 }, { id: 'r2', name: '둘째', createdAt: 1 }],
   agents: [agent('a'), agent('b'), agent('c', 'r2')],
-  messages: [], requests: [], autoChainLimit: 5, allowBypass: false, notify: { asks: true, finished: false }, usage: null, ...over,
+  messages: [], requests: [], autoChainLimit: 5, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null, ...over,
 })
 const note = (text: string, t = 1): HistoryItem => ({ t, kind: 'notice', text })
 
@@ -86,6 +86,17 @@ describe('store events', () => {
     emit('flags', { agentId: 'a', bypass: true, bySettings: false, pending: false })
     emit('held-input', { agentId: 'a', count: 2 })
     expect(s.getState().agents[0]).toMatchObject({ status: 'error', errorText: '멈춤', bypass: true, heldInput: 2 })
+  })
+
+  it('sleep 사건은 그 에이전트의 잠듦·깨우는 중만 바꾸고, 스냅샷의 재우기 시간이 상태에 들어온다', async () => {
+    const { api, emit } = fake({ snapshot: async () => snap({ sleepAfterMin: 60 }) })
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().sleepAfterMin).toBe(60)
+    emit('sleep', { agentId: 'a', asleep: true, waking: false })
+    expect(s.getState().agents.map(a => [a.asleep, a.waking])).toEqual([[true, false], [false, false], [false, false]])
+    emit('sleep', { agentId: 'a', asleep: true, waking: true })
+    expect(s.getState().agents[0]).toMatchObject({ asleep: true, waking: true })
   })
 
   it('plan-mode·hold 사건이 에이전트 보기를 바꾼다', async () => {

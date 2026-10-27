@@ -5,7 +5,7 @@ import type { PendingRequest, RelayMessage } from '../../src/engine/types'
 
 const agent = (id: string, roomId: string): AgentView => ({
   id, roomId, name: id, role: '역할', folder: 'C:\w', sessionId: 's', started: false, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [],
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [],
 })
 const ask = (id: string, agentId: string): PendingRequest => ({ id, agentId, toolName: 'Bash', input: {}, kind: 'permission', createdAt: 1 })
 const msg = (id: string, to: string): RelayMessage => ({ id, roomId: 'r1', from: 'a1', to, text: 't', createdAt: 1, state: 'pending', updatedAt: 1 })
@@ -18,7 +18,7 @@ beforeEach(() => {
     claudeMissing: false,
     rooms: [{ id: 'r1', name: '여름', createdAt: 1 }],
     agents: [agent('a1', 'r1'), agent('a2', 'r1')],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
   }
   ;(window as any).dure = { snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
 })

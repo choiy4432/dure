@@ -5,14 +5,14 @@ import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 const room = (id: string, name = id) => ({ id, name, createdAt: 1 })
 const agent = (id: string, roomId: string, name: string): AgentView => ({
   id, roomId, name, role: '역할', folder: 'C:/w', sessionId: 's', started: false, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [],
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [],
 })
 
 let snapshot: Snapshot
 beforeEach(() => {
   vi.resetModules()
   localStorage.clear()
-  snapshot = { claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null }
+  snapshot = { claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null }
   ;(window as any).dure = {
     snapshot: async () => snapshot, history: async () => [], on: () => () => {}, updateAgent: async () => ({}),
   }

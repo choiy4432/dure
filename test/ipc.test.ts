@@ -32,6 +32,13 @@ function fakeEngine() {
     modelNow: () => 'claude-opus-5-5',
     subagentsRunning: () => ['toolu_1', 'toolu_2'],
     planMode: () => true,
+    sleepState: () => ({ asleep: true, waking: false }),
+    sleepAfter: () => 60,
+    sleep: rec('sleep', Promise.resolve(true)),
+    sleepRoom: rec('sleepRoom', Promise.resolve(2)),
+    sleepBlock: rec('sleepBlock', 'working'),
+    sleepableIn: rec('sleepableIn', 3),
+    setSleepAfter: rec('setSleepAfter'),
     hold: () => ({ since: 1, items: [] }),
     usage: () => ({ windows: [{ key: 'session', label: '5시간', percent: 40, resetsAt: null }], at: 1 }),
     setEffort: rec('setEffort', Promise.resolve()),
@@ -124,12 +131,22 @@ describe('registerIpc', () => {
       answerRequest: ['q1', { type: 'allow' }], setAutoChainLimit: [5],
       setEffort: ['a1', 'high'], refreshUsage: [], setAllowBypass: [true], setNotify: [{ finished: true }], setTheme: ['dark'], setBypass: ['a1', false],
       setPlanMode: ['a1', true], resumeHold: ['a1'], dropHoldItem: ['a1', 'i1'], dropHold: ['a1'], revokeAlwaysAllow: ['a1', 'Bash'],
+      sleep: ['a1'], sleepRoom: ['r1'], sleepBlock: ['a1'], sleepableIn: ['r1'], setSleepAfter: [15],
     }
     for (const [m, a] of Object.entries(args)) {
       const r = await call(m, ...a)
       expect(r.ok, m).toBe(true)
     }
     expect(calls.map(([n, a]) => [n, a])).toEqual(Object.entries(args))
+  })
+
+  it('재우기 메서드는 엔진에 그대로 이어지고 결과를 돌려준다', async () => {
+    const { call } = setup()
+    expect(await call('sleep', 'a1')).toEqual({ ok: true, value: true })
+    expect(await call('sleepRoom', 'r1')).toEqual({ ok: true, value: 2 })
+    expect(await call('sleepBlock', 'a1')).toEqual({ ok: true, value: 'working' })
+    expect(await call('sleepableIn', 'r1')).toEqual({ ok: true, value: 3 })
+    for (const m of ['sleep', 'sleepRoom', 'sleepBlock', 'sleepableIn', 'setSleepAfter']) expect(METHODS).toContain(m)
   })
 
   it('every whitelisted method is covered by a handler', async () => {
@@ -151,7 +168,8 @@ describe('registerIpc', () => {
       notify: { asks: false, finished: true },
       theme: 'dark',
       rooms: [{ id: 'r1' }],
-      agents: [{ id: 'a1', status: 'idle', errorText: null, bypassOn: true, bypass: true, bypassBySettings: false, bypassPending: true, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5', subagentsRunning: ['toolu_1', 'toolu_2'], planMode: true, hold: { since: 1, items: [] } }],
+      agents: [{ id: 'a1', status: 'idle', errorText: null, bypassOn: true, bypass: true, bypassBySettings: false, bypassPending: true, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5', subagentsRunning: ['toolu_1', 'toolu_2'], planMode: true, hold: { since: 1, items: [] }, asleep: true, waking: false }],
+      sleepAfterMin: 60,
       usage: { windows: [{ key: 'session', percent: 40 }] },
     })
   })
@@ -182,7 +200,7 @@ describe('registerIpc', () => {
     const { call, sent } = setup(false)
     const s = await call('snapshot')
     expect(s.value).toEqual({
-      claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, theme: 'system', usage: null,
+      claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, theme: 'system', sleepAfterMin: 30, usage: null,
     })
     expect(await call('addRoom', 'x')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })
     expect(await call('pickFolder')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })

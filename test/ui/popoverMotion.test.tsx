@@ -83,11 +83,11 @@ describe('떠 있는 창 움직임 — 관계도 엣지의 두 에이전트 메�
     const snapshot = {
       claudeMissing: false, rooms: [{ id: 'r1', name: '방', createdAt: 1 }],
       agents: [
-        { id: 'a', roomId: 'r1', name: '기획', role: '역할', folder: 'C:/w', sessionId: 's', started: true, auto: false, model: null, alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [] },
-        { id: 'b', roomId: 'r1', name: '웹 화면', role: '역할', folder: 'C:/w', sessionId: 's', started: true, auto: false, model: null, alwaysAllow: [], pos: { x: 400, y: 64 }, color: null, effort: null, lastContext: null, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [] },
+        { id: 'a', roomId: 'r1', name: '기획', role: '역할', folder: 'C:/w', sessionId: 's', started: true, auto: false, model: null, alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [] },
+        { id: 'b', roomId: 'r1', name: '웹 화면', role: '역할', folder: 'C:/w', sessionId: 's', started: true, auto: false, model: null, alwaysAllow: [], pos: { x: 400, y: 64 }, color: null, effort: null, lastContext: null, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [] },
       ],
       messages: [{ id: 'm1', roomId: 'r1', from: 'a', to: 'b', text: '첫 메시지', createdAt: Date.now(), state: 'delivered', updatedAt: Date.now() }],
-      requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
+      requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
     }
     ;(window as any).dure = { snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
   })

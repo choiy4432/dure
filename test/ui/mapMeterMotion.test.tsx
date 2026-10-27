@@ -12,7 +12,7 @@ vi.mock('animejs', async orig => {
 
 const agent = (id: string): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [],
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [],
 })
 
 let handlers: Record<string, ((p: any) => void)[]>
@@ -21,7 +21,7 @@ beforeEach(() => {
   handlers = {}
   const snapshot: Snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '방', createdAt: 1 }],
-    agents: [agent('n'), agent('o')], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
+    agents: [agent('n'), agent('o')], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
   }
   ;(window as any).dure = {
     snapshot: async () => snapshot,

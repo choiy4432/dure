@@ -8,7 +8,7 @@ const MIN = 60_000
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [], ...over,
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [], ...over,
 })
 const request = (over: Partial<PendingRequest> = {}): PendingRequest => ({
   id: 'q1', agentId: 'd', toolName: 'Bash', input: { command: 'npm run build' },
@@ -35,7 +35,7 @@ beforeEach(() => {
       agent('d', { name: '디자인' }),
       agent('x', { name: '다른 방 사람', roomId: 'r2' }),
     ],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
   }
   ;(window as any).dure = {
     approveMessage: vi.fn(async () => {}),

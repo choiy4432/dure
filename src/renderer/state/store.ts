@@ -1,5 +1,5 @@
 import { useRef, useSyncExternalStore } from 'react'
-import type { AgentId, AgentStatus, EngineEventMap, HistoryItem, RoomId } from '../../engine/types'
+import { SLEEP_DEFAULT_MIN, type AgentId, type AgentStatus, type EngineEventMap, type HistoryItem, type RoomId } from '../../engine/types'
 import type { DureApi, Snapshot } from '../../shared/ipcContract'
 import { displayStatus, type EdgeMode, type Phase } from './selectors'
 import { markFresh } from '../map/freshNodes'
@@ -97,7 +97,7 @@ type Ev = { [K in keyof EngineEventMap]: { name: K; payload: EngineEventMap[K] }
 
 const EVENTS: (keyof EngineEventMap)[] = [
   'agent-event', 'status', 'message', 'request', 'request-resolved', 'flags', 'history', 'held-input',
-  'usage', 'context', 'effort', 'model-now', 'subagents', 'agent-added', 'plan-mode', 'hold', 'always-allow',
+  'usage', 'context', 'effort', 'model-now', 'subagents', 'agent-added', 'plan-mode', 'hold', 'always-allow', 'sleep',
 ]
 
 const sameItem = (a: HistoryItem, b: HistoryItem) => JSON.stringify(a) === JSON.stringify(b)
@@ -129,7 +129,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   // 창에 초점이 있는가 — 초점이 없으면 고른 에이전트의 결과도 못 본 것이다. document.hasFocus 가 없는 환경에선 본 것으로 친다
   const hasFocus = opts.hasFocus ?? (() => (typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true))
   let state: UiState = {
-    claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
+    claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
     statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0,
   }
@@ -204,6 +204,11 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       case 'plan-mode': {
         const p = ev.payload
         state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, planMode: p.on } : a)) }
+        break
+      }
+      case 'sleep': {
+        const p = ev.payload
+        state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, asleep: p.asleep, waking: p.waking } : a)) }
         break
       }
       case 'hold': {

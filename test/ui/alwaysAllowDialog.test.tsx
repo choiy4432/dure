@@ -6,7 +6,7 @@ import { allowMotion, fastMotion } from './motion'
 
 const agent = (over: Partial<AgentView> = {}): AgentView => ({
   id: 'w', roomId: 'r1', name: '웹 화면', role: '역할', folder: 'C:\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: ['Bash', 'Edit'], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [], ...over,
+  alwaysAllow: ['Bash', 'Edit'], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [], ...over,
 })
 
 let snapshot: Snapshot
@@ -27,7 +27,7 @@ beforeEach(() => {
   alwaysNow = ['Bash', 'Edit']
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }],
-    agents: [agent()], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
+    agents: [agent()], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
   }
   // 엔진처럼 — 바꾸면 always-allow 사건을 보내고(답보다 먼저), 스냅샷은 다시 받을 필요가 없다
   revoke = vi.fn(async (_id: string, tool: string) => {

@@ -12,7 +12,7 @@ vi.mock('animejs', async orig => {
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [], ...over,
+  alwaysAllow: [], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [], ...over,
 })
 const say = (t: number, text: string): HistoryItem => ({ t, kind: 'user', source: 'human', parts: [{ type: 'text', text }] })
 const reply = (t: number, text: string): HistoryItem => ({ t, kind: 'assistant', blocks: [{ type: 'text', text }] })
@@ -29,7 +29,7 @@ beforeEach(() => {
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '방', createdAt: 1 }],
     agents: [agent('w'), agent('p')],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
   }
   history = vi.fn(async (id: string) => (id === 'w' ? [say(1, '하나'), reply(2, '둘')] : [say(1, '기획')]))
   ;(window as any).dure = {

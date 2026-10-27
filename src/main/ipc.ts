@@ -3,7 +3,7 @@ import {
   CHANNEL, CLAUDE_MISSING_ERROR, EVENT_NAMES, METHODS,
   type AgentView, type InvokeRequest, type InvokeResult, type Snapshot,
 } from '../shared/ipcContract'
-import type { ThemePref } from '../engine/types'
+import { SLEEP_DEFAULT_MIN, type ThemePref } from '../engine/types'
 
 export interface IpcLike {
   handle(channel: string, fn: (event: unknown, req: unknown) => unknown): void
@@ -38,6 +38,7 @@ function agentViews(engine: Engine): AgentView[] {
       bypassPending: flags.pending,
       heldInput: engine.heldInput(a.id),
       planMode: engine.planMode(a.id),
+      ...engine.sleepState(a.id),
       hold: engine.hold(a.id),
       effortNow: engine.effortNow(a.id),
       modelNow: engine.modelNow(a.id),
@@ -48,7 +49,7 @@ function agentViews(engine: Engine): AgentView[] {
 
 function snapshot(engine: Engine | null): Snapshot {
   if (!engine) {
-    return { claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, theme: 'system', usage: null }
+    return { claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, theme: 'system', sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null }
   }
   return {
     claudeMissing: false,
@@ -60,6 +61,7 @@ function snapshot(engine: Engine | null): Snapshot {
     allowBypass: engine.allowBypass(),
     notify: engine.notify(),
     theme: engine.theme(),
+    sleepAfterMin: engine.sleepAfter(),
     usage: engine.usage(),
   }
 }
@@ -100,6 +102,11 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
     d.applyTheme(t)
   },
   setBypass: (e, _d, id, on) => e.setBypass(id, on),
+  sleep: (e, _d, id) => e.sleep(id),
+  sleepRoom: (e, _d, roomId) => e.sleepRoom(roomId),
+  sleepBlock: (e, _d, id) => e.sleepBlock(id),
+  sleepableIn: (e, _d, roomId) => e.sleepableIn(roomId),
+  setSleepAfter: (e, _d, min) => e.setSleepAfter(min),
   pickFolder: (_e, d) => d.pickFolder(),
   setTaskbar: (_e, d, count, png) => d.setTaskbar(count as number, (png ?? null) as string | null),
   flashWindow: (_e, d) => d.flashWindow(),

@@ -1,5 +1,5 @@
 import type {
-  Agent, AgentDescription, AgentId, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, ThemePref, UserPart,
+  Agent, AgentDescription, AgentId, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, SleepBlock, ThemePref, UserPart,
 } from '../engine/types'
 
 export interface AgentView extends Agent {
@@ -14,6 +14,10 @@ export interface AgentView extends Agent {
   heldInput: number
   /** 계획 모드 중인가 */
   planMode: boolean
+  /** 재워져(또는 막 켜서) 살아 있는 claude 가 없는가 — 'sleep' 사건이 바꾼다 */
+  asleep: boolean
+  /** 재운 에이전트를 깨우는 중인가 */
+  waking: boolean
   /** 붙잡힌 입력 — 없으면 null */
   hold: Hold | null
   /** Claude 에게 마지막으로 읽은 지금 effort — 모르면 null */
@@ -37,6 +41,8 @@ export interface Snapshot {
   notify: NotifyPrefs
   /** 화면 테마 — claude 가 없으면 Windows 따라감. 옛 main 이 보내지 않으면 없다(Windows 따라감으로 친다) */
   theme?: ThemePref
+  /** 쉬는 에이전트를 재우기까지의 시간(분, 0 = 끔) — claude 가 없으면 기본값 */
+  sleepAfterMin: number
   /** 플랜 사용량 — claude 가 없거나 아직 모르면 null */
   usage: PlanUsage | null
 }
@@ -81,6 +87,16 @@ export interface DureApi {
   /** 화면 테마 저장 + 창에 바로 적용(설정 창이 누르는 즉시 부른다) */
   setTheme(t: ThemePref): Promise<void>
   setBypass(id: AgentId, on: boolean): Promise<void>
+  /** 에이전트를 재운다 — 재웠으면 true(못 재우는 까닭은 sleepBlock) */
+  sleep(id: AgentId): Promise<boolean>
+  /** 그 방에서 재울 수 있는 에이전트를 모두 재운다 — 재운 수 */
+  sleepRoom(roomId: RoomId): Promise<number>
+  /** 지금 못 재우는 까닭 — 재울 수 있으면 null */
+  sleepBlock(id: AgentId): Promise<SleepBlock | 'no-session' | null>
+  /** 그 방에서 지금 재울 수 있는 에이전트 수 */
+  sleepableIn(roomId: RoomId): Promise<number>
+  /** 재우기까지의 시간(분, 0 = 끔) 저장 */
+  setSleepAfter(min: number): Promise<void>
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
   /** 작업표시줄 배지(할 일 개수 + 아이콘 PNG data URL; png 가 null 이거나 count 0 이면 지움) */
@@ -101,6 +117,7 @@ export const METHODS = [
   'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'image',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
   'setAllowBypass', 'setNotify', 'setTheme', 'setBypass',
+  'sleep', 'sleepRoom', 'sleepBlock', 'sleepableIn', 'setSleepAfter',
   'setPlanMode', 'resumeHold', 'dropHoldItem', 'dropHold', 'revokeAlwaysAllow',
   'pickFolder', 'openFolder', 'setTaskbar', 'flashWindow', 'focusWindow',
 ] as const satisfies readonly Exclude<keyof DureApi, 'on'>[]

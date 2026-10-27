@@ -5,7 +5,7 @@ import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id === 'a' ? '디자인' : id, role: '', folder: 'C:/w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [], ...over,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [], ...over,
 })
 const req = (id: string, agentId = 'a'): PendingRequest => ({ id, agentId, toolName: 'Edit', input: { file_path: 'C:/w/x.ts' }, kind: 'permission', createdAt: 1 })
 const msg = (id: string): RelayMessage => ({ id, roomId: 'r1', from: 'a', to: 'b', text: 'x', createdAt: 1, state: 'pending', updatedAt: 1 })
@@ -20,7 +20,7 @@ beforeEach(() => {
   handlers = {}
   snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '여름 캠페인', createdAt: 1 }], agents: [agent('a'), agent('b')],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
   }
   dure = { setTaskbar: vi.fn(async () => {}), flashWindow: vi.fn(async () => {}), focusWindow: vi.fn(async () => {}) }
   ;(window as any).dure = {

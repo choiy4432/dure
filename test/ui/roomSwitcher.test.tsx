@@ -7,7 +7,7 @@ import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 const room = (id: string, name: string): Room => ({ id, name, createdAt: 1 })
 const agent = (id: string, roomId: string, name: string, pos = { x: 64, y: 64 }): AgentView => ({
   id, roomId, name, role: '역할', folder: 'C:\\w', sessionId: 's', started: false, auto: false, model: null,
-  alwaysAllow: [], pos, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [],
+  alwaysAllow: [], pos, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [],
 })
 
 let snapshot: Snapshot
@@ -20,7 +20,7 @@ beforeEach(() => {
     claudeMissing: false,
     rooms: [room('r1', '여름 캠페인'), room('r2', '가을 행사'), room('r3', '빈 방')],
     agents: [agent('a1', 'r1', '기획'), agent('a2', 'r1', '웹 화면', { x: 384, y: 64 }), agent('b1', 'r2', '서버')],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
   }
   // 엔진처럼 — 바뀐 방은 다음 스냅샷에 들어 있다(방 바뀜 이벤트는 없다)
   let next = 4

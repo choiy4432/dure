@@ -6,7 +6,7 @@ import { placeNew } from '../../src/renderer/map/layout'
 
 const agent = (id: string, roomId: string, name: string, pos: { x: number; y: number }): AgentView => ({
   id, roomId, name, role: '역할', folder: 'C:\\w', sessionId: 's', started: false, auto: false, model: null,
-  alwaysAllow: [], pos, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, hold: null, subagentsRunning: [],
+  alwaysAllow: [], pos, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [],
 })
 
 let snapshot: Snapshot
@@ -23,7 +23,7 @@ beforeEach(() => {
       agent('a2', 'r1', '웹 화면', { x: 424, y: 64 }),
       agent('b1', 'r2', '서버', { x: 784, y: 64 }), // 다른 방 — 자리 셈에 들지 않는다
     ],
-    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, usage: null,
+    messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
   }
   // 엔진처럼 — 이름 겹침·없는 폴더는 엔진 문구로 거절, 새 에이전트 자리는 {0,0}
   api = {
