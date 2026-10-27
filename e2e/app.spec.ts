@@ -51,7 +51,7 @@ function makeWork(): Work {
 }
 
 /** 앱에 줄 환경 — ELECTRON_RUN_AS_NODE 가 남아 있으면 electron 이 그냥 node 로 돈다 */
-function appEnv(w: Work): Record<string, string> {
+function appEnv(w: Work, extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
   delete env.ELECTRON_RUN_AS_NODE
@@ -64,6 +64,7 @@ function appEnv(w: Work): Record<string, string> {
     DURE_USER_DATA: w.userData,
     DURE_E2E_FOLDERS: JSON.stringify([w.planFolder, w.webFolder]),
     DURE_NO_DIALOG: '1',
+    ...extra,
   }
 }
 
@@ -76,8 +77,8 @@ interface Running {
   pageErrors: string[]
 }
 
-async function launch(w: Work): Promise<Running> {
-  const app = await electron.launch({ args: [MAIN], env: appEnv(w), cwd: ROOT })
+async function launch(w: Work, extraEnv: Record<string, string> = {}): Promise<Running> {
+  const app = await electron.launch({ args: [MAIN], env: appEnv(w, extraEnv), cwd: ROOT })
   const page = await app.firstWindow()
   await page.emulateMedia({ reducedMotion: 'reduce' })
   expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true)
@@ -490,6 +491,55 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       await expect(short.getByRole('button', { name: '더 보기' })).toHaveCount(0)
       await expect(long.locator('.clamp-box')).toHaveClass(/\bclamped\b/)
       await expect(long.getByRole('button', { name: '더 보기' })).toHaveCount(1)
+    })
+
+    expect(run.pageErrors).toEqual([])
+  } finally {
+    await run?.app.close().catch(() => undefined)
+    fs.rmSync(w.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+  }
+})
+
+test('재우기 — 쉬면 잠들고, 말을 걸면 --resume 으로 깨어난다', async () => {
+  const w = makeWork()
+  let run: Running | null = null
+  try {
+    // 재우는 시간의 '1분' 을 50ms 로 줄인다(DURE_SLEEP_MINUTE_MS) — 15분 설정이 0.75초
+    run = await launch(w, { DURE_SLEEP_MINUTE_MS: '50' })
+    const { page } = run
+
+    await test.step('방 · 에이전트 둘', async () => {
+      await page.getByRole('button', { name: '방 만들기' }).click()
+      const dlg = page.getByRole('dialog', { name: '새 방' })
+      await dlg.getByLabel('이름').fill(ROOM)
+      await dlg.getByRole('button', { name: '만들기', exact: true }).click()
+      await expect(dlg).toBeHidden()
+      await addAgent(page, PLAN, w.planFolder)
+      await addAgent(page, WEB, w.webFolder)
+    })
+
+    await test.step('설정에서 15분 고르고 저장', async () => {
+      await page.getByRole('button', { name: '설정', exact: true }).click()
+      const dlg = page.getByRole('dialog', { name: '설정' })
+      await dlg.getByRole('radiogroup', { name: '쉬는 에이전트 재우기' }).getByRole('radio', { name: '15분' }).click()
+      await dlg.getByRole('button', { name: '저장', exact: true }).click()
+      await expect(dlg).toBeHidden()
+    })
+
+    await test.step('말 걸고 끝난 뒤 다른 에이전트를 고르면 카드가 잠듦', async () => {
+      await node(page, PLAN.name).locator('.nh').click()
+      await say(page, PLAN.name, '첫 번째 말')
+      await expect(panel(page, PLAN.name).locator('.ci-claude', { hasText: '받음: 첫 번째 말' })).toBeVisible({ timeout: 15_000 })
+      await node(page, WEB.name).locator('.nh').click()
+      await expect(node(page, PLAN.name).locator('.av-moon')).toBeVisible({ timeout: 15_000 })
+      await expect(node(page, PLAN.name).locator('.nf .st-l')).toHaveText('잠듦')
+    })
+
+    await test.step('말을 걸면 깨어나 이어서 답한다(--resume)', async () => {
+      await node(page, PLAN.name).locator('.nh').click()
+      await say(page, PLAN.name, '두 번째 말')
+      await expect(panel(page, PLAN.name).locator('.ci-claude', { hasText: '받음: 두 번째 말' })).toBeVisible({ timeout: 15_000 })
+      await expect.poll(() => fs.readFileSync(w.log, 'utf8').includes('"--resume"')).toBe(true)
     })
 
     expect(run.pageErrors).toEqual([])

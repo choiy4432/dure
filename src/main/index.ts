@@ -125,11 +125,15 @@ if (!app.requestSingleInstanceLock()) {
     .then(async () => {
       const nextE2eFolder = e2eFolders(process.env.DURE_E2E_FOLDERS)
       const claude = resolveClaudeCommand(process.env, () => locateClaude())
+      // Test-only: DURE_SLEEP_MINUTE_MS shortens the sleep timer ('1 minute' and the sweep interval) so the E2E sees an agent fall asleep in seconds.
+      const sleepMs = Number(process.env.DURE_SLEEP_MINUTE_MS)
+      const sleepKnob = Number.isFinite(sleepMs) && sleepMs > 0 ? { sleepMinuteMs: sleepMs, sleepSweepMs: sleepMs } : {}
       if (claude) {
         engine = await createEngine({
           dataDir: app.getPath('userData'),
           claude,
           autoStart: false,
+          ...sleepKnob,
         })
         logEngineErrors(engine)
       }

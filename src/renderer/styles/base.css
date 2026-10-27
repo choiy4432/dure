@@ -933,7 +933,7 @@ code {
   place-items: center;
   border-radius: var(--radius-dot);
   background: var(--raised);
-  box-shadow: 0 0 0 1px var(--border-soft);
+  box-shadow: 0 0 0 1px var(--border);
   color: var(--text-2);
 }
 
