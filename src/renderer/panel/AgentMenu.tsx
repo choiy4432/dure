@@ -40,18 +40,20 @@ export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
     if (open) menu.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus()
   }, [open])
 
-  // 메뉴를 열 때마다 지금 재울 수 있는지 묻는다 — 답이 오기 전엔 항목을 꺼 두어 깜박여 눌리지 않게
+  // 메뉴를 열 때마다 지금 재울 수 있는지 묻는다 — 답이 오기 전엔 항목을 꺼 두어 깜박여 눌리지 않게.
+  // 잠든 에이전트는 답이 거의 늘 '재울 게 없음'이라 처음부터 감춘 채 묻는다(꺼진 항목이 떴다 사라지며 메뉴가 들썩이지 않게 — 답이 다르면 그때 보인다)
   const agentId = agent.id
+  const asleep = agent.asleep
   useEffect(() => {
     if (!open) return
     let stale = false
-    setSleepCheck(undefined)
+    setSleepCheck(asleep ? 'no-session' : undefined)
     Promise.resolve()
       .then(() => window.dure.sleepBlock(agentId))
       .then(r => { if (!stale) setSleepCheck(r) })
       .catch(() => { if (!stale) setSleepCheck('no-session') }) // 못 물으면 항목을 감춘다 — 재우기는 편의라 막혀도 해롭지 않다
     return () => { stale = true }
-  }, [open, agentId])
+  }, [open, agentId, asleep])
 
   const setButton = (el: HTMLButtonElement | null) => {
     btn.current = el

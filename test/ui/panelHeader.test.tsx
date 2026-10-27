@@ -435,6 +435,29 @@ describe('AgentMenu', () => {
       expect(api.sleep).not.toHaveBeenCalled()
     })
 
+    it('잠든 에이전트는 항목 없이 연다 — 묻기는 하고, 답이 재울 수 있다고 하면 그때 보인다', async () => {
+      snapshot.agents = [agent('w', { name: '웹 화면', asleep: true }), agent('p', { name: '기획' })]
+      let answer: (v: string | null) => void = () => {}
+      api.sleepBlock.mockImplementation(() => new Promise(r => { answer = r as typeof answer }))
+      await renderPanel()
+      openMenu()
+      await act(async () => {})
+      expect(api.sleepBlock).toHaveBeenCalledWith('w')
+      // 묻는 동안 꺼진 항목이 떴다가 'no-session' 답에 사라지며 메뉴가 들썩이지 않게
+      expect(screen.queryByRole('menuitem', { name: '지금 재우기' })).toBeNull()
+      await act(async () => { answer('no-session') })
+      expect(screen.queryByRole('menuitem', { name: '지금 재우기' })).toBeNull()
+      // 다시 열어 묻는다 — 그새 쉬는 세션이 생겨(스냅샷이 아직 잠듦) 재울 수 있다고 답하면 보인다
+      openMenu()
+      await settle()
+      openMenu()
+      await act(async () => {})
+      expect(api.sleepBlock).toHaveBeenCalledTimes(2)
+      expect(screen.queryByRole('menuitem', { name: '지금 재우기' })).toBeNull()
+      await act(async () => { answer(null) })
+      expect((item('지금 재우기') as HTMLButtonElement).disabled).toBe(false)
+    })
+
     it("'no-session'(재울 게 없음)이면 항목이 없다", async () => {
       api.sleepBlock.mockResolvedValue('no-session')
       await renderPanel()
