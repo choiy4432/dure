@@ -417,6 +417,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private subagents = new Map<AgentId, Map<string, RunningSubagent>>();
   // 뒤에서 돈 서브에이전트가 끝나 Claude 가 스스로 열 차례를 기다린다 — 그동안 다시 띄우기·/effort 를 미루고 화면은 작업 중(세션 끝에 지운다)
   private autoTurns = new Map<AgentId, AutoTurnWait>();
+  private bgTasks = new WeakMap<ClaudeSession, string[]>(); // 그 세션이 마지막으로 알린 뒤에서 도는 일의 id 목록 — 비지 않으면 재우지 않는다(끄면 그 명령도 죽는다)
   private seen = new WeakMap<ClaudeSession, SeenToolUses>(); // 그 세션 스트림에서 본 하는 일 — 승인·두레 도구를 부른 쪽을 가른다(세션이 끝나면 비운다)
   // 결과를 기다리는 고친 일(EDIT_TOOLS) — tool_use id → 입력으로 만들어 기록용으로 줄인 바뀐 줄(못 만들면 null). 결과가 오면 빼고, 세션이 끝나면 비운다.
   // 결과에 structuredPatch 가 없을 때(서브에이전트 줄 등)만 쓴다. 입력 통째는 들고 있지 않는다
@@ -1493,6 +1494,11 @@ class EngineImpl extends EventEmitter implements Engine {
         // 보낸 줄을 읽었나 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
         const answered = this.noteRead(s, ev);
         if (this.sessions.get(id) !== s) return;
+        // 뒤에서 도는 일 목록 — 세션마다 마지막 것만 든다(재우기가 비어 있을 때만 재운다). 기록·화면엔 안 보낸다
+        if (ev.kind === 'background-tasks') {
+          this.bgTasks.set(s, ev.taskIds);
+          return;
+        }
         if (ev.kind === 'replay') return; // 되돌림은 읽었다는 표시일 뿐 — 기록·화면엔 보낼 때 이미 있다
         if (ev.kind === 'init') this.clearMidGrace(s); // 멈춘 뒤 안 읽힌 말로 새 차례가 열렸다
         // 본 하는 일 — 승인·두레 도구를 부른 쪽을 가르는 근거(/effort 차례 중에 온 줄도)
@@ -2384,7 +2390,7 @@ function inputText(parts: UserPart[]): string {
 function readsInput(ev: StreamEvent): boolean {
   if (
     ev.kind === 'control-response' || ev.kind === 'task-started' || ev.kind === 'task-ended' || ev.kind === 'ignored' || ev.kind === 'thinking' ||
-    ev.kind === 'api-status'
+    ev.kind === 'api-status' || ev.kind === 'background-tasks'
   ) return false;
   return !((ev.kind === 'assistant' || ev.kind === 'tool-result') && ev.parent);
 }

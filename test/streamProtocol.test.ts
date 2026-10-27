@@ -152,8 +152,17 @@ describe('parseLine — 서브에이전트', () => {
     expect(parseLine(JSON.stringify({ ...bare, status: 'weird' }))).toEqual({ kind: 'task-ended', taskId: 't1', toolUseId: 'toolu_A', status: 'failed', summary: '', toolUses: null, durationMs: null });
   });
 
-  test('task_progress·task_updated·background_tasks_changed → ignored', () => {
-    for (const subtype of ['task_progress', 'task_updated', 'background_tasks_changed']) {
+  test('background_tasks_changed → background-tasks(task_id 목록) — 비었거나 tasks 가 없거나 배열이 아니면 [] · task_id 가 글이 아닌 항목은 뺀다', () => {
+    const line = (tasks?: unknown) => JSON.stringify({ type: 'system', subtype: 'background_tasks_changed', ...(tasks === undefined ? {} : { tasks }) });
+    expect(parseLine(line([{ task_id: 'b1', task_type: 'local_bash', description: 'x' }]))).toEqual({ kind: 'background-tasks', taskIds: ['b1'] });
+    expect(parseLine(line([]))).toEqual({ kind: 'background-tasks', taskIds: [] });
+    expect(parseLine(line())).toEqual({ kind: 'background-tasks', taskIds: [] });
+    expect(parseLine(line('x'))).toEqual({ kind: 'background-tasks', taskIds: [] });
+    expect(parseLine(line([{ task_id: 7 }, { task_id: 'b2' }, null, {}]))).toEqual({ kind: 'background-tasks', taskIds: ['b2'] });
+  });
+
+  test('task_progress·task_updated → ignored', () => {
+    for (const subtype of ['task_progress', 'task_updated']) {
       expect(parseLine(JSON.stringify({ type: 'system', subtype }))).toEqual({ kind: 'ignored', type: `system/${subtype}` });
     }
   });

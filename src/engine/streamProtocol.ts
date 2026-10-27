@@ -149,6 +149,12 @@ function parseObject(obj: any): StreamEvent {
           durationMs: num(obj.usage?.duration_ms),
         };
       }
+      if (obj.subtype === 'background_tasks_changed') {
+        // tasks 가 없거나 배열이 아니면 빈 목록. task_id 가 글이 아닌 항목은 뺀다
+        const tasks: unknown[] = Array.isArray(obj.tasks) ? obj.tasks : [];
+        const taskIds = tasks.flatMap((t: any) => (typeof t?.task_id === 'string' ? [t.task_id] : []));
+        return { kind: 'background-tasks', taskIds };
+      }
       return ignored(`system/${obj.subtype}`);
     case 'stream_event': {
       const d = obj.event?.delta;

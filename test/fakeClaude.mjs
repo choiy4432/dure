@@ -31,6 +31,9 @@
 //   BGTASK <명령>       서브에이전트가 아닌 일(백그라운드 명령) — Bash tool_use(run_in_background) → task_started(task_<n>,
 //                       task_type:'local_bash' — 파서가 버린다) → tool_result → task_notification(completed — 같은 모양, 엔진엔 모르는 끝으로 온다)
 //                       → 글 "BG DONE" → result. 끝 알림까지 차례 안에서(시험이 result 로 기다릴 수 있게)
+//   BGRUN <ms>          뒤에서 도는 명령(probe18) — Bash tool_use(run_in_background) → background_tasks_changed [bg_<n>] → task_started(local_bash) →
+//                       tool_result → 글 "BG STARTED" → result. 그 뒤 차례 밖에서 <ms> 지나 task_updated · task_notification(completed) ·
+//                       background_tasks_changed [] → 스스로 시작한 차례(init → 글 "BG DONE" → result — 진행 중인 차례가 있으면 그 뒤에, SUB 처럼)
 //   EDIT <파일> [<n>]   Edit tool_use(file_path·old_string·new_string) → tool_result "The file <파일> has been updated successfully."
 //                       + 최상위 tool_use_result {filePath, oldString, newString, originalFile, structuredPatch, userModified, replaceAll}
 //                       (진짜 Claude Code 의 Edit 결과 모양) → 글 "EDITED" → result. 묶음은 앞뒤 줄 · '-' 한 줄 · '+' 두 줄,
@@ -341,14 +344,14 @@ async function killTasks() {
 }
 
 /** 뒤에서 돈 서브에이전트가 끝난 뒤 Claude 가 입력 없이 여는 차례(probe13) — 진행 중인 차례가 있거나 막혀 있으면(FAKE_MUTE_FILE) 그 뒤에 */
-async function selfTurn(report) {
+async function selfTurn(report, text) {
   const late = Number(process.env.FAKE_SELF_TURN_MS ?? 0);
   if (late) await sleep(late);
   while (current || muted()) await sleep(20);
   const tok = { ended: false, queue: [] };
   current = tok;
   await init();
-  const said = `전달: ${report}`;
+  const said = text ?? `전달: ${report}`;
   await assistant([{ type: 'text', text: said }]);
   if (tok.ended) return;
   while (tok.queue.length) {
@@ -464,6 +467,32 @@ async function turn(text, pending = []) {
     const said = `정리: ${report}`;
     await assistant([{ type: 'text', text: said }]);
     await finish(said);
+    return;
+  }
+  const bgRun = /^BGRUN (\d+)$/.exec(text);
+  if (bgRun) {
+    const n = ++sequence;
+    const toolUseId = `toolu_${n}`;
+    const taskId = `bg_${n}`;
+    const ms = Number(bgRun[1]);
+    const tasksNow = [{ task_id: taskId, task_type: 'local_bash', description: 'bg' }];
+    await assistant([{ type: 'tool_use', id: toolUseId, name: 'Bash', input: { command: 'sleep', run_in_background: true } }]);
+    await system('background_tasks_changed', { tasks: tasksNow });
+    await system('task_started', { task_id: taskId, tool_use_id: toolUseId, description: 'bg', is_backgrounded: true, task_type: 'local_bash' });
+    await toolResult(toolUseId, `Command running in background with ID: ${taskId}`);
+    await assistant([{ type: 'text', text: 'BG STARTED' }]);
+    await finish('BG STARTED');
+    // 차례 밖에서 ms 뒤 — 끝 줄 셋(probe18) 뒤 Claude 가 스스로 차례를 연다
+    void (async () => {
+      await sleep(ms);
+      await system('task_updated', { task_id: taskId, patch: { status: 'completed' } });
+      await system('task_notification', {
+        task_id: taskId, tool_use_id: toolUseId, status: 'completed', summary: 'Background command "sleep" completed (exit code 0)',
+        output_file: `${taskId}.output`,
+      });
+      await system('background_tasks_changed', { tasks: [] });
+      await selfTurn('', 'BG DONE');
+    })();
     return;
   }
   const bg = /^BGTASK ([\s\S]+)$/.exec(text);

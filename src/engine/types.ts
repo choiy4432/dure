@@ -112,6 +112,8 @@ export type StreamEvent =
   | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; parent?: string; patch?: DiffHunk[] }
   | { kind: 'task-started'; taskId: string; toolUseId: string; description: string; subagentType: string | null; parentTaskId: string | null }
   | { kind: 'task-ended'; taskId: string; toolUseId: string; status: SubagentEnd; summary: string; toolUses: number | null; durationMs: number | null }
+  // 뒤에서 도는 일(백그라운드 명령 등)의 지금 목록(system/background_tasks_changed, probe18) — 비면 하나도 안 돈다. 기록·화면엔 안 나간다(엔진이 세션마다 들고 있다)
+  | { kind: 'background-tasks'; taskIds: string[] }
   | { kind: 'local-output'; text: string } // 로컬 명령(/model 등) 출력 에코
   // 보낸 사람 말을 Claude 가 읽었다(--replay-user-messages 의 되돌림) — 글 조각만. 화면·기록엔 안 나간다(보낼 때 기록했다)
   | { kind: 'replay'; text: string }

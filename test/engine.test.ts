@@ -3706,6 +3706,21 @@ test('subagent: 서브에이전트가 아닌 일(백그라운드 명령)의 끝 
   expect(e.status(a.id)).toBe('working'); // 서브에이전트는 아직 돈다
 });
 
+test('background: 뒤에서 도는 명령(BGRUN)의 목록 줄은 화면 사건·기록에 안 나가고, 끝난 뒤 스스로 연 차례는 그대로 온다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const seen: StreamEvent[] = [];
+  e.on('agent-event', (x: AgentEvent) => {
+    if (x.agentId === a.id) seen.push(x.event);
+  });
+  const started = resultTextIs(e, a.id, 'BG STARTED');
+  await e.sendUser(a.id, text('BGRUN 300'));
+  await started;
+  await resultTextIs(e, a.id, 'BG DONE'); // 300ms 뒤 스스로 연 차례
+  expect(seen.filter((ev) => ev.kind === 'background-tasks')).toEqual([]);
+  expect(e.history(a.id).filter((x) => (x.kind as string) === 'background-tasks')).toEqual([]);
+});
+
 test('subagent: 둘이 돌면 시작 순 [A, B] — A 가 끝나면 [B], 둘 다 끝나면 []', async () => {
   const e = await start({ FAKE_SUB_MS: '400' }); // 둘 다 띄운 뒤에 일을 시작한다 — 먼저 띄운 A 가 먼저 끝난다
   const { a } = setup(e);
