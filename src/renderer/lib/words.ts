@@ -35,6 +35,10 @@ export const MESSAGE_WORD: Record<MessageState, string> = {
 }
 
 /** 방금 끝난 에이전트의 새 결과 표시 낱말 — 카드에서 쓰는 건 따로 붙인다 */
+/** 잠든 에이전트(프로세스를 꺼 둔 것) — 바닥 줄·패널 알약 낱말과 달 위에 올렸을 때 설명 */
+export const SLEEP_WORD = { asleep: '잠듦', waking: '깨우는 중' } as const
+export const SLEEP_HINT = '지금은 꺼 두어 메모리를 쓰지 않아요 · 말을 걸면 몇 초 뒤 깨어나요'
+
 export const FRESH_WORD = '끝남 · 새 결과'
 
 /** 질문(AskUserQuestion)이 떠 있는 카드의 링크 문구 */

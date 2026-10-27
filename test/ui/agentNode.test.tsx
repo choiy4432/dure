@@ -582,6 +582,43 @@ describe('AgentNode — 흘끗 보기 카드', () => {
     expect(card.querySelector('.st.n')!.textContent).toContain('끝남 · 새 결과')
   })
 
+  it('잠든 카드 — 바닥 줄 달 + 잠듦, 아바타 달 배지, 둘 다 안내 title', async () => {
+    snapshot.agents = [agent('d', { status: 'idle', asleep: true })]
+    const { card } = await renderCard()
+    const hint = '지금은 꺼 두어 메모리를 쓰지 않아요 · 말을 걸면 몇 초 뒤 깨어나요'
+    expect(card.querySelector('.st-l')!.textContent).toBe('잠듦')
+    expect(card.querySelector('.nf .dot')).toBeNull()
+    expect(card.querySelector('.nf svg.st-moon')).toBeTruthy()
+    expect(card.querySelector('.av .av-moon')).toBeTruthy()
+    expect(card.querySelector('.av-moon')!.getAttribute('title')).toBe(hint)
+    expect(card.querySelector('.nf .st')!.getAttribute('title')).toBe(hint)
+  })
+
+  it('깨우는 중 — 바닥 줄 깨우는 중 · .dot.wake · .st.wake', async () => {
+    snapshot.agents = [agent('d', { status: 'working', asleep: true, waking: true })]
+    const { card } = await renderCard()
+    expect(card.querySelector('.st-l')!.textContent).toBe('깨우는 중')
+    expect(card.querySelector('.dot.wake')).toBeTruthy()
+    expect(card.querySelector('.st.wake')).toBeTruthy()
+  })
+
+  it('새 결과가 잠듦보다 먼저 — 바닥은 끝남 · 새 결과, 아바타 배지는 그대로', async () => {
+    snapshot.agents = [agent('d', { status: 'idle', asleep: true })]
+    const { card } = await renderCard()
+    emit('history', { agentId: 'd', item: { kind: 'result', t: 5 } } as any)
+    expect(card.querySelector('.st.n')!.textContent).toContain('끝남 · 새 결과')
+    expect(card.querySelector('.dot.n')).toBeTruthy()
+    expect(card.querySelector('.st-moon')).toBeNull()
+    expect(card.querySelector('.av .av-moon')).toBeTruthy()
+  })
+
+  it('잠들지 않은 카드엔 달이 없다', async () => {
+    snapshot.agents = [agent('d', { status: 'idle' })]
+    const { card } = await renderCard()
+    expect(card.querySelector('.av-moon')).toBeNull()
+    expect(card.querySelector('.st-moon')).toBeNull()
+  })
+
   it('작업 중이면 fresh 가 있어도 작업 중', async () => {
     snapshot.agents = [agent('d', { status: 'working' })]
     const { card, store } = await renderCard()

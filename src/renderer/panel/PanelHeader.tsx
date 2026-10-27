@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { CircleAlert, ShieldAlert, Square, X } from 'lucide-react'
+import { CircleAlert, Moon, ShieldAlert, Square, X } from 'lucide-react'
 import type { AgentId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
-import { displayStatus, type DisplayStatus } from '../state/selectors'
-import { errorMessage, fieldError, initial, STATUS_WORD } from '../lib/words'
+import { displayStatus, sleepLook, type DisplayStatus } from '../state/selectors'
+import { errorMessage, fieldError, initial, SLEEP_HINT, SLEEP_WORD, STATUS_WORD } from '../lib/words'
 import { ModelPicker, type Described } from './ModelPicker'
 import { EffortControl } from './EffortControl'
 import { AgentMenu } from './AgentMenu'
@@ -56,6 +56,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
   if (!v) return null
   const { agent, status } = v
   const pill = PILL[status]
+  const sleep = sleepLook(agent, status)
   const canStop = (status === 'working' || status === 'awaiting') && !stopping
 
   const stop = async () => {
@@ -132,9 +133,16 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
           )}
         </div>
         <div className="ph-row ph-r2">
-          <span className={`pill${pill.tone ? ` ${pill.tone}` : ''}`}>
-            <i className={`dot ${pill.dot}`} aria-hidden="true" />
-            {STATUS_WORD[status]}
+          <span
+            className={`pill${sleep === 'waking' ? ' wake' : pill.tone ? ` ${pill.tone}` : ''}`}
+            title={sleep === 'asleep' ? SLEEP_HINT : undefined}
+          >
+            {sleep === 'asleep' ? (
+              <Moon className="st-moon" size={13} aria-hidden="true" />
+            ) : (
+              <i className={`dot ${sleep === 'waking' ? 'wake' : pill.dot}`} aria-hidden="true" />
+            )}
+            {sleep ? SLEEP_WORD[sleep] : STATUS_WORD[status]}
           </span>
           <ModelPicker
             agentId={agent.id}

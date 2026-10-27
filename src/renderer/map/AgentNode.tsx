@@ -1,12 +1,12 @@
 import { memo, useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
 import { Handle, Position, type Node, type NodeProps } from '@xyflow/react'
-import { ShieldAlert } from 'lucide-react'
+import { Moon, ShieldAlert } from 'lucide-react'
 import type { AgentId, Decision, PendingRequest } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
-import { displayStatus, unreadFor, type DisplayStatus } from '../state/selectors'
+import { displayStatus, sleepLook, unreadFor, type DisplayStatus } from '../state/selectors'
 import { createAgentPlan, requestTarget, requestTitle } from '../lib/toolSummary'
-import { ago, FRESH_WORD, initial, josa, lasting, nodeModelLabel, PHASE_WORD, QUESTION_LINK, STATUS_LINE, STATUS_WORD } from '../lib/words'
+import { ago, FRESH_WORD, initial, josa, lasting, nodeModelLabel, PHASE_WORD, QUESTION_LINK, SLEEP_HINT, SLEEP_WORD, STATUS_LINE, STATUS_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { MOTION, popOnce, useRise } from '../lib/motion'
 import { useMotion } from '../lib/presence'
@@ -194,6 +194,9 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
   // 쉬는 에이전트가 못 본 결과를 냈다 — 바닥 상태를 '끝남 · 새 결과' 로
   const isFresh = (status === 'idle' || status === 'stopped') && fresh
   const st = STATUS[status]
+  // 잠듦 — 새 결과가 먼저(바닥 줄만, 아바타 달은 그대로)
+  const sleep = sleepLook(agent, status)
+  const footSleep = isFresh ? null : sleep
   const time = timeText(v, now)
   const errorText = status === 'error' && agent.errorText ? agent.errorText : null
 
@@ -206,6 +209,11 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
       <div className="nh">
         <span className={`av${selected ? ' b' : ''}`} aria-hidden="true">
           {initial(agent.name)}
+          {sleep === 'asleep' && (
+            <span className="av-moon" title={SLEEP_HINT}>
+              <Moon size={11} aria-hidden="true" />
+            </span>
+          )}
         </span>
         <div className="nt">
           <span className="nn">
@@ -250,9 +258,16 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
       )}
 
       <div className="nf">
-        <span className={`st${isFresh ? ' n' : st.tone ? ` ${st.tone}` : ''}`}>
-          <i className={`dot ${isFresh ? 'n' : st.dot}`} aria-hidden="true" />
-          <span className="st-l">{isFresh ? FRESH_WORD : STATUS_WORD[status]}</span>
+        <span
+          className={`st${isFresh ? ' n' : footSleep === 'waking' ? ' wake' : st.tone ? ` ${st.tone}` : ''}`}
+          title={footSleep === 'asleep' ? SLEEP_HINT : undefined}
+        >
+          {footSleep === 'asleep' ? (
+            <Moon className="st-moon" size={13} aria-hidden="true" />
+          ) : (
+            <i className={`dot ${isFresh ? 'n' : footSleep === 'waking' ? 'wake' : st.dot}`} aria-hidden="true" />
+          )}
+          <span className="st-l">{isFresh ? FRESH_WORD : footSleep ? SLEEP_WORD[footSleep] : STATUS_WORD[status]}</span>
           {errorText && (
             <span className="nf-err trunc" title={errorText}>
               {clip(errorText, ERROR_MAX)}

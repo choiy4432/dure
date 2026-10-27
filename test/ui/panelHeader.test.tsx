@@ -96,6 +96,24 @@ describe('AgentPanel — 고른 에이전트가 없을 때', () => {
   })
 })
 
+describe('PanelHeader — 잠듦 알약', () => {
+  it('잠든 에이전트는 달 + 잠듦, 깨우는 중은 깨우는 중', async () => {
+    snapshot.agents = [
+      agent('w', { name: '웹 화면', status: 'idle', asleep: true }),
+      agent('p', { name: '기획', status: 'working', asleep: true, waking: true }),
+    ]
+    const { store } = await renderPanel()
+    const pill = () => document.querySelector('.ph .pill')!
+    await act(async () => store.selectAgent('w'))
+    expect(pill().textContent).toBe('잠듦')
+    expect(pill().querySelector('svg.st-moon')).toBeTruthy()
+    expect(pill().querySelector('.dot')).toBeNull()
+    await act(async () => store.selectAgent('p'))
+    expect(pill().textContent).toBe('깨우는 중')
+    expect(pill().querySelector('.dot.wake')).toBeTruthy()
+  })
+})
+
 describe('PanelHeader — 멈추기', () => {
   it.each([
     ['작업 중', { status: 'working' }, [], true],

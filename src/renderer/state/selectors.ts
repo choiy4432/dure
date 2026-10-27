@@ -43,6 +43,13 @@ export function displayStatus(agent: AgentView, requests: PendingRequest[]): Dis
   return agent.status
 }
 
+/** 잠듦 모습 — 엔진 상태는 쉬는 중 그대로라 화면이 정한다. 깨우는 중은 작업 중일 때만, 잠듦은 쉬는·멈춤일 때만 */
+export function sleepLook(agent: AgentView, status: DisplayStatus): 'asleep' | 'waking' | null {
+  if (agent.waking && status === 'working') return 'waking'
+  if (agent.asleep && (status === 'idle' || status === 'stopped')) return 'asleep'
+  return null
+}
+
 export function unreadFor(agentId: AgentId, messages: RelayMessage[]): number {
   return messages.filter(m => m.to === agentId && isUnread(m)).length
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { displayStatus, edges, label, nextAgent, pairMessages, summary, unreadFor, type EdgeView } from '../../src/renderer/state/selectors'
+import { displayStatus, edges, sleepLook, label, nextAgent, pairMessages, summary, unreadFor, type EdgeView } from '../../src/renderer/state/selectors'
 import type { PendingRequest, RelayMessage, MessageState } from '../../src/engine/types'
 import type { AgentView } from '../../src/shared/ipcContract'
 
@@ -173,5 +173,18 @@ describe('pairMessages', () => {
 
   it('오간 메시지가 없으면 빈 목록', () => {
     expect(pairMessages('a', 'b', [msg('a', 'c', 'pending')])).toEqual([])
+  })
+})
+
+describe('sleepLook', () => {
+  it('깨우는 중은 작업 중일 때만, 잠듦은 쉬는·멈춤일 때만, 나머지는 null', () => {
+    expect(sleepLook(agent('a', { asleep: true }), 'idle')).toBe('asleep')
+    expect(sleepLook(agent('a', { asleep: true }), 'stopped')).toBe('asleep')
+    expect(sleepLook(agent('a', { asleep: true, waking: true }), 'working')).toBe('waking')
+    expect(sleepLook(agent('a', { asleep: true, waking: true }), 'awaiting')).toBeNull()
+    expect(sleepLook(agent('a', { asleep: true }), 'working')).toBeNull()
+    expect(sleepLook(agent('a', { asleep: true }), 'error')).toBeNull()
+    expect(sleepLook(agent('a', { asleep: false }), 'idle')).toBeNull()
+    expect(sleepLook(agent('a', { waking: true }), 'idle')).toBeNull()
   })
 })
