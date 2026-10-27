@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from 'react'
-import type { ThemePref } from '../../engine/types'
+import { SLEEP_CHOICES, type ThemePref } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
-import { errorMessage } from '../lib/words'
+import { errorMessage, SLEEP_CHOICE_WORD, SLEEP_SETTING } from '../lib/words'
 import { FormDialog } from './FormDialog'
 
 /** 자동 전달 상한으로 적을 수 있는 수 */
@@ -32,11 +32,13 @@ export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; o
   const limit = useDure(s => s.autoChainLimit)
   const allowed = useDure(s => s.allowBypass)
   const notified = useDure(s => s.notify)
+  const sleepSaved = useDure(s => s.sleepAfterMin)
   const savedTheme = useDure(s => s.theme ?? 'system')
   /** 열 때의 테마 — 저장 없이 닫으면 여기로 */
   const startTheme = useRef(savedTheme)
   const [theme, setTheme] = useState(savedTheme)
   const [themeError, setThemeError] = useState<string | null>(null)
+  const [sleepMin, setSleepMin] = useState(sleepSaved)
   const [allow, setAllow] = useState(allowed)
   const [asks, setAsks] = useState(notified.asks)
   const [finished, setFinished] = useState(notified.finished)
@@ -55,6 +57,7 @@ export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; o
     setError(null)
     try {
       if (n !== limit) await window.dure.setAutoChainLimit(n)
+      if (sleepMin !== sleepSaved) await window.dure.setSleepAfter(sleepMin)
       if (!allow && allowed) await window.dure.setAllowBypass(false) // 끄기는 바로
       // 바뀐 칸만 — 안 바뀐 칸을 다시 쓰면 그사이 다른 곳에서 바뀐 값을 덮는다
       const np: { asks?: boolean; finished?: boolean } = {}
@@ -102,7 +105,7 @@ export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; o
       title="설정"
       submitLabel="저장"
       canSubmit={
-        n !== null && (n !== limit || allow !== allowed || asks !== notified.asks || finished !== notified.finished || theme !== startTheme.current)
+        n !== null && (n !== limit || sleepMin !== sleepSaved || allow !== allowed || asks !== notified.asks || finished !== notified.finished || theme !== startTheme.current)
       }
       busy={busy}
       onSubmit={() => void submit()}
@@ -123,6 +126,21 @@ export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; o
           Windows 따라감은 Windows 가 어둡게 바뀌면 두레도 같이 바뀌어요
         </p>
         {themeError && <p className="fe">{themeError}</p>}
+      </div>
+      <div className="fld">
+        <span className="fld-l" id={`${id}-s`}>
+          {SLEEP_SETTING.label}
+        </span>
+        <div className="seg" role="radiogroup" aria-labelledby={`${id}-s`} aria-describedby={`${id}-sd`}>
+          {SLEEP_CHOICES.map(m => (
+            <button key={m} type="button" role="radio" aria-checked={sleepMin === m} onClick={() => setSleepMin(m)}>
+              {SLEEP_CHOICE_WORD[m]}
+            </button>
+          ))}
+        </div>
+        <p className="fld-d" id={`${id}-sd`}>
+          {SLEEP_SETTING.desc}
+        </p>
       </div>
       <div className="fld">
         <label className="fld-l" htmlFor={`${id}-n`}>

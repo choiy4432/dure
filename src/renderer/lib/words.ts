@@ -1,6 +1,6 @@
 // 화면 문구 도우미 — 조사(이/가 …)와 '방금 · N분 전' 같은 시각 말
 
-import type { MessageState, UsageWindow } from '../../engine/types'
+import type { MessageState, SleepBlock, UsageWindow } from '../../engine/types'
 import { hasBatchim } from '../../shared/josa'
 import type { DisplayStatus, Phase } from '../state/selectors'
 
@@ -34,11 +34,32 @@ export const MESSAGE_WORD: Record<MessageState, string> = {
   dismissed: '버림',
 }
 
-/** 방금 끝난 에이전트의 새 결과 표시 낱말 — 카드에서 쓰는 건 따로 붙인다 */
 /** 잠든 에이전트(프로세스를 꺼 둔 것) — 바닥 줄·패널 알약 낱말과 달 위에 올렸을 때 설명 */
 export const SLEEP_WORD = { asleep: '잠듦', waking: '깨우는 중' } as const
 export const SLEEP_HINT = '지금은 꺼 두어 메모리를 쓰지 않아요 · 말을 걸면 몇 초 뒤 깨어나요'
 
+/** 패널 … 메뉴의 '지금 재우기' · 방 메뉴의 '쉬는 에이전트 모두 재우기' */
+export const SLEEP_NOW = '지금 재우기'
+export const SLEEP_ROOM = '쉬는 에이전트 모두 재우기'
+
+/** 지금 못 재우는 까닭 — 꺼진 '지금 재우기' 항목의 title */
+export const SLEEP_BLOCK_WORD: Record<SleepBlock, string> = {
+  working: '일하는 중이에요',
+  asking: '답을 기다리고 있어요',
+  'waiting-input': '기다리는 입력이 있어요',
+  subagents: '서브에이전트가 일하는 중이에요',
+  background: '뒤에서 명령이 돌고 있어요',
+  unread: '보낸 말을 아직 읽는 중이에요',
+}
+
+/** 설정의 재우는 시간 칸 — 문구와 고르는 값의 이름 */
+export const SLEEP_SETTING = {
+  label: '쉬는 에이전트 재우기',
+  desc: '이만큼 쉬면 claude 를 내려 메모리를 비워요. 말을 걸면 몇 초 뒤 그대로 이어서 깨어나요',
+}
+export const SLEEP_CHOICE_WORD: Record<number, string> = { 0: '끔', 15: '15분', 30: '30분', 60: '1시간', 180: '3시간' }
+
+/** 방금 끝난 에이전트의 새 결과 표시 낱말 — 카드에서 쓰는 건 따로 붙인다 */
 export const FRESH_WORD = '끝남 · 새 결과'
 
 /** 질문(AskUserQuestion)이 떠 있는 카드의 링크 문구 */

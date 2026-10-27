@@ -7,6 +7,7 @@ let setAutoChainLimit: ReturnType<typeof vi.fn>
 let setAllowBypass: ReturnType<typeof vi.fn>
 let setNotify: ReturnType<typeof vi.fn>
 let setTheme: ReturnType<typeof vi.fn>
+let setSleepAfter: ReturnType<typeof vi.fn>
 
 beforeEach(() => {
   vi.resetModules()
@@ -27,7 +28,10 @@ beforeEach(() => {
   setTheme = vi.fn(async (t: 'light' | 'dark' | 'system') => {
     snapshot = { ...snapshot, theme: t }
   })
-  ;(window as any).dure = { setAutoChainLimit, setAllowBypass, setNotify, setTheme, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
+  setSleepAfter = vi.fn(async (m: number) => {
+    snapshot = { ...snapshot, sleepAfterMin: m }
+  })
+  ;(window as any).dure = { setSleepAfter, setAutoChainLimit, setAllowBypass, setNotify, setTheme, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
 })
 afterEach(() => cleanup())
 
@@ -49,6 +53,36 @@ const openSettings = () => {
 }
 
 describe('SettingsDialog', () => {
+  it('재우는 시간 — 다섯 칸에 지금 값이 체크되고, 다른 값을 골라 저장하면 setSleepAfter 한 번 · 그 칸만 바꿔도 저장이 켜진다', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    const group = within(dlg).getByRole('radiogroup', { name: '쉬는 에이전트 재우기' })
+    expect(dlg.textContent).toContain('이만큼 쉬면 claude 를 내려 메모리를 비워요. 말을 걸면 몇 초 뒤 그대로 이어서 깨어나요')
+    const radios = within(group).getAllByRole('radio')
+    expect(radios.map(r => r.textContent)).toEqual(['끔', '15분', '30분', '1시간', '3시간'])
+    expect(radios.map(r => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true', 'false', 'false'])
+    const save = within(dlg).getByRole('button', { name: '저장' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.click(within(group).getByRole('radio', { name: '1시간' }))
+    expect(within(group).getByRole('radio', { name: '1시간' }).getAttribute('aria-checked')).toBe('true')
+    expect(save.disabled).toBe(false)
+    await act(async () => { fireEvent.click(save) })
+    await settle()
+    expect(setSleepAfter).toHaveBeenCalledTimes(1)
+    expect(setSleepAfter).toHaveBeenCalledWith(60)
+    expect(setAutoChainLimit).not.toHaveBeenCalled()
+  })
+
+  it('재우는 시간을 안 바꾸고 저장하면 setSleepAfter 를 부르지 않는다', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    fireEvent.change(within(dlg).getByRole('spinbutton', { name: '자동 전달 상한' }), { target: { value: '5' } })
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '저장' })) })
+    await settle()
+    expect(setAutoChainLimit).toHaveBeenCalledWith(5)
+    expect(setSleepAfter).not.toHaveBeenCalled()
+  })
+
   it('지금 상한을 보여 주고 1~20 정수로 바꿨을 때만 저장이 켜진다 — 저장하면 setAutoChainLimit 후 닫힘', async () => {
     const store = await renderApp()
     const { dlg, opener } = openSettings()

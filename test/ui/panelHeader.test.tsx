@@ -25,7 +25,7 @@ const DESC: AgentDescription = {
 }
 
 let snapshot: Snapshot
-let api: Record<'describe' | 'setModel' | 'updateAgent' | 'removeAgent' | 'newConversation' | 'interrupt' | 'openFolder' | 'setBypass',ReturnType<typeof vi.fn>>
+let api: Record<'describe' | 'setModel' | 'updateAgent' | 'removeAgent' | 'newConversation' | 'interrupt' | 'openFolder' | 'setBypass' | 'sleep' | 'sleepBlock',ReturnType<typeof vi.fn>>
 
 // 엔진처럼 — 바꾼 값은 다음 스냅샷에 들어 있다(엔진은 에이전트 바뀜 이벤트를 보내지 않는다)
 const patch = (id: string, p: Partial<AgentView>) => {
@@ -57,6 +57,8 @@ beforeEach(() => {
     interrupt: vi.fn(async (_id: string) => {}),
     openFolder: vi.fn(async (_path: string) => {}),
     setBypass: vi.fn(async (_id: string, _on: boolean) => {}),
+    sleep: vi.fn(async (_id: string) => true),
+    sleepBlock: vi.fn(async (_id: string): Promise<string | null> => null),
   }
   ;(window as any).dure = { ...api, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
 })
@@ -391,6 +393,56 @@ describe('AgentMenu', () => {
     await act(async () => { fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: '지우기' })) })
     await settle()
     expect(within(screen.getByRole('alertdialog')).getByText('에이전트를 찾을 수 없습니다: w')).toBeTruthy()
+  })
+
+  describe('지금 재우기', () => {
+    it('새 대화 바로 아래에 있고, 막힌 까닭이 없으면 누르는 즉시 sleep 한 번 · 메뉴는 닫힌다', async () => {
+      await renderPanel()
+      openMenu()
+      await settle()
+      expect(api.sleepBlock).toHaveBeenCalledWith('w')
+      const items = screen.getAllByRole('menuitem').map(el => el.textContent)
+      expect(items.indexOf('지금 재우기')).toBe(items.indexOf('새 대화') + 1)
+      const sleep = item('지금 재우기') as HTMLButtonElement
+      expect(sleep.disabled).toBe(false)
+      fireEvent.click(sleep)
+      expect(api.sleep).toHaveBeenCalledTimes(1)
+      expect(api.sleep).toHaveBeenCalledWith('w')
+      expect(screen.queryByRole('alertdialog')).toBeNull()
+      await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    })
+
+    it('묻는 중에는 꺼 둔다 — 답이 오면 켜진다', async () => {
+      let answer: (v: null) => void = () => {}
+      api.sleepBlock.mockImplementationOnce(() => new Promise(r => { answer = r as typeof answer }))
+      await renderPanel()
+      openMenu()
+      await act(async () => {})
+      expect((item('지금 재우기') as HTMLButtonElement).disabled).toBe(true)
+      await act(async () => { answer(null) })
+      expect((item('지금 재우기') as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    it('까닭이 있으면 꺼지고 title 이 그 문구 · 눌러도 sleep 을 부르지 않는다', async () => {
+      api.sleepBlock.mockResolvedValue('subagents')
+      await renderPanel()
+      openMenu()
+      await settle()
+      const sleep = item('지금 재우기') as HTMLButtonElement
+      expect(sleep.disabled).toBe(true)
+      expect(sleep.title).toBe('서브에이전트가 일하는 중이에요')
+      fireEvent.click(sleep)
+      expect(api.sleep).not.toHaveBeenCalled()
+    })
+
+    it("'no-session'(재울 게 없음)이면 항목이 없다", async () => {
+      api.sleepBlock.mockResolvedValue('no-session')
+      await renderPanel()
+      openMenu()
+      await settle()
+      expect(screen.queryByRole('menuitem', { name: '지금 재우기' })).toBeNull()
+      expect(screen.getByRole('menuitem', { name: '새 대화' })).toBeTruthy()
+    })
   })
 
   it('새 대화는 확인을 거쳐 newConversation', async () => {

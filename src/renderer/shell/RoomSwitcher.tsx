@@ -1,11 +1,11 @@
 import {
   useCallback, useMemo, useEffect, useId, useRef, useState, type CSSProperties, type FocusEvent, type FormEvent, type KeyboardEvent,
 } from 'react'
-import { Check, ChevronDown, Ellipsis, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Check, ChevronDown, Ellipsis, Moon, Pencil, Plus, Trash2 } from 'lucide-react'
 import type { Room, RoomId } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { roomTotal, todoCounts } from '../state/attention'
-import { errorMessage, josa } from '../lib/words'
+import { errorMessage, josa, SLEEP_ROOM } from '../lib/words'
 import { moveMenuFocus, useDismiss } from '../lib/popover'
 import { MotionDiv, Presence } from '../lib/presence'
 import { MOTION } from '../lib/motion'
@@ -47,6 +47,8 @@ export function RoomSwitcher() {
   const [editing, setEditing] = useState<Editing>(null)
   const [menu, setMenu] = useState<{ id: RoomId; at: CSSProperties } | null>(null)
   const [ask, setAsk] = useState<Ask | null>(null)
+  /** 열린 방 메뉴에서 지금 재울 수 있는 에이전트 수 — null 은 아직 묻는 중 */
+  const [sleepable, setSleepable] = useState<number | null>(null)
   const wrap = useRef<HTMLSpanElement>(null)
   const button = useRef<HTMLButtonElement>(null)
   const list = useRef<HTMLDivElement>(null)
@@ -89,7 +91,7 @@ export function RoomSwitcher() {
   const menuId = menu?.id ?? null
   useEffect(() => {
     if (menuId === null) return
-    roomMenu.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+    roomMenu.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus()
     const shut = () => setMenu(null)
     const onScroll = (e: Event) => {
       if (!roomMenu.current?.contains(e.target as Node)) shut()
@@ -100,6 +102,18 @@ export function RoomSwitcher() {
       window.removeEventListener('scroll', onScroll, true)
       window.removeEventListener('resize', shut)
     }
+  }, [menuId])
+
+  // 방 메뉴를 열 때마다 재울 수 있는 수를 묻는다 — 답이 오기 전엔 항목을 꺼 둔다
+  useEffect(() => {
+    if (menuId === null) return
+    let stale = false
+    setSleepable(null)
+    Promise.resolve()
+      .then(() => window.dure.sleepableIn(menuId))
+      .then(n => { if (!stale) setSleepable(n) })
+      .catch(() => { if (!stale) setSleepable(0) })
+    return () => { stale = true }
   }, [menuId])
 
   const closeToButton = () => {
@@ -126,6 +140,15 @@ export function RoomSwitcher() {
   const startRename = (id: RoomId) => {
     setMenu(null)
     setEditing({ kind: 'rename', id })
+  }
+
+  const sleepRoom = (id: RoomId) => {
+    setMenu(null)
+    moreButton(id)?.focus()
+    window.dure
+      .sleepRoom(id)
+      .then(() => getStore().refresh())
+      .catch(e => console.error('두레: 방의 에이전트를 재우지 못했어요', e))
   }
 
   const rename = async (room: Room, name: string) => {
@@ -275,6 +298,16 @@ export function RoomSwitcher() {
                           aria-label={`${r.name} 메뉴`}
                           onKeyDown={onMenuKey}
                         >
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="mi"
+                            disabled={!sleepable}
+                            onClick={() => sleepRoom(r.id)}
+                          >
+                            <Moon className="i" aria-hidden="true" />
+                            {SLEEP_ROOM}
+                          </button>
                           <button type="button" role="menuitem" className="mi" onClick={() => startRename(r.id)}>
                             <Pencil className="i" aria-hidden="true" />
                             이름 바꾸기

@@ -11,7 +11,7 @@ const agent = (id: string, roomId: string, name: string, pos = { x: 64, y: 64 })
 })
 
 let snapshot: Snapshot
-let api: Record<'addRoom' | 'renameRoom' | 'removeRoom', ReturnType<typeof vi.fn>>
+let api: Record<'addRoom' | 'renameRoom' | 'removeRoom' | 'sleepRoom' | 'sleepableIn', ReturnType<typeof vi.fn>>
 
 beforeEach(() => {
   vi.resetModules()
@@ -42,6 +42,8 @@ beforeEach(() => {
         agents: snapshot.agents.filter(a => a.roomId !== id),
       }
     }),
+    sleepRoom: vi.fn(async (_id: string) => 2),
+    sleepableIn: vi.fn(async (_id: string) => 2),
   }
   ;(window as any).dure = {
     ...api, snapshot: async () => snapshot, history: async () => [], on: () => () => {}, updateAgent: async () => ({}),
@@ -175,6 +177,33 @@ describe('RoomSwitcher — 새 방', () => {
 })
 
 describe('RoomSwitcher — 방마다 메뉴', () => {
+  it('이름 바꾸기 위에 모두 재우기 — 메뉴를 열면 sleepableIn 을 묻고, 누르면 sleepRoom 한 번', async () => {
+    await renderApp()
+    fireEvent.click(within(openList()).getByRole('button', { name: '여름 캠페인 메뉴' }))
+    const menu = screen.getByRole('menu', { name: '여름 캠페인 메뉴' })
+    await settle()
+    expect(api.sleepableIn).toHaveBeenCalledWith('r1')
+    const items = within(menu).getAllByRole('menuitem').map(el => el.textContent)
+    expect(items.indexOf('쉬는 에이전트 모두 재우기')).toBe(items.indexOf('이름 바꾸기') - 1)
+    const btn = within(menu).getByRole('menuitem', { name: '쉬는 에이전트 모두 재우기' }) as HTMLButtonElement
+    expect(btn.disabled).toBe(false)
+    await act(async () => { fireEvent.click(btn) })
+    expect(api.sleepRoom).toHaveBeenCalledTimes(1)
+    expect(api.sleepRoom).toHaveBeenCalledWith('r1')
+  })
+
+  it('재울 수 있는 게 0 이면 항목이 꺼져 있고 눌러도 부르지 않는다', async () => {
+    api.sleepableIn.mockResolvedValue(0)
+    await renderApp()
+    fireEvent.click(within(openList()).getByRole('button', { name: '빈 방 메뉴' }))
+    const menu = screen.getByRole('menu', { name: '빈 방 메뉴' })
+    await settle()
+    const btn = within(menu).getByRole('menuitem', { name: '쉬는 에이전트 모두 재우기' }) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    fireEvent.click(btn)
+    expect(api.sleepRoom).not.toHaveBeenCalled()
+  })
+
   const openRoomMenu = (list: HTMLElement, name: string) => {
     fireEvent.click(within(list).getByRole('button', { name: `${name} 메뉴` }))
     return screen.getByRole('menu', { name: `${name} 메뉴` })
