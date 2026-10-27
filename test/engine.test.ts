@@ -4856,18 +4856,30 @@ async function talk(e: Engine, id: string, t = '안녕'): Promise<void> {
   await e.sendUser(id, text(t));
   await done;
 }
+/**
+ * 그 에이전트의 마지막 result 를 받은 시각(부른 뒤부터) — 엔진이 그 줄을 활동으로 적는 같은 동기 흐름에서 잰다.
+ * 기다림이 끝난 뒤 Date.now() 를 재면 그 사이 틈(부하에서 수십 ms)만큼 하한 검사가 헐거워지거나 깨진다
+ */
+function resultClock(e: Engine, id: string): () => number {
+  let at = NaN;
+  e.on('agent-event', (x: AgentEvent) => {
+    if (x.agentId === id && x.event.kind === 'result') at = Date.now();
+  });
+  return () => at;
+}
 
 test('재우기: 저절로 — 설정 시간만큼 쉬면 claude 를 내린다 · 상태는 그대로 idle, 잠듦 사건', async () => {
   const e = await start({}, false, SLEEPY);
   const { a, b } = setup(e);
   e.setSleepAfter(15); // 300ms
+  const lastResult = resultClock(e, a.id);
   await talk(e, a.id);
   const pid = spawnsOf('A')[0].pid;
-  const t0 = Date.now();
   const slept = asleepOf(e, a.id);
   e.setSelected(b.id);
   expect(await slept).toEqual({ agentId: a.id, asleep: true, waking: false });
-  expect(Date.now() - t0).toBeGreaterThanOrEqual(250); // 마지막 활동(차례 끝)에서 300ms 남짓
+  // 마지막 활동(차례 끝)에서 300ms 가 지나기 전엔 재우지 않는다 — 차례 끝을 그 자리에서 쟀으니 여유는 시계 눈금만큼
+  expect(Date.now() - lastResult()).toBeGreaterThanOrEqual(290);
   await until('A 가 꺼짐', () => !isAlive(pid));
   expect(e.status(a.id)).toBe('idle');
   expect(e.sleepState(a.id)).toEqual({ asleep: true, waking: false });
@@ -4933,6 +4945,29 @@ test('깨우기: effort 를 고른 에이전트도 — /effort 뒤에 기다리�
   expect(e.sleepState(a.id)).toEqual({ asleep: false, waking: false });
 });
 
+test('깨우기: effort 를 고른 에이전트를 전달 메시지가 깨우면 — /effort 차례 동안에도 깨우는 중, 메시지를 받는 차례의 init 에 깨어남', async () => {
+  const e = await start({}, false, SLEEPY);
+  e.setSleepAfter(0);
+  const { a, b } = setup(e);
+  e.updateAgent(a.id, { auto: true });
+  await e.setEffort(a.id, 'high');
+  await talk(e, a.id, '처음');
+  expect(await e.sleep(a.id)).toBe(true);
+  const got = sleepEvents(e, a.id);
+  const aDone = resultOf(e, a.id);
+  const bDone = resultOf(e, b.id);
+  await e.sendUser(b.id, text('SEND A: 일해'));
+  // 띄운 세션이 /effort 차례 중이라 메시지는 queued 로 남았다가 그 차례가 끝나면 나간다
+  expect(await resultText(bDone)).toBe('A 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+  expect(await resultText(aDone)).toBe('받음: [두레 메시지 — 보낸 쪽: B(웹 화면)]\n일해');
+  // 띄운 순간부터 깨우는 중 — /effort 의 init 에서 '쉬는 중'으로 내려가지 않고, 메시지를 받는 차례의 init 에서 깨어남
+  expect(got).toEqual([
+    { agentId: a.id, asleep: false, waking: true },
+    { agentId: a.id, asleep: false, waking: false },
+  ]);
+  expect(e.messages({ to: a.id })).toMatchObject([{ text: '일해', state: 'delivered' }]);
+});
+
 test('깨우기: 고르기로만 깨우면(줄 없음) 깨우는 중이 아니다 — 쉬는 중', async () => {
   const e = await start({}, false, SLEEPY);
   e.setSleepAfter(0);
@@ -4986,6 +5021,7 @@ test('재우기: 뒤에서 명령이 돌면 재우지 않는다 — 끝나 그 �
   const e = await start({}, false, SLEEPY);
   const { a, b } = setup(e);
   e.setSleepAfter(15);
+  const lastResult = resultClock(e, a.id);
   const started = resultTextIs(e, a.id, 'BG STARTED');
   await e.sendUser(a.id, text('BGRUN 1500'));
   await started;
@@ -4997,10 +5033,40 @@ test('재우기: 뒤에서 명령이 돌면 재우지 않는다 — 끝나 그 �
   expect(isAlive(spawnsOf('A')[0].pid)).toBe(true);
   expect(got).toEqual([]);
   await bgDone;
-  const t0 = Date.now();
   await asleepOf(e, a.id);
-  expect(Date.now() - t0).toBeGreaterThanOrEqual(250);
+  expect(Date.now() - lastResult()).toBeGreaterThanOrEqual(290); // 'BG DONE' 차례 끝에서 300ms
   expect(spawnsOf('A')).toHaveLength(1);
+});
+
+test('재우기: 뒤에서 도는 일 목록이 바뀐 줄도 활동이다 — 목록이 비는 그 순간 재우지 않고 그 줄부터 잰다', async () => {
+  // 끝 줄은 목록이 비는 줄 하나뿐(끝 알림·스스로 시작한 차례 없이) — 그 줄만으로 활동이 되는지 본다
+  const e = await start({ FAKE_BGRUN_LIST_ONLY: '1' }, false, SLEEPY);
+  const { a } = setup(e);
+  e.setSleepAfter(30); // 600ms
+  const lastResult = resultClock(e, a.id);
+  const started = resultTextIs(e, a.id, 'BG STARTED');
+  await e.sendUser(a.id, text('BGRUN 800'));
+  await started;
+  expect(e.sleepBlock(a.id)).toBe('background');
+  await until('A 가 잠듦', () => e.sleepBlock(a.id) === 'no-session', 4000);
+  // 목록이 빈 줄(차례 끝 + 800ms)을 활동으로 치면 그로부터 600ms(차례 끝 + 1400ms). 치지 않으면 비자마자(차례 끝 + 800ms 남짓) 잠든다
+  expect(Date.now() - lastResult()).toBeGreaterThanOrEqual(1100);
+  expect(spawnsOf('A')).toHaveLength(1);
+});
+
+test('재우기: 사용량 묻기 답은 활동이 아니다 — 일하는 에이전트가 있어 쉬는 에이전트에 주기마다 물어도 그 에이전트는 잠든다', async () => {
+  // 주기 40ms — 일하는 에이전트가 있는 동안 떠 있는 첫 세션(먼저 띄운 A)에 get_usage 를 묻는다
+  const e = await start({}, { startDelayMs: 60_000, pollMs: 40, minAgeMs: 60_000, timeoutMs: 2000 }, SLEEPY);
+  const { a, b } = setup(e);
+  e.setSleepAfter(15); // 300ms
+  await talk(e, a.id);
+  const aPid = spawnsOf('A')[0].pid;
+  await slowTurn(e, b.id);
+  await asleepOf(e, a.id);
+  const askedA = readLog().filter((x) => x.type === 'control_request' && x.request?.subtype === 'get_usage' && x.pid === aPid);
+  expect(askedA.length).toBeGreaterThanOrEqual(2); // 쉬는 동안 A 에게 물었다 — 그래도 잠들었다
+  expect(spawnsOf('A')).toHaveLength(1);
+  expect(e.status(b.id)).toBe('working');
 });
 
 test('재우기: sleepBlock — 일하는 중·답을 기다림·기다리는 입력·서브에이전트·세션 없음·쉬는 세션', async () => {
@@ -5058,14 +5124,27 @@ test('재우기: 손으로 재운 고른 에이전트는 같은 고르기로 다
   e.setSleepAfter(0);
   const { a, b } = setup(e);
   e.setSelected(a.id);
-  await until('A 가 뜸', () => spawnsOf('A').length === 1);
+  await talk(e, a.id);
   expect(await e.sleep(a.id)).toBe(true);
-  e.setSelected(a.id); // 고른 카드를 다시 눌러도
-  await sleep(150);
-  expect(spawnsOf('A')).toHaveLength(1);
+  e.setSelected(a.id); // 고른 카드를 다시 눌러도 — 미리 띄우기는 그 자리에서(동기로) 띄우니 곧바로 본다
+  expect(e.sleepBlock(a.id)).toBe('no-session');
+  expect(e.sleepState(a.id).asleep).toBe(true);
   e.setSelected(b.id);
   e.setSelected(a.id);
   await until('A 가 다시 뜸', () => spawnsOf('A').length === 2);
+});
+
+test('재우기: 손으로 재운 고른 에이전트도 새 대화를 시작하면 미리 띄운다 — 새 대화는 손으로 재운 표를 푼다', async () => {
+  const e = await start({}, false, SLEEPY);
+  e.setSleepAfter(0);
+  const { a } = setup(e);
+  e.setSelected(a.id);
+  await talk(e, a.id);
+  expect(await e.sleep(a.id)).toBe(true);
+  await e.newConversation(a.id);
+  expect(e.sleepBlock(a.id)).not.toBe('no-session'); // 새 대화로 미리 띄운 세션
+  await until('A 가 새 대화로 뜸', () => spawnsOf('A').length === 2);
+  expect(flagValue(lastSpawnOf('A').argv, '--session-id')).toBe(agentOf(e, a.id).sessionId);
 });
 
 test('재우기: 방 모두 — 쉬는 에이전트만 재우고 일하는 에이전트는 그대로', async () => {

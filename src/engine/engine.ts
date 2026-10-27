@@ -82,7 +82,7 @@ export interface EngineOptions {
 //  'model-now'   { agentId; modelNow }   (차례의 init 이 알려 준 모델 id 가 바뀔 때 · setModel 은 null 로 비운다)
 //  'subagents'   { agentId; running }   (도는 서브에이전트 목록이 바뀔 때마다 — 부모의 Agent tool_use id, 시작 순. 세션이 끝나면 빈 목록)
 //  'agent-added' { agent; by }   (에이전트가 create_agent 로 만든 에이전트를 사람이 승인해 더했을 때 — by = 만든 에이전트. 화면에서 더한 것엔 없다)
-//  'sleep'       { agentId; asleep; waking }   (sleepState() 가 바뀔 때만 — 상태를 알리는 자리(emitStatus)·깨운 세션의 첫 init 에서 견준다)
+//  'sleep'       { agentId; asleep; waking }   (sleepState() 가 바뀔 때만 — 상태를 알리는 자리(emitStatus)·깨운 세션의 첫 차례의 init 에서 견준다)
 //  'usage'       PlanUsage | null   (플랜 사용량을 받을 때마다 — 모르는 모양·한도 없음이면 null)
 //  'engine-error' { agentId: string | null; message: string }  (프로세스 이벤트 처리·듣는 쪽에서 난 오류 — 앱을 죽이지 않고 알린다)
 export interface Engine extends EventEmitter {
@@ -134,7 +134,8 @@ export interface Engine extends EventEmitter {
   setSleepAfter(min: number): void;
   /**
    * asleep = 대화를 시작한 적 있는데 지금 살아 있는 claude 가 없다(재워서든 앱을 막 켜서든 — 오류로 멈춤·지우는 중은 아니다) ·
-   * waking = 잠든 에이전트를 띄운 세션이 아직 첫 init 전인데 일하는 중(줄을 썼거나 기다리는 입력이 있다)
+   * waking = 잠든 에이전트를 띄운 세션이 아직 첫 차례의 init 전인데(엔진이 먼저 쓴 /effort 차례는 치지 않는다) 일거리가 있다
+   * (줄을 썼거나 기다리는 입력·전달 대기 메시지가 있다)
    */
   sleepState(id: AgentId): { asleep: boolean; waking: boolean };
   /** 지금 재울 수 없는 까닭(앞의 것부터 하나) — 살아 있는 세션이 없으면 'no-session', 재울 수 있으면 null. 메뉴를 열 때 묻는다 */
@@ -449,12 +450,13 @@ class EngineImpl extends EventEmitter implements Engine {
   // 재우기 — 한동안 쉰 세션을 끈다(메모리를 비운다). 말을 걸면 ensure 가 --resume 으로 깨운다(앱을 다시 켠 뒤 처음 말을 걸 때와 같은 길)
   private sleepMin: number; // 재우기까지의 시간(분) — 0 = 끔
   private sweepTimer: NodeJS.Timeout | null = null; // 살아 있는 세션 훑기(start 에서 켜고 shutdown 에서 끈다)
-  // 마지막 활동 — 띄울 때 · 그 세션이 보낸 줄(어떤 사건이든) · 그 세션에 쓴 줄 · 고른 에이전트에서 다른 에이전트로 옮긴 순간
+  // 마지막 활동 — 띄울 때 · 그 세션이 보낸 줄(제어 응답 말고 어떤 사건이든) · 그 세션에 쓴 줄(/effort 포함) · 고른 에이전트에서 다른 에이전트로 옮긴 순간.
+  // 엔진이 제 일로 보내는 제어 요청(사용량·설정 읽기·권한 모드)과 그 답은 치지 않는다
   private lastActive = new WeakMap<ClaudeSession, number>();
   // 손으로 재운 에이전트 — 렌더러는 고른 카드를 다시 눌러도 setSelected 를 다시 부르니, 미리 띄우기가 곧바로 깨우지 않게 건너뛴다.
-  // 깨우면(ensure 가 새로 띄움) · 다른 에이전트를 골랐다가 돌아오면 풀린다(메모리만)
+  // 깨우면(ensure 가 새로 띄움) · 다른 에이전트를 골랐다가 돌아오면 · 새 대화를 시작하면 풀린다(메모리만)
   private handSlept = new Set<AgentId>();
-  private waking = new WeakSet<ClaudeSession>(); // 잠든 에이전트를 띄운 세션 — 첫 init 에서 빠진다(그 전에 일하는 중이면 깨우는 중)
+  private waking = new WeakSet<ClaudeSession>(); // 잠든 에이전트를 띄운 세션 — 첫 차례의 init 에서 빠진다(/effort 차례 것 말고. 그 전에 일거리가 있으면 깨우는 중)
   private shownSleep = new Map<AgentId, { asleep: boolean; waking: boolean }>(); // 마지막으로 알린 잠듦 — 바뀔 때만 'sleep'
   private seen = new WeakMap<ClaudeSession, SeenToolUses>(); // 그 세션 스트림에서 본 하는 일 — 승인·두레 도구를 부른 쪽을 가른다(세션이 끝나면 비운다)
   // 결과를 기다리는 고친 일(EDIT_TOOLS) — tool_use id → 입력으로 만들어 기록용으로 줄인 바뀐 줄(못 만들면 null). 결과가 오면 빼고, 세션이 끝나면 비운다.
@@ -531,6 +533,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.router.on('message', (m: RelayMessage) => {
       this.guard(null, () => this.emit('message', m));
       this.guard(m.to, () => this.noteHoldMessage(m));
+      this.guard(m.to, () => this.emitSleep(m.to)); // 깨운 세션의 /effort 차례 중에 queued 로 남은 메시지도 깨우는 중
     });
     this.router.on('held', (h: { roomId: RoomId }) => this.guard(null, () => this.emit('held', h)));
   }
@@ -894,9 +897,16 @@ class EngineImpl extends EventEmitter implements Engine {
     const s = this.sessions.get(id);
     // 오류로 멈춘 에이전트는 잠듦이 아니다 — 엔진이 끈 세션(재우기·미리 띄운 세션 끄기)·막 켠 앱만. 새 에이전트는 이어 갈 대화가 없다
     if (!s) return { asleep: !!this.store.agent(id)?.started && !this.errors.has(id) && !this.removing.has(id), waking: false };
-    // 깨우는 중 = 그 세션이 아직 첫 init 전인데 일하는 중 — 쓴 줄을 기다리거나, /effort·계획 모드 답 뒤에 내 입력이 기다린다
-    // (엔진 상태로 본다: effort 를 고른 에이전트는 /effort 를 먼저 몰래 써서 세션 상태가 쉬는 채다). 고르기로만 깨우면 쉬는 중
-    return { asleep: false, waking: this.waking.has(s) && this.status(id) === 'working' };
+    // 깨우는 중 = 그 세션이 아직 첫 차례의 init 전인데 일거리가 있다 — 쓴 줄을 기다리거나(엔진 상태 working), /effort·계획 모드 답 뒤에
+    // 내 입력이나 전달 메시지가 기다린다(effort 를 고른 에이전트는 /effort 를 먼저 몰래 써서 세션 상태가 쉬는 채고, 메시지는 그 차례가 끝날
+    // 때까지 queued 다). 붙잡힌 메시지는 사람이 고를 때까지 안 나가니 치지 않는다. 고르기로만 깨우면 쉬는 중
+    return { asleep: false, waking: this.waking.has(s) && (this.status(id) === 'working' || this.hasWaitingWork(id)) };
+  }
+
+  /** 띄운 세션에 곧 쓸 것 — 기다리는 내 입력, 또는 붙잡히지 않은 전달 대기(queued) 메시지 */
+  private hasWaitingWork(id: AgentId): boolean {
+    if ((this.held.get(id)?.length ?? 0) > 0) return true;
+    return !this.holds.has(id) && this.log.list({ to: id, states: ['queued'] }).length > 0;
   }
 
   /**
@@ -1064,6 +1074,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     // 새 대화는 계획 모드를 끈 채로 — 끝내는 세션의 모드는 세션과 함께 사라진다(세션 끝 정리가 알린다)
     this.wantPlan(id, false);
+    this.handSlept.delete(id); // 사람이 새 대화를 골랐다 — 손으로 재운 표를 풀어 고른 에이전트면 새 대화로 미리 띄운다
     const ending = this.endSession(id);
     this.guard(id, () => this.record(id, { kind: 'boundary' }));
     this.store.updateAgent(id, { sessionId: crypto.randomUUID(), started: false });
@@ -1675,9 +1686,11 @@ class EngineImpl extends EventEmitter implements Engine {
         // 보낸 줄을 읽었나 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
         const answered = this.noteRead(s, ev);
         if (this.sessions.get(id) !== s) return;
-        this.lastActive.set(s, Date.now()); // 그 세션이 보낸 줄은 무엇이든 활동이다 — 뒤에서 도는 일 목록도
-        // 깨운 세션의 첫 init — 깨어났다(/effort 차례의 것이어도: claude 가 떴다)
-        if (ev.kind === 'init' && this.waking.delete(s)) this.emitSleep(id);
+        // 그 세션이 보낸 줄은 무엇이든 활동이다 — 뒤에서 도는 일 목록도. 제어 응답만 뺀다: 엔진이 제 일로 물은 것(사용량·설정·권한 모드)의
+        // 답이다 — 사용량은 일하는 에이전트가 있는 동안 떠 있는 첫 세션에 주기마다 물어, 치면 그 쉬는 에이전트가 영영 잠들지 않는다
+        if (ev.kind !== 'control-response') this.lastActive.set(s, Date.now());
+        // 깨운 세션의 첫 차례의 init — 깨어났다. 엔진이 먼저 쓴 /effort 차례의 init 은 아니다: 그 뒤에 기다리는 입력·메시지가 남아 있다
+        if (ev.kind === 'init' && !this.effortTurn.has(s) && this.waking.delete(s)) this.emitSleep(id);
         // 뒤에서 도는 일 목록 — 세션마다 마지막 것만 든다(재우기가 비어 있을 때만 재운다). 기록·화면엔 안 보낸다
         if (ev.kind === 'background-tasks') {
           this.bgTasks.set(s, ev.taskIds);
@@ -1851,8 +1864,7 @@ class EngineImpl extends EventEmitter implements Engine {
       await this.endSession(id); // 기다리던 입력·queued 메시지는 그대로 — /effort 는 보낸 줄로 치지 않아 되살릴 것이 없다
       if (this.closed || this.removing.has(id) || !this.store.agent(id)) return;
       // 붙잡힌 메시지는 기다리는 것으로 치지 않는다 — 이어서 보내기를 고르면 그때 띄운다
-      const waiting =
-        (this.held.get(id)?.length ?? 0) > 0 || (!this.holds.has(id) && this.log.list({ to: id, states: ['queued'] }).length > 0);
+      const waiting = this.hasWaitingWork(id);
       // 그새 누가 띄웠으면 그 세션을 쓴다. 상태는 보내고 나서 한 번만 알린다(다시 띄우는 사이 대기로 깜박이지 않게)
       if (!this.sessions.has(id) && waiting) this.ensure(id, { quiet: true });
       else this.prewarm(id); // 기다리는 것이 없으면 고른 에이전트만 다시 미리 띄운다

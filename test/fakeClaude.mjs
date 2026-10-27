@@ -54,6 +54,7 @@
 //   FAKE_SELF_TURN_MS=<ms> 끝 알림 뒤 스스로 시작한 차례를 그만큼 늦게 연다(그사이 온 사용자 줄의 차례가 먼저)
 //   FAKE_STATUS_AFTER_RESULT=1  모든 result 뒤 차례 밖에 system/status requesting · null(부모 표시 없음)
 //   FAKE_PRE_INIT_SYSTEM=1 사용자 줄의 init 앞에 서브에이전트·백그라운드 system 줄(background_tasks_changed · task_progress — 부모 줄이 아니다)
+//   FAKE_BGRUN_LIST_ONLY=1 BGRUN 의 끝 줄을 background_tasks_changed [] 하나만 낸다(끝 알림·스스로 시작한 차례 없이 — 목록 줄만으로 활동이 되는지 보려고)
 //   interrupt(제어 요청)   도는 서브에이전트마다 task_updated {status:'killed'} · task_notification {status:'stopped'} 를 내고
 //                          스스로 시작한 차례는 내지 않는다(probe14 C). 진행 중인 차례는 오류 result 로 끝낸다
 //   FAKE_INTERRUPT_SPARES_TASKS=1  interrupt 가 진행 중인 차례만 끝내고 서브에이전트는 그대로 둔다 — 앞에서 돌던 서브에이전트의
@@ -485,6 +486,7 @@ async function turn(text, pending = []) {
     // 차례 밖에서 ms 뒤 — 끝 줄 셋(probe18) 뒤 Claude 가 스스로 차례를 연다
     void (async () => {
       await sleep(ms);
+      if (process.env.FAKE_BGRUN_LIST_ONLY === '1') return system('background_tasks_changed', { tasks: [] });
       await system('task_updated', { task_id: taskId, patch: { status: 'completed' } });
       await system('task_notification', {
         task_id: taskId, tool_use_id: toolUseId, status: 'completed', summary: 'Background command "sleep" completed (exit code 0)',
