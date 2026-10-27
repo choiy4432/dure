@@ -20,6 +20,15 @@ export interface NotifyPrefs {
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type EffortLevel = (typeof EFFORT_LEVELS)[number];
 
+/** 쉬는 에이전트 재우기까지의 시간(분) — 0 = 끔. settings.json 의 sleepAfterMin, 없거나 이 밖의 값이면 SLEEP_DEFAULT_MIN */
+export const SLEEP_CHOICES = [0, 15, 30, 60, 180] as const;
+export const SLEEP_DEFAULT_MIN = 30;
+/**
+ * 지금 재울 수 없는 까닭(앞의 것부터 하나) — working 일하는 중 · asking 사람 답을 기다림(승인·질문·계획·에이전트 만들기) ·
+ * waiting-input 기다리는 입력·붙잡기 · subagents 서브에이전트가 일하는 중 · background 뒤에서 명령이 도는 중 · unread 보낸 줄을 아직 안 읽음
+ */
+export type SleepBlock = 'working' | 'asking' | 'waiting-input' | 'subagents' | 'background' | 'unread';
+
 export interface UsageWindow {
   key: 'session' | 'week' | `model:${string}`;
   label: string;
@@ -219,6 +228,11 @@ export interface EngineEventMap {
   subagents: { agentId: AgentId; running: string[] };
   /** 엔진이 에이전트를 만들었다(create_agent 를 사람이 승인) — by = 만든 에이전트. 사람이 화면에서 더한 것엔 오지 않는다 */
   'agent-added': { agent: Agent; by: AgentId };
+  /**
+   * 잠듦(시작한 적 있는데 살아 있는 claude 가 없다 — 오류·지우는 중 제외) · 깨우는 중(잠든 에이전트를 띄운 세션이 첫 init 전에 일하는 중).
+   * 둘 중 하나라도 바뀔 때만. 상태(status)와 따로 — 잠든 에이전트의 상태는 그대로 idle
+   */
+  sleep: { agentId: AgentId; asleep: boolean; waking: boolean };
 }
 
 export interface AgentDescription {

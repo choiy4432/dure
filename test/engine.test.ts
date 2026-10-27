@@ -4834,3 +4834,314 @@ test('alwaysAllow: 되돌리면 다음 요청부터 다시 묻는다 · 없는 �
   e.answerRequest(r.id, { type: 'allow' });
   await asked2;
 });
+
+// ── 재우기 — 한동안 쉰 에이전트의 claude 를 내리고, 말을 걸면 --resume 으로 깨운다 ──
+/** '1분' = 20ms(15분 = 300ms, 기본 30분 = 600ms), 훑기도 20ms 마다 */
+const SLEEPY: Partial<EngineOptions> = { sleepMinuteMs: 20, sleepSweepMs: 20 };
+interface SleepEvent {
+  agentId: string;
+  asleep: boolean;
+  waking: boolean;
+}
+/** 그 에이전트의 'sleep' 사건을 모은다(부른 뒤부터) */
+function sleepEvents(e: Engine, id: string): SleepEvent[] {
+  const got: SleepEvent[] = [];
+  e.on('sleep', (x: SleepEvent) => x.agentId === id && got.push(x));
+  return got;
+}
+const asleepOf = (e: Engine, id: string, ms = 3000) => waitFor<SleepEvent>(e, 'sleep', (x) => x.agentId === id && x.asleep, ms);
+/** 한 차례 주고받는다 — 시작한 에이전트의 쉬는 세션이 남는다 */
+async function talk(e: Engine, id: string, t = '안녕'): Promise<void> {
+  const done = resultOf(e, id);
+  await e.sendUser(id, text(t));
+  await done;
+}
+
+test('재우기: 저절로 — 설정 시간만큼 쉬면 claude 를 내린다 · 상태는 그대로 idle, 잠듦 사건', async () => {
+  const e = await start({}, false, SLEEPY);
+  const { a, b } = setup(e);
+  e.setSleepAfter(15); // 300ms
+  await talk(e, a.id);
+  const pid = spawnsOf('A')[0].pid;
+  const t0 = Date.now();
+  const slept = asleepOf(e, a.id);
+  e.setSelected(b.id);
+  expect(await slept).toEqual({ agentId: a.id, asleep: true, waking: false });
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(250); // 마지막 활동(차례 끝)에서 300ms 남짓
+  await until('A 가 꺼짐', () => !isAlive(pid));
+  expect(e.status(a.id)).toBe('idle');
+  expect(e.sleepState(a.id)).toEqual({ asleep: true, waking: false });
+  expect(e.sleepBlock(a.id)).toBe('no-session');
+  expect(spawnsOf('A')).toHaveLength(1);
+});
+
+test('재우기: 고른 에이전트는 저절로 재우지 않는다 — 다른 에이전트로 옮긴 순간부터 잰다', async () => {
+  const e = await start({}, false, SLEEPY);
+  const { a, b } = setup(e);
+  e.setSleepAfter(15);
+  e.setSelected(a.id);
+  await talk(e, a.id);
+  const got = sleepEvents(e, a.id);
+  await sleep(600);
+  expect(isAlive(spawnsOf('A')[0].pid)).toBe(true);
+  expect(got).toEqual([]);
+  const t0 = Date.now();
+  const slept = asleepOf(e, a.id);
+  e.setSelected(b.id); // 고르지 않게 된 때가 마지막 활동 — 이미 600ms 쉬었어도 곧바로 재우지 않는다
+  await slept;
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(250);
+});
+
+test('깨우기: 재운 뒤 말을 걸면 --resume 으로 이어서 — 깨우는 중 → 깨어남, 그 사이 다시 잠듦으로 가지 않는다', async () => {
+  const e = await start({}, false, SLEEPY);
+  const { a, b } = setup(e);
+  e.setSleepAfter(15);
+  await talk(e, a.id, '처음');
+  const slept = asleepOf(e, a.id);
+  e.setSelected(b.id);
+  await slept;
+  const got = sleepEvents(e, a.id);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('다시'));
+  expect(await resultText(done)).toBe('받음: 다시');
+  const seen = [...got]; // 차례가 끝난 그 자리까지(다시 300ms 쉬면 또 잠든다)
+  expect(spawnsOf('A')).toHaveLength(2);
+  expect(flagValue(spawnsOf('A')[1].argv, '--resume')).toBe(a.sessionId);
+  expect(spawnsOf('A')[1].argv).not.toContain('--session-id');
+  // 띄운 순간(줄을 쓰기 전)엔 깨우는 중이 아닐 수 있다 — 줄을 쓰면 깨우는 중, 첫 init 에 깨어남
+  const wakingAt = seen.findIndex((x) => x.waking);
+  expect(wakingAt).toBeGreaterThanOrEqual(0);
+  expect(seen.slice(wakingAt + 1)).toContainEqual({ agentId: a.id, asleep: false, waking: false });
+  expect(seen.every((x) => !x.asleep)).toBe(true);
+  expect(e.sleepState(a.id)).toEqual({ asleep: false, waking: false });
+});
+
+test('깨우기: effort 를 고른 에이전트도 — /effort 뒤에 기다리는 입력이 있는 동안은 깨우는 중', async () => {
+  const e = await start({}, false, SLEEPY);
+  e.setSleepAfter(0);
+  const { a } = setup(e);
+  await e.setEffort(a.id, 'high');
+  await talk(e, a.id, '처음');
+  expect(await e.sleep(a.id)).toBe(true);
+  const got = sleepEvents(e, a.id);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('다시'));
+  expect(await resultText(done)).toBe('받음: 다시');
+  const wakingAt = got.findIndex((x) => x.waking);
+  expect(wakingAt).toBeGreaterThanOrEqual(0);
+  expect(got.slice(wakingAt + 1)).toContainEqual({ agentId: a.id, asleep: false, waking: false });
+  expect(e.sleepState(a.id)).toEqual({ asleep: false, waking: false });
+});
+
+test('깨우기: 고르기로만 깨우면(줄 없음) 깨우는 중이 아니다 — 쉬는 중', async () => {
+  const e = await start({}, false, SLEEPY);
+  e.setSleepAfter(0);
+  const { a } = setup(e);
+  await talk(e, a.id);
+  expect(await e.sleep(a.id)).toBe(true);
+  const got = sleepEvents(e, a.id);
+  e.setSelected(a.id); // 고르지 않은 채 재웠다 — 고르면 미리 띄운다
+  await until('A 가 다시 뜸', () => spawnsOf('A').length === 2);
+  await sleep(150);
+  expect(got).toEqual([{ agentId: a.id, asleep: false, waking: false }]);
+});
+
+test('재우기: 재우는 중에 온 입력도 깨워서 한 번만 나간다', async () => {
+  const e = await start({}, false, SLEEPY);
+  e.setSleepAfter(0);
+  const { a } = setup(e);
+  await talk(e, a.id, '처음');
+  const results: string[] = [];
+  e.on('agent-event', (x: AgentEvent) => x.agentId === a.id && x.event.kind === 'result' && results.push(x.event.text));
+  const done = resultOf(e, a.id);
+  const sleeping = e.sleep(a.id); // 기다리지 않는다 — 끄는 사이에 말을 건다
+  await e.sendUser(a.id, text('끼어듦'));
+  expect(await resultText(done)).toBe('받음: 끼어듦');
+  expect(await sleeping).toBe(true);
+  await sleep(200);
+  expect(userTexts().filter((t) => t === '끼어듦')).toHaveLength(1);
+  expect(results).toEqual(['받음: 끼어듦']);
+  expect(spawnsOf('A')).toHaveLength(2);
+  expect(e.sleepState(a.id)).toEqual({ asleep: false, waking: false }); // 새 세션이 받았다
+});
+
+test('깨우기: 전달 메시지가 잠든 에이전트를 깨운다 — --resume 으로 띄워 받고 delivered', async () => {
+  const e = await start({}, false, SLEEPY);
+  e.setSleepAfter(0);
+  const { a, b } = setup(e);
+  e.updateAgent(a.id, { auto: true });
+  await talk(e, a.id, '처음');
+  expect(await e.sleep(a.id)).toBe(true);
+  const aDone = resultOf(e, a.id);
+  const bDone = resultOf(e, b.id);
+  await e.sendUser(b.id, text('SEND A: 일해'));
+  expect(await resultText(bDone)).toBe('A 에게 전달했습니다.');
+  expect(await resultText(aDone)).toBe('받음: [두레 메시지 — 보낸 쪽: B(웹 화면)]\n일해');
+  expect(spawnsOf('A')).toHaveLength(2);
+  expect(flagValue(lastSpawnOf('A').argv, '--resume')).toBe(a.sessionId);
+  expect(e.messages({ to: a.id })).toMatchObject([{ text: '일해', state: 'delivered' }]);
+});
+
+test('재우기: 뒤에서 명령이 돌면 재우지 않는다 — 끝나 그 차례가 끝난 뒤부터 다시 잰다', async () => {
+  const e = await start({}, false, SLEEPY);
+  const { a, b } = setup(e);
+  e.setSleepAfter(15);
+  const started = resultTextIs(e, a.id, 'BG STARTED');
+  await e.sendUser(a.id, text('BGRUN 1500'));
+  await started;
+  const bgDone = resultTextIs(e, a.id, 'BG DONE');
+  e.setSelected(b.id);
+  const got = sleepEvents(e, a.id);
+  await sleep(700); // 300ms 를 넘게 쉬었지만 명령이 돈다
+  expect(e.sleepBlock(a.id)).toBe('background');
+  expect(isAlive(spawnsOf('A')[0].pid)).toBe(true);
+  expect(got).toEqual([]);
+  await bgDone;
+  const t0 = Date.now();
+  await asleepOf(e, a.id);
+  expect(Date.now() - t0).toBeGreaterThanOrEqual(250);
+  expect(spawnsOf('A')).toHaveLength(1);
+});
+
+test('재우기: sleepBlock — 일하는 중·답을 기다림·기다리는 입력·서브에이전트·세션 없음·쉬는 세션', async () => {
+  const gate = path.join(dir, 'gate'); // 서브에이전트를 돌려 둔 채
+  const e = await start({ FAKE_SUB_GATE: gate }, false, SLEEPY);
+  e.setSleepAfter(0);
+  const room = e.addRoom('방');
+  const mk = (name: string) => e.addAgent({ roomId: room.id, name, role: '일', folder: folder(name.toLowerCase()) });
+  const [a, b, c, d, f] = ['A', 'B', 'C', 'D', 'F'].map(mk);
+  expect(e.sleepBlock(a.id)).toBe('no-session');
+  await talk(e, a.id);
+  expect(e.sleepBlock(a.id)).toBeNull();
+  await slowTurn(e, b.id);
+  expect(e.sleepBlock(b.id)).toBe('working');
+  const asked = requestOf(e, c.id);
+  await e.sendUser(c.id, text('ASK Bash'));
+  await asked;
+  expect(e.sleepBlock(c.id)).toBe('asking'); // 차례는 도는 중이지만 사람 답이 막고 있다
+  const launched = resultTextIs(e, d.id, 'LAUNCHED');
+  await e.sendUser(d.id, text('SUB 조사'));
+  await launched;
+  expect(e.sleepBlock(d.id)).toBe('subagents');
+  // 일하는 중에 친 슬래시 명령을 멈춰서 붙잡았다 — 쉬지만 사람이 고를 때까지 기다린다
+  await slowTurn(e, f.id);
+  await e.sendUser(f.id, text('/둘째'));
+  const stopped = resultOf(e, f.id);
+  await e.interrupt(f.id);
+  await stopped;
+  expect(e.hold(f.id)).not.toBeNull();
+  expect(e.sleepBlock(f.id)).toBe('waiting-input');
+  expect(e.sleepableIn(room.id)).toBe(1); // A 만
+  expect(() => e.sleepBlock('없는-에이전트')).toThrow();
+});
+
+test('재우기: 손으로 — 재웠으면 true · 세션이 없거나 일하는 중이면 false 이고 세션 그대로', async () => {
+  const e = await start({}, false, SLEEPY);
+  e.setSleepAfter(0);
+  const { a, b } = setup(e);
+  await talk(e, a.id);
+  const pid = spawnsOf('A')[0].pid;
+  expect(await e.sleep(a.id)).toBe(true);
+  await until('A 가 꺼짐', () => !isAlive(pid));
+  expect(e.sleepState(a.id)).toEqual({ asleep: true, waking: false });
+  expect(await e.sleep(a.id)).toBe(false); // 세션 없음
+  await slowTurn(e, b.id);
+  expect(await e.sleep(b.id)).toBe(false); // 일하는 중
+  expect(isAlive(spawnsOf('B')[0].pid)).toBe(true);
+  expect(e.status(b.id)).toBe('working');
+  expect(spawnsOf('B')).toHaveLength(1);
+  await expect(e.sleep('없는-에이전트')).rejects.toThrow();
+});
+
+test('재우기: 손으로 재운 고른 에이전트는 같은 고르기로 다시 띄우지 않는다 — 다른 에이전트를 골랐다 오면 띄운다', async () => {
+  const e = await start({}, false, SLEEPY);
+  e.setSleepAfter(0);
+  const { a, b } = setup(e);
+  e.setSelected(a.id);
+  await until('A 가 뜸', () => spawnsOf('A').length === 1);
+  expect(await e.sleep(a.id)).toBe(true);
+  e.setSelected(a.id); // 고른 카드를 다시 눌러도
+  await sleep(150);
+  expect(spawnsOf('A')).toHaveLength(1);
+  e.setSelected(b.id);
+  e.setSelected(a.id);
+  await until('A 가 다시 뜸', () => spawnsOf('A').length === 2);
+});
+
+test('재우기: 방 모두 — 쉬는 에이전트만 재우고 일하는 에이전트는 그대로', async () => {
+  const e = await start({}, false, SLEEPY);
+  e.setSleepAfter(0);
+  const { room, a, b } = setup(e);
+  const c = e.addAgent({ roomId: room.id, name: 'C', role: '검토', folder: folder('c') });
+  await talk(e, a.id);
+  await talk(e, b.id);
+  await slowTurn(e, c.id);
+  e.setSelected(a.id); // 고른 에이전트도 재운다
+  expect(e.sleepableIn(room.id)).toBe(2);
+  expect(await e.sleepRoom(room.id)).toBe(2);
+  expect(e.sleepState(a.id).asleep).toBe(true);
+  expect(e.sleepState(b.id).asleep).toBe(true);
+  expect(e.status(c.id)).toBe('working');
+  expect(isAlive(spawnsOf('C')[0].pid)).toBe(true);
+  expect(e.sleepableIn(room.id)).toBe(0);
+  const other = e.addRoom('다른 방');
+  expect(await e.sleepRoom(other.id)).toBe(0);
+});
+
+test('재우기: 설정 — 기본 30분 · 끔(0)이면 안 재우고, 바꾸면 다음 훑기부터 · 고를 수 없는 값은 던진다 · 다시 켜도 그대로', async () => {
+  const e = await start({}, false, SLEEPY);
+  expect(e.sleepAfter()).toBe(30);
+  e.setSleepAfter(0);
+  const { a, b } = setup(e);
+  await talk(e, a.id);
+  e.setSelected(b.id);
+  const got = sleepEvents(e, a.id);
+  await sleep(1000);
+  expect(got).toEqual([]);
+  expect(isAlive(spawnsOf('A')[0].pid)).toBe(true);
+  const slept = asleepOf(e, a.id, 1000);
+  e.setSleepAfter(15); // 이미 300ms 넘게 쉬었다 — 다음 훑기에
+  await slept;
+  expect(() => e.setSleepAfter(7)).toThrow('고를 수 없는 시간이에요');
+  expect(() => e.setSleepAfter('15' as never)).toThrow('고를 수 없는 시간이에요');
+  expect(e.sleepAfter()).toBe(15);
+  expect(JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8'))).toEqual({ sleepAfterMin: 15 });
+  await e.shutdown();
+  const e2 = await start({}, false, SLEEPY);
+  expect(e2.sleepAfter()).toBe(15);
+  await e2.shutdown();
+  fs.writeFileSync(path.join(dataDir, 'settings.json'), JSON.stringify({ sleepAfterMin: 7 }));
+  const e3 = await start();
+  expect(e3.sleepAfter()).toBe(30);
+  await e3.shutdown();
+  fs.rmSync(path.join(dataDir, 'settings.json'));
+  expect((await start()).sleepAfter()).toBe(30);
+});
+
+test('잠듦: 시작한 적 있고 세션이 없을 때 — 새 에이전트·오류로 멈춤은 아니다 · 다시 켜면 시작한 에이전트는 잠듦, 말을 걸면 깨어남을 알린다', async () => {
+  const e = await start({}, false, SLEEPY);
+  e.setSleepAfter(0);
+  const { room, a, b } = setup(e);
+  expect(e.sleepState(a.id)).toEqual({ asleep: false, waking: false });
+  await talk(e, a.id);
+  expect(e.sleepState(a.id)).toEqual({ asleep: false, waking: false });
+  const bEvents = sleepEvents(e, b.id);
+  const crashed = waitFor<StatusEvent>(e, 'status', (s) => s.agentId === b.id && s.status === 'error');
+  await e.sendUser(b.id, text('CRASH'));
+  await crashed;
+  expect(agentOf(e, b.id).started).toBe(true);
+  expect(e.sleepState(b.id)).toEqual({ asleep: false, waking: false }); // 오류 — 잠듦이 아니다
+  expect(bEvents.some((x) => x.asleep)).toBe(false);
+  await e.shutdown();
+
+  const e2 = await start({}, false, SLEEPY);
+  expect(e2.sleepState(a.id)).toEqual({ asleep: true, waking: false }); // 앱을 막 켠 것도 잠듦
+  const c = e2.addAgent({ roomId: room.id, name: 'C', role: '검토', folder: folder('c') });
+  const aEvents = sleepEvents(e2, a.id);
+  const cEvents = sleepEvents(e2, c.id);
+  await talk(e2, a.id);
+  expect(aEvents.at(-1)).toEqual({ agentId: a.id, asleep: false, waking: false });
+  expect(aEvents.some((x) => x.waking)).toBe(true);
+  await talk(e2, c.id); // 처음 띄우는 새 에이전트 — 이어 갈 대화가 없어 잠듦도 깨우는 중도 아니다
+  expect(cEvents).toEqual([]);
+});

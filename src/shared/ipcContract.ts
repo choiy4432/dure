@@ -110,7 +110,7 @@ const EVENT_FLAGS: Record<keyof EngineEventMap, true> = {
   'agent-event': true, status: true, message: true, held: true, request: true,
   'request-resolved': true, flags: true, 'engine-error': true, history: true, 'held-input': true,
   usage: true, context: true, effort: true, 'model-now': true, subagents: true, 'agent-added': true, 'plan-mode': true, hold: true,
-  'always-allow': true,
+  'always-allow': true, sleep: true,
 }
 export const EVENT_NAMES = Object.keys(EVENT_FLAGS) as (keyof EngineEventMap)[]
 

@@ -14,7 +14,7 @@ import { Permissions } from './permissions';
 import { DENY } from '../shared/denyTexts';
 import { josa } from '../shared/josa';
 import { Router, AUTO_CHAIN_LIMIT, joinDeliveries, type Delivery } from './router';
-import { EFFORT_LEVELS, THEME_PREFS, type EffortLevel, type NotifyPrefs, type ThemePref } from './types';
+import { EFFORT_LEVELS, SLEEP_CHOICES, SLEEP_DEFAULT_MIN, THEME_PREFS, type EffortLevel, type NotifyPrefs, type SleepBlock, type ThemePref } from './types';
 import { toContextUsage } from './usage';
 import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
 import type {
@@ -55,6 +55,10 @@ export interface EngineOptions {
   midGraceMs?: number;
   /** 미리 띄웠지만 아무 줄도 안 받은 세션을 고르지 않게 된 뒤 끄기까지(ms) — 없으면 PREWARM_IDLE_MS. 시험은 짧게 */
   prewarmIdleMs?: number;
+  /** 재우기 시간(sleepAfter 의 분)을 재는 '1분'의 길이(ms) — 없으면 SLEEP_MINUTE_MS. 시험·e2e 는 짧게 */
+  sleepMinuteMs?: number;
+  /** 살아 있는 세션을 훑어 재우는 간격(ms) — 없으면 sleepMinuteMs(1분마다) */
+  sleepSweepMs?: number;
 }
 
 // 이벤트:
@@ -78,6 +82,7 @@ export interface EngineOptions {
 //  'model-now'   { agentId; modelNow }   (차례의 init 이 알려 준 모델 id 가 바뀔 때 · setModel 은 null 로 비운다)
 //  'subagents'   { agentId; running }   (도는 서브에이전트 목록이 바뀔 때마다 — 부모의 Agent tool_use id, 시작 순. 세션이 끝나면 빈 목록)
 //  'agent-added' { agent; by }   (에이전트가 create_agent 로 만든 에이전트를 사람이 승인해 더했을 때 — by = 만든 에이전트. 화면에서 더한 것엔 없다)
+//  'sleep'       { agentId; asleep; waking }   (sleepState() 가 바뀔 때만 — 상태를 알리는 자리(emitStatus)·깨운 세션의 첫 init 에서 견준다)
 //  'usage'       PlanUsage | null   (플랜 사용량을 받을 때마다 — 모르는 모양·한도 없음이면 null)
 //  'engine-error' { agentId: string | null; message: string }  (프로세스 이벤트 처리·듣는 쪽에서 난 오류 — 앱을 죽이지 않고 알린다)
 export interface Engine extends EventEmitter {
@@ -123,6 +128,26 @@ export interface Engine extends EventEmitter {
   /** 화면 테마 — settings.json 의 theme(기본 system = Windows 따라감). 모르는 값이면 기본값 */
   theme(): ThemePref;
   setTheme(t: ThemePref): void;
+  /** 쉬는 에이전트를 재우기까지의 시간(분, 0 = 끔) — settings.json 의 sleepAfterMin(없거나 SLEEP_CHOICES 밖이면 SLEEP_DEFAULT_MIN) */
+  sleepAfter(): number;
+  /** SLEEP_CHOICES 만 받는다(아니면 던진다) — 저장하고 다음 훑기부터 새 시간으로(이미 더 오래 쉰 에이전트는 다음 훑기에 잠든다) */
+  setSleepAfter(min: number): void;
+  /**
+   * asleep = 대화를 시작한 적 있는데 지금 살아 있는 claude 가 없다(재워서든 앱을 막 켜서든 — 오류로 멈춤·지우는 중은 아니다) ·
+   * waking = 잠든 에이전트를 띄운 세션이 아직 첫 init 전인데 일하는 중(줄을 썼거나 기다리는 입력이 있다)
+   */
+  sleepState(id: AgentId): { asleep: boolean; waking: boolean };
+  /** 지금 재울 수 없는 까닭(앞의 것부터 하나) — 살아 있는 세션이 없으면 'no-session', 재울 수 있으면 null. 메뉴를 열 때 묻는다 */
+  sleepBlock(id: AgentId): SleepBlock | 'no-session' | null;
+  /** 그 방에서 지금 재울 수 있는(sleepBlock 이 null 인) 에이전트 수 — 고른 에이전트도 센다 */
+  sleepableIn(roomId: RoomId): number;
+  /**
+   * 지금 재운다(고른 에이전트도) — 재웠으면 true, 세션이 없거나 재울 수 없으면 false. 말을 걸면(사람 입력·받은 메시지) --resume 으로 깨어난다.
+   * 고른 채 재운 에이전트는 같은 고르기로 곧바로 다시 띄우지 않는다(다른 에이전트를 골랐다 돌아오거나 깨우면 풀린다)
+   */
+  sleep(id: AgentId): Promise<boolean>;
+  /** 그 방에서 재울 수 있는 에이전트를 차례로 모두 재운다(고른 에이전트 포함) — 재운 수 */
+  sleepRoom(roomId: RoomId): Promise<number>;
   /**
    * 저장 + (끄면) 모든 에이전트 bypassOn=false 저장 — 켜져 있던 에이전트의 살아 있는 세션은 내 Claude 설정의 기본 모드로
    * 돌린다(다시 띄우지 않는다). 다음에 띄울 때는 옵션 없이
@@ -246,6 +271,9 @@ const AUTO_TURN_GRACE_MS = 1500;
 const MID_GRACE_MS = 5000;
 /** 미리 띄웠지만 아무 줄도 안 받은 세션 — 고르지 않게 된 뒤 이만큼 지나면 끈다(둘러보기만 한 에이전트의 프로세스가 쌓이지 않게) */
 const PREWARM_IDLE_MS = 5 * 60_000;
+/** 재우기 시간을 재는 '1분' — 살아 있는 세션은 이만큼마다 훑는다(probe18: 재웠다 --resume 으로 깨워도 토큰 손해가 없고 띄우는 시간만 든다) */
+const SLEEP_MINUTE_MS = 60_000;
+const SLEEP_INVALID = '고를 수 없는 시간이에요';
 const EFFORT_UNKNOWN = '알 수 없는 effort 예요.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
 /** /effort 의 답(로컬 명령 — 모델을 부르지 않는다): "Set effort level to max (this session only): …" (probe9) */
@@ -418,6 +446,16 @@ class EngineImpl extends EventEmitter implements Engine {
   // 뒤에서 돈 서브에이전트가 끝나 Claude 가 스스로 열 차례를 기다린다 — 그동안 다시 띄우기·/effort 를 미루고 화면은 작업 중(세션 끝에 지운다)
   private autoTurns = new Map<AgentId, AutoTurnWait>();
   private bgTasks = new WeakMap<ClaudeSession, string[]>(); // 그 세션이 마지막으로 알린 뒤에서 도는 일의 id 목록 — 비지 않으면 재우지 않는다(끄면 그 명령도 죽는다)
+  // 재우기 — 한동안 쉰 세션을 끈다(메모리를 비운다). 말을 걸면 ensure 가 --resume 으로 깨운다(앱을 다시 켠 뒤 처음 말을 걸 때와 같은 길)
+  private sleepMin: number; // 재우기까지의 시간(분) — 0 = 끔
+  private sweepTimer: NodeJS.Timeout | null = null; // 살아 있는 세션 훑기(start 에서 켜고 shutdown 에서 끈다)
+  // 마지막 활동 — 띄울 때 · 그 세션이 보낸 줄(어떤 사건이든) · 그 세션에 쓴 줄 · 고른 에이전트에서 다른 에이전트로 옮긴 순간
+  private lastActive = new WeakMap<ClaudeSession, number>();
+  // 손으로 재운 에이전트 — 렌더러는 고른 카드를 다시 눌러도 setSelected 를 다시 부르니, 미리 띄우기가 곧바로 깨우지 않게 건너뛴다.
+  // 깨우면(ensure 가 새로 띄움) · 다른 에이전트를 골랐다가 돌아오면 풀린다(메모리만)
+  private handSlept = new Set<AgentId>();
+  private waking = new WeakSet<ClaudeSession>(); // 잠든 에이전트를 띄운 세션 — 첫 init 에서 빠진다(그 전에 일하는 중이면 깨우는 중)
+  private shownSleep = new Map<AgentId, { asleep: boolean; waking: boolean }>(); // 마지막으로 알린 잠듦 — 바뀔 때만 'sleep'
   private seen = new WeakMap<ClaudeSession, SeenToolUses>(); // 그 세션 스트림에서 본 하는 일 — 승인·두레 도구를 부른 쪽을 가른다(세션이 끝나면 비운다)
   // 결과를 기다리는 고친 일(EDIT_TOOLS) — tool_use id → 입력으로 만들어 기록용으로 줄인 바뀐 줄(못 만들면 null). 결과가 오면 빼고, 세션이 끝나면 비운다.
   // 결과에 structuredPatch 가 없을 때(서브에이전트 줄 등)만 쓴다. 입력 통째는 들고 있지 않는다
@@ -440,7 +478,12 @@ class EngineImpl extends EventEmitter implements Engine {
     super();
     this.images = openImageStore(o.dataDir);
     this.limit = this.loadLimit(o.autoChainLimit ?? AUTO_CHAIN_LIMIT);
-    this.allow = this.readSettings().allowBypass === true;
+    const settings = this.readSettings();
+    this.allow = settings.allowBypass === true;
+    const sleepMin = settings.sleepAfterMin;
+    this.sleepMin = (SLEEP_CHOICES as readonly unknown[]).includes(sleepMin) ? (sleepMin as number) : SLEEP_DEFAULT_MIN;
+    // 막 켰을 때 시작한 에이전트는 모두 잠듦이다(세션이 없다) — 처음 상태 받기(sleepState)와 같은 값에서 견주어야 깨어남이 사건으로 나간다
+    for (const a of store.agents()) if (a.started) this.shownSleep.set(a.id, { asleep: true, waking: false });
     this.watcher =
       o.usage === false
         ? null
@@ -521,13 +564,17 @@ class EngineImpl extends EventEmitter implements Engine {
     this.started = true;
     this.router.flushAll();
     this.watcher?.start();
+    this.sweepTimer = setInterval(() => this.guard(null, () => this.sweep()), this.o.sleepSweepMs ?? this.minuteMs());
+    this.sweepTimer.unref?.();
   }
 
   // ── 설정 ──
   private settingsFile() { return path.join(this.o.dataDir, 'settings.json'); }
 
   /** 설정 파일 — 없거나 깨졌으면 빈 객체 */
-  private readSettings(): { autoChainLimit?: unknown; allowBypass?: unknown; notifyAsks?: unknown; notifyFinished?: unknown; theme?: unknown } {
+  private readSettings(): {
+    autoChainLimit?: unknown; allowBypass?: unknown; notifyAsks?: unknown; notifyFinished?: unknown; theme?: unknown; sleepAfterMin?: unknown;
+  } {
     try {
       const raw = JSON.parse(fs.readFileSync(this.settingsFile(), 'utf8'));
       return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
@@ -537,7 +584,9 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /** 있던 값은 그대로 두고 patch 만 덮어 쓴다 */
-  private writeSettings(patch: { autoChainLimit?: number; allowBypass?: boolean; notifyAsks?: boolean; notifyFinished?: boolean; theme?: ThemePref }): void {
+  private writeSettings(patch: {
+    autoChainLimit?: number; allowBypass?: boolean; notifyAsks?: boolean; notifyFinished?: boolean; theme?: ThemePref; sleepAfterMin?: number;
+  }): void {
     const file = this.settingsFile();
     fs.mkdirSync(this.o.dataDir, { recursive: true });
     fs.writeFileSync(`${file}.tmp`, JSON.stringify({ ...this.readSettings(), ...patch }, null, 2));
@@ -595,6 +644,15 @@ class EngineImpl extends EventEmitter implements Engine {
     this.writeSettings({ theme: t });
   }
 
+  sleepAfter(): number { return this.sleepMin; }
+
+  setSleepAfter(min: number): void {
+    // 렌더러에서 온 값 — 고를 수 있는 수만(문자열 '15' 같은 것도 받지 않는다). 훑기는 다음 차례부터 새 값으로 잰다
+    if (!(SLEEP_CHOICES as readonly unknown[]).includes(min)) throw new Error(SLEEP_INVALID);
+    this.writeSettings({ sleepAfterMin: min });
+    this.sleepMin = min;
+  }
+
   autoChainLimit(): number { return this.limit; }
 
   setAutoChainLimit(n: number): void {
@@ -642,6 +700,8 @@ class EngineImpl extends EventEmitter implements Engine {
     } finally {
       this.removing.delete(id);
       this.shown.delete(id);
+      this.shownSleep.delete(id);
+      this.handSlept.delete(id);
       const had = this.held.get(id)?.length ?? 0;
       this.held.delete(id); // 기다리던 사람 입력은 에이전트와 함께 버린다
       this.settingsDefaultOf.delete(id);
@@ -737,15 +797,25 @@ class EngineImpl extends EventEmitter implements Engine {
     if (this.closed) return;
     const prev = this.selected;
     this.selected = id;
-    if (prev && prev !== id) this.armCool(prev);
+    if (prev && prev !== id) {
+      this.armCool(prev);
+      // 고르지 않게 된 순간이 마지막 활동 — 패널에서 보고 있던 동안은 재우지 않았으니, 그때부터 다시 잰다
+      const left = this.sessions.get(prev);
+      if (left) this.lastActive.set(left, Date.now());
+    }
     if (!id) return;
+    if (prev !== id) this.handSlept.delete(id); // 다른 에이전트를 골랐다가 돌아왔다 — 손으로 재운 에이전트도 다시 미리 띄운다
     this.disarmCool(id);
     this.prewarm(id);
   }
 
-  /** 고른 에이전트에 세션이 없으면 미리 띄운다 — 오류로 멈춘 에이전트는 고르기만으로 띄우지 않는다. 던지지 않는다 */
+  /**
+   * 고른 에이전트에 세션이 없으면 미리 띄운다 — 오류로 멈춘 에이전트는 고르기만으로 띄우지 않는다. 손으로 재운 에이전트도 띄우지 않는다
+   * (고른 카드를 다시 눌러도 setSelected 가 다시 온다 — 재우자마자 깨우지 않게). 던지지 않는다
+   */
   private prewarm(id: AgentId): void {
     if (this.closed || this.selected !== id || !this.store.agent(id) || this.removing.has(id) || this.sessions.has(id) || this.errors.has(id)) return;
+    if (this.handSlept.has(id)) return;
     try {
       this.prewarmed.add(this.ensure(id));
     } catch {
@@ -786,6 +856,113 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     await this.endSession(id);
     this.emitStatus(id);
+  }
+
+  // ── 재우기 ──
+  sleepState(id: AgentId): { asleep: boolean; waking: boolean } {
+    this.need(id);
+    return this.sleepOf(id);
+  }
+
+  sleepBlock(id: AgentId): SleepBlock | 'no-session' | null {
+    this.need(id);
+    return this.blockOf(id);
+  }
+
+  sleepableIn(roomId: RoomId): number {
+    return this.store.agents(roomId).filter((a) => !this.removing.has(a.id) && this.blockOf(a.id) === null).length;
+  }
+
+  async sleep(id: AgentId): Promise<boolean> {
+    this.need(id);
+    const s = this.sessions.get(id);
+    return !!s && this.putToSleep(id, s, true);
+  }
+
+  async sleepRoom(roomId: RoomId): Promise<number> {
+    let n = 0;
+    // 하나씩 — 끄는 사이 바뀐 것(일을 받음·지움)은 그 차례에 다시 본다
+    for (const a of this.store.agents(roomId)) {
+      if (this.removing.has(a.id) || !this.store.agent(a.id)) continue;
+      if (await this.sleep(a.id)) n++;
+    }
+    return n;
+  }
+
+  /** 잠듦·깨우는 중 — 세션 맵에서 계산한다(한 곳). 화면엔 emitSleep 이 바뀔 때만 알린다 */
+  private sleepOf(id: AgentId): { asleep: boolean; waking: boolean } {
+    const s = this.sessions.get(id);
+    // 오류로 멈춘 에이전트는 잠듦이 아니다 — 엔진이 끈 세션(재우기·미리 띄운 세션 끄기)·막 켠 앱만. 새 에이전트는 이어 갈 대화가 없다
+    if (!s) return { asleep: !!this.store.agent(id)?.started && !this.errors.has(id) && !this.removing.has(id), waking: false };
+    // 깨우는 중 = 그 세션이 아직 첫 init 전인데 일하는 중 — 쓴 줄을 기다리거나, /effort·계획 모드 답 뒤에 내 입력이 기다린다
+    // (엔진 상태로 본다: effort 를 고른 에이전트는 /effort 를 먼저 몰래 써서 세션 상태가 쉬는 채다). 고르기로만 깨우면 쉬는 중
+    return { asleep: false, waking: this.waking.has(s) && this.status(id) === 'working' };
+  }
+
+  /**
+   * 지금 재울 수 없는 까닭 — 앞의 것부터 하나(설계 §2 의 표). 재우면 그 일이 끊기거나(차례·서브에이전트·뒤에서 도는 명령은 프로세스와 함께
+   * 죽는다) 사람이 기다리는 것(답·붙잡은 입력)이 사라진다
+   */
+  private blockOf(id: AgentId): SleepBlock | 'no-session' | null {
+    const s = this.sessions.get(id);
+    if (!s) return 'no-session';
+    const asking = this.perms.pending(id).length > 0; // 서브에이전트가 물은 것 포함
+    // 일하는 중 — 차례가 돈다(사람 답을 기다리며 멈춘 차례는 아래 '답을 기다림' — status() 의 awaiting 과 같다), 또는 엔진이 쥔 일:
+    // /effort 차례 · 차례 도중에 보낸 말이 안 읽힘 · 계획 모드 답을 기다리며 쥔 입력 · 권한 모드 때문에 다시 띄울 세션
+    if (
+      (s.status !== 'idle' && !asking) || this.effortTurn.has(s) || this.midUnread(s) || this.planGates.has(s) || this.planBlocked(id, s) ||
+      this.restartWant.has(s)
+    ) return 'working';
+    if (asking) return 'asking';
+    if ((this.held.get(id)?.length ?? 0) > 0 || this.holds.has(id)) return 'waiting-input';
+    // 끝난 뒤 Claude 가 스스로 열 차례(보고 전달)를 기다리는 동안도 서브에이전트의 일 — 재우면 그 보고가 사라진다
+    if (this.subagents.has(id) || this.autoTurns.has(id)) return 'subagents';
+    // 종류를 가리지 않는다 — 끝나지 않는 dev 서버를 띄운 에이전트는 잠들지 않는다(재우면 그 서버가 함께 죽는다)
+    if ((this.bgTasks.get(s)?.length ?? 0) > 0) return 'background';
+    if ((this.inFlight.get(s)?.length ?? 0) > 0) return 'unread';
+    return null;
+  }
+
+  /**
+   * 쉬는 세션을 끈다(재우기 — 미리 띄운 세션 끄기 cool 과 같은 길). 끄기 직전에 그 세션이 아직 그 에이전트의 세션이고 재울 수 있는지 다시 본다
+   * (그사이 바뀌었으면 false). 끄기는 세션을 맵에서 먼저 빼므로 끄는 사이에 온 입력·메시지는 새 세션이 받는다(ensure 가 깨운다).
+   * hand: 손으로 재움 — 표는 끄기 전에 단다(끄는 사이의 같은 고르기도 띄우지 않게). 던지지 않는다(상태 알림 오류는 engine-error)
+   */
+  private async putToSleep(id: AgentId, s: ClaudeSession, hand = false): Promise<boolean> {
+    if (this.closed || !this.live(id, s) || this.blockOf(id) !== null) return false;
+    if (hand) this.handSlept.add(id);
+    await this.endSession(id);
+    this.guard(id, () => this.emitStatus(id)); // 상태는 그대로 idle — 잠듦만 바뀐다(emitStatus 가 함께 알린다)
+    return true;
+  }
+
+  /** 1분마다 — 고른 에이전트가 아니고, 마지막 활동에서 설정 시간 이상 지났고, 재울 수 있는 세션을 재운다. 끔(0)이면 아무것도 안 한다 */
+  private sweep(): void {
+    if (this.closed || this.sleepMin === 0) return;
+    const now = Date.now();
+    const after = this.sleepMin * this.minuteMs();
+    for (const [id, s] of [...this.sessions]) {
+      if (this.selected === id || this.removing.has(id)) continue;
+      const last = this.lastActive.get(s);
+      if (last === undefined || now - last < after || this.blockOf(id) !== null) continue;
+      void this.putToSleep(id, s).catch((e) =>
+        this.guard(id, () => this.emit('engine-error', { agentId: id, message: e instanceof Error ? e.message : String(e) })),
+      );
+    }
+  }
+
+  private minuteMs(): number {
+    return this.o.sleepMinuteMs ?? SLEEP_MINUTE_MS;
+  }
+
+  /** 잠듦이 바뀌었으면 알린다 — 바뀔 때만. 지우는 중·지운 에이전트엔 안 보낸다(emitStatus 와 같다), 끄는 중인 엔진도 */
+  private emitSleep(id: AgentId): void {
+    if (this.closed || this.removing.has(id) || !this.store.agent(id)) return;
+    const now = this.sleepOf(id);
+    const prev = this.shownSleep.get(id) ?? { asleep: false, waking: false };
+    if (prev.asleep === now.asleep && prev.waking === now.waking) return;
+    this.shownSleep.set(id, now);
+    this.emit('sleep', { agentId: id, ...now });
   }
 
   // ── 대화 ──
@@ -1025,6 +1202,8 @@ class EngineImpl extends EventEmitter implements Engine {
       this.closed = true;
       for (const timer of this.coolTimers.values()) clearTimeout(timer);
       this.coolTimers.clear();
+      if (this.sweepTimer) clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
       const ids = [...this.sessions.keys()];
       for (const r of this.perms.pending()) this.perms.cancelForAgent(r.agentId, EXITED);
       // 맵에서 이미 빠진 채 끄는 중인 세션(다시 띄우기·새 대화)도 기다린다 — 각각 STOP_LIMIT_MS 상한
@@ -1343,6 +1522,7 @@ class EngineImpl extends EventEmitter implements Engine {
 
   private write(s: ClaudeSession, parts: UserPart[], item: InFlight): void {
     s.send(parts);
+    this.lastActive.set(s, Date.now());
     const list = this.inFlight.get(s) ?? [];
     list.push(item);
     this.inFlight.set(s, list);
@@ -1468,6 +1648,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const agent = this.need(id);
     const live = this.sessions.get(id);
     if (live) return live;
+    const wasAsleep = this.sleepOf(id).asleep; // 깨우기 — 띄우기 전에 본다(띄우면 잠듦이 아니다)
 
     const runDir = path.join(this.o.dataDir, 'run', id);
     fs.mkdirSync(runDir, { recursive: true });
@@ -1494,6 +1675,9 @@ class EngineImpl extends EventEmitter implements Engine {
         // 보낸 줄을 읽었나 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
         const answered = this.noteRead(s, ev);
         if (this.sessions.get(id) !== s) return;
+        this.lastActive.set(s, Date.now()); // 그 세션이 보낸 줄은 무엇이든 활동이다 — 뒤에서 도는 일 목록도
+        // 깨운 세션의 첫 init — 깨어났다(/effort 차례의 것이어도: claude 가 떴다)
+        if (ev.kind === 'init' && this.waking.delete(s)) this.emitSleep(id);
         // 뒤에서 도는 일 목록 — 세션마다 마지막 것만 든다(재우기가 비어 있을 때만 재운다). 기록·화면엔 안 보낸다
         if (ev.kind === 'background-tasks') {
           this.bgTasks.set(s, ev.taskIds);
@@ -1549,6 +1733,9 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     this.errors.delete(id);
     this.sessions.set(id, s);
+    this.lastActive.set(s, Date.now());
+    this.handSlept.delete(id); // 깨웠다 — 손으로 재운 표는 풀린다
+    if (wasAsleep) this.waking.add(s);
     if (allow) this.optioned.add(s);
     // 사용자가 켠 에이전트만(허용 + 스위치) — 어떤 입력(/effort 포함)보다, 상태 알림보다도 먼저 제어 요청을 쓴다(듣는 쪽이 바로 보내도 뒤에 선다).
     // 오류 뒤·새 대화·다시 띄우기가 모두 여기를 지난다. 띄운 직후엔 CLI 시작·--resume 대화 읽기 뒤에야 답하니 /effort 만큼 기다린다.
@@ -1599,6 +1786,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.effortTurn.set(s, turn);
     try {
       s.send([{ type: 'text', text: `/effort ${level}` }], { quiet: true });
+      this.lastActive.set(s, Date.now());
     } catch {
       this.effortTurn.delete(s); // 이미 끝난 세션 — 다음에 띄울 때 다시 보낸다
       return;
@@ -2360,14 +2548,22 @@ class EngineImpl extends EventEmitter implements Engine {
     }
   }
 
+  /**
+   * 상태가 바뀌었으면 알린다 — 잠듦도 여기서 함께 견준다(띄우기·끄기·재우기·스스로 죽음·오류·지우기가 모두 이 자리를 지난다).
+   * 상태를 듣는 쪽이 던져도 잠듦은 알린다
+   */
   private emitStatus(id: AgentId): void {
     if (this.removing.has(id) || !this.store.agent(id)) return;
-    const status = this.status(id);
-    const errorText = this.errorText(id);
-    const prev = this.shown.get(id) ?? { status: 'idle', errorText: null };
-    if (prev.status === status && prev.errorText === errorText) return;
-    this.shown.set(id, { status, errorText });
-    this.emit('status', { agentId: id, status, errorText });
+    try {
+      const status = this.status(id);
+      const errorText = this.errorText(id);
+      const prev = this.shown.get(id) ?? { status: 'idle', errorText: null };
+      if (prev.status === status && prev.errorText === errorText) return;
+      this.shown.set(id, { status, errorText });
+      this.emit('status', { agentId: id, status, errorText });
+    } finally {
+      this.guard(id, () => this.emitSleep(id));
+    }
   }
 }
 

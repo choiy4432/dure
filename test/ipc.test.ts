@@ -158,8 +158,9 @@ describe('registerIpc', () => {
 
   it('forwards every engine event as dure:event { name, payload }', () => {
     const { engine, sent } = setup()
-    expect(EVENT_NAMES).toHaveLength(19)
+    expect(EVENT_NAMES).toHaveLength(20)
     expect(EVENT_NAMES).toContain('always-allow')
+    expect(EVENT_NAMES).toContain('sleep')
     expect(EVENT_NAMES).toContain('subagents')
     expect(EVENT_NAMES).toContain('agent-added')
     for (const name of EVENT_NAMES) engine.emit(name, { n: name })
