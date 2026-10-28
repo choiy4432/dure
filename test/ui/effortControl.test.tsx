@@ -75,7 +75,8 @@ describe('EffortControl — 칩', () => {
     expect(filled()).toBe(0)
   })
 
-  it('패널이 400px 보다 좁으면 이름을 숨기고 aria-label·title 에 남긴다', () => {
+  // 460 = 상태 · 모델 '기본 (추천)' · effort 'medium' · '묻지 않음' 한 줄이 다 들어가는 패널 너비 — 그보다 좁으면 이름까지 두면 모델 칩이 한 글자로 눌린다
+  it('패널이 460px 보다 좁으면 이름을 숨기고 aria-label·title 에 남긴다', () => {
     let cb: () => void = () => {}
     vi.stubGlobal('ResizeObserver', class {
       constructor(c: () => void) { cb = c }
@@ -83,11 +84,11 @@ describe('EffortControl — 칩', () => {
       unobserve() {}
       disconnect() {}
     })
-    let width = 500
+    let width = 470
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width } as DOMRect))
     const { container } = mount({ effortNow: 'high' })
     expect(container.querySelector('.eff.narrow')).toBeNull()
-    width = 360
+    width = 440
     act(() => cb())
     expect(container.querySelector('.eff.narrow')).not.toBeNull()
     expect(chip().getAttribute('aria-label')).toBe('effort high')
@@ -127,6 +128,8 @@ describe('EffortControl — 칩 너비(펼침이 칩 오른쪽 끝에 붙어 있
     const both = rule('.eff-v::before,\n.eff-v::after')
     expect(both).toMatch(/height:\s*0/)
     expect(both).toMatch(/visibility:\s*hidden/)
+    // 줄이 좁아도 effort 칸은 줄지 않는다 — 막대는 자를 수 없어 줄면 칩 테두리 밖으로 넘친다(줄어드는 건 이름을 자르는 모델 칩)
+    expect(rule('.mp.eff')).toMatch(/flex-shrink:\s*0/)
   })
 })
 

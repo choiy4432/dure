@@ -4355,6 +4355,12 @@ code {
   margin: 0;
 }
 
+/* effort 칸은 줄지 않는다 — 막대·이름은 자를 수 없어 .mp 의 min-width: 0 으로 줄면 칩 테두리 밖으로 넘쳤다.
+   줄이 좁으면 이름을 … 로 자르는 모델 칩이 줄어든다 */
+.mp.eff {
+  flex-shrink: 0;
+}
+
 /* effort 칩 — 높이가 오르는 막대 5개 + 단계 이름 */
 .eff-chip {
   padding: 0 10px;

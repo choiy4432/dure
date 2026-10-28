@@ -22,8 +22,11 @@ interface Props {
   onError?: (message: string) => void
 }
 
-/** 패널이 이 너비(px)보다 좁으면 칩은 막대만 */
-const NARROW_PX = 400
+/**
+ * 패널이 이 너비(px)보다 좁으면 칩은 막대만 — 상태 · 모델 '기본 (추천)' · effort 'medium' · '묻지 않음' 한 줄이 다 들어가는 너비.
+ * 그보다 좁은데 이름까지 두면 effort 칸은 줄지 않으니(base.css .mp.eff) 모델 칩이 한 글자로 눌린다
+ */
+const NARROW_PX = 460
 /** 마지막 움직임 뒤 이만큼 가만히 있으면 Claude 에 보낸다 */
 const SEND_DELAY_MS = 300
 /** effort 를 못 정하는 모델 */
