@@ -54,18 +54,40 @@ export function slashEntry(c: SlashCommand): SlashEntry | null {
   return text === undefined ? null : { name: c.name, text }
 }
 
-/** 보일 명령 중 이름 앞부분이 맞는 것 — 받은 순서대로, 최대 8개(대소문자 무시) */
+/** 이름 안 낱말의 경계 — plan-eng-review · superpowers:brainstorming · my_tool */
+const WORD_EDGE = /[-_:./ ]/
+
+/**
+ * 친 글이 이름의 어디에 맞나 — 0 앞부분 · 1 가운데 낱말의 앞부분 · 2 그 밖 가운데 · null 안 맞음.
+ * 같은 글이 여러 번 나오면 낱말 앞부분인 쪽으로 친다(preview-view 의 'view').
+ */
+function matchRank(name: string, q: string): number | null {
+  if (name.startsWith(q)) return 0
+  let rank: number | null = null
+  for (let i = name.indexOf(q); i !== -1; i = name.indexOf(q, i + 1)) {
+    if (WORD_EDGE.test(name[i - 1])) return 1
+    rank = 2
+  }
+  return rank
+}
+
+/**
+ * 보일 명령 중 이름 어디든 맞는 것 — 앞부분 → 가운데 낱말의 앞부분 → 그 밖 순, 같은 자리끼리는 받은 순서, 최대 8개(대소문자 무시).
+ * 그래서 플러그인 스킬은 ':' 뒤 이름(/brain → superpowers:brainstorming)으로도, 낱말 가운데 몇 글자로도 찾는다.
+ */
 export function matchCommands(commands: SlashCommand[], query: string): SlashEntry[] {
   const q = query.toLowerCase()
-  const out: SlashEntry[] = []
+  const found: { entry: SlashEntry; rank: number }[] = []
   for (const c of commands) {
-    if (!c.name.toLowerCase().startsWith(q)) continue
+    const rank = matchRank(c.name.toLowerCase(), q)
+    if (rank === null) continue
     const entry = slashEntry(c)
-    if (!entry) continue
-    out.push(entry)
-    if (out.length === MAX_ITEMS) break
+    if (entry) found.push({ entry, rank })
   }
-  return out
+  return found
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, MAX_ITEMS)
+    .map(f => f.entry)
 }
 
 export const slashOptionId = (listId: string, i: number) => `${listId}-${i}`

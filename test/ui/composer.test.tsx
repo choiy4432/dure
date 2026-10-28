@@ -207,6 +207,17 @@ describe('Composer — / 명령', () => {
     expect(menu()).toBeNull() // context · config 는 두레에선 쓸 수 없는 기본 명령
   })
 
+  it('이름 가운데 글자로도 거른다 — 앞부분이 맞는 것이 먼저', async () => {
+    await renderPanel()
+    type('/rev')
+    await settle()
+    expect(names()).toEqual(['/review', '/code-review']) // 받은 순서는 code-review 가 먼저
+    type('/check')
+    expect(names()).toEqual(['/color-check'])
+    type('/view')
+    expect(names()).toEqual(['/code-review', '/review'])
+  })
+
   it('맞는 게 없거나 띄어 쓰면 목록이 닫히고 Enter 는 그대로 보낸다', async () => {
     await renderPanel()
     type('/zzz')
@@ -371,6 +382,47 @@ describe('slashEntry — / 목록에 무엇을 보이나', () => {
     expect(slashEntry(cmd('compact', 'Clear conversation history but keep a summary in context'))).toEqual({
       name: 'compact', text: '대화를 요약해 용량을 줄여요',
     })
+  })
+})
+
+describe('matchCommands — 이름 어디든 맞으면 보이고, 앞부분 → 낱말 머리 → 그 밖 순', () => {
+  const mine = (name: string) => cmd(name, `${name} (user)`)
+  const match = async (list: ReturnType<typeof cmd>[], q: string) => {
+    const { matchCommands } = await import('../../src/renderer/panel/SlashMenu')
+    return matchCommands(list, q).map(e => e.name)
+  }
+
+  it('가운데 낱말의 앞부분으로도 — 플러그인 스킬은 : 뒤 이름으로 찾는다', async () => {
+    const list = [cmd('superpowers:brainstorming', 'Explore first'), mine('plan-eng-review'), cmd('review', 'Review a pull request')]
+    expect(await match(list, 'brain')).toEqual(['superpowers:brainstorming'])
+    expect(await match(list, 'eng')).toEqual(['plan-eng-review'])
+    expect(await match(list, 'rev')).toEqual(['review', 'plan-eng-review'])
+  })
+
+  it('낱말 가운데 몇 글자로도 — 대소문자 무시', async () => {
+    const list = [cmd('superpowers:brainstorming', 'Explore first'), mine('code-review')]
+    expect(await match(list, 'storm')).toEqual(['superpowers:brainstorming'])
+    expect(await match(list, 'VIEW')).toEqual(['code-review'])
+  })
+
+  it('받은 순서보다 맞는 자리가 먼저 — 앞부분 · 낱말 머리 · 그 밖(같은 자리끼리는 받은 순서)', async () => {
+    const list = [mine('preview'), mine('x-view'), mine('preview-two'), mine('view'), mine('y_view')]
+    expect(await match(list, 'view')).toEqual(['view', 'x-view', 'y_view', 'preview', 'preview-two'])
+  })
+
+  it('같은 글이 두 번 나오면 낱말 머리인 쪽으로 친다', async () => {
+    expect(await match([mine('preview'), mine('preview-view')], 'view')).toEqual(['preview-view', 'preview'])
+  })
+
+  it('8개를 넘으면 맞는 자리가 좋은 것부터 8개 — 뒤에 받은 앞부분 일치도 빠지지 않는다', async () => {
+    const list = [...Array.from({ length: 9 }, (_, i) => mine(`a${i}-xlint`)), mine('lint')]
+    const got = await match(list, 'lint')
+    expect(got).toHaveLength(8)
+    expect(got[0]).toBe('lint')
+  })
+
+  it('숨는 기본 명령은 가운데가 맞아도 숨는다', async () => {
+    expect(await match([cmd('context', 'Visualize current context usage'), mine('my-context')], 'text')).toEqual(['my-context'])
   })
 })
 
