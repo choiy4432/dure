@@ -451,7 +451,8 @@ class EngineImpl extends EventEmitter implements Engine {
   private sleepMin: number; // 재우기까지의 시간(분) — 0 = 끔
   private sweepTimer: NodeJS.Timeout | null = null; // 살아 있는 세션 훑기(start 에서 켜고 shutdown 에서 끈다)
   // 마지막 활동 — 띄울 때 · 그 세션이 보낸 줄(제어 응답 말고 어떤 사건이든) · 그 세션에 쓴 줄(/effort 포함) · 고른 에이전트에서 다른 에이전트로 옮긴 순간.
-  // 엔진이 제 일로 보내는 제어 요청(사용량·설정 읽기·권한 모드)과 그 답은 치지 않는다
+  // 엔진이 제 일로 보내는 제어 요청(사용량·설정 읽기·권한 모드)과 그 답은 치지 않는다.
+  // 흐른 시간(performance.now)으로 잰다 — 벽시계면 PC 시계를 뒤로 돌린 만큼(3일이면 3일) 아무도 잠들지 않는다
   private lastActive = new WeakMap<ClaudeSession, number>();
   // 손으로 재운 에이전트 — 렌더러는 고른 카드를 다시 눌러도 setSelected 를 다시 부르니, 미리 띄우기가 곧바로 깨우지 않게 건너뛴다.
   // 깨우면(ensure 가 새로 띄움) · 다른 에이전트를 골랐다가 돌아오면 · 새 대화를 시작하면 풀린다(메모리만)
@@ -804,7 +805,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.armCool(prev);
       // 고르지 않게 된 순간이 마지막 활동 — 패널에서 보고 있던 동안은 재우지 않았으니, 그때부터 다시 잰다
       const left = this.sessions.get(prev);
-      if (left) this.lastActive.set(left, Date.now());
+      if (left) this.lastActive.set(left, performance.now());
     }
     if (!id) return;
     if (prev !== id) this.handSlept.delete(id); // 다른 에이전트를 골랐다가 돌아왔다 — 손으로 재운 에이전트도 다시 미리 띄운다
@@ -949,7 +950,7 @@ class EngineImpl extends EventEmitter implements Engine {
   /** 1분마다 — 고른 에이전트가 아니고, 마지막 활동에서 설정 시간 이상 지났고, 재울 수 있는 세션을 재운다. 끔(0)이면 아무것도 안 한다 */
   private sweep(): void {
     if (this.closed || this.sleepMin === 0) return;
-    const now = Date.now();
+    const now = performance.now();
     const after = this.sleepMin * this.minuteMs();
     for (const [id, s] of [...this.sessions]) {
       if (this.selected === id || this.removing.has(id)) continue;
@@ -1533,7 +1534,7 @@ class EngineImpl extends EventEmitter implements Engine {
 
   private write(s: ClaudeSession, parts: UserPart[], item: InFlight): void {
     s.send(parts);
-    this.lastActive.set(s, Date.now());
+    this.lastActive.set(s, performance.now());
     const list = this.inFlight.get(s) ?? [];
     list.push(item);
     this.inFlight.set(s, list);
@@ -1688,7 +1689,7 @@ class EngineImpl extends EventEmitter implements Engine {
         if (this.sessions.get(id) !== s) return;
         // 그 세션이 보낸 줄은 무엇이든 활동이다 — 뒤에서 도는 일 목록도. 제어 응답만 뺀다: 엔진이 제 일로 물은 것(사용량·설정·권한 모드)의
         // 답이다 — 사용량은 일하는 에이전트가 있는 동안 떠 있는 첫 세션에 주기마다 물어, 치면 그 쉬는 에이전트가 영영 잠들지 않는다
-        if (ev.kind !== 'control-response') this.lastActive.set(s, Date.now());
+        if (ev.kind !== 'control-response') this.lastActive.set(s, performance.now());
         // 깨운 세션의 첫 차례의 init — 깨어났다. 엔진이 먼저 쓴 /effort 차례의 init 은 아니다: 그 뒤에 기다리는 입력·메시지가 남아 있다
         if (ev.kind === 'init' && !this.effortTurn.has(s) && this.waking.delete(s)) this.emitSleep(id);
         // 뒤에서 도는 일 목록 — 세션마다 마지막 것만 든다(재우기가 비어 있을 때만 재운다). 기록·화면엔 안 보낸다
@@ -1746,7 +1747,7 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     this.errors.delete(id);
     this.sessions.set(id, s);
-    this.lastActive.set(s, Date.now());
+    this.lastActive.set(s, performance.now());
     this.handSlept.delete(id); // 깨웠다 — 손으로 재운 표는 풀린다
     if (wasAsleep) this.waking.add(s);
     if (allow) this.optioned.add(s);
@@ -1799,7 +1800,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.effortTurn.set(s, turn);
     try {
       s.send([{ type: 'text', text: `/effort ${level}` }], { quiet: true });
-      this.lastActive.set(s, Date.now());
+      this.lastActive.set(s, performance.now());
     } catch {
       this.effortTurn.delete(s); // 이미 끝난 세션 — 다음에 띄울 때 다시 보낸다
       return;

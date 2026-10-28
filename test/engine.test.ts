@@ -4887,6 +4887,21 @@ test('재우기: 저절로 — 설정 시간만큼 쉬면 claude 를 내린다 �
   expect(spawnsOf('A')).toHaveLength(1);
 });
 
+test('재우기: PC 시계를 뒤로 돌려도 잰다 — 쉰 시간은 벽시계가 아니라 흐른 시간', async () => {
+  const e = await start({}, false, SLEEPY);
+  const { a, b } = setup(e);
+  e.setSleepAfter(15); // 300ms
+  await talk(e, a.id);
+  e.setSelected(b.id);
+  const real = Date.now;
+  const back = vi.spyOn(Date, 'now').mockImplementation(() => real() - 3 * 24 * 60 * 60 * 1000); // 3일 뒤로
+  try {
+    expect(await asleepOf(e, a.id)).toEqual({ agentId: a.id, asleep: true, waking: false });
+  } finally {
+    back.mockRestore();
+  }
+});
+
 test('재우기: 고른 에이전트는 저절로 재우지 않는다 — 다른 에이전트로 옮긴 순간부터 잰다', async () => {
   const e = await start({}, false, SLEEPY);
   const { a, b } = setup(e);
