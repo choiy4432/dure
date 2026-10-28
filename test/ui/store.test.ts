@@ -129,12 +129,16 @@ describe('store events', () => {
     await s.init()
     // 스냅샷으로만 아는 상태는 언제부터인지 모른다
     expect(s.getState().statusSince).toEqual({})
+    // 벽시계와 흐른 시간이 함께 간다(시계를 돌린 게 아니다)
     const now = vi.spyOn(Date, 'now')
+    const mono = vi.spyOn(performance, 'now')
     try {
       now.mockReturnValue(1_000)
+      mono.mockReturnValue(100)
       emit('status', { agentId: 'b', status: 'working', errorText: null })
       expect(s.getState().statusSince.b).toBe(1_000)
       now.mockReturnValue(5_000)
+      mono.mockReturnValue(4_100)
       emit('status', { agentId: 'b', status: 'working', errorText: null }) // 같은 상태 — 그대로
       expect(s.getState().statusSince.b).toBe(1_000)
       emit('status', { agentId: 'a', status: 'working', errorText: null }) // 이미 작업 중이던 a — 바뀐 게 아님
@@ -143,6 +147,69 @@ describe('store events', () => {
       expect(s.getState().statusSince.b).toBe(5_000)
     } finally {
       now.mockRestore()
+      mono.mockRestore()
+    }
+  })
+
+  it('statusSince — PC 시계를 돌리면(벽시계만 뛴다) 이미 적은 시작 시각도 같은 만큼 옮긴다 · 지난 시간은 그대로', async () => {
+    const DAY = 24 * 60 * 60 * 1000
+    const { api, emit } = fake({ snapshot: async () => snap({ agents: [agent('a'), agent('b')] }) })
+    const s = createStore(api)
+    await s.init()
+    let wall = 1_800_000_000_000
+    let mono = 50_000
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => wall)
+    const perf = vi.spyOn(performance, 'now').mockImplementation(() => mono)
+    const since = () => s.getState().statusSince
+    try {
+      emit('status', { agentId: 'b', status: 'working', errorText: null })
+      expect(since().b).toBe(wall)
+      wall += 3_000
+      mono += 3_000
+      wall -= 3 * DAY // 3초 뒤 시계를 3일 뒤로
+      emit('status', { agentId: 'a', status: 'working', errorText: null })
+      expect(since().a).toBe(wall) // 뛴 뒤에 받은 것은 지금 시계로
+      expect(wall - since().b).toBe(3_000) // '0초'에 멈추지 않는다
+      wall += 1_000
+      mono += 1_000
+      wall += 2 * DAY // 1초 뒤 앞으로 2일 — 어떤 이벤트든 받으면 맞춘다
+      emit('held-input', { agentId: 'a', count: 0 })
+      expect(wall - since().b).toBe(4_000)
+      expect(wall - since().a).toBe(1_000)
+      wall += 1_500 // 시간 동기화 정도의 작은 어긋남은 그대로 둔다
+      mono += 1_000
+      emit('held-input', { agentId: 'a', count: 0 })
+      expect(wall - since().a).toBe(2_500)
+    } finally {
+      now.mockRestore()
+      perf.mockRestore()
+    }
+  })
+
+  it('followClock — 이벤트가 없어도(긴 명령이 도는 동안) 시계를 돌렸으면 맞추고 알린다 · 안 돌렸으면 알리지 않는다', async () => {
+    const DAY = 24 * 60 * 60 * 1000
+    const { api, emit } = fake({ snapshot: async () => snap({ agents: [agent('a')] }) })
+    const s = createStore(api)
+    await s.init()
+    let wall = 1_800_000_000_000
+    let mono = 50_000
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => wall)
+    const perf = vi.spyOn(performance, 'now').mockImplementation(() => mono)
+    try {
+      emit('status', { agentId: 'a', status: 'working', errorText: null })
+      const told = vi.fn()
+      s.subscribe(told)
+      wall += 5_000
+      mono += 5_000
+      s.followClock()
+      expect(told).not.toHaveBeenCalled()
+      wall -= 3 * DAY
+      s.followClock()
+      expect(told).toHaveBeenCalledTimes(1)
+      expect(wall - s.getState().statusSince.a).toBe(5_000)
+    } finally {
+      now.mockRestore()
+      perf.mockRestore()
     }
   })
 

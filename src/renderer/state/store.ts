@@ -91,6 +91,8 @@ export interface Store {
   focusAgent(id: AgentId): void
   /** 방 목록을 열어 달라고 요청한다 — roomMenuRequest 가 하나 오른다 */
   requestRoomMenu(): void
+  /** PC 시계를 바꿨으면 시작 시각(statusSince)을 맞춘다 — 이벤트를 받을 때도 보지만, 이벤트가 없는 동안(긴 명령)을 위해 앱이 1초마다 부른다 */
+  followClock(): void
 }
 
 type Ev = { [K in keyof EngineEventMap]: { name: K; payload: EngineEventMap[K] } }[keyof EngineEventMap]
@@ -119,6 +121,9 @@ function withPhase(phase: UiState['phase'], id: AgentId, to: Phase): UiState['ph
   return phase[id] === to ? phase : { ...phase, [id]: to }
 }
 
+/** 벽시계가 흐른 시간보다 이만큼 넘게 어긋나면 PC 시계를 바꾼 것 — 시간 동기화의 작은 보정은 그대로 둔다 */
+const CLOCK_JUMP_MS = 2000
+
 /** 부모의 assistant 항목의 글(하는 일 블록은 뺀다) — 글이 없거나 서브에이전트의 줄이면 '' */
 function assistantText(item: HistoryItem): string {
   if (item.kind !== 'assistant' || item.parent) return ''
@@ -138,6 +143,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   const loading = new Map<AgentId, HistoryItem[]>() // 기록을 불러오는 동안 온 항목
   let subscribed = false
   let loaded = false // 스냅샷을 한 번이라도 받았는가
+  let clockOffset = Date.now() - performance.now() // 벽시계 − 흐른 시간 — 이것이 뛰면 PC 시계를 바꾼 것
 
   const notify = () => listeners.forEach(fn => fn())
   const set = (next: UiState) => {
@@ -361,7 +367,24 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     }
   }
 
+  /**
+   * PC 시계를 바꿨으면(벽시계만 뛴다) 이미 적은 시작 시각(statusSince)을 같은 만큼 옮긴다 — 안 옮기면 뒤로 돌린 만큼(3일이면 3일)
+   * '작업 중… 0초'·'방금 시작'에 멈추고, 앞으로 돌린 만큼 지난 시간이 늘어난다. 이벤트를 받을 때마다 받은 시각을 적기 전에 본다
+   * — 그래서 뛴 뒤에 적은 시각은 옮기지 않는다. 옮겼으면 true
+   */
+  const matchClock = (): boolean => {
+    const offset = Date.now() - performance.now()
+    const jump = offset - clockOffset
+    if (Math.abs(jump) < CLOCK_JUMP_MS) return false
+    clockOffset = offset
+    const statusSince: UiState['statusSince'] = {}
+    for (const [id, t] of Object.entries(state.statusSince)) statusSince[id] = t + jump
+    state = { ...state, statusSince }
+    return true
+  }
+
   const onEvent = (ev: Ev) => {
+    matchClock()
     const at = Date.now() // 받은 시각 — 스냅샷을 기다렸다 적용해도 이 시각을 쓴다
     if (buffer) { buffer.push({ ev, at }); return }
     applyEvent(ev, at)
@@ -468,6 +491,9 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
 
   return {
     getState: () => state,
+    followClock() {
+      if (matchClock()) notify()
+    },
     subscribe(fn) {
       listeners.add(fn)
       return () => { listeners.delete(fn) }
