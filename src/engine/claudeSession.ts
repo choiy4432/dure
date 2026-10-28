@@ -169,20 +169,30 @@ export class ClaudeSession extends EventEmitter {
     await this.request({ subtype: 'interrupt' });
   }
 
-  async stop(): Promise<void> {
+  /**
+   * 끝낸다 — 입력을 닫고 STOP_TIMEOUT_MS 기다린 뒤에도 살아 있으면 프로세스 트리를 끈다.
+   * now: 기다리지 않고 바로 끈다 — 입력을 닫으면 Claude 는 이미 써 둔 줄을 마저 읽고 끝나므로, 그 줄을 읽히지 않으려면(끼운 말 돌려받기, probe20)
+   */
+  async stop(o: { now?: boolean } = {}): Promise<void> {
     if (!this.child || !this.running) {
       if (this._status !== 'error') this.setStatus('stopped');
       return;
     }
     this.stopping = true;
-    this.child.stdin?.end();
-    let timer: NodeJS.Timeout | undefined;
-    const timedOut = new Promise<'timeout'>((r) => {
-      timer = setTimeout(() => r('timeout'), STOP_TIMEOUT_MS);
-    });
-    const r = await Promise.race([this.exited.then(() => 'exited' as const), timedOut]);
-    clearTimeout(timer);
-    if (r === 'timeout' && this.child.pid !== undefined) {
+    if (!o.now) {
+      this.child.stdin?.end();
+      let timer: NodeJS.Timeout | undefined;
+      const timedOut = new Promise<'timeout'>((r) => {
+        timer = setTimeout(() => r('timeout'), STOP_TIMEOUT_MS);
+      });
+      const r = await Promise.race([this.exited.then(() => 'exited' as const), timedOut]);
+      clearTimeout(timer);
+      if (r === 'exited') {
+        this.setStatus('stopped');
+        return;
+      }
+    }
+    if (this.child.pid !== undefined) {
       await killTree(this.child.pid);
       await this.exited;
     }

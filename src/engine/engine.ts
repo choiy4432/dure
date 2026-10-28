@@ -178,7 +178,8 @@ export interface Engine extends EventEmitter {
   sendUser(id: AgentId, parts: UserPart[], o?: { plan?: boolean }): Promise<void>;
   /**
    * 멈춘다 — 떠 있던 승인 요청은 거절로 치우고, 계획 모드였으면 평소 모드로(묻지 않음이 켜진 에이전트면 bypass, 아니면 default).
-   * 기다리던 내 입력·전달 대기 메시지가 있으면 붙잡는다(hold) — 사람이 고를 때까지 나가지 않는다
+   * 기다리던 내 입력·전달 대기 메시지가 있으면 붙잡는다(hold) — 사람이 고를 때까지 나가지 않는다. 일하는 중 끼워 넣은 말을 Claude 가 아직 안 읽었으면
+   * claude 를 내려 그 말까지 돌려받아 붙잡고 --resume 으로 다시 띄운다(probe20)
    */
   interrupt(id: AgentId): Promise<void>;
   /** 새 대화 — 계획 모드는 끈 채로 시작한다 */
@@ -231,6 +232,8 @@ const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit']);
 /** 결과를 기다리는 고친 일의 입력 묶음 상한(세션마다) — 결과가 끝내 안 온 것(멈춤 등)이 쌓이지 않게 오래된 것부터 버린다 */
 const EDITS_PENDING_MAX = 32;
 const STOPPED_NOTICE = '멈췄어요';
+/** 멈출 때 Claude 가 아직 안 읽은 끼운 말을 claude 를 내려 돌려받았다 — 붙잡기 목록에 있다 */
+const stoppedHeldNotice = (n: number) => `멈췄어요 — Claude 가 아직 읽지 않은 말 ${n}개는 붙잡았어요`;
 /** 붙잡기 목록의 글 — 첫 줄을 이만큼까지(코드 포인트로) */
 const HOLD_TEXT_MAX = 200;
 const NO_AGENT = '에이전트를 찾을 수 없습니다.';
@@ -1006,6 +1009,9 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     // 계획 모드 답을 기다리며 쥔 입력도 기다리던 것 — 줄 맨 앞으로 돌려놓아 아래에서 함께 붙잡는다(늦게 온 답이 쓰지 않게)
     const gated = this.ungate(id, this.sessions.get(id));
+    const live = this.sessions.get(id);
+    // 끼워 넣은 말을 Claude 가 아직 안 읽었다 — 그 말로 새 차례가 열리지 않게 돌려받아 붙잡는다
+    if (live && this.midUnread(live) && !this.effortTurn.has(live)) return this.stopRetracting(id, live);
     const hadInput = (this.held.get(id)?.length ?? 0) > 0; // 아래 /effort 다시 띄우기의 근거 — 붙잡으면 줄이 빈다
     // 멈춤 = 하던 일 끊기 + 대기열 붙잡기. 승인 카드를 치우기 전에 붙잡는다 — 치우면 pump 가 돌아 기다리던 것을 보낼 수 있다
     this.holdQueue(id);
@@ -1026,6 +1032,27 @@ class EngineImpl extends EventEmitter implements Engine {
     await s.interrupt();
     await leaving;
     if (wasWorking) this.guard(id, () => this.record(id, { kind: 'notice', text: STOPPED_NOTICE }));
+  }
+
+  /**
+   * 일하는 중 끼워 넣은 말을 Claude 가 아직 안 읽은 채 멈춘다 — interrupt 만 보내면 Claude 가 그 말로 곧바로 새 차례를 연다(probe17).
+   * 이미 claude 안에 들어간 말을 돌려받는 길은 claude 를 내리는 것뿐이고, 안 읽은 말은 대화 기록에 안 남는다 — --resume 하면 그대로 이어진다(probe20).
+   * 내리면 못 읽은 줄이 돌아온다(restoreInFlight — 내 말은 기다리는 줄 맨 앞, 메시지는 queued) → 기다리던 것과 함께 붙잡는다.
+   * 그다음 --resume 으로 다시 띄워 둔다 — 잠듦으로 보이지 않고 이어서 보낼 때 깨우는 시간이 없다. 붙잡은 것은 이어서 보내기 전엔 안 나간다
+   */
+  private async stopRetracting(id: AgentId, s: ClaudeSession): Promise<void> {
+    this.perms.cancelForAgent(id, STOPPED_BY_USER);
+    const unread = this.inFlight.get(s)?.filter((x) => x.mid).length ?? 0;
+    await this.endSession(id, { now: true });
+    this.holdQueue(id);
+    await this.leavePlan(id); // 세션이 없으니 바라는 값만 거둔다 — 다시 띄울 때 계획 모드 없이
+    this.guard(id, () => this.record(id, { kind: 'notice', text: stoppedHeldNotice(unread) }));
+    try {
+      this.ensure(id, { quiet: true });
+    } catch {
+      // 폴더 없음 등 — ensure 가 오류 상태를 남겼다(붙잡은 것은 이어서 보내기를 고르면 그때)
+    }
+    this.emitStatus(id); // 다시 띄운 뒤에 — 잠듦도 함께 견준다(먼저 알리면 '잠듦'으로 남는다)
   }
 
   resumeHold(id: AgentId): void {
@@ -2516,7 +2543,8 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /** 세션을 맵에서 빼고(이후 이벤트 무시) 승인 대기를 정리한 뒤 멈춘다 — 상한 STOP_LIMIT_MS */
-  private async endSession(id: AgentId): Promise<void> {
+  /** now: 기다리지 않고 바로 끈다(ClaudeSession.stop) — 써 둔 줄을 Claude 가 마저 읽지 않게 */
+  private async endSession(id: AgentId, o: { now?: boolean } = {}): Promise<void> {
     const s = this.sessions.get(id);
     this.sessions.delete(id);
     this.ungate(id, s); // 계획 모드 답을 기다리며 쥔 입력 — 쓰지 않았으니 다음 세션이 받는다(기다리는 줄 맨 앞)
@@ -2534,7 +2562,7 @@ class EngineImpl extends EventEmitter implements Engine {
       timer = setTimeout(r, this.o.stopLimitMs ?? STOP_LIMIT_MS);
     });
     this.unstopped.add(s);
-    const stop = s.stop().catch(() => undefined).finally(() => this.unstopped.delete(s));
+    const stop = s.stop(o).catch(() => undefined).finally(() => this.unstopped.delete(s));
     const stopped = Promise.race([stop, limit]).then(() => clearTimeout(timer));
     this.stopping.add(stopped);
     try {

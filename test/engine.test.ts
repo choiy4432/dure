@@ -291,7 +291,7 @@ test('차례가 끝나면 그 에이전트에 남은 승인 요청을 정리한�
 const resultTextIs = (e: Engine, agentId: string, t: string) =>
   waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === agentId && x.event.kind === 'result' && x.event.text === t);
 
-test('일하는 중엔 사람 말도 받은 메시지도 바로 지금 차례에 끼어든다(probe17) — 멈추면 끼어든 줄로 곧바로 새 차례, 붙잡을 것이 없다', async () => {
+test('일하는 중엔 사람 말도 받은 메시지도 바로 지금 차례에 끼어든다(probe17) — 멈추면 안 읽힌 끼운 말은 claude 를 내려 돌려받아 붙잡는다(probe20)', async () => {
   const e = await start();
   const { a, b } = setup(e);
   e.updateAgent(a.id, { auto: true });
@@ -309,14 +309,29 @@ test('일하는 중엔 사람 말도 받은 메시지도 바로 지금 차례에
   expect(aTexts()).toEqual(['SLOW', 'echo 둘째', delivery]); // 둘 다 바로
   expect(e.history(a.id).flatMap((x) => (x.kind === 'user' ? [x.source] : []))).toEqual(['human', 'human', 'relay']);
 
-  // 멈추면 하던 차례는 끝나고, 끼어든 둘째로 새 차례가 곧바로 열려 그 안에서 메시지까지 읽는다(probe17)
-  const second = resultTextIs(e, a.id, '받음: echo 둘째');
+  // 멈추면 — 그대로 두면 Claude 가 아직 안 읽은 끼운 말로 곧바로 새 차례를 연다(probe17). 이미 claude 안에 들어간 말을 돌려받는 길은
+  // claude 를 내리는 것뿐(그 말은 기록에 안 남는다, probe20) — 돌려받아 붙잡고, --resume 으로 다시 띄워 둔다. 이어서 보내기 전엔 안 나간다
+  const first = spawnsOf('A')[0].pid;
+  const slept = sleepEvents(e, a.id);
   await e.interrupt(a.id);
-  expect(e.hold(a.id)).toBeNull();
-  await second;
+  expect(slept.at(-1) ?? { asleep: false }).toMatchObject({ asleep: false }); // 다시 띄웠다 — 화면이 '잠듦'으로 남지 않는다
+  expect(e.hold(a.id)?.items.map((x) => [x.source, x.text])).toEqual([['human', 'echo 둘째'], ['relay', '셋째']]);
+  expect(e.messages({ to: a.id }).map((m) => m.state)).toEqual(['queued']);
+  expect(e.history(a.id).some((x) => x.kind === 'notice' && x.text === '멈췄어요 — Claude 가 아직 읽지 않은 말 2개는 붙잡았어요')).toBe(true);
+  await until('A 가 꺼짐', () => !isAlive(first));
+  await until('다시 띄움', () => spawnsOf('A').length === 2);
+  expect(lastSpawnOf('A').argv).toContain('--resume');
   await until('쉼', () => e.status(a.id) === 'idle');
-  expect(aTexts()).toEqual(['SLOW', 'echo 둘째', delivery]); // 다시 보내지 않았다
+  await sleep(300);
+  expect(aTexts()).toEqual(['SLOW', 'echo 둘째', delivery]); // 새 claude 엔 아무것도 안 갔다
+  // 이어서 보내기 — 내 말 먼저, 메시지는 그다음
+  const own = resultTextIs(e, a.id, '받음: echo 둘째');
+  const relayed = resultTextIs(e, a.id, `받음: ${delivery}`);
+  e.resumeHold(a.id);
+  await own;
+  await relayed;
   expect(e.messages({ to: a.id }).map((m) => m.state)).toEqual(['delivered']);
+  expect(aTexts()).toEqual(['SLOW', 'echo 둘째', delivery, 'echo 둘째', delivery]);
 });
 
 test('일하는 중에 끼어든 줄이 안 읽힌 채 차례가 끝나면 그 줄의 차례까지 쉬지 않는다 — 받은 메시지도 같이 끼어 그 차례에서 읽는다', async () => {
@@ -333,7 +348,8 @@ test('일하는 중에 끼어든 줄이 안 읽힌 채 차례가 끝나면 그 �
   const own = resultTextIs(e, a.id, '받음: echo 끼어듦');
   const statuses: string[] = [];
   e.on('status', (x: StatusEvent) => x.agentId === a.id && statuses.push(x.status));
-  await e.interrupt(a.id);
+  // 엔진이 스스로 멈춘 차례(계획 모드 바꾸기 실패 — planOnFailed)처럼 세션에 바로 — 사람의 멈추기는 끼운 말을 돌려받아 붙잡는다(probe20 시험)
+  await (e as any).sessions.get(a.id).interrupt();
   expect(await resultText(first)).toBe('interrupted');
   await own;
   expect(statuses).toEqual(['idle']); // 끼어든 줄의 차례가 끝난 뒤 한 번 — 멈춘 차례와 그 차례 사이에 쉬는 틈이 없었다
@@ -530,15 +546,17 @@ test('newConversation 때 남은 사람 입력은 새 대화로 보내고 idle �
   expect(await resultText(aDone)).toBe('B 에게 전달했습니다. 지금 하는 일 사이에 읽습니다.'); // SLOW 차례에 끼어든다
 
   const delivery = '[두레 메시지 — 보낸 쪽: A(기획)]\n이어서';
+  await e.interrupt(b.id); // 끼어든 메시지를 안 읽은 채 멈춤 — claude 를 내려 돌려받고 붙잡는다(probe20), 새 대화 세션을 --resume 으로 다시 띄운다
+  expect(e.hold(b.id)?.items.map((x) => x.source)).toEqual(['relay']);
+  await until('다시 띄움', () => spawnsOf('B').length === 3);
   const last = resultTextIs(e, b.id, `받음: ${delivery}`);
-  await e.interrupt(b.id); // 멈추면 끼어든 메시지로 곧바로 새 차례(probe17) — 붙잡을 것이 없다
-  expect(e.hold(b.id)).toBeNull();
+  e.resumeHold(b.id);
   await last;
-  expect(e.status(b.id)).toBe('idle');
-  // 첫 줄은 mute 프로세스가 받기만 한 기록
-  expect(userTexts().filter((t) => t !== 'SEND B: 이어서')).toEqual(['echo 못 읽음', 'SLOW', 'echo 못 읽음', 'SLOW', delivery]);
-  expect(spawnsOf('B')).toHaveLength(2);
-  expect(flagValue(lastSpawnOf('B').argv, '--session-id')).toBe(agentOf(e, b.id).sessionId);
+  await until('쉼', () => e.status(b.id) === 'idle');
+  // 첫 줄은 mute 프로세스가 받기만 한 기록 · 끼어들었다 돌려받은 메시지는 이어서 보낼 때 다시
+  expect(userTexts().filter((t) => t !== 'SEND B: 이어서')).toEqual(['echo 못 읽음', 'SLOW', 'echo 못 읽음', 'SLOW', delivery, delivery]);
+  expect(flagValue(spawnsOf('B')[1].argv, '--session-id')).toBe(agentOf(e, b.id).sessionId);
+  expect(flagValue(lastSpawnOf('B').argv, '--resume')).toBe(agentOf(e, b.id).sessionId);
   expect(e.messages({ to: b.id }).map((m) => m.state)).toEqual(['delivered']);
 });
 
@@ -3369,7 +3387,7 @@ test('hold: 전달 대기 메시지도 붙잡고 보낸 쪽을 적는다', async
   expect(textsToA()).toEqual(['SLOW']);
 });
 
-test('hold: 일하는 중에 온 메시지는 끼어들어 붙잡을 것이 없다 — 멈추면 그 메시지로 곧바로 이어서', async () => {
+test('hold: 일하는 중에 온 메시지는 끼어든다 — 안 읽은 채 멈추면 그 메시지로 새 차례가 열리지 않고 붙잡힌다', async () => {
   const e = await start();
   const { a, b } = setup(e);
   e.updateAgent(a.id, { auto: true });
@@ -3379,12 +3397,12 @@ test('hold: 일하는 중에 온 메시지는 끼어들어 붙잡을 것이 없�
   expect(await resultText(bDone)).toBe('A 에게 전달했습니다. 지금 하는 일 사이에 읽습니다.');
   const delivery = '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n멈춰';
   expect(textsToA()).toEqual(['SLOW', delivery]);
-  const next = resultTextIs(e, a.id, `받음: ${delivery}`);
   await e.interrupt(a.id);
-  expect(e.hold(a.id)).toBeNull();
-  await next;
+  expect(e.hold(a.id)?.items.map((i) => [i.source, i.text])).toEqual([['relay', '멈춰']]);
+  expect(e.messages({ to: a.id }).map((m) => m.state)).toEqual(['queued']);
   await until('쉼', () => e.status(a.id) === 'idle');
-  expect(textsToA()).toEqual(['SLOW', delivery]);
+  await sleep(300);
+  expect(textsToA()).toEqual(['SLOW', delivery]); // 그 메시지로 새 차례가 열리지 않았다
 });
 
 test('hold: 이어서 보내기 = 내 입력 먼저 그다음 메시지, 붙잡기 풀림', async () => {
