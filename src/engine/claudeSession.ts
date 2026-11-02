@@ -11,6 +11,15 @@ export interface SessionOptions {
   args: string[];
   cwd: string;
   env: NodeJS.ProcessEnv;
+  /** 띄운 직후 다른 무엇보다 먼저 stdin 에 쓴다 — 서버 방의 머리말(MCP 설정·방 안내문, 명령 인자에 싣지 않으려고) */
+  stdinPreamble?: string;
+  /** stderr 조각을 받는 대로 — 서버 방이 DURE_PID 를 읽는다. 꼬리(errorText)는 그대로 모은다 */
+  onStderr?: (chunk: string) => void;
+  /**
+   * 이 일이 끝난 뒤에 띄운다(서버 방 — 옛 claude 정리가 끝나야 같은 에이전트를 다시 띄운다). 그동안 실행 중으로 치고 쓴 줄은 모아 두었다가
+   * 띄운 뒤 머리말 다음에 그대로. 그새 stop 하면 띄우지 않는다. 실패해도 띄운다
+   */
+  startAfter?: Promise<unknown>;
 }
 
 const STDERR_KEEP = 2048;
@@ -33,6 +42,8 @@ export class ClaudeSession extends EventEmitter {
   private stderrTail = '';
   private pending = new Map<string, Pending>();
   private exited: Promise<void> = Promise.resolve();
+  private queued: string[] | null = null; // 띄우기 전(startAfter)에 쓴 줄 — 띄운 뒤 머리말 다음에
+  private dropGate: (() => void) | null = null; // 띄우기 전에 접는다(stop) — 띄우지 않고 끝낸다
 
   constructor(private opts: SessionOptions) {
     super();
@@ -60,6 +71,45 @@ export class ClaudeSession extends EventEmitter {
       this.setStatus('error');
       return;
     }
+    if (this.opts.startAfter) return this.startAfter(this.opts.startAfter);
+    this.spawnChild();
+    this.setStatus('idle');
+  }
+
+  /** startAfter 가 끝날 때까지 띄우지 않는다 — 실행 중으로 치고 쓴 줄을 모은다. exited 는 띄운 claude 가 끝날 때(접으면 그때) */
+  private startAfter(gate: Promise<unknown>): void {
+    this.running = true;
+    this.stopping = false;
+    this._errorText = null;
+    this.queued = [];
+    this.exited = new Promise<void>((resolve) => {
+      this.dropGate = () => {
+        this.dropGate = null;
+        this.queued = null;
+        this.onExit(null);
+        resolve();
+      };
+      const open = () => {
+        if (!this.dropGate) return; // 그새 stop — 띄우지 않는다
+        this.dropGate = null;
+        try {
+          this.spawnChild();
+        } catch (e) {
+          // 띄우지 못함 — 띄운 뒤 곧 죽은 것과 같게(예기치 않은 종료)
+          this.queued = null;
+          this.stderrTail += String(e instanceof Error ? e.message : e);
+          this.onExit(null);
+          resolve();
+          return;
+        }
+        void this.exited.then(resolve);
+      };
+      gate.then(open, open);
+    });
+    this.setStatus('idle');
+  }
+
+  private spawnChild(): void {
     const child = spawn(this.opts.command, this.opts.args, {
       cwd: this.opts.cwd,
       env: this.opts.env,
@@ -75,8 +125,13 @@ export class ClaudeSession extends EventEmitter {
     child.stdout!.on('data', (d: string) => this.onStdout(d));
     child.stderr!.on('data', (d: string) => {
       this.stderrTail = (this.stderrTail + d).slice(-STDERR_KEEP);
+      this.opts.onStderr?.(d);
     });
     child.stdin!.on('error', () => {});
+    if (this.opts.stdinPreamble) child.stdin!.write(this.opts.stdinPreamble);
+    const queued = this.queued;
+    this.queued = null;
+    for (const line of queued ?? []) child.stdin!.write(line);
     this.exited = new Promise<void>((resolve) => {
       let done = false;
       const finish = (code: number | null) => {
@@ -91,7 +146,6 @@ export class ClaudeSession extends EventEmitter {
       });
       child.on('close', (code) => finish(code));
     });
-    this.setStatus('idle');
   }
 
   private onStdout(chunk: string): void {
@@ -141,7 +195,8 @@ export class ClaudeSession extends EventEmitter {
   }
 
   private write(line: string): void {
-    this.child?.stdin?.write(line);
+    if (this.queued) this.queued.push(line);
+    else this.child?.stdin?.write(line);
   }
 
   /** quiet: 그 차례의 result 까지 상태를 working 으로 바꾸지 않는다 — 모델을 부르지 않는 로컬 명령(/effort)을 엔진이 몰래 보낼 때 */
@@ -174,6 +229,12 @@ export class ClaudeSession extends EventEmitter {
    * now: 기다리지 않고 바로 끈다 — 입력을 닫으면 Claude 는 이미 써 둔 줄을 마저 읽고 끝나므로, 그 줄을 읽히지 않으려면(끼운 말 돌려받기, probe20)
    */
   async stop(o: { now?: boolean } = {}): Promise<void> {
+    if (this.dropGate) {
+      // 띄우기 전 — 띄우지 않고 멈춤으로 끝낸다
+      this.stopping = true;
+      this.dropGate();
+      return;
+    }
     if (!this.child || !this.running) {
       if (this._status !== 'error') this.setStatus('stopped');
       return;

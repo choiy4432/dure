@@ -289,3 +289,90 @@ test('interrupt: ASK 가 승인 응답을 기다리는 중 → result ok false �
   srv.closeAllConnections();
   await new Promise((r) => srv.close(r));
 });
+
+// ── 서버 방 손잡이 — 머리말·stderr 조각·띄우기 미루기 ──
+/** stdin 을 그대로 파일에 받아 적는 가짜(입력이 끝나면 끝남) — 무엇을 어떤 차례로 썼는지 본다 */
+const COPY_STDIN =
+  "const fs=require('fs');const f=process.argv[1];fs.writeFileSync(f,'');process.stderr.write('DURE_PID='+process.pid+String.fromCharCode(10));" +
+  "process.stdin.on('data',d=>fs.appendFileSync(f,d));process.stdin.on('end',()=>process.exit(0))";
+function copier(o: { stdinPreamble?: string; onStderr?: (c: string) => void; startAfter?: Promise<unknown> } = {}) {
+  const out = path.join(dir, 'stdin.txt');
+  const s = new ClaudeSession({ command: process.execPath, args: ['-e', COPY_STDIN, out], cwd: dir, env: { ...process.env }, ...o });
+  sessions.push(s);
+  return { s, out };
+}
+const userLine = (t: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: t }] } });
+
+test('stdinPreamble: 띄운 직후 맨 먼저 쓴다 — 그다음 보낸 줄', async () => {
+  const { s, out } = copier({ stdinPreamble: 'QUFB\nQkJC\n' });
+  s.start();
+  s.send(text('하나'));
+  await s.stop();
+  const got = fs.readFileSync(out, 'utf8');
+  expect(got.startsWith('QUFB\nQkJC\n')).toBe(true);
+  expect(got.slice('QUFB\nQkJC\n'.length).trim()).toBe(userLine('하나'));
+});
+
+test('onStderr: stderr 조각을 받는 대로 넘긴다 — errorText(stderr 꼬리)는 그대로', async () => {
+  const chunks: string[] = [];
+  const { s } = copier({ onStderr: (c) => chunks.push(c) });
+  s.start();
+  await new Promise<void>((r) => {
+    const t = setInterval(() => chunks.join('').includes('\n') && (clearInterval(t), r()), 10);
+  });
+  expect(chunks.join('')).toBe(`DURE_PID=${s.pid}\n`);
+  await s.stop();
+
+  const seen: string[] = [];
+  const crash = new ClaudeSession({ ...(make() as any).opts, onStderr: (c: string) => seen.push(c) });
+  sessions.push(crash);
+  crash.start();
+  const ex = waitFor<any>(crash, 'exit');
+  crash.send(text('CRASH'));
+  await ex;
+  expect(seen.join('')).toContain('fake crash');
+  expect(crash.errorText).toContain('fake crash');
+});
+
+test('startAfter: 끝날 때까지 띄우지 않고 쓴 줄을 모아 둔다 — 띄우면 머리말 → 모은 줄 → 그 뒤 줄 차례', async () => {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  const { s, out } = copier({ stdinPreamble: 'PRE\n', startAfter: gate });
+  const statuses: SessionStatus[] = [];
+  s.on('status', (x) => statuses.push(x));
+  s.start();
+  expect(s.status).toBe('idle');
+  s.send(text('하나')); // 띄우기 전이어도 받는다
+  expect(s.status).toBe('working');
+  await new Promise((r) => setTimeout(r, 50));
+  expect(s.pid).toBeUndefined();
+  expect(fs.existsSync(out)).toBe(false);
+  open();
+  await new Promise<void>((r) => {
+    const t = setInterval(() => s.pid !== undefined && (clearInterval(t), r()), 10);
+  });
+  s.send(text('둘'));
+  await s.stop();
+  expect(fs.readFileSync(out, 'utf8')).toBe(`PRE\n${userLine('하나')}\n${userLine('둘')}\n`);
+  expect(statuses.at(-1)).toBe('stopped');
+});
+
+test('startAfter: 끝나기 전에 stop — 띄우지 않고 바로 멈춤(exit expected), 대기 요청은 거절', async () => {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  const { s, out } = copier({ startAfter: gate });
+  s.start();
+  const ex = waitFor<any>(s, 'exit');
+  const req = s.request({ subtype: 'initialize' }, 5000);
+  const rejected = expect(req).rejects.toThrow('프로세스가 종료되었습니다');
+  await s.stop();
+  expect(await ex).toMatchObject({ expected: true, code: null });
+  await rejected;
+  expect(s.status).toBe('stopped');
+  expect(() => s.send(text('x'))).toThrow('세션이 실행 중이 아닙니다');
+  open();
+  await new Promise((r) => setTimeout(r, 150));
+  expect(s.pid).toBeUndefined();
+  expect(fs.existsSync(out)).toBe(false);
+  await s.forceKill(10); // 띄우지 않은 세션 — 아무 일도 없다
+});
