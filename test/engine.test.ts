@@ -5412,7 +5412,80 @@ test('돌아가기 — 경계·알림·세션·--resume 대상', async () => {
   expect(convUserTexts(e.history(a.id))).toEqual(['echo 하나', 'echo 셋']);
 });
 
-test('돌아가기 막힘 — 일하는 중·30일 지난 대화·지금 대화·없는 대화는 거절하고 기록·세션 그대로', async () => {
+test('돌아간 대화를 Claude 가 다른 세션 id 로 이어 가도 지금 대화다 — 대화 탭이 비지 않고 목록의 지금 표시도 그것', async () => {
+  const { e, env } = await startConv();
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 둘');
+  const s2 = agentOf(e, a.id).sessionId;
+  await e.resumeConversation(a.id, s1);
+  expect(e.pastCount(a.id)).toBe(1); // 기억해 둔 수 — 세션 id 가 바뀌면 버려야 한다
+  const other = crypto.randomUUID();
+  env.FAKE_INIT_SESSION = other; // --resume 했는데 init 이 다른 세션을 알린다
+
+  await talk(e, a.id, 'echo 셋');
+
+  expect(flagValue(lastSpawnOf('A').argv, '--resume')).toBe(s1);
+  expect(agentOf(e, a.id).sessionId).toBe(other);
+  const h = e.history(a.id);
+  expect(h[0]).toMatchObject({ kind: 'notice', text: '이 대화로 돌아왔어요' });
+  expect(convUserTexts(h)).toEqual(['echo 셋']);
+  const list = e.conversations(a.id);
+  expect(list.filter((c) => c.current)).toMatchObject([{ key: other, title: 'echo 셋', why: null }]);
+  expect(list.filter((c) => !c.current).map((c) => c.key)).toEqual([s2, s1]);
+  expect(e.conversation(a.id, other)).toEqual(h);
+  expect(e.pastCount(a.id)).toBe(2);
+});
+
+test('돌아가기 막힘 — 뒤에서 도는 명령이 있으면 끄지 않고 거절', async () => {
+  const { e } = await startConv();
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  const started = resultTextIs(e, a.id, 'BG STARTED');
+  await e.sendUser(a.id, text('BGRUN 1000'));
+  await started;
+  const bgDone = resultTextIs(e, a.id, 'BG DONE');
+  const s2 = agentOf(e, a.id).sessionId;
+  expect(e.sleepBlock(a.id)).toBe('background');
+
+  await expect(e.resumeConversation(a.id, s1)).rejects.toThrow('뒤에서 도는 명령이 끝나면 돌아갈 수 있어요');
+
+  expect(agentOf(e, a.id).sessionId).toBe(s2);
+  expect(isAlive(lastSpawnOf('A').pid)).toBe(true);
+  await bgDone;
+});
+
+test('이어 갈 수 없는 이유 — Claude 기록이 없으면 30일이 넘은 대화만 30일이 지나서라고', async () => {
+  const { e, env } = await startConv();
+  const { a } = setup(e);
+  await e.shutdown();
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const oldId = crypto.randomUUID();
+  const newId = crypto.randomUUID();
+  const lines = [
+    { t: now - 31 * DAY, kind: 'user', source: 'human', parts: [{ type: 'text', text: '오래된' }] },
+    { t: now - 31 * DAY + 1, kind: 'boundary', ended: oldId },
+    { t: now - 2 * DAY, kind: 'user', source: 'human', parts: [{ type: 'text', text: '요즘' }] },
+    { t: now - 2 * DAY + 1, kind: 'boundary', ended: newId },
+  ];
+  fs.mkdirSync(path.join(dataDir, 'history'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const e2 = await start({}, false, { env });
+  expect(e2.conversations(a.id).map((c) => [c.title, c.why])).toEqual([['요즘', 'gone'], ['오래된', 'gone']]);
+
+  await expect(e2.resumeConversation(a.id, oldId)).rejects.toThrow('30일이 지나 이어 갈 수 없어요');
+  await expect(e2.resumeConversation(a.id, newId)).rejects.toThrow('Claude 쪽 기록이 없어 이어 갈 수 없어요');
+  const fork = (key: string) => () => e2.forkAgent({ from: a.id, key, name: 'A 2', role: '기획' });
+  expect(fork(oldId)).toThrow('30일이 지나 이어 갈 수 없어요');
+  expect(fork(newId)).toThrow('Claude 쪽 기록이 없어 이어 갈 수 없어요');
+});
+
+test('돌아가기 막힘 — 일하는 중·Claude 기록이 없는 대화·지금 대화·없는 대화는 거절하고 기록·세션 그대로', async () => {
   const { e, claudeDir } = await startConv();
   const { a } = setup(e);
   await talk(e, a.id, 'echo 하나');
@@ -5426,7 +5499,7 @@ test('돌아가기 막힘 — 일하는 중·30일 지난 대화·지금 대화�
   fs.rmSync(path.join(claudeDir, 'projects', 'fake', `${s1}.jsonl`));
   const before = e.history(a.id, { all: true }).length;
 
-  await expect(e.resumeConversation(a.id, s1)).rejects.toThrow('30일이 지나 이어 갈 수 없어요');
+  await expect(e.resumeConversation(a.id, s1)).rejects.toThrow('Claude 쪽 기록이 없어 이어 갈 수 없어요'); // 방금 대화 — 30일이 지나서가 아니다
   await expect(e.resumeConversation(a.id, s3)).rejects.toThrow('그 대화를 찾을 수 없어요');
   await expect(e.resumeConversation(a.id, 'nope')).rejects.toThrow('그 대화를 찾을 수 없어요');
 
@@ -5636,6 +5709,22 @@ test('갈래 — 새 에이전트, 줄 복사·알림, 첫 실행만 --fork-sess
   expect(agentOf(e, a.id).sessionId).toBe(src.sessionId);
 });
 
+test('갈래 — 첫 init 의 저장은 한 번에(started·forkOf 함께) — 뒤 저장만 실패해 다시 갈래 치는 일이 없게', async () => {
+  const { e } = await startConv();
+  const { a, s1 } = await pastOfA(e);
+  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+  const store = (e as any).store;
+  const realUpdate = store.updateAgent.bind(store);
+  const patches: object[] = [];
+  store.updateAgent = (id: string, patch: object) => {
+    if (id === made.id) patches.push(patch);
+    return realUpdate(id, patch);
+  };
+  await talk(e, made.id, 'echo 둘');
+  expect(patches.filter((p) => 'started' in p || 'forkOf' in p || 'sessionId' in p)).toEqual([{ started: true, forkOf: null }]);
+  expect(agentOf(e, made.id)).toMatchObject({ started: true, forkOf: null, sessionId: made.sessionId });
+});
+
 test('갈래 — 앱을 다시 켜도 첫 실행 전이면 --fork-session', async () => {
   const { e, env } = await startConv();
   const { a, s1 } = await pastOfA(e);
@@ -5697,7 +5786,7 @@ test('갈래 — 지난 대화가 아니거나 이어 갈 수 없거나 이름�
   fs.rmSync(path.join(claudeDir, 'projects', 'fake', `${s2}.jsonl`));
   const fork = (key: string, name = 'A 2') => () => e.forkAgent({ from: a.id, key, name, role: '기획' });
 
-  expect(fork(s2)).toThrow('30일이 지나 이어 갈 수 없어요');
+  expect(fork(s2)).toThrow('Claude 쪽 기록이 없어 이어 갈 수 없어요');
   expect(fork(s3)).toThrow('그 대화를 찾을 수 없어요');
   expect(fork('nope')).toThrow('그 대화를 찾을 수 없어요');
   expect(fork(s1, 'a')).toThrow('이미 있는 이름입니다');

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { nextAgentName, pastDateLine, resumeBlockOf } from '../../src/renderer/panel/pastView'
+import { pastWhyText } from '../../src/shared/pastWhy'
 
 // 지난 대화 탭의 순수 도우미 — 날짜 줄 · 돌아가기 막힘 · 갈래 이름
 
@@ -60,5 +61,22 @@ describe('nextAgentName — <원래 이름> 2, 겹치면 3, 4…', () => {
   it('대소문자·앞뒤 공백은 같은 이름으로 본다(엔진 이름 검사와 같게)', () => {
     expect(nextAgentName('Web', ['web', ' WEB 2 ', 'web 3'])).toBe('Web 4')
     expect(nextAgentName('  웹 화면 ', ['웹 화면 2'])).toBe('웹 화면 3')
+  })
+})
+
+describe('pastWhyText — 이어 갈 수 없는 이유(엔진 거절 글과 같은 도우미)', () => {
+  const DAY = 86_400_000
+  const now = at(2026, 11, 2, 16, 0)
+
+  it('old 는 날짜와 상관없이 예전 대화', () => {
+    expect(pastWhyText('old', now - 40 * DAY, now)).toBe('예전 대화라 읽기만 돼요')
+    expect(pastWhyText('old', now, now)).toBe('예전 대화라 읽기만 돼요')
+  })
+
+  it('gone 은 30일보다 오래된 대화만 30일이 지나서, 그 밖은 Claude 쪽 기록이 없어서', () => {
+    expect(pastWhyText('gone', now - 30 * DAY - 1, now)).toBe('30일이 지나 이어 갈 수 없어요')
+    expect(pastWhyText('gone', now - 30 * DAY, now)).toBe('Claude 쪽 기록이 없어 이어 갈 수 없어요')
+    expect(pastWhyText('gone', now - 2 * DAY, now)).toBe('Claude 쪽 기록이 없어 이어 갈 수 없어요')
+    expect(pastWhyText('gone', now + DAY, now)).toBe('Claude 쪽 기록이 없어 이어 갈 수 없어요') // 시계가 뒤로 간 경우
   })
 })

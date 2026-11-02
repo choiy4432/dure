@@ -12,7 +12,8 @@ export interface Conversation {
 
 /**
  * 기록(경계 포함)을 대화별로 나눈다 — 처음 나타난 순서.
- * 구간 k 의 세션 = 구간을 연 경계의 resumed ?? 구간을 닫은 경계의 ended ?? (마지막 구간이면 지금 세션) ?? 모름.
+ * 구간 k 의 세션 = 마지막 구간이면 지금 세션 · 아니면 구간을 닫은 경계의 ended ?? 구간을 연 경계의 resumed ?? 모름.
+ * (돌아간 대화를 Claude 가 다른 세션 id 로 이어 가면 그 구간은 resumed 가 아니라 지금·닫은 세션이다 — engine noteInit 이 init 의 id 를 저장한다)
  * 세션이 같은 구간은 처음 나타난 대화에 이어 붙인다(지난 대화로 돌아갔다 온 경우)
  */
 export function splitConversations(items: HistoryItem[], currentSessionId: string): Conversation[] {
@@ -28,7 +29,7 @@ export function splitConversations(items: HistoryItem[], currentSessionId: strin
   segs.forEach((seg, k) => {
     if (!seg.items.length) return;
     const last = k === segs.length - 1;
-    const sessionId = seg.opened ?? seg.closed ?? (last ? currentSessionId : null);
+    const sessionId = last ? currentSessionId : (seg.closed ?? seg.opened ?? null);
     const key = sessionId ?? `seg:${k}`;
     const had = byKey.get(key);
     if (had) had.items.push(...seg.items);

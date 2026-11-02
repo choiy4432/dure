@@ -6,7 +6,7 @@ import { buildTranscript } from '../state/transcript'
 import { MOTION } from '../lib/motion'
 import { PresenceList, useMotion } from '../lib/presence'
 import { useNow } from '../lib/useNow'
-import { errorMessage, PAST, PAST_WHY, RESUME_BLOCK_WORD } from '../lib/words'
+import { errorMessage, PAST, pastWhyText, RESUME_BLOCK_WORD } from '../lib/words'
 import { ChatItem } from './ChatItem'
 import { ViewShown } from './PanelTabs'
 import { nextAgentName, pastDateLine, resumeBlockOf } from './pastView'
@@ -123,7 +123,7 @@ function PastRow({ conv: c, now, onChoose, rowRef }: {
 }) {
   const ref = useRef<HTMLButtonElement | null>(null)
   useMotion(ref, MOTION.line)
-  const third = c.why ? PAST_WHY[c.why] : c.lastReply
+  const third = c.why ? pastWhyText(c.why, c.at, now) : c.lastReply
   return (
     <button
       ref={el => {
@@ -230,7 +230,7 @@ function PastRead({ agentId, conv, now, onBack, onResumed }: {
     onBack()
   }
 
-  const why = conv.why ? PAST_WHY[conv.why] : null
+  const why = conv.why ? pastWhyText(conv.why, conv.at, now) : null
   const blocked = block ? RESUME_BLOCK_WORD[block] : null
   // 안내 자리 — 이어 갈 수 없는 이유 > 지금 막는 까닭 > 거절당한 글 > 평소 안내
   const reason = why ?? blocked

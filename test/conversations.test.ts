@@ -40,6 +40,17 @@ test('돌아갔다 다시 새 대화', () => {
   expect(cs[0].items).toEqual([u1, n5, u6]);
 });
 
+test('돌아간 뒤 Claude 가 다른 세션 id 를 알렸다 — 마지막 구간은 지금 세션, 닫힌 구간은 닫은 경계의 ended', () => {
+  const u1 = u(1, 'a'), u3 = u(3, 'b'), n5 = n(5, '이 대화로 돌아왔어요'), u6 = u(6, 'c'), u8 = u(8, 'd');
+  const cs = splitConversations([u1, b(2, 'S1'), u3, b(4, 'S2', 'S1'), n5, u6], 'B');
+  expect(cs.map((c) => [c.key, c.sessionId])).toEqual([['S1', 'S1'], ['S2', 'S2'], ['B', 'B']]);
+  expect(cs[2].items).toEqual([n5, u6]);
+  // 그 뒤 새 대화 — 돌아간 구간은 resumed(S1) 가 아니라 닫은 세션(B)
+  const after = splitConversations([u1, b(2, 'S1'), u3, b(4, 'S2', 'S1'), n5, u6, b(7, 'B'), u8], 'S3');
+  expect(after.map((c) => c.key)).toEqual(['S1', 'S2', 'B', 'S3']);
+  expect(after[2].items).toEqual([n5, u6]);
+});
+
 test('사람 말 없는 구간은 목록감이 아니다', () => {
   const n0 = n(0, '폴더를 찾을 수 없습니다');
   const cs = splitConversations([n0, b(1), u(2, 'x')], 'S2');

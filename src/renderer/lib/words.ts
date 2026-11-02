@@ -106,11 +106,8 @@ export const PAST = {
   more: '앞 줄 모두 보기',
 } as const
 
-/** 이어 갈 수 없는 이유 — old: 세션을 모름 · gone: Claude 쪽 대화 파일이 없음(목록 셋째 줄 · 읽기 아래 줄) */
-export const PAST_WHY: Record<'old' | 'gone', string> = {
-  old: '예전 대화라 읽기만 돼요',
-  gone: '30일이 지나 이어 갈 수 없어요',
-}
+/** 이어 갈 수 없는 이유 글(목록 셋째 줄 · 읽기 아래 줄) — 엔진이 거절하는 글과 같다(gone 은 30일이 넘은 대화만 '30일이 지나') */
+export { pastWhyText } from '../../shared/pastWhy'
 
 /** 돌아가기를 막는 까닭 — 읽기 아래 줄(엔진이 거절하는 글과 같다) */
 export const RESUME_BLOCK_WORD: Record<'working' | 'asking' | 'held', string> = {

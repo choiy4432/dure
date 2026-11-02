@@ -15,6 +15,7 @@ import { startMcpServer, type McpServerHandle } from './mcpServer';
 import { Permissions } from './permissions';
 import { DENY } from '../shared/denyTexts';
 import { josa } from '../shared/josa';
+import { pastWhyText } from '../shared/pastWhy';
 import { Router, AUTO_CHAIN_LIMIT, joinDeliveries, type Delivery } from './router';
 import { EFFORT_LEVELS, SLEEP_CHOICES, SLEEP_DEFAULT_MIN, THEME_PREFS, type EffortLevel, type NotifyPrefs, type SleepBlock, type ThemePref } from './types';
 import { toContextUsage } from './usage';
@@ -262,13 +263,11 @@ const NO_CONVERSATION = '그 대화를 찾을 수 없어요';
 const RESUME_BLOCKED: Record<SleepBlock, string> = {
   working: '일이 끝나면 돌아갈 수 있어요',
   subagents: '일이 끝나면 돌아갈 수 있어요',
-  background: '일이 끝나면 돌아갈 수 있어요',
+  background: '뒤에서 도는 명령이 끝나면 돌아갈 수 있어요', // 끝나지 않는 명령(dev 서버)일 수 있다 — 끄지 않고 막는다
   unread: '일이 끝나면 돌아갈 수 있어요',
   asking: '기다리는 카드를 먼저 처리해 주세요',
   'waiting-input': '붙잡아 둔 입력을 먼저 처리해 주세요',
 };
-/** 이어 갈 수 없는 대화 — old: 세션을 모름 · gone: Claude 쪽 대화 파일이 없음 */
-const RESUME_WHY: Record<'old' | 'gone', string> = { old: '예전 대화라 읽기만 돼요', gone: '30일이 지나 이어 갈 수 없어요' };
 const RESUMED_NOTICE = '이 대화로 돌아왔어요';
 /** --resume 했는데 Claude 쪽 대화 기록이 없었다(probe21) — 새 대화로 이어 간다 */
 const RESUME_LOST_NOTICE = 'Claude 쪽 기록이 없어 이어 가지 못했어요 — 새 대화로 시작해요';
@@ -1184,7 +1183,7 @@ class EngineImpl extends EventEmitter implements Engine {
     if (!target) throw new Error(NO_CONVERSATION);
     const block = this.resumeBlock(id);
     if (block) throw new Error(RESUME_BLOCKED[block]);
-    if (target.why) throw new Error(RESUME_WHY[target.why]);
+    if (target.why) throw new Error(pastWhyText(target.why, target.at, Date.now()));
     // 새 대화와 같은 길 — 계획 모드는 끈 채로, 손으로 재운 표는 풀어 고른 에이전트면 돌아간 대화로 미리 띄운다
     this.wantPlan(id, false);
     this.handSlept.delete(id);
@@ -1204,7 +1203,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const src = this.need(i.from);
     const target = this.conversations(i.from).find((c) => c.key === i.key && !c.current);
     if (!target) throw new Error(NO_CONVERSATION);
-    if (target.why) throw new Error(RESUME_WHY[target.why]);
+    if (target.why) throw new Error(pastWhyText(target.why, target.at, Date.now()));
     const conv = this.splitOf(i.from).find((c) => c.key === i.key)!;
     const added = this.store.addAgent({ roomId: src.roomId, name: i.name, role: i.role, folder: src.folder });
     // 자동·묻지 않음·늘 허용은 새 에이전트 기본값(addAgent) 그대로
@@ -2586,17 +2585,18 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /** 차례의 init — 시작됨 · 권한 모드 · 풀린 모델 id(엔진이 보낸 /effort 차례에서도) */
   private noteInit(id: AgentId, ev: Extract<StreamEvent, { kind: 'init' }>): void {
-    // 이어 받은 세션이 다른 id 로 시작하면 저장값을 그것으로 — 다음 --resume 이 맞는 세션을 가리키게
+    // 저장은 한 번에 — 나눠 쓰다 뒤 것만 실패하면 갈래가 다시 갈래 친다. 실패해도 init 은 알린다(다음 차례의 init 때 다시 쓴다)
     this.guard(id, () => {
-      if (ev.sessionId && this.store.agent(id)?.sessionId !== ev.sessionId) this.store.updateAgent(id, { sessionId: ev.sessionId });
-    });
-    // 저장이 실패해도 init 은 알린다 — started 는 다음 차례의 init 때 다시 쓴다
-    this.guard(id, () => {
-      if (this.store.agent(id)?.started === false) this.store.updateAgent(id, { started: true });
-    });
-    // 갈래 친 새 세션이 생겼다 — 다음 실행부터는 이 세션을 --resume
-    this.guard(id, () => {
-      if (this.store.agent(id)?.forkOf) this.store.updateAgent(id, { forkOf: null });
+      const agent = this.store.agent(id);
+      const patch: AgentPatch = {};
+      // 이어 받은 세션이 다른 id 로 시작하면 저장값을 그것으로 — 다음 --resume 이 맞는 세션을 가리키게(지난 대화 수도 다시 센다)
+      if (ev.sessionId && agent?.sessionId !== ev.sessionId) patch.sessionId = ev.sessionId;
+      if (agent?.started === false) patch.started = true;
+      // 갈래 친 새 세션이 생겼다 — 다음 실행부터는 이 세션을 --resume
+      if (agent?.forkOf) patch.forkOf = null;
+      if (!Object.keys(patch).length) return;
+      if (patch.sessionId) this.forgetPastCount(id); // 저장이 실패해도 메모리 값은 바뀐다(store.updateAgent 는 바꾼 뒤 쓴다)
+      this.store.updateAgent(id, patch);
     });
     this.guard(id, () => {
       this.setModeNow(id, ev.permissionMode);

@@ -156,6 +156,17 @@ describe('지난 대화 탭', () => {
     expect(old.querySelector('.pc-s')).toHaveTextContent('예전 대화라 읽기만 돼요')
   })
 
+  it('Claude 쪽 기록이 없어도 30일이 안 된 대화는 까닭을 짐작하지 않는다 — 목록 셋째 줄 · 읽기 아래 줄', async () => {
+    conversations.mockResolvedValue([CONVS[0], { ...CONVS[1], resumable: false, why: 'gone' }, CONVS[2]]) // 3일 전 · 34일 전
+    await openPast()
+    const [, login, main] = rows()
+    expect(login.querySelector('.pc-s')).toHaveTextContent('Claude 쪽 기록이 없어 이어 갈 수 없어요')
+    expect(main.querySelector('.pc-s')).toHaveTextContent('30일이 지나 이어 갈 수 없어요')
+    await read(1)
+    expect(bar()).toHaveTextContent('Claude 쪽 기록이 없어 이어 갈 수 없어요')
+    expect(resumeBtn()).toBeDisabled()
+  })
+
   it('목록은 탭을 열 때마다 · 지난 대화 수가 바뀔 때 다시 받는다', async () => {
     const { store } = await openPast()
     expect(conversations).toHaveBeenCalledTimes(1)
