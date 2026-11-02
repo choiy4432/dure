@@ -6042,6 +6042,9 @@ describe('서버 방 띄우기', () => {
     expect(flagValue(argv, '--mcp-config')).toBe(path.join(launch.runDir, 'mcp.json'));
     expect(flagValue(argv, '--append-system-prompt-file')).toBe(path.join(launch.runDir, 'prompt.md'));
     expect(argv).toEqual(expect.arrayContaining(['--disallowedTools', 'SendMessage', 'ListAgents', '--session-id', web.sessionId]));
+    // 이 PC 의 claude 와 같은 도구 대기 시간 — ssh 는 환경을 넘기지 않으니 서버 명령이 넣는다
+    expect(lastSpawnOf('web').mcpToolTimeout).toBe('86400000');
+    expect(start.script).toContain("export MCP_TOOL_TIMEOUT='86400000'");
     // 이 PC 에는 MCP 설정을 쓰지 않는다
     expect(fs.existsSync(path.join(dataDir, 'run', web.id, 'mcp.json'))).toBe(false);
     // 정리에 쓸 서버 pid 와 띄우기 id
@@ -6270,7 +6273,7 @@ describe('서버 방 띄우기', () => {
   }, 30_000);
 
   test('키 거절·접속 안 됨·서버 키 바뀜·claude 없음·폴더 없음 — 종류별 안내 한 줄 · 오류 상태 아님 · 보낸 말은 기다린다', async () => {
-    const { e, room, web, mode, events, notices } = await remoteRoom();
+    const { e, root, room, web, mode, events, notices } = await remoteRoom();
     const issue = async (m: string, kind: string) => {
       mode(m);
       await e.sendUser(web.id, text(`echo ${m}`));
@@ -6294,6 +6297,7 @@ describe('서버 방 띄우기', () => {
     await e.sendUser(gone.id, text('echo 없음'));
     await until('no-folder', () => e.remoteIssue(gone.id)?.kind === 'no-folder', 10_000);
     expect(notices(gone.id)).toEqual(['서버에 그 폴더가 없어요']);
+    expect(fs.existsSync(path.join(root, 'home', 'a', '.dure', 'run', gone.id))).toBe(false); // 토큰이 든 파일을 남기지 않는다
 
     // 고치고 다시 보내면 기다리던 말부터 간다 · 안내는 지운다
     const done = resultOf(e, web.id);

@@ -7,6 +7,7 @@ import {
   hostArgs, SSH_OPTIONS, shq, remoteRunDir, remoteRunFiles, remoteLaunchScript, launchArgs, launchPreamble,
   cleanupScript, checkScript, transcriptCheckScript, classifyExit, parsePid, isLoginFailure, posixJoin, parseCheckOutput, sshErrorLines, isSafeId,
 } from '../src/engine/remote';
+import { SPAWN_ENV_EXTRA } from '../src/engine/claudeArgs';
 
 const hasBash = (() => {
   try { return spawnSync('bash', ['--version']).status === 0; } catch { return false; }
@@ -75,7 +76,23 @@ describe('remoteLaunchScript', () => {
     expect(s).toContain(`'--append-system-prompt-file' "$HOME/.dure/run/ag1/ab12cd34/prompt.md"`);
     expect(s).toContain('echo "DURE_PID=$$" >&2');
     expect(s).not.toContain('setsid');
-    expect(s).toMatch(/export DURE_RUN=ag1\.ab12cd34; exec claude /);
+    // 이 PC 의 claude 와 같은 환경(SPAWN_ENV_EXTRA) — 표식 바로 뒤, exec 바로 앞. ssh 는 환경을 넘기지 않는다
+    const extra = Object.entries(SPAWN_ENV_EXTRA).map(([k, v]) => `export ${k}=${shq(v)}; `).join('');
+    expect(extra).toContain("export MCP_TOOL_TIMEOUT='86400000'; ");
+    expect(s).toContain(`export DURE_RUN=ag1.ab12cd34; ${extra}exec claude `);
+  });
+  it('cd 가 먼저 — 폴더가 없으면 run 폴더·머리말 파일을 만들기 전에 끝난다 · pid·표식·exec 는 파일을 쓴 뒤', () => {
+    const s = make('/home/a/web');
+    const at = (x: string) => {
+      const i = s.indexOf(x);
+      expect(i).toBeGreaterThanOrEqual(0);
+      return i;
+    };
+    const order = [
+      'umask 077', "cd '/home/a/web' || exit 3", 'mkdir -p "$d"', 'IFS= read -r a', 'IFS= read -r b',
+      'base64 -d > "$d/mcp.json"', 'base64 -d > "$d/prompt.md"', 'echo "DURE_PID=$$" >&2', 'export DURE_RUN=', 'export MCP_TOOL_TIMEOUT=', 'exec claude ',
+    ].map(at);
+    expect(order).toEqual([...order].sort((x, y) => x - y));
   });
   it('토큰·포트가 스크립트에 없다', () => {
     expect(make()).not.toMatch(/Bearer|127\.0\.0\.1|token/i);
@@ -91,17 +108,18 @@ describe('remoteLaunchScript', () => {
       const home = join(tmp, 'home');
       const folder = `${posix(join(tmp, 'my app'))}/it's $HOME`;
       execFileSync('bash', ['-c', `mkdir -p ${shq(posix(fake))} ${shq(posix(home))} ${shq(folder)}`]);
-      writeFileSync(join(fake, 'claude'), '#!/bin/bash\nprintf "[%s]\\n" "$@"\npwd\necho "RUN=$DURE_RUN"\ncat\n');
+      writeFileSync(join(fake, 'claude'), '#!/bin/bash\nprintf "[%s]\\n" "$@"\npwd\necho "RUN=$DURE_RUN"\necho "TIMEOUT=$MCP_TOOL_TIMEOUT"\ncat\n');
       execFileSync('bash', ['-c', `chmod +x ${shq(posix(fake))}/claude`]);
       const script = remoteLaunchScript({
         agentId: 'ag1', launchId: 'ab12cd34', folder,
         claudeArgs: ['-p', '--mcp-config', files.mcp, '--append-system-prompt-file', files.prompt, '-n', `it's $x`],
       });
       const mcp = '{"t":"a\'b"}', prompt = 'hello $HOME `x` "q"\n';
+      const { MCP_TOOL_TIMEOUT: _drop, ...outer } = process.env; // 서버 쪽 환경엔 없다 — 스크립트가 넣어야 한다
       const r = spawnSync('bash', ['-c', script], {
         input: launchPreamble(mcp, prompt) + 'REST\n',
         encoding: 'utf8',
-        env: { ...process.env, HOME: posix(home), PATH: `${posix(fake)}:${process.env.PATH}` },
+        env: { ...outer, HOME: posix(home), PATH: `${posix(fake)}:${process.env.PATH}` },
       });
       expect(r.stderr).toMatch(/DURE_PID=\d+/);
       const out = r.stdout.split('\n');
@@ -110,10 +128,29 @@ describe('remoteLaunchScript', () => {
       expect(out).toContain(`[it's $x]`);
       expect(out).toContain(folder);
       expect(out).toContain('RUN=ag1.ab12cd34');
+      expect(out).toContain(`TIMEOUT=${SPAWN_ENV_EXTRA.MCP_TOOL_TIMEOUT}`);
       expect(out).toContain('REST');
       const dir = join(home, '.dure', 'run', 'ag1', 'ab12cd34');
       expect(readFileSync(join(dir, 'mcp.json'), 'utf8')).toBe(mcp);
       expect(readFileSync(join(dir, 'prompt.md'), 'utf8')).toBe(prompt);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('remoteLaunchScript — 없는 폴더', () => {
+  it.skipIf(!hasBash)('bash 로 돌리면 3 으로 끝나고 서버에 run 폴더(토큰 파일)를 남기지 않는다', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'dure-nofolder-'));
+    try {
+      const home = join(tmp, 'home');
+      execFileSync('bash', ['-c', `mkdir -p ${shq(posix(home))}`]);
+      const files = remoteRunFiles('ag1', 'ab12cd34');
+      const script = remoteLaunchScript({ agentId: 'ag1', launchId: 'ab12cd34', folder: `${posix(tmp)}/nope`, claudeArgs: ['--mcp-config', files.mcp] });
+      const r = spawnSync('bash', ['-c', script], { input: launchPreamble('{"t":"secret"}', 'p'), encoding: 'utf8', env: { ...process.env, HOME: posix(home) } });
+      expect(r.status).toBe(3);
+      expect(r.stderr).not.toMatch(/DURE_PID=/);
+      expect(existsSync(join(home, '.dure'))).toBe(false);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

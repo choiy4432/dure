@@ -25,7 +25,8 @@
 //                                                        출력은 버리며 정리 명령·뒷정리가 끌 때까지 둔다(안전 상한 10 분). 띄우기에만 걸린다
 //   FAKE_SSH_MODE_FILE   그 파일이 있으면 FAKE_SSH_MODE 대신 그 내용(빈 파일 = 보통) — 엔진 환경을 못 바꾸는 시험이 도중에 모드를 바꾸게
 //   FAKE_SSH_CLEANUP_MS  정리 명령이 끝나기 전에 더 기다린다(진짜는 sleep 2 — 기본 0, 정리 상한 시험용)
-// 서버 환경 = 이 프로세스의 환경 — CLAUDE_CONFIG_DIR·FAKE_TRANSCRIPTS·FAKE_CLAUDE_LOG 등이 가짜 claude 에 그대로 간다.
+// 서버 환경 = 이 프로세스의 환경 + 띄우기 스크립트의 export — CLAUDE_CONFIG_DIR·FAKE_TRANSCRIPTS·FAKE_CLAUDE_LOG 등이 가짜 claude 에 그대로 간다.
+// 띄우기는 스크립트의 차례를 따른다: cd 가 run 폴더보다 먼저면 폴더가 없을 때 run 폴더·머리말 파일을 만들지 않고 3.
 //   CLAUDE_CONFIG_DIR 은 이 PC 경로로 읽는다(가짜 claude 가 거기에 대화 파일을 만든다). 없으면 $HOME/.claude.
 // 셸이 $HOME 을 펼친 claude 인자(큰따옴표 run 파일 경로)는 이 PC 경로로 바꿔 넘긴다 — 가짜 claude 가 그 mcp.json 을 직접 읽는다.
 // 정리 명령에 꺼진 claude 가 붙은 ssh 는 255(진짜: exit-signal). 실제와 다른 점: 정리 명령은 sleep 2 없이 곧바로 끈다.
@@ -248,17 +249,28 @@ function classify(script) {
   } catch {
     return { kind: 'unknown' };
   }
-  // 띄우기(remoteLaunchScript) — d="…" · cd <폴더> || exit 3 · export DURE_RUN=<표식> · exec claude <인자…>
+  // 띄우기(remoteLaunchScript) — cd <폴더> || exit 3 · d="…" · mkdir -p "$d" · export DURE_RUN=<표식> · export <이름>=<값>… · exec claude <인자…>
   const exec = cmds.find((c) => c[0]?.value === 'exec' && c[1]?.value === 'claude');
   if (exec) {
     const d = cmds.find((c) => c.length === 1 && c[0].value.startsWith('d='));
     const cd = cmds.find((c) => same(c, ['cd', null, '||', 'exit', '3']));
+    const mkdir = cmds.find((c) => same(c, ['mkdir', '-p', null]));
     const run = cmds.find((c) => c.length === 2 && c[0].value === 'export' && c[1].value.startsWith('DURE_RUN='));
-    if (!d || !cd || !run) return { kind: 'unknown' };
+    if (!d || !cd || !mkdir || !run) return { kind: 'unknown' };
+    // 그 밖의 export — 서버 셸이 claude 에 넘기는 환경(ssh 는 이 PC 의 환경을 넘기지 않는다)
+    const env = {};
+    for (const c of cmds) {
+      if (c === run || c.length !== 2 || c[0].value !== 'export') continue;
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s.exec(c[1].value);
+      if (m) env[m[1]] = m[2];
+    }
     return {
       kind: 'launch',
       runDir: d[0].value.slice(2),
       folder: cd[1].value,
+      // 스크립트 차례 그대로 — cd 가 run 폴더보다 먼저면 폴더가 없을 때 아무것도 쓰지 않고 끝난다
+      cdFirst: cmds.indexOf(cd) < cmds.indexOf(mkdir),
+      env,
       marker: run[1].value.slice('DURE_RUN='.length),
       // 셸이 $HOME 을 펼친 인자(run 폴더의 mcp.json·prompt.md)는 가짜 claude 가 읽게 이 PC 경로로
       args: exec.slice(2).map((w) => (w.home ? toLocal(w.value) : w.value)),
@@ -463,7 +475,18 @@ function stdinReader() {
 }
 
 async function runLaunch(spec, mode, host) {
-  // 진짜 순서: mkdir -p run 폴더 → 머리말 두 줄 읽기 → 파일 쓰기 → cd(없으면 3) → DURE_PID → exec claude
+  // 스크립트 차례 그대로: cd(없으면 3) → mkdir -p run 폴더 → 머리말 두 줄 읽기 → 파일 쓰기 → DURE_PID → exec claude
+  // (옛 모양처럼 cd 가 뒤에 있으면 run 폴더·파일을 먼저 쓰고 나서 cd)
+  const remotePath = remoteAbs(spec.folder);
+  const cwd = toLocal(remotePath);
+  /** cd — 폴더가 없으면 3 으로 끝내고 true */
+  const cdFails = () => {
+    const k = kindOf(cwd);
+    if (k === 'dir') return false;
+    fail(3, `bash: line 1: cd: ${spec.folder}: ${k ? 'Not a directory' : 'No such file or directory'}`);
+    return true;
+  };
+  if (spec.cdFirst && cdFails()) return;
   const runDir = toLocal(spec.runDir);
   fs.mkdirSync(runDir, { recursive: true });
   const input = stdinReader();
@@ -471,10 +494,7 @@ async function runLaunch(spec, mode, host) {
   const b = await input.line();
   fs.writeFileSync(path.join(runDir, 'mcp.json'), Buffer.from(a, 'base64'));
   fs.writeFileSync(path.join(runDir, 'prompt.md'), Buffer.from(b, 'base64'));
-  const remotePath = remoteAbs(spec.folder);
-  const cwd = toLocal(remotePath);
-  const k = kindOf(cwd);
-  if (k !== 'dir') return fail(3, `bash: line 1: cd: ${spec.folder}: ${k ? 'Not a directory' : 'No such file or directory'}`);
+  if (!spec.cdFirst && cdFails()) return;
   const notFound = () => fail(127, 'bash: line 1: claude: command not found');
   if (mode === 'noclaude') {
     process.stderr.write(`DURE_PID=${process.pid}\n`); // 진짜도 셸 pid 를 먼저 알린 뒤 exec 에서 실패한다
@@ -482,7 +502,7 @@ async function runLaunch(spec, mode, host) {
   }
   const drop = /^drop:(\d+)$/.exec(mode);
   const [cmd, ...pre] = claudeCommand();
-  const env = { ...process.env, HOME: toLocal(REMOTE_HOME), DURE_RUN: spec.marker };
+  const env = { ...process.env, ...spec.env, HOME: toLocal(REMOTE_HOME), DURE_RUN: spec.marker };
   // 지킴이 — detached: ssh 와 같은 수명이 아니다(서버의 claude 처럼 — 윈도에서 detached 가 아니면 ssh 가 끝날 때 함께 죽는다).
   // claude 는 지킴이의 보통 자식이라 지킴이가 죽으면 함께 죽는다(주인 없는 claude 는 남지 않는다)
   const keeper = spawn(process.execPath, [SELF, '--fake-keeper'], {

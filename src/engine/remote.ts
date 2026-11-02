@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { SPAWN_ENV_EXTRA } from './claudeArgs';
 import type { RemoteIssue } from './types';
 
 // 서버(SSH) 방 — 서버에서 claude 를 띄우고·확인하고·정리하는 명령과 종료 분류. 순수 함수만(프로세스·파일 없음).
@@ -53,21 +54,32 @@ export function remoteRunFiles(agentId: string, launchId: string): { mcp: string
 
 const marker = (agentId: string, launchId: string) => `${safeId(agentId)}.${safeId(launchId)}`;
 
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * 서버에서 claude 띄우기 — 폴더로 먼저 간다(없으면 3: run 폴더도 토큰이 든 머리말 파일도 만들지 않는다 — 읽지 않은 머리말은 셸과 함께 버려진다).
+ * 그다음 run 폴더에 머리말 두 줄을 풀고, pid 를 알리고, 표식과 이 PC 의 claude 와 같은 환경(SPAWN_ENV_EXTRA — ssh 는 환경을 넘기지 않는다)을 둔 뒤 exec
+ */
 export function remoteLaunchScript(a: { agentId: string; launchId: string; folder: string; claudeArgs: string[] }): string {
   const files = remoteRunFiles(a.agentId, a.launchId);
   const quoted = a.claudeArgs.map((x) => (x === files.mcp || x === files.prompt ? `"${x}"` : shq(x)));
+  const env = Object.entries(SPAWN_ENV_EXTRA).map(([k, v]) => {
+    if (!ENV_NAME.test(k)) throw new Error('올바르지 않은 환경 이름');
+    return `export ${k}=${shq(v)}`;
+  });
   return [
     'umask 077',
+    `cd ${shq(a.folder)} || exit 3`,
     `d="${remoteRunDir(a.agentId, a.launchId)}"`,
     'mkdir -p "$d"',
     'IFS= read -r a',
     'IFS= read -r b',
     'printf %s "$a" | base64 -d > "$d/mcp.json"',
     'printf %s "$b" | base64 -d > "$d/prompt.md"',
-    `cd ${shq(a.folder)} || exit 3`,
     'echo "DURE_PID=$$" >&2',
     // claude·그 Bash 명령·손자가 물려받는 표식 — 정리가 고아가 된 것도 찾는다. setsid 는 쓰지 않는다(이미 세션 리더, 쓰면 깨짐)
     `export DURE_RUN=${marker(a.agentId, a.launchId)}`,
+    ...env,
     `exec claude ${quoted.join(' ')}`,
   ].join('; ');
 }

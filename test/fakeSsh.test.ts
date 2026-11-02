@@ -229,6 +229,7 @@ describe('띄우기', () => {
     // 가짜 claude 는 서버 run 폴더의 mcp.json 을 이 PC 경로로 받아 읽는다 — 그 pid 가 DURE_PID
     const argvLine = fs.readFileSync(claudeLog, 'utf8').split('\n').filter(Boolean).map((x) => JSON.parse(x)).find((x) => x.argv);
     expect(argvLine.pid).toBe(pid);
+    expect(argvLine.mcpToolTimeout).toBe('86400000'); // 스크립트의 export 로(이 시험 환경엔 없다)
     const mcpArg = argvLine.argv[argvLine.argv.indexOf('--mcp-config') + 1];
     expect(path.resolve(mcpArg)).toBe(path.resolve(l.runDir, 'mcp.json'));
     const launched = logLines().find((x) => x.event === 'launch');
@@ -250,10 +251,12 @@ describe('띄우기', () => {
     expect(await res.text()).toBe('pong:/mcp?x=1');
   }, 20000);
 
-  it('없는 폴더 → 머리말을 읽은 뒤 3, claude 는 안 뜬다', async () => {
+  it('없는 폴더 → 3, claude 는 안 뜨고 run 폴더(토큰 파일)도 만들지 않는다', async () => {
     const l = await launch({ folder: '/home/a/nope' });
     l.run.child.stdin!.end(launchPreamble(l.mcp, l.prompt));
     expect(await l.run.exit).toBe(3);
+    expect(fs.existsSync(l.runDir)).toBe(false);
+    expect(fs.existsSync(path.join(home, '.dure'))).toBe(false);
     expect(parsePid(l.run.err())).toBeNull();
     expect(classifyExit({ code: 3, stderr: l.run.err(), started: false })?.kind).toBe('no-folder');
   }, 20000);

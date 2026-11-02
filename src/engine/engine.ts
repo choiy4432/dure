@@ -932,7 +932,8 @@ class EngineImpl extends EventEmitter implements Engine {
       command: ssh.command,
       args: [...(ssh.argsPrefix ?? []), ...launchArgs({ host, remotePort: port, localPort: this.mcp.port, script })],
       cwd: runDir,
-      env: this.spawnEnv(),
+      // ssh 는 환경을 서버로 넘기지 않는다 — claude 의 환경(SPAWN_ENV_EXTRA)은 스크립트가 export 한다
+      env: { ...process.env, ...this.o.env },
       stdinPreamble: launchPreamble(mcpJson, prompt),
       onStderr: (chunk) => this.guard(id, () => this.noteRemotePid(id, run, chunk)),
       ...(gate ? { startAfter: gate } : {}),
