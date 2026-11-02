@@ -1,0 +1,331 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import fs from 'node:fs';
+import http from 'node:http';
+import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
+import { buildArgs } from '../src/engine/claudeArgs';
+import {
+  checkScript, classifyExit, cleanupScript, hostArgs, launchArgs, launchPreamble, parsePid, remoteLaunchScript,
+  remoteRunFiles, shq, SSH_OPTIONS, transcriptCheckScript,
+} from '../src/engine/remote';
+
+// 가짜 ssh(test/fakeSsh.mjs) — 서버 방 시험이 진짜 ssh·서버 없이 돌게 한다. 명령 모양은 src/engine/remote.ts 그대로 만든다
+const FAKE_SSH = path.resolve('test/fakeSsh.mjs');
+const AGENT = 'ag1';
+const LAUNCH = 'ab12cd34';
+
+let tmp: string;
+let root: string; // FAKE_SSH_ROOT — 서버의 / (가짜 사용자 a 의 $HOME = <root>/home/a)
+let home: string;
+let sshLog: string;
+let claudeLog: string;
+let children: ChildProcess[] = [];
+let servers: net.Server[] = [];
+
+beforeEach(() => {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dure-fakessh-'));
+  root = path.join(tmp, 'server');
+  home = path.join(root, 'home', 'a');
+  fs.mkdirSync(path.join(home, 'web'), { recursive: true });
+  sshLog = path.join(tmp, 'ssh.log');
+  claudeLog = path.join(tmp, 'claude.log');
+});
+
+afterEach(async () => {
+  for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill();
+  children = [];
+  // 끊김으로 남긴 가짜 claude 까지 — 가짜 ssh 의 정리 손잡이
+  spawnSync(process.execPath, [FAKE_SSH, '--fake-reap'], { env: env(), windowsHide: true });
+  await Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
+  servers = [];
+  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+});
+
+/** 이 시험의 환경 — 바깥의 FAKE_*·CLAUDE_CONFIG_DIR 는 버린다(진짜 ~/.claude 에 쓰지 않게) */
+function env(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const base: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('FAKE_') && k !== 'CLAUDE_CONFIG_DIR') base[k] = v;
+  return { ...base, FAKE_SSH_ROOT: root, FAKE_SSH_LOG: sshLog, FAKE_CLAUDE_LOG: claudeLog, ...extra };
+}
+
+interface Run {
+  child: ChildProcess;
+  out: () => string;
+  err: () => string;
+  exit: Promise<number | null>;
+}
+function ssh(args: string[], extra: Record<string, string> = {}): Run {
+  const child = spawn(process.execPath, [FAKE_SSH, ...args], { env: env(extra), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  children.push(child);
+  let out = '';
+  let err = '';
+  child.stdout!.setEncoding('utf8').on('data', (d: string) => (out += d));
+  child.stderr!.setEncoding('utf8').on('data', (d: string) => (err += d));
+  child.stdin!.on('error', () => {});
+  const exit = new Promise<number | null>((r) => child.on('close', (code) => r(code)));
+  return { child, out: () => out, err: () => err, exit };
+}
+async function sshDone(args: string[], extra: Record<string, string> = {}, input = '') {
+  const r = ssh(args, extra);
+  r.child.stdin!.end(input);
+  const code = await r.exit;
+  return { code, stdout: r.out(), stderr: r.err() };
+}
+/** 서버 명령 하나(확인·정리·기록 확인) — 엔진이 보낼 모양 그대로 */
+const remote = (script: string, host = 'dev') => [...SSH_OPTIONS, ...hostArgs(host), 'bash -lc ' + shq(script)];
+
+async function until(pred: () => boolean, ms = 8000, what = '조건'): Promise<void> {
+  const end = Date.now() + ms;
+  while (!pred()) {
+    if (Date.now() > end) throw new Error(`기다린 ${what} 이(가) 오지 않음`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+async function freePort(): Promise<number> {
+  const s = net.createServer();
+  await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
+  const p = (s.address() as net.AddressInfo).port;
+  await new Promise<void>((r) => s.close(() => r()));
+  return p;
+}
+async function listen(s: net.Server): Promise<number> {
+  servers.push(s);
+  await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
+  return (s.address() as net.AddressInfo).port;
+}
+
+const userLine = (text: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }) + '\n';
+const results = (out: string) =>
+  out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l)).filter((m) => m.type === 'result').map((m) => m.result as string);
+
+/** 서버에서 claude 띄우기 — 엔진이 보낼 인자·스크립트 그대로(buildArgs 의 MCP·안내문 경로는 서버 run 폴더) */
+async function launch(o: { launchId?: string; folder?: string; env?: Record<string, string>; remotePort?: number; localPort?: number; sessionId?: string } = {}) {
+  const launchId = o.launchId ?? LAUNCH;
+  const files = remoteRunFiles(AGENT, launchId);
+  const remotePort = o.remotePort ?? (await freePort());
+  const localPort = o.localPort ?? (await freePort());
+  const claudeArgs = buildArgs({
+    sessionId: o.sessionId ?? 'sess-1', resume: false, mcpConfigPath: files.mcp, promptPath: files.prompt, model: 'haiku', name: 'A', allowBypass: false,
+  });
+  const script = remoteLaunchScript({ agentId: AGENT, launchId, folder: o.folder ?? '/home/a/web', claudeArgs });
+  const run = ssh(launchArgs({ host: 'dev', remotePort, localPort, script }), o.env);
+  const mcp = JSON.stringify({ mcpServers: { dure: { type: 'http', url: `http://127.0.0.1:${remotePort}/mcp`, headers: { Authorization: 'Bearer t0k' } } } });
+  const prompt = `방 안내 — 따옴표 ' " $HOME \`x\`\n둘째 줄`;
+  return { run, mcp, prompt, remotePort, localPort, launchId, runDir: path.join(home, '.dure', 'run', AGENT, launchId) };
+}
+async function pidOf(run: Run): Promise<number> {
+  await until(() => parsePid(run.err()) !== null, 8000, 'DURE_PID');
+  return parsePid(run.err())!;
+}
+function logLines(): any[] {
+  if (!fs.existsSync(sshLog)) return [];
+  return fs.readFileSync(sshLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+}
+
+describe('확인 명령', () => {
+  it('폴더가 있으면 펼친 경로와 버전', async () => {
+    const r = await sshDone(remote(checkScript('/home/a/web')));
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim().split(/\r?\n/)).toEqual(['/home/a/web', '2.1.304 (Claude Code)']);
+  });
+  it('~ 는 가짜 사용자 a 의 $HOME', async () => {
+    expect((await sshDone(remote(checkScript('~/web')))).stdout.trim().split(/\r?\n/)[0]).toBe('/home/a/web');
+    expect((await sshDone(remote(checkScript('~')))).stdout.trim().split(/\r?\n/)[0]).toBe('/home/a');
+  });
+  it('폴더 없이 — 버전만', async () => {
+    const r = await sshDone(remote(checkScript()));
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe('2.1.304 (Claude Code)');
+  });
+  it('공백·작은따옴표·$ 가 든 폴더도 그대로', async () => {
+    const weird = `/home/a/my app/it's $HOME`;
+    fs.mkdirSync(path.join(root, ...weird.split('/').filter(Boolean)), { recursive: true });
+    const r = await sshDone(remote(checkScript(weird)));
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim().split(/\r?\n/)[0]).toBe(weird);
+  });
+  it('없는 폴더 → 3', async () => {
+    const r = await sshDone(remote(checkScript('/home/a/nope')));
+    expect(r.code).toBe(3);
+    expect(r.stderr).toContain('No such file or directory');
+    expect(classifyExit({ code: r.code, stderr: r.stderr, started: false })?.kind).toBe('no-folder');
+  });
+  it('noclaude → 127', async () => {
+    const r = await sshDone(remote(checkScript('/home/a/web')), { FAKE_SSH_MODE: 'noclaude' });
+    expect(r.code).toBe(127);
+    expect(classifyExit({ code: r.code, stderr: r.stderr, started: false })?.kind).toBe('no-claude');
+  });
+  it('FAKE_SSH_LOG — 받은 인자와 명령을 JSON 한 줄씩', async () => {
+    await sshDone(remote(checkScript('/home/a/web')));
+    const [line] = logLines();
+    expect(line.argv).toContain('BatchMode=yes');
+    expect(line.host).toBe('dev');
+    expect(line.kind).toBe('check');
+    expect(line.script).toBe(checkScript('/home/a/web'));
+  });
+});
+
+describe('접속 실패 흉내', () => {
+  it('refused → 255 Connection refused', async () => {
+    const r = await sshDone(remote(checkScript()), { FAKE_SSH_MODE: 'refused' });
+    expect(r.code).toBe(255);
+    expect(r.stderr).toContain('ssh: connect to host dev port 22: Connection refused');
+    expect(classifyExit({ code: r.code, stderr: r.stderr, started: false })).toEqual({
+      kind: 'unreachable', detail: 'ssh: connect to host dev port 22: Connection refused',
+    });
+  });
+  it('denied → 255 Permission denied (publickey)', async () => {
+    const r = await sshDone(remote(checkScript(), 'me@h:2222'), { FAKE_SSH_MODE: 'denied' });
+    expect(r.code).toBe(255);
+    expect(r.stderr).toContain('me@h: Permission denied (publickey).');
+    expect(classifyExit({ code: r.code, stderr: r.stderr, started: false })?.kind).toBe('denied');
+  });
+  it('hostkey → 255 서버 키 바뀜', async () => {
+    const r = await sshDone(remote(checkScript()), { FAKE_SSH_MODE: 'hostkey' });
+    expect(r.code).toBe(255);
+    expect(r.stderr).toContain('WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!');
+    expect(r.stderr).toContain('Host key verification failed.');
+    expect(classifyExit({ code: r.code, stderr: r.stderr, started: false })?.kind).toBe('hostkey');
+  });
+});
+
+describe('띄우기', () => {
+  it('머리말이 run 폴더에 풀리고 가짜 claude 가 echo 하나 에 답한다', async () => {
+    const l = await launch();
+    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt) + userLine('echo 하나')); // 머리말과 첫 말을 한 번에(probe25 D3)
+    await until(() => results(l.run.out()).includes('받음: echo 하나'), 10000, '받음');
+    expect(fs.readFileSync(path.join(l.runDir, 'mcp.json'), 'utf8')).toBe(l.mcp);
+    expect(fs.readFileSync(path.join(l.runDir, 'prompt.md'), 'utf8')).toBe(l.prompt);
+    const pid = parsePid(l.run.err());
+    expect(pid).not.toBeNull();
+    expect(alive(pid!)).toBe(true);
+    // 가짜 claude 는 서버 run 폴더의 mcp.json 을 이 PC 경로로 받아 읽는다 — 그 pid 가 DURE_PID
+    const argvLine = fs.readFileSync(claudeLog, 'utf8').split('\n').filter(Boolean).map((x) => JSON.parse(x)).find((x) => x.argv);
+    expect(argvLine.pid).toBe(pid);
+    const mcpArg = argvLine.argv[argvLine.argv.indexOf('--mcp-config') + 1];
+    expect(path.resolve(mcpArg)).toBe(path.resolve(l.runDir, 'mcp.json'));
+    const launched = logLines().find((x) => x.event === 'launch');
+    expect(launched).toMatchObject({ pid, marker: `${AGENT}.${LAUNCH}`, folder: '/home/a/web' });
+    expect(path.resolve(launched.cwd)).toBe(path.resolve(home, 'web'));
+    // 입력을 닫으면 claude 가 끝나고 ssh 도 0 으로
+    l.run.child.stdin!.end();
+    expect(await l.run.exit).toBe(0);
+    await until(() => !alive(pid!), 5000, '가짜 claude 끝남');
+  }, 20000);
+
+  it('-R 중계 — 원격 포트로 보낸 HTTP 요청이 이 PC 의 서버에 닿는다', async () => {
+    const local = http.createServer((req, res) => res.end(`pong:${req.url}`));
+    const localPort = await listen(local);
+    const l = await launch({ localPort });
+    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
+    await pidOf(l.run);
+    const res = await fetch(`http://127.0.0.1:${l.remotePort}/mcp?x=1`);
+    expect(await res.text()).toBe('pong:/mcp?x=1');
+  }, 20000);
+
+  it('없는 폴더 → 머리말을 읽은 뒤 3, claude 는 안 뜬다', async () => {
+    const l = await launch({ folder: '/home/a/nope' });
+    l.run.child.stdin!.end(launchPreamble(l.mcp, l.prompt));
+    expect(await l.run.exit).toBe(3);
+    expect(parsePid(l.run.err())).toBeNull();
+    expect(classifyExit({ code: 3, stderr: l.run.err(), started: false })?.kind).toBe('no-folder');
+  }, 20000);
+
+  it('noclaude → 127 claude: command not found', async () => {
+    const l = await launch({ env: { FAKE_SSH_MODE: 'noclaude' } });
+    l.run.child.stdin!.end(launchPreamble(l.mcp, l.prompt));
+    expect(await l.run.exit).toBe(127);
+    expect(l.run.err()).toContain('bash: line 1: claude: command not found');
+    expect(classifyExit({ code: 127, stderr: l.run.err(), started: false })?.kind).toBe('no-claude');
+  }, 20000);
+
+  it('portclash-once → 첫 번째만 255 remote port forwarding failed, 둘째는 뜬다', async () => {
+    const first = await launch({ env: { FAKE_SSH_MODE: 'portclash-once' } });
+    first.run.child.stdin!.end(launchPreamble(first.mcp, first.prompt));
+    expect(await first.run.exit).toBe(255);
+    expect(first.run.err()).toContain(`Error: remote port forwarding failed for listen port ${first.remotePort}`);
+    expect(classifyExit({ code: 255, stderr: first.run.err(), started: false })?.kind).toBe('port');
+    expect(fs.existsSync(first.runDir)).toBe(false); // 명령까지 가지 않았다
+
+    const second = await launch({ env: { FAKE_SSH_MODE: 'portclash-once' } });
+    second.run.child.stdin!.write(launchPreamble(second.mcp, second.prompt) + userLine('echo 둘'));
+    await until(() => results(second.run.out()).includes('받음: echo 둘'), 10000, '받음');
+  }, 20000);
+
+  it('원격 포트가 정말 쓰이는 중이면 255 remote port forwarding failed', async () => {
+    const busy = net.createServer();
+    const remotePort = await listen(busy);
+    const l = await launch({ remotePort });
+    l.run.child.stdin!.end(launchPreamble(l.mcp, l.prompt));
+    expect(await l.run.exit).toBe(255);
+    expect(l.run.err()).toContain(`remote port forwarding failed for listen port ${remotePort}`);
+  }, 20000);
+
+  it('기록 확인 — 가짜 claude 가 남긴 대화 파일(CLAUDE_CONFIG_DIR) 의 id 만', async () => {
+    const cfg = path.join(root, '.claude');
+    const extra = { CLAUDE_CONFIG_DIR: cfg, FAKE_TRANSCRIPTS: '1' };
+    const l = await launch({ env: extra, sessionId: 'aaa-111' });
+    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt) + userLine('echo 하나'));
+    await until(() => results(l.run.out()).length > 0, 10000, 'result');
+    const r = await sshDone(remote(transcriptCheckScript(['aaa-111', 'bbb-222'])), extra);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim().split(/\r?\n/)).toEqual(['aaa-111']);
+    // CLAUDE_CONFIG_DIR 이 없으면 $HOME/.claude
+    fs.mkdirSync(path.join(home, '.claude', 'projects', '-home-a-web'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.claude', 'projects', '-home-a-web', 'bbb-222.jsonl'), '');
+    expect((await sshDone(remote(transcriptCheckScript(['aaa-111', 'bbb-222'])))).stdout.trim()).toBe('bbb-222');
+  }, 20000);
+});
+
+describe('끊김·정리', () => {
+  it('drop:<ms> → 255 Connection closed, 가짜 claude 는 남는다 · 정리 명령이 끈다', async () => {
+    const l = await launch({ env: { FAKE_SSH_MODE: 'drop:300' } });
+    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
+    const pid = await pidOf(l.run);
+    expect(await l.run.exit).toBe(255);
+    expect(l.run.err()).toContain('Connection to dev closed by remote host.');
+    expect(classifyExit({ code: 255, stderr: l.run.err(), started: true })?.kind).toBe('disconnected');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(alive(pid)).toBe(true); // 진짜처럼 서버에 남았다
+
+    const c = await sshDone(remote(cleanupScript({ pid, agentId: AGENT, launchId: l.launchId })));
+    expect(c.code).toBe(0);
+    await until(() => !alive(pid), 5000, '가짜 claude 꺼짐');
+    expect(fs.existsSync(l.runDir)).toBe(false);
+    expect(fs.existsSync(path.join(home, '.dure', 'run', AGENT))).toBe(false);
+    expect(logLines().find((x) => x.event === 'cleanup')).toMatchObject({ pid, marker: `${AGENT}.${LAUNCH}`, killed: [pid] });
+  }, 20000);
+
+  it('정리 명령 — 붙어 있는 가짜 claude 도 죽고 ssh 가 끝난다', async () => {
+    const l = await launch();
+    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
+    const pid = await pidOf(l.run);
+    const c = await sshDone(remote(cleanupScript({ pid, agentId: AGENT, launchId: l.launchId })));
+    expect(c.code).toBe(0);
+    await until(() => !alive(pid), 5000, '가짜 claude 꺼짐');
+    expect(await l.run.exit).not.toBe(0);
+    expect(fs.existsSync(l.runDir)).toBe(false);
+  }, 20000);
+
+  it('정리 명령 — 표식(띄우기 id)이 다르면 그 pid 를 건드리지 않는다', async () => {
+    const l = await launch();
+    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
+    const pid = await pidOf(l.run);
+    const c = await sshDone(remote(cleanupScript({ pid, agentId: AGENT, launchId: 'other999' })));
+    expect(c.code).toBe(0);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(alive(pid)).toBe(true);
+    expect(fs.existsSync(l.runDir)).toBe(true);
+    expect(logLines().find((x) => x.event === 'cleanup')).toMatchObject({ pid, killed: [] });
+  }, 20000);
+});
