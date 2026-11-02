@@ -63,6 +63,24 @@ test('없는 파일은 null', () => {
   expect(s.read('a1', `${'0'.repeat(32)}.png`)).toBeNull();
 });
 
+test('copy — 저장한 그림을 다른 에이전트 칸으로(같은 이름), 없는 파일·틀린 이름·칸은 false', () => {
+  const s = openImageStore(dir);
+  const file = s.save('a1', 'image/png', png)!;
+  expect(s.copy('a1', 'a2', file)).toBe(true);
+  expect(s.read('a2', file)).toEqual({ mediaType: 'image/png', base64: png });
+  expect(s.copy('a1', 'a2', file)).toBe(true); // 이미 있어도
+  expect(s.read('a1', file)).toEqual({ mediaType: 'image/png', base64: png }); // 원래 것 그대로
+  expect(s.copy('a1', 'a3', `${'0'.repeat(32)}.png`)).toBe(false);
+  expect(fs.existsSync(path.join(dir, 'images', 'a3'))).toBe(false);
+  fs.writeFileSync(path.join(dir, 'secret.png'), 'x');
+  for (const bad of ['../secret.png', '..\\secret.png', 'secret.png', `${file}/x`, '']) {
+    expect(s.copy('a1', 'a3', bad), bad).toBe(false);
+  }
+  expect(s.copy('../a1', 'a3', file)).toBe(false);
+  expect(s.copy('a1', '../a3', file)).toBe(false);
+  expect(fs.existsSync(path.join(dir, 'images', 'a3'))).toBe(false);
+});
+
 test('에이전트를 지우면 그 칸의 그림도 지운다 — 다른 에이전트 것은 그대로', () => {
   const s = openImageStore(dir);
   const mine = s.save('a1', 'image/png', png)!;

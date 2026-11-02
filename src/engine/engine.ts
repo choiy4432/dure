@@ -224,6 +224,12 @@ export interface Engine extends EventEmitter {
    * 없는 key·지금 대화
    */
   resumeConversation(id: AgentId, key: string): Promise<void>;
+  /**
+   * 그 지난 대화로 새 에이전트를 만든다(갈래) — 원래 에이전트의 방·폴더, 모델·effort 는 원래 것(이름 검사는 addAgent 그대로).
+   * 그 대화의 줄을 새 에이전트 기록에 복사하고(그림 파일도 — 복사 못 한 그림은 file 없이) 알림 한 줄. 첫 실행만 그 세션에서 갈래 친다
+   * (--resume <그 세션> --fork-session). 원래 에이전트의 기록·세션은 그대로. 던진다: 이어 갈 수 없는 대화(old·gone) · 없는 key·지금 대화
+   */
+  forkAgent(i: { from: AgentId; key: string; name: string; role: string }): Agent;
   /** 사람이 보낸 그림(기록의 file) — data URL. 이름이 틀리거나 없으면 null, 없는 에이전트면 던진다 */
   image(id: AgentId, file: string): Promise<string | null>;
   messages(f?: Parameters<MessageLog['list']>[0]): RelayMessage[];
@@ -268,6 +274,13 @@ const RESUMED_NOTICE = '이 대화로 돌아왔어요';
 const RESUME_LOST_NOTICE = 'Claude 쪽 기록이 없어 이어 가지 못했어요 — 새 대화로 시작해요';
 /** 그때 claude 의 stderr — `No conversation found with session ID: <id>`(probe21) */
 const NO_TRANSCRIPT_ERR = 'No conversation found';
+/** 새 에이전트로 이어 가기 — 날짜는 그 대화의 at(로컬 시간) */
+const forkedNotice = (name: string, at: number) => {
+  const d = new Date(at);
+  return `${name}의 ${d.getMonth() + 1}월 ${d.getDate()}일 대화에서 이어 만들었어요`;
+};
+/** 갈래 칠 원래 세션의 Claude 쪽 기록이 없었다 — 새 대화로 시작한다 */
+const FORK_LOST_NOTICE = '그 대화를 이어 오지 못했어요 — 새 대화로 시작해요';
 const LIMIT_INVALID = '상한은 1 이상이어야 해요.';
 const THEME_INVALID = '화면 테마는 라이트·다크·Windows 따라감 중 하나예요';
 const DURE_TOOL_PREFIX = 'mcp__dure__';
@@ -474,6 +487,9 @@ class EngineImpl extends EventEmitter implements Engine {
   // 오류 result 한 줄을 내고 끝난다(probe21) — 그 result 는 기록·전달하지 않고 resumeLost 에 표시만, 끝나면(exit) 새 대화로
   private resuming = new WeakMap<ClaudeSession, string>();
   private resumeLost = new WeakSet<ClaudeSession>();
+  private forking = new WeakSet<ClaudeSession>(); // 갈래 실행(--fork-session) — 이어 가기 실패면 이 에이전트의 대화가 아니니 경계에 세션을 남기지 않는다
+  // 엔진이 멈추기(interrupt)를 보낸 세션 — init 전 오류 result 가 멈춘 차례의 끝일 수 있다(기록 없음으로 치지 않는다. 정말 없으면 끝날 때 stderr 가 말한다)
+  private interrupted = new WeakSet<ClaudeSession>();
   private effortNows = new Map<AgentId, EffortLevel>(); // Claude 에게 마지막으로 읽은 지금 effort
   // effort 는 세션 명령 `/effort <단계>` 로 정한다 — 설정 층(apply_flag_settings)엔 max 가 없어 조용히 무시되고,
   // get_settings 는 세션 값을 모른다(probe9). 사람 입력처럼 한 줄씩 쓰지만 기록·사건·작업 중 표시는 남기지 않는다.
@@ -1066,7 +1082,7 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     // 부모 차례와 도는 서브에이전트 모두(spec §4.6) — 서브에이전트만 돌아도 interrupt 하나로 멈춘다(끝 알림 stopped, probe14 C)
     const wasWorking = s.status === 'working' || this.subagents.has(id) || gated;
-    await s.interrupt();
+    await this.sendInterrupt(s);
     await leaving;
     if (wasWorking) this.guard(id, () => this.record(id, { kind: 'notice', text: STOPPED_NOTICE }));
   }
@@ -1143,7 +1159,8 @@ class EngineImpl extends EventEmitter implements Engine {
     const ended = agent.started ? agent.sessionId : null; // 한 마디라도 한 대화만 — 돌아갈 대화가 있다
     const ending = this.endSession(id);
     this.guard(id, () => this.record(id, ended ? { kind: 'boundary', ended } : { kind: 'boundary' }));
-    this.store.updateAgent(id, { sessionId: crypto.randomUUID(), started: false });
+    // 첫 실행 전인 갈래도 새 대화는 갈래 치지 않는다
+    this.store.updateAgent(id, { sessionId: crypto.randomUUID(), started: false, forkOf: null });
     this.guard(id, () => this.setContext(id, null));
     this.emitStatus(id);
     await ending;
@@ -1175,12 +1192,43 @@ class EngineImpl extends EventEmitter implements Engine {
     const ending = this.endSession(id);
     this.guard(id, () => this.record(id, ended ? { kind: 'boundary', ended, resumed: key } : { kind: 'boundary', resumed: key }));
     this.guard(id, () => this.record(id, { kind: 'notice', text: RESUMED_NOTICE }));
-    this.store.updateAgent(id, { sessionId: key, started: true });
+    this.store.updateAgent(id, { sessionId: key, started: true, forkOf: null });
     this.forgetPastCount(id); // 경계를 남길 때 버렸지만 그 history 사건을 듣는 쪽이 옛 세션으로 다시 셌을 수 있다
     this.guard(id, () => this.setContext(id, null));
     this.emitStatus(id);
     await ending;
     this.prewarm(id);
+  }
+
+  forkAgent(i: { from: AgentId; key: string; name: string; role: string }): Agent {
+    const src = this.need(i.from);
+    const target = this.conversations(i.from).find((c) => c.key === i.key && !c.current);
+    if (!target) throw new Error(NO_CONVERSATION);
+    if (target.why) throw new Error(RESUME_WHY[target.why]);
+    const conv = this.splitOf(i.from).find((c) => c.key === i.key)!;
+    const added = this.store.addAgent({ roomId: src.roomId, name: i.name, role: i.role, folder: src.folder });
+    // 자동·묻지 않음·늘 허용은 새 에이전트 기본값(addAgent) 그대로
+    const agent = this.store.updateAgent(added.id, { model: src.model, effort: src.effort, forkOf: conv.sessionId });
+    // 기록은 쓰기만 — 사건은 없다(화면이 더한 에이전트와 같다). 줄은 시각 그대로, 경계 없이
+    for (const it of conv.items) this.guard(agent.id, () => this.hist.append(agent.id, this.forkedItem(i.from, agent.id, it)));
+    this.guard(agent.id, () => this.hist.append(agent.id, { t: Date.now(), kind: 'notice', text: forkedNotice(src.name, target.at) }));
+    return agent;
+  }
+
+  /** 갈래로 옮길 기록 한 줄 — 사람이 보낸 그림은 새 에이전트 칸으로 복사, 복사 못 한 그림은 file 을 뺀다(크기·형식은 그대로) */
+  private forkedItem(from: AgentId, to: AgentId, it: HistoryItem): HistoryItem {
+    if (it.kind !== 'user' || !it.parts.some((p) => p.type === 'image' && p.file)) return it;
+    const parts = it.parts.map((p): HistoryPart => {
+      if (p.type !== 'image' || !p.file) return p;
+      try {
+        if (this.images.copy(from, to, p.file)) return p;
+      } catch {
+        // 디스크가 막혀도 갈래는 만든다 — 그 그림만 다시 볼 수 없다
+      }
+      const { file: _file, ...rest } = p;
+      return rest;
+    });
+    return { ...it, parts };
   }
 
   /** 돌아가기를 막는 까닭 — 재울 수 없는 까닭(blockOf)과 같다. 세션이 없어도 기다리는·붙잡은 입력이 있으면 막는다 */
@@ -1813,8 +1861,10 @@ class EngineImpl extends EventEmitter implements Engine {
     const peers = this.store.agents(agent.roomId).filter((a) => a.id !== id);
     fs.writeFileSync(promptPath, buildRoomPrompt(agent, peers));
     const allow = this.allow;
+    // 갈래(새 에이전트로 이어 가기)의 첫 실행 — 원래 세션의 기록을 이어 받은 새 세션(id = 이 에이전트의 sessionId)으로. init 까지 그대로(앱을 다시 켜도)
+    const forkOf = agent.forkOf ?? null;
     const args = buildArgs({
-      sessionId: agent.sessionId, resume: agent.started, mcpConfigPath, promptPath, model: agent.model, name: agent.name,
+      sessionId: agent.sessionId, resume: agent.started, forkOf, mcpConfigPath, promptPath, model: agent.model, name: agent.name,
       allowBypass: allow,
     });
     const s = new ClaudeSession({
@@ -1824,7 +1874,11 @@ class EngineImpl extends EventEmitter implements Engine {
       env: this.spawnEnv(),
     });
     this.seen.set(s, new SeenToolUses());
-    if (agent.started) this.resuming.set(s, agent.sessionId);
+    // 갈래도 이어 가기 — 원래 세션의 Claude 쪽 기록이 없으면 같은 길(resumeFailed)로 새 대화
+    if (forkOf) {
+      this.resuming.set(s, forkOf);
+      this.forking.add(s);
+    } else if (agent.started) this.resuming.set(s, agent.sessionId);
     // 세션 콜백 안에서 던지면 stdout 처리 중 잡히지 않은 예외가 되어 앱이 죽는다 — 모두 guard 로 감싼다
     s.on('event', (ev: StreamEvent) =>
       this.guard(id, () => {
@@ -1931,14 +1985,22 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * --resume 실행의 init 전 사건 — init 이면 이어 왔다(표시를 지운다). 오류 result(error_during_execution)면 Claude 쪽 대화 기록이 없다는
-   * 뜻이라(probe21) 표시만 하고 true — 그 사건은 버린다
+   * 뜻이라(probe21) 표시만 하고 true — 그 사건은 버린다. 엔진이 멈추기를 보낸 세션이면 멈춘 차례의 끝일 수 있어 평소처럼 넘긴다
+   * (정말 기록이 없으면 끝날 때 stderr 로 안다 — lostTranscript)
    */
   private noteResume(s: ClaudeSession, ev: StreamEvent): boolean {
     if (!this.resuming.has(s)) return false;
     if (ev.kind === 'init') this.resuming.delete(s);
     if (ev.kind !== 'result' || ev.subtype !== 'error_during_execution') return false;
+    if (this.interrupted.has(s)) return false;
     this.resumeLost.add(s);
     return true;
+  }
+
+  /** 엔진이 보내는 멈추기 — 보낸 세션을 적어 둔다(noteResume) */
+  private sendInterrupt(s: ClaudeSession): Promise<void> {
+    this.interrupted.add(s);
+    return s.interrupt();
   }
 
   /** --resume 실행이 init 없이 끝난 까닭이 Claude 쪽 대화 기록이 없어서인가 — 그 오류 result 를 봤거나 stderr 가 그렇게 말한다 */
@@ -1947,15 +2009,17 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /**
-   * --resume 으로 띄운 세션이 Claude 쪽 대화 기록이 없어 끝났다(30일이 지나 지워짐 · 돌아간 대화의 기록이 없음) — 오류로 멈추지 않고
-   * 새 대화로: 경계(이어 가려던 세션) · 알림 한 줄 · 새 세션 id. 보낸 줄은 되살려 새 대화로 보내고, 기다리는 것이 없으면 고른 에이전트만
-   * 미리 띄운다. 상태는 부른 쪽(exit)이 알린다
+   * --resume 으로 띄운 세션이 Claude 쪽 대화 기록이 없어 끝났다(30일이 지나 지워짐 · 돌아간 대화의 기록이 없음 · 갈래 칠 원래 세션이 없음) —
+   * 오류로 멈추지 않고 새 대화로: 경계(이어 가려던 세션 — 갈래면 이 에이전트의 대화가 아니라 세션 없이) · 알림 한 줄 · 새 세션 id(갈래 표시도 지운다).
+   * 보낸 줄은 되살려 새 대화로 보내고, 기다리는 것이 없으면 고른 에이전트만 미리 띄운다. 상태는 부른 쪽(exit)이 알린다
    */
   private resumeFailed(id: AgentId, s: ClaudeSession): void {
     const ended = this.resuming.get(s)!;
-    this.guard(id, () => this.record(id, { kind: 'boundary', ended }));
-    this.guard(id, () => this.record(id, { kind: 'notice', text: RESUME_LOST_NOTICE }));
-    this.store.updateAgent(id, { sessionId: crypto.randomUUID(), started: false });
+    const fork = this.forking.has(s);
+    this.guard(id, () => this.record(id, fork ? { kind: 'boundary' } : { kind: 'boundary', ended }));
+    this.guard(id, () => this.record(id, { kind: 'notice', text: fork ? FORK_LOST_NOTICE : RESUME_LOST_NOTICE }));
+    // 저장이 실패해도 아래 정리(보낸 줄 되살리기)는 한다 — 저장값은 메모리에선 이미 바뀌었다(store.updateAgent 는 바꾼 뒤 쓴다)
+    this.guard(id, () => this.store.updateAgent(id, { sessionId: crypto.randomUUID(), started: false, forkOf: null }));
     this.forgetPastCount(id);
     this.guard(id, () => this.setContext(id, null));
     this.guard(id, () => this.restoreInFlight(id, s));
@@ -2409,7 +2473,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const stopped = working || this.planGates.has(s);
     this.guard(id, () => this.emit('engine-error', { agentId: id, message: PLAN_ON_FAILED }));
     this.guard(id, () => this.record(id, { kind: 'notice', text: stopped ? PLAN_ON_FAILED_STOPPED_NOTICE : PLAN_ON_FAILED_NOTICE }));
-    if (working) await s.interrupt().catch(() => undefined);
+    if (working) await this.sendInterrupt(s).catch(() => undefined);
     await this.settleNormal(id, s);
     // 계획 모드를 기다리는 동안 묻지 않음을 껐다(계획 모드 중이라 끄기를 보내지 않았다) — 아직 두레가 켠 bypass 면 내 기본 모드로
     if (this.live(id, s) && this.modes.get(s) === BYPASS_MODE) await this.reconcile(id);
@@ -2529,6 +2593,10 @@ class EngineImpl extends EventEmitter implements Engine {
     // 저장이 실패해도 init 은 알린다 — started 는 다음 차례의 init 때 다시 쓴다
     this.guard(id, () => {
       if (this.store.agent(id)?.started === false) this.store.updateAgent(id, { started: true });
+    });
+    // 갈래 친 새 세션이 생겼다 — 다음 실행부터는 이 세션을 --resume
+    this.guard(id, () => {
+      if (this.store.agent(id)?.forkOf) this.store.updateAgent(id, { forkOf: null });
     });
     this.guard(id, () => {
       this.setModeNow(id, ev.permissionMode);

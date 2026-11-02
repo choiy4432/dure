@@ -5501,3 +5501,232 @@ test('이어 가기 실패: 평소 --resume 도 Claude 기록이 없으면 오�
   expect(e.errorText(a.id)).toBeNull();
   expect(convUserTexts(e.history(a.id))).toEqual(['echo 둘']);
 });
+
+test('돌아가기 — 고른 에이전트면 돌아간 대화로 미리 띄운다(--resume <그 대화>)', async () => {
+  const { e } = await startConv();
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 둘');
+  e.setSelected(a.id);
+  const before = spawnsOf('A').length;
+
+  await e.resumeConversation(a.id, s1);
+
+  await until('A 가 돌아간 대화로 뜸', () => spawnsOf('A').length === before + 1);
+  expect(flagValue(lastSpawnOf('A').argv, '--resume')).toBe(s1);
+  expect(lastSpawnOf('A').argv).not.toContain('--session-id');
+  expect(convUserTexts(e.history(a.id))).toEqual(['echo 하나']);
+});
+
+test('이어 가기 실패: 고른 에이전트가 돌아간 대화를 미리 띄우다 Claude 기록이 없으면 새 대화로 다시 미리 띄운다', async () => {
+  const { e, env } = await startConv();
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 둘');
+  const s2 = agentOf(e, a.id).sessionId;
+  env.FAKE_MISSING_SESSIONS = s1;
+  e.setSelected(a.id);
+  const before = spawnsOf('A').length;
+  const statuses = statusEvents(e, a.id);
+
+  await e.resumeConversation(a.id, s1);
+
+  await until('A 가 새 대화로 다시 뜸', () => spawnsOf('A').length === before + 2);
+  const [tried, fresh] = spawnsOf('A').slice(-2);
+  expect(flagValue(tried.argv, '--resume')).toBe(s1);
+  const now = agentOf(e, a.id);
+  expect([s1, s2]).not.toContain(now.sessionId);
+  expect(now.started).toBe(false);
+  expect(flagValue(fresh.argv, '--session-id')).toBe(now.sessionId);
+  expect(fresh.argv).not.toContain('--resume');
+  const { bound, next } = lastBoundary(e.history(a.id, { all: true }));
+  expect(bound).toMatchObject({ kind: 'boundary', ended: s1 });
+  expect(next).toMatchObject({ kind: 'notice', text: RESUME_LOST });
+  expect(statuses.some((x) => x.status === 'error')).toBe(false);
+  expect(e.errorText(a.id)).toBeNull();
+  expect(userTexts()).toEqual(['echo 하나', 'echo 둘']); // 미리 띄우기는 줄을 쓰지 않는다
+});
+
+test('이어 가기: init 전에 멈춘 --resume 세션의 오류 result 는 기록이 없다는 뜻이 아니다 — 평소처럼 멈춤, 새 대화로 가지 않는다', async () => {
+  const { e, env } = await startConv();
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  expect(await e.sleep(a.id)).toBe(true);
+  env.FAKE_INIT_DELAY_MS = '400'; // init 앞에서 멈추기가 먼저 닿는다 — init 없이 오류 result
+  const before = spawnsOf('A').length;
+
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 둘'));
+  await e.interrupt(a.id);
+  const { event } = await done;
+  expect(event).toMatchObject({ kind: 'result', subtype: 'error_during_execution' });
+
+  await talk(e, a.id, 'echo 셋'); // 같은 프로세스가 이어 받는다
+  expect(spawnsOf('A')).toHaveLength(before + 1);
+  expect(flagValue(lastSpawnOf('A').argv, '--resume')).toBe(s1);
+  expect(agentOf(e, a.id)).toMatchObject({ sessionId: s1, started: true });
+  const all = e.history(a.id, { all: true });
+  expect(all.filter((x) => x.kind === 'boundary')).toEqual([]);
+  expect(all.some((x) => x.kind === 'notice' && x.text === RESUME_LOST)).toBe(false);
+  expect(all.some((x) => x.kind === 'notice' && x.text === '멈췄어요')).toBe(true);
+  expect(e.status(a.id)).toBe('idle');
+});
+
+// ── 새 에이전트로 이어 가기(갈래) ──
+const FORK_LOST = '그 대화를 이어 오지 못했어요 — 새 대화로 시작해요';
+/** 갈래 알림 — 날짜는 그 대화의 at(로컬 시간) */
+const forkNotice = (name: string, at: number) => {
+  const d = new Date(at);
+  return `${name}의 ${d.getMonth() + 1}월 ${d.getDate()}일 대화에서 이어 만들었어요`;
+};
+/** A 의 첫 대화(echo 하나)를 끝내고 새 대화로 — 그 첫 대화의 세션 */
+async function pastOfA(e: Engine): Promise<{ a: Agent; s1: string }> {
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  return { a, s1 };
+}
+
+test('갈래 — 새 에이전트, 줄 복사·알림, 첫 실행만 --fork-session', async () => {
+  const { e } = await startConv();
+  const { a, s1 } = await pastOfA(e);
+  await e.setModel(a.id, 'haiku');
+  await e.setEffort(a.id, 'low'); // 갈래의 첫 실행은 /effort 부터 — 그 차례의 init 도 갈래 친 세션이다
+  e.updateAgent(a.id, { auto: true });
+  const first = e.conversations(a.id).find((c) => c.key === s1)!;
+  const src = agentOf(e, a.id);
+  const aBefore = e.history(a.id, { all: true });
+
+  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+
+  expect(made).toMatchObject({
+    name: 'A 2', role: '기획', roomId: src.roomId, folder: src.folder, forkOf: s1, started: false,
+    auto: false, bypassOn: false, alwaysAllow: [], model: 'haiku', effort: 'low',
+  });
+  expect(made.sessionId).not.toBe(s1);
+  expect(agentOf(e, made.id).forkOf).toBe(s1);
+  const copied = e.history(made.id, { all: true });
+  expect(copied.filter((x) => x.kind === 'boundary')).toEqual([]);
+  expect(convUserTexts(copied)).toEqual(['echo 하나']);
+  expect(copied.at(-1)).toMatchObject({ kind: 'notice', text: forkNotice('A', first.at) });
+  expect(copied.slice(0, -1)).toEqual(e.conversation(a.id, s1)); // 그 대화의 줄 그대로(시각도)
+
+  const done = resultOf(e, made.id);
+  await e.sendUser(made.id, text('echo 둘'));
+  expect(await resultText(done)).toBe('받음: echo 둘');
+  const firstRun = lastSpawnOf('A 2').argv;
+  const i = firstRun.indexOf('--resume');
+  expect(firstRun.slice(i, i + 5)).toEqual(['--resume', s1, '--fork-session', '--session-id', made.sessionId]);
+  expect(flagValue(firstRun, '--model')).toBe('haiku');
+  expect(agentOf(e, made.id)).toMatchObject({ forkOf: null, started: true, sessionId: made.sessionId });
+
+  expect(await e.sleep(made.id)).toBe(true);
+  await talk(e, made.id, 'echo 셋');
+  const later = lastSpawnOf('A 2').argv;
+  expect(flagValue(later, '--resume')).toBe(made.sessionId);
+  expect(later).not.toContain('--fork-session');
+  expect(convUserTexts(e.history(made.id))).toEqual(['echo 하나', 'echo 둘', 'echo 셋']);
+  expect(e.history(a.id, { all: true })).toEqual(aBefore); // 원래 에이전트의 기록·세션은 그대로
+  expect(agentOf(e, a.id).sessionId).toBe(src.sessionId);
+});
+
+test('갈래 — 앱을 다시 켜도 첫 실행 전이면 --fork-session', async () => {
+  const { e, env } = await startConv();
+  const { a, s1 } = await pastOfA(e);
+  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+  await e.shutdown();
+
+  const e2 = await start({}, false, { env });
+  expect(agentOf(e2, made.id)).toMatchObject({ forkOf: s1, started: false, sessionId: made.sessionId });
+  await talk(e2, made.id, 'echo 둘');
+  const argv = lastSpawnOf('A 2').argv;
+  expect(argv).toContain('--fork-session');
+  expect(flagValue(argv, '--resume')).toBe(s1);
+  expect(flagValue(argv, '--session-id')).toBe(made.sessionId);
+  expect(agentOf(e2, made.id).forkOf).toBeNull();
+});
+
+test('갈래 실패 — 새 대화로', async () => {
+  const { e, env } = await startConv();
+  const { a, s1 } = await pastOfA(e);
+  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+  env.FAKE_MISSING_SESSIONS = s1; // 만든 사이 Claude 쪽 기록이 지워졌다
+  const aBefore = e.history(a.id, { all: true });
+  const statuses = statusEvents(e, made.id);
+
+  const done = resultOf(e, made.id);
+  await e.sendUser(made.id, text('echo 둘'));
+  expect(await resultText(done)).toBe('받음: echo 둘');
+
+  const now = agentOf(e, made.id);
+  expect(now.forkOf).toBeNull();
+  expect(now.started).toBe(true);
+  expect([s1, made.sessionId]).not.toContain(now.sessionId);
+  const [tried, fresh] = spawnsOf('A 2');
+  expect(tried.argv).toContain('--fork-session');
+  expect(fresh.argv).not.toContain('--resume');
+  expect(fresh.argv).not.toContain('--fork-session');
+  expect(flagValue(fresh.argv, '--session-id')).toBe(now.sessionId);
+  const all = e.history(made.id, { all: true });
+  const { bound, next } = lastBoundary(all);
+  expect(bound).toEqual({ t: expect.any(Number), kind: 'boundary' }); // 이 에이전트의 대화가 아니다 — 세션을 남기지 않는다
+  expect(next).toMatchObject({ kind: 'notice', text: FORK_LOST });
+  expect(all.some((x) => x.kind === 'notice' && x.text === RESUME_LOST)).toBe(false);
+  expect(all.some((x) => x.kind === 'result' && x.subtype === 'error_during_execution')).toBe(false);
+  expect(statuses.some((x) => x.status === 'error')).toBe(false);
+  expect(e.errorText(made.id)).toBeNull();
+  expect(convUserTexts(e.history(made.id))).toEqual(['echo 둘']);
+  expect(e.conversations(made.id).find((c) => !c.current)).toMatchObject({ title: 'echo 하나', resumable: false, why: 'old' });
+  expect(e.history(a.id, { all: true })).toEqual(aBefore);
+});
+
+test('갈래 — 지난 대화가 아니거나 이어 갈 수 없거나 이름이 겹치면 만들지 않는다', async () => {
+  const { e, claudeDir } = await startConv();
+  const { a, s1 } = await pastOfA(e);
+  await talk(e, a.id, 'echo 둘');
+  const s2 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 셋');
+  const s3 = agentOf(e, a.id).sessionId;
+  fs.rmSync(path.join(claudeDir, 'projects', 'fake', `${s2}.jsonl`));
+  const fork = (key: string, name = 'A 2') => () => e.forkAgent({ from: a.id, key, name, role: '기획' });
+
+  expect(fork(s2)).toThrow('30일이 지나 이어 갈 수 없어요');
+  expect(fork(s3)).toThrow('그 대화를 찾을 수 없어요');
+  expect(fork('nope')).toThrow('그 대화를 찾을 수 없어요');
+  expect(fork(s1, 'a')).toThrow('이미 있는 이름입니다');
+  expect(fork(s1, ' ')).toThrow('이름을 입력하세요');
+  expect(e.agents().map((x) => x.name)).toEqual(['A', 'B']);
+});
+
+test('갈래 — 그림은 새 에이전트 칸으로 복사, 복사 못 한 그림은 file 없이', async () => {
+  const { e } = await startConv();
+  const { a } = setup(e);
+  const one = Buffer.from('png-one').toString('base64');
+  const two = Buffer.from('png-two').toString('base64');
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [
+    { type: 'text', text: 'echo 그림' },
+    { type: 'image', mediaType: 'image/png', base64: one },
+    { type: 'image', mediaType: 'image/png', base64: two },
+  ]);
+  await done;
+  const s1 = agentOf(e, a.id).sessionId;
+  const [, p1, p2] = (e.history(a.id).find((x) => x.kind === 'user') as any).parts;
+  fs.rmSync(path.join(dataDir, 'images', a.id, p2.file)); // 지워진 그림
+  await e.newConversation(a.id);
+
+  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+
+  const parts = (e.history(made.id).find((x) => x.kind === 'user') as any).parts;
+  expect(parts[1]).toEqual(p1);
+  expect(await e.image(made.id, p1.file)).toBe(`data:image/png;base64,${one}`);
+  expect(parts[2]).toEqual({ type: 'image', mediaType: 'image/png', bytes: p2.bytes });
+  expect(await e.image(a.id, p1.file)).toBe(`data:image/png;base64,${one}`); // 원래 것 그대로
+});

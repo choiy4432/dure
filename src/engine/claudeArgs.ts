@@ -24,6 +24,8 @@ export function buildArgs(a: {
   name: string;
   /** 설정의 '묻지 않고 실행 허용' */
   allowBypass: boolean;
+  /** 갈래 칠 원래 세션 — 있으면 그 기록을 이어 받은 새 세션(id = sessionId)으로 띄운다(probe22). 원래 세션의 기록은 그대로 */
+  forkOf?: string | null;
 }): string[] {
   // --allowedTools / --disallowedTools are variadic: each must be followed by another flag.
   return [
@@ -31,7 +33,9 @@ export function buildArgs(a: {
     '--verbose', '--include-partial-messages',
     // 보낸 말을 Claude 가 읽은 순간 되돌려 준다 — 일하는 중에 보낸 말이 언제 읽혔는지 안다(probe17: 끼어든 말은 다음 요청 때 읽힌다)
     '--replay-user-messages',
-    a.resume ? '--resume' : '--session-id', a.sessionId,
+    ...(a.forkOf
+      ? ['--resume', a.forkOf, '--fork-session', '--session-id', a.sessionId]
+      : [a.resume ? '--resume' : '--session-id', a.sessionId]),
     '--mcp-config', a.mcpConfigPath,
     '--permission-prompts', 'host',
     '--permission-prompt-tool', APPROVE_TOOL,

@@ -165,6 +165,28 @@ test('effort·lastContext 칸이 없는 옛 state.json 은 null 로 열린다', 
   expect(old.lastContext).toBeNull();
 });
 
+test('forkOf — 새 에이전트는 null, 저장하면 다시 열어도 남고, 칸이 없거나 글이 아닌 옛 state.json 은 null', () => {
+  const s = openStore(dir);
+  const r = s.addRoom('A');
+  const a = s.addAgent({ roomId: r.id, name: 'x', role: 'r', folder: dir });
+  const b = s.addAgent({ roomId: r.id, name: 'y', role: 'r', folder: dir });
+  const c = s.addAgent({ roomId: r.id, name: 'z', role: 'r', folder: dir });
+  expect(a.forkOf).toBeNull();
+  s.updateAgent(a.id, { forkOf: 'OLD' });
+  expect(openStore(dir).agent(a.id)!.forkOf).toBe('OLD');
+  const file = path.join(dir, 'state.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  for (const ag of raw.agents) {
+    if (ag.id === b.id) delete ag.forkOf;
+    if (ag.id === c.id) ag.forkOf = 3;
+  }
+  fs.writeFileSync(file, JSON.stringify(raw));
+  const back = openStore(dir);
+  expect(back.agent(a.id)!.forkOf).toBe('OLD');
+  expect(back.agent(b.id)!.forkOf).toBeNull();
+  expect(back.agent(c.id)!.forkOf).toBeNull();
+});
+
 test('깨지거나 손댄 state.json 의 effort·lastContext 는 null 로 열린다 — 다른 칸은 그대로', () => {
   const s = openStore(dir);
   const r = s.addRoom('A');

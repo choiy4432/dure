@@ -36,6 +36,19 @@ describe('buildArgs', () => {
     expect(a).not.toContain('--session-id');
     expect(after(a, '--model')).toEqual(['opus']);
   });
+  test('forkOf 면 그 자리에 --resume OLD --fork-session --session-id NEW(probe22) — --resume NEW 없음 · forkOf null 이면 지금 그대로', () => {
+    const a = buildArgs({ ...base, sessionId: 'NEW', forkOf: 'OLD' });
+    const i = a.indexOf('--resume');
+    expect(a.slice(i, i + 5)).toEqual(['--resume', 'OLD', '--fork-session', '--session-id', 'NEW']);
+    expect(a.filter((x) => x === '--resume')).toHaveLength(1);
+    expect(a.filter((x) => x === '--session-id')).toHaveLength(1);
+    expect(a[i - 1]).toBe('--replay-user-messages'); // 지금의 --resume/--session-id 자리
+    expect(a[i + 5]).toBe('--mcp-config');
+    expect(after(a, '--disallowedTools')).toEqual(['SendMessage', 'ListAgents']);
+    expect(buildArgs({ ...base, forkOf: null })).toEqual(buildArgs(base));
+    expect(buildArgs({ ...base, resume: true, forkOf: null })).toEqual(buildArgs({ ...base, resume: true }));
+    expect(buildArgs(base)).not.toContain('--fork-session');
+  });
   test('가변 인자 플래그는 마지막이 아니고 바로 뒤에 플래그가 온다', () => {
     for (const a of [buildArgs(base), buildArgs({ ...base, resume: true, model: 'opus' }), buildArgs({ ...base, allowBypass: true })]) {
       for (const f of ['--allowedTools', '--disallowedTools']) {

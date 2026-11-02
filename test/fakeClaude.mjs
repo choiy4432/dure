@@ -96,7 +96,9 @@ if (missing) {
   );
 }
 
-const sessionId = process.env.FAKE_INIT_SESSION || (flag('--resume') ?? flag('--session-id') ?? 'fake-session'); // FAKE_INIT_SESSION: init 이 다른 session_id 를 알린다
+// 진짜(probe22)처럼 --resume A --fork-session 이면 새 세션 — id 는 --session-id 값(A 의 기록은 그대로)
+const forked = argv.includes('--fork-session');
+const sessionId = process.env.FAKE_INIT_SESSION || ((forked ? flag('--session-id') : flag('--resume') ?? flag('--session-id')) ?? 'fake-session'); // FAKE_INIT_SESSION: init 이 다른 session_id 를 알린다
 let model = flag('--model') ?? 'claude-opus-5-5'; // --model 이 없으면 기본 모델이 풀린 id 를 알린다
 // 내 Claude 설정의 기본 모드(get_settings 의 effective.permissions.defaultMode) — 세션은 이 모드로 시작한다.
 // 진짜(probe12)처럼 세션 모드를 바꿔도 get_settings 의 이 값은 그대로다
@@ -452,6 +454,12 @@ async function turn(text, pending = []) {
     await system('task_progress', {
       task_id: 'task_bg', tool_use_id: 'toolu_bg', description: 'Working', usage: { total_tokens: 1, tool_uses: 0, duration_ms: 0 }, last_tool_name: 'Read',
     });
+  }
+  // FAKE_INIT_DELAY_MS=<ms> — init 을 그만큼 늦게 낸다. 그새 멈추면(interrupt) init 없이 오류 result 로 끝난다(init 전 멈춤)
+  const initDelay = Number(process.env.FAKE_INIT_DELAY_MS ?? 0);
+  if (initDelay) {
+    await sleep(initDelay);
+    if (tok.ended) return;
   }
   await init();
   await echo(text);

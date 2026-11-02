@@ -66,10 +66,12 @@ export interface Agent {
   bypassOn: boolean;
   /** 이 에이전트의 '묻지 않고 실행해요' 경고를 닫음 — 다시 띄우지 않는다(옛 기록엔 없음 → false) */
   bypassNoticeClosed?: boolean;
+  /** 첫 실행에 갈래 칠 원래 세션 id(새 에이전트로 이어 가기) — 첫 init 에서 null. 옛 기록엔 없음 → null */
+  forkOf?: string | null;
 }
 
 export type AgentPatch = Partial<
-  Pick<Agent, 'name' | 'role' | 'auto' | 'model' | 'alwaysAllow' | 'pos' | 'color' | 'started' | 'sessionId' | 'effort' | 'lastContext' | 'bypassOn' | 'bypassNoticeClosed'>
+  Pick<Agent, 'name' | 'role' | 'auto' | 'model' | 'alwaysAllow' | 'pos' | 'color' | 'started' | 'sessionId' | 'effort' | 'lastContext' | 'bypassOn' | 'bypassNoticeClosed' | 'forkOf'>
 >;
 
 export type MessageState = 'pending' | 'held' | 'queued' | 'delivered' | 'dismissed';

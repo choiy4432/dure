@@ -19,6 +19,8 @@ export interface ImageStore {
   save(agentId: AgentId, mediaType: string, base64: string): string | null;
   /** 저장한 그림 — 이름 모양이 틀리거나 없으면 null */
   read(agentId: AgentId, file: string): { mediaType: string; base64: string } | null;
+  /** 그림 하나를 다른 에이전트 칸으로 같은 이름에 복사한다 — 이름·칸 모양이 틀리거나 원본이 없으면 false(이미 있으면 그대로 true) */
+  copy(from: AgentId, to: AgentId, file: string): boolean;
   /** 그 에이전트의 그림 칸을 통째로 지운다 */
   remove(agentId: AgentId): void;
 }
@@ -50,6 +52,22 @@ export function openImageStore(dataDir: string): ImageStore {
       const full = path.join(dir, file);
       if (!fs.existsSync(full)) return null;
       return { mediaType: TYPE_OF[file.slice(file.lastIndexOf('.') + 1)], base64: fs.readFileSync(full).toString('base64') };
+    },
+    copy(from, to, file) {
+      const src = dirOf(from);
+      const dst = dirOf(to);
+      if (!src || !dst || !FILE_RE.test(file)) return false;
+      const source = path.join(src, file);
+      if (!fs.existsSync(source)) return false;
+      const full = path.join(dst, file);
+      if (!fs.existsSync(full)) {
+        fs.mkdirSync(dst, { recursive: true });
+        // save 와 같이 — 다 쓴 뒤 이름을 바꾼다
+        const tmp = `${full}.${process.pid}.tmp`;
+        fs.copyFileSync(source, tmp);
+        fs.renameSync(tmp, full);
+      }
+      return true;
     },
     remove(agentId) {
       const dir = dirOf(agentId);
