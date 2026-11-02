@@ -626,6 +626,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private remoteWork = new Set<Promise<void>>(); // 도는 서버 정리 — shutdown 이 상한 안에서 기다린다
   private cleaning = new Set<string>(); // 줄에 선 정리의 띄우기(`<에이전트>:<pid>.<띄우기>`) — 같은 띄우기를 두 번 세우지 않는다
   private finished = false; // shutdown 이 다 끝났다 — 그 뒤에 끝난 정리는 저장·기록하지 않는다(다음에 켤 때 다시)
+  private cleanFailNoticed = new Set<string>(); // 정리 실패를 알린 지운 에이전트의 띄우기 — 켤 때마다 한 번만(기다리는 정리 목록에 남아 다음에 다시)
   private perms: Permissions;
   private router: Router;
   private mcp!: McpServerHandle;
@@ -727,6 +728,8 @@ class EngineImpl extends EventEmitter implements Engine {
       const remote = this.remoteOf(a);
       if (remote && a.remoteLaunch) this.guard(a.id, () => void this.queueClean(a.id, remote.host, a.remoteLaunch!));
     }
+    // 지운 에이전트의 서버 claude 중 정리하지 못한 것(기다리는 정리 목록) — 되면 목록에서 뺀다(forgetLaunch), 안 되면 남겨 다음에 켤 때 다시
+    for (const p of this.store.pendingCleanups()) this.guard(null, () => void this.queueClean(p.agentId, p.host, p.launch));
     this.router.flushAll();
     this.watcher?.start();
     this.sweepTimer = setInterval(() => this.guard(null, () => this.sweep()), this.o.sleepSweepMs ?? this.minuteMs());
@@ -1175,16 +1178,21 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     if (this.finished) return;
     if (this.removing.has(id) || !this.store.agent(id)) {
+      // 지운 에이전트 — 띄우기는 기다리는 정리 목록에 남아 다음에 켤 때 다시 한다. 알림은 켤 때마다 그 띄우기 하나에 한 번
+      const key = `${id}:${launch.pid}.${launch.run}`;
+      if (this.cleanFailNoticed.has(key)) return;
+      this.cleanFailNoticed.add(key);
       this.guard(null, () => this.emit('engine-error', { agentId: id, message: REMOTE_CLEANUP_FAILED }));
       return;
     }
     this.guard(id, () => this.record(id, { kind: 'notice', text: REMOTE_CLEANUP_FAILED }));
   }
 
-  /** 정리한 띄우기가 아직 저장된 것이면 비운다 */
+  /** 정리한 띄우기를 잊는다 — 에이전트에 저장된 것이 이것이면 비우고, 지운 에이전트의 기다리는 정리 목록에서도 뺀다 */
   private forgetLaunch(id: AgentId, launch: { pid: number; run: string }): void {
     const cur = this.store.agent(id)?.remoteLaunch;
     if (cur && cur.pid === launch.pid && cur.run === launch.run) this.store.updateAgent(id, { remoteLaunch: null });
+    this.store.dropPendingCleanup(id, launch);
   }
 
   /** 도는 서버 정리를 기다린다 — 상한 stopLimitMs(STOP_LIMIT_MS). 못 끝낸 띄우기는 저장돼 있어 다음에 켤 때 다시 정리한다 */
@@ -1220,8 +1228,8 @@ class EngineImpl extends EventEmitter implements Engine {
     const hadHold = this.holds.delete(id);
     try {
       await this.endSession(id);
-      // 세션 없이 서버에 남은 claude(끊긴 뒤·정리 실패 뒤) — 저장이 지워지면 다시는 못 찾는다. 지우기 전에 정리를 세운다
-      // (방금 내린 세션의 것과 같으면 한 번만 — 실패는 engine-error)
+      // 세션 없이 서버에 남은 claude(끊긴 뒤·정리 실패 뒤) — 지우기 전에 정리를 세운다(방금 내린 세션의 것과 같으면 한 번만).
+      // store 가 지우며 그 띄우기를 기다리는 정리 목록으로 옮긴다 — 실패하면(engine-error) 다음에 켤 때 다시, 되면 목록에서 뺀다
       const gone = this.store.agent(id);
       const remote = gone && this.remoteOf(gone);
       if (remote && gone.remoteLaunch) void this.queueClean(id, remote.host, gone.remoteLaunch);

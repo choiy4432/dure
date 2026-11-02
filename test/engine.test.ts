@@ -6313,6 +6313,47 @@ describe('서버 방 띄우기', () => {
     expect(isAlive(launch.pid)).toBe(false);
   }, 40_000);
 
+  test('지운 에이전트의 서버 정리가 안 되면 기다리는 정리로 남겼다가(알림은 켤 때마다 한 번) 다음에 켤 때 끈다', async () => {
+    const { e, web, mode, calls, events } = await remoteRoom();
+    mode('drop:1500');
+    const done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 하나'));
+    await done;
+    const [first] = launchesIn(events());
+    const launch = { pid: first.pid, run: runOf(first.marker) };
+    await until('끊김', () => e.remoteIssue(web.id)?.kind === 'disconnected', 8000);
+    mode('refused');
+    const errors: any[] = [];
+    e.on('engine-error', (x) => errors.push(x));
+    await e.removeAgent(web.id);
+    await until('정리 두 번 실패', () => calls().filter((c) => c.kind === 'cleanup').length === 2, 10_000);
+    await until('알림', () => errors.length === 1, 5000);
+    expect(errors[0]).toEqual({ agentId: web.id, message: '서버의 claude 를 끄지 못했어요 — 서버에서 직접 확인해 주세요' });
+    expect(openStore(dataDir).pendingCleanups()).toEqual([{ host: 'dev', agentId: web.id, launch }]);
+    expect(isAlive(first.pid)).toBe(true);
+    await e.shutdown();
+    engines = engines.filter((x) => x !== e);
+
+    // 켰는데 아직 서버가 안 된다 — 다시 해 보고 실패해도 목록은 남는다 · 알림은 한 번
+    const { e: e2 } = await startSsh();
+    const errors2: any[] = [];
+    e2.on('engine-error', (x) => errors2.push(x));
+    await until('켤 때 다시', () => calls().filter((c) => c.kind === 'cleanup').length === 4, 10_000);
+    await until('알림', () => errors2.length === 1, 5000);
+    await sleep(300);
+    expect(errors2).toHaveLength(1);
+    expect(openStore(dataDir).pendingCleanups()).toEqual([{ host: 'dev', agentId: web.id, launch }]);
+    await e2.shutdown();
+    engines = engines.filter((x) => x !== e2);
+
+    // 서버가 돌아왔다 — 켤 때 정리하고 목록에서 뺀다
+    mode('');
+    await startSsh();
+    await until('켤 때 정리', () => cleanupsIn(events()).some((c) => c.marker === first.marker), 10_000);
+    await until('목록 비움', () => openStore(dataDir).pendingCleanups().length === 0, 5000);
+    await until('서버 claude 꺼짐', () => !isAlive(first.pid), 5000);
+  }, 60_000);
+
   test('지우기 — 끊겨 세션은 없어도 서버에 남은 claude 를 정리한다 · 방 지우기도', async () => {
     const { e, root, room, web, mode, events } = await remoteRoom();
     const cleaned = (marker: string) => cleanupsIn(events()).some((c) => c.marker === marker);

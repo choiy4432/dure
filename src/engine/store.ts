@@ -4,6 +4,13 @@ import path from 'node:path';
 import { hostArgs, isSafeId } from './remote';
 import { EFFORT_LEVELS, type Agent, type AgentId, type AgentPatch, type ContextUsage, type EffortLevel, type Room, type RoomId } from './types';
 
+/** 지운 서버 방 에이전트의 정리하지 못한 서버 claude — 에이전트 기록과 따로(에이전트는 지워졌다). 정리가 되면 뺀다 */
+export interface PendingCleanup {
+  host: string;
+  agentId: AgentId;
+  launch: { pid: number; run: string };
+}
+
 export interface Store {
   rooms(): Room[];
   agents(roomId?: RoomId): Agent[];
@@ -19,13 +26,19 @@ export interface Store {
    */
   checkAgent(input: { roomId: RoomId; name: string; folder: string }): void;
   updateAgent(id: AgentId, patch: AgentPatch): Agent;
+  /** 서버 방 에이전트면 저장된 띄우기(remoteLaunch)를 기다리는 정리 목록으로 옮긴 뒤 지운다 */
   removeAgent(id: AgentId): void;
+  /** 기다리는 정리 — 엔진이 켤 때 다시 해 본다 */
+  pendingCleanups(): PendingCleanup[];
+  /** 그 에이전트의 그 띄우기를 목록에서 뺀다(정리가 됐다) — 없으면 아무것도 안 한다 */
+  dropPendingCleanup(agentId: AgentId, launch: { pid: number; run: string }): void;
 }
 
 interface State {
   version: 1;
   rooms: Room[];
   agents: Agent[];
+  pendingCleanups: PendingCleanup[];
 }
 
 const norm = (s: string) => s.trim().toLocaleLowerCase('ko');
@@ -87,12 +100,31 @@ function savedLaunch(v: unknown): { pid: number; run: string } | null {
   return { pid: pid as number, run };
 }
 
+/** 저장된 기다리는 정리 — 올바른 서버 이름·안전한 에이전트 id·띄우기만, 깨진 줄·배열이 아니면 버린다 */
+function savedPending(v: unknown): PendingCleanup[] {
+  if (!Array.isArray(v)) return [];
+  const out: PendingCleanup[] = [];
+  for (const x of v) {
+    if (!x || typeof x !== 'object') continue;
+    const { host, agentId } = x as Record<string, unknown>;
+    const launch = savedLaunch((x as Record<string, unknown>).launch);
+    if (typeof host !== 'string' || typeof agentId !== 'string' || !isSafeId(agentId) || !launch) continue;
+    try {
+      hostArgs(host);
+    } catch {
+      continue;
+    }
+    out.push({ host, agentId, launch });
+  }
+  return out;
+}
+
 export const REMOTE_FOLDER_ABSOLUTE = '서버 폴더는 / 로 시작하는 전체 경로로 적어 주세요';
 /** 줄바꿈 같은 제어 문자 — 이름·역할·서버 폴더에 쓰지 않는다(서버 폴더는 셸 명령에 들어간다) */
 export const CONTROL_CHAR = /[\p{Cc}\u2028\u2029]/u;
 
 function load(file: string): State {
-  const empty: State = { version: 1, rooms: [], agents: [] };
+  const empty: State = { version: 1, rooms: [], agents: [], pendingCleanups: [] };
   if (!fs.existsSync(file)) return empty;
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -104,6 +136,7 @@ function load(file: string): State {
         ...a, effort: savedEffort(a.effort), lastContext: savedContext(a.lastContext), bypassOn: a.bypassOn === true, bypassNoticeClosed: a.bypassNoticeClosed === true,
         forkOf: typeof a.forkOf === 'string' && a.forkOf ? a.forkOf : null, remoteLaunch: savedLaunch(a.remoteLaunch),
       })),
+      pendingCleanups: savedPending(raw.pendingCleanups), // 옛 파일엔 없다 → []
     };
   } catch {
     renameRetrying(file, `${file}.broken-${Date.now()}`);
@@ -138,6 +171,14 @@ export function openStore(dataDir: string): Store {
     if (state.agents.some((a) => a.roomId === roomId && a.id !== exceptId && norm(a.name) === n)) {
       throw new Error(`이미 있는 이름입니다: ${name.trim()}`);
     }
+  };
+  /** 지우는 에이전트의 서버 claude 띄우기를 기다리는 정리 목록으로 — 서버 방이고 저장된 띄우기가 있을 때만(같은 것은 한 번) */
+  const keepLaunch = (a: Agent) => {
+    const host = state.rooms.find((r) => r.id === a.roomId)?.remote?.host;
+    const launch = a.remoteLaunch;
+    if (!host || !launch) return;
+    if (state.pendingCleanups.some((p) => p.agentId === a.id && p.launch.pid === launch.pid && p.launch.run === launch.run)) return;
+    state.pendingCleanups.push({ host, agentId: a.id, launch: { pid: launch.pid, run: launch.run } });
   };
   const checkAgent = ({ roomId, name, folder }: { roomId: RoomId; name: string; folder: string }) => {
     const room = needRoom(roomId);
@@ -176,6 +217,7 @@ export function openStore(dataDir: string): Store {
     },
     removeRoom(id) {
       needRoom(id);
+      for (const a of state.agents) if (a.roomId === id) keepLaunch(a); // 방이 지워지기 전에(서버 이름은 방에 있다)
       state.rooms = state.rooms.filter((r) => r.id !== id);
       state.agents = state.agents.filter((a) => a.roomId !== id);
       save();
@@ -205,8 +247,15 @@ export function openStore(dataDir: string): Store {
       return clone(a);
     },
     removeAgent(id) {
-      needAgent(id);
+      keepLaunch(needAgent(id));
       state.agents = state.agents.filter((a) => a.id !== id);
+      save();
+    },
+    pendingCleanups: () => clone(state.pendingCleanups),
+    dropPendingCleanup(agentId, launch) {
+      const rest = state.pendingCleanups.filter((p) => !(p.agentId === agentId && p.launch.pid === launch.pid && p.launch.run === launch.run));
+      if (rest.length === state.pendingCleanups.length) return;
+      state.pendingCleanups = rest;
       save();
     },
   };

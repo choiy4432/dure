@@ -346,3 +346,65 @@ test('서버 방 에이전트 폴더 — / 로 시작하는 전체 경로면 이
   const local = s.addRoom('이 PC');
   expect(() => s.addAgent({ roomId: local.id, name: 'x', role: 'r', folder: '/home/a/web' })).toThrow('폴더를 찾을 수 없습니다: /home/a/web');
 });
+
+test('기다리는 정리 — 서버 방 에이전트를 지우면 저장된 띄우기를 목록으로 옮긴다(방 지우기도) · 이 PC 방·띄우기 없음은 없다 · 다시 열어도 남는다', () => {
+  const s = openStore(dir);
+  const srv = s.addRoom('서버', { host: 'me@h:2222' });
+  const a = s.addAgent({ roomId: srv.id, name: 'a', role: 'r', folder: '/home/a/web' });
+  const b = s.addAgent({ roomId: srv.id, name: 'b', role: 'r', folder: '/home/a/api' });
+  const c = s.addAgent({ roomId: srv.id, name: 'c', role: 'r', folder: '/home/a/c' }); // 띄우기 없음
+  const local = s.addRoom('이 PC');
+  const d = s.addAgent({ roomId: local.id, name: 'd', role: 'r', folder: dir });
+  s.updateAgent(a.id, { remoteLaunch: { pid: 11, run: 'aaaa1111' } });
+  s.updateAgent(b.id, { remoteLaunch: { pid: 22, run: 'bbbb2222' } });
+  expect(s.pendingCleanups()).toEqual([]);
+  s.removeAgent(a.id);
+  s.removeAgent(c.id);
+  s.removeAgent(d.id);
+  expect(s.pendingCleanups()).toEqual([{ host: 'me@h:2222', agentId: a.id, launch: { pid: 11, run: 'aaaa1111' } }]);
+  s.removeRoom(srv.id);
+  const want = [
+    { host: 'me@h:2222', agentId: a.id, launch: { pid: 11, run: 'aaaa1111' } },
+    { host: 'me@h:2222', agentId: b.id, launch: { pid: 22, run: 'bbbb2222' } },
+  ];
+  expect(s.pendingCleanups()).toEqual(want);
+  expect(openStore(dir).pendingCleanups()).toEqual(want);
+});
+
+test('기다리는 정리 — 정리가 되면 그 띄우기만 뺀다(다른 띄우기·없는 것은 그대로)', () => {
+  const s = openStore(dir);
+  const srv = s.addRoom('서버', { host: 'dev' });
+  const a = s.addAgent({ roomId: srv.id, name: 'a', role: 'r', folder: '/home/a/web' });
+  s.updateAgent(a.id, { remoteLaunch: { pid: 11, run: 'aaaa1111' } });
+  s.removeAgent(a.id);
+  s.dropPendingCleanup(a.id, { pid: 11, run: 'other999' });
+  s.dropPendingCleanup('ghost', { pid: 11, run: 'aaaa1111' });
+  expect(s.pendingCleanups()).toHaveLength(1);
+  s.dropPendingCleanup(a.id, { pid: 11, run: 'aaaa1111' });
+  expect(s.pendingCleanups()).toEqual([]);
+  expect(openStore(dir).pendingCleanups()).toEqual([]);
+});
+
+test('기다리는 정리 — 옛 state.json 에 칸이 없으면 빈 목록 · 깨진 줄은 버린다', () => {
+  const s = openStore(dir);
+  s.addRoom('A');
+  const file = path.join(dir, 'state.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete raw.pendingCleanups;
+  fs.writeFileSync(file, JSON.stringify(raw));
+  expect(openStore(dir).pendingCleanups()).toEqual([]);
+  raw.pendingCleanups = [
+    { host: 'dev', agentId: 'ag1', launch: { pid: 4242, run: 'abcd1234' } },
+    { host: 'a b', agentId: 'ag1', launch: { pid: 1, run: 'x' } },
+    { host: 'dev', agentId: '../x', launch: { pid: 1, run: 'x' } },
+    { host: 'dev', agentId: 'ag1', launch: { pid: -1, run: 'x' } },
+    { host: 'dev', agentId: 'ag1' },
+    7,
+  ];
+  fs.writeFileSync(file, JSON.stringify(raw));
+  expect(openStore(dir).pendingCleanups()).toEqual([{ host: 'dev', agentId: 'ag1', launch: { pid: 4242, run: 'abcd1234' } }]);
+  raw.pendingCleanups = 'nope';
+  fs.writeFileSync(file, JSON.stringify(raw));
+  expect(openStore(dir).pendingCleanups()).toEqual([]);
+  expect(fs.readdirSync(dir).filter((f) => f.includes('.broken-'))).toEqual([]);
+});
