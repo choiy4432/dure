@@ -1,4 +1,4 @@
-import { createContext, useLayoutEffect, useRef, type KeyboardEvent, type ReactNode, type WheelEvent } from 'react'
+import { createContext, useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type WheelEvent } from 'react'
 import type { PanelTab } from '../state/store'
 import { PAST } from '../lib/words'
 
@@ -13,6 +13,9 @@ export const tabId = (base: string, tab: PanelTab) => `${base}-${tab}`
 /** 탭마다 제 칸(tabpanel)의 id — 탭의 aria-controls 가 가리킨다. 두 칸을 함께 그려 두고 고르지 않은 칸은 숨긴다(AgentPanel) */
 export const panelId = (base: string, tab: PanelTab) => `${base}-${tab}-panel`
 
+/** 넘친 탭 줄 끝의 흐림 폭 — base.css .ptabs.fade-l·fade-r 의 24px 와 같다(고른 탭은 이만큼 더 끌어와 흐림 밖에 둔다) */
+const FADE_PX = 24
+
 /**
  * 패널 탭 [대화 | 서브에이전트 N | 메시지 N | 지난 대화 N](시안 2안 · 메시지 탭 시안 A · 지난 대화 시안 B) — 대화 말고 탭이 하나라도 있을 때만 그린다(AgentPanel).
  * 서브에이전트 탭은 지금 대화에 서브에이전트가 있었을 때, 메시지 탭은 이 에이전트가 주고받은 메시지가 있을 때,
@@ -22,6 +25,7 @@ export const panelId = (base: string, tab: PanelTab) => `${base}-${tab}-panel`
  * 메시지 N 은 받은 것 + 보낸 것, 이 에이전트가 받은 것 가운데 내 확인이 필요한 게 있으면 주황 점(관계도 카드의 받은 메시지와 같은 셈).
  * 지난 대화 N 은 지금 대화를 뺀 수.
  * 좁은 패널에서 탭이 다 안 들어가면 탭 줄이 옆으로 밀린다(스크롤 막대 없이) — 세로 휠도 옆으로, 고른 탭은 늘 보이게 끌어온다.
+ * 넘치는 동안은 가려진 탭이 있는 쪽 끝을 흐린다(fade-l · fade-r) — 스크롤·패널 너비·탭이 바뀔 때마다 다시 잰다.
  */
 export function PanelTabs({ tab, tabs, subagents, messages, past, base, onChange }: {
   tab: PanelTab
@@ -36,15 +40,39 @@ export function PanelTabs({ tab, tabs, subagents, messages, past, base, onChange
 }) {
   const order = tabs
   const refs = useRef<Partial<Record<PanelTab, HTMLButtonElement | null>>>({})
+  const rowRef = useRef<HTMLDivElement>(null)
+  const [fade, setFade] = useState({ l: false, r: false })
 
-  // 고른 탭이 밀려 가려져 있으면 보이게 — 다른 곳에서 탭을 바꿔도(대화에서 보기 등). 넘치지 않으면 할 일이 없다
+  // 고른 탭이 밀려 가려져 있거나 끝의 흐림 아래 있으면 보이게 — 다른 곳에서 탭을 바꿔도(대화에서 보기 등). 넘치지 않으면 할 일이 없다
   useLayoutEffect(() => {
     const el = refs.current[tab]
     const row = el?.parentElement
     if (!el || !row || row.scrollWidth <= row.clientWidth) return
-    if (el.offsetLeft < row.scrollLeft) row.scrollLeft = el.offsetLeft
-    else if (el.offsetLeft + el.offsetWidth > row.scrollLeft + row.clientWidth) row.scrollLeft = el.offsetLeft + el.offsetWidth - row.clientWidth
+    if (el.offsetLeft - FADE_PX < row.scrollLeft) row.scrollLeft = el.offsetLeft - FADE_PX
+    else if (el.offsetLeft + el.offsetWidth + FADE_PX > row.scrollLeft + row.clientWidth) {
+      row.scrollLeft = el.offsetLeft + el.offsetWidth + FADE_PX - row.clientWidth
+    }
   }, [tab, tabs])
+
+  // 가려진 탭이 있는 쪽 — 넘칠 때만(1px 은 반올림 틈으로 친다). 그려지지 않은 줄(숨은 칸)은 재지 않고 지난 값을 둔다
+  const measure = useCallback(() => {
+    const row = rowRef.current
+    if (!row || !row.getClientRects().length) return
+    const end = row.scrollWidth - row.clientWidth
+    const l = end > 1 && row.scrollLeft > 1
+    const r = end > 1 && row.scrollLeft < end - 1
+    setFade(f => (f.l === l && f.r === r ? f : { l, r }))
+  }, [])
+
+  // 탭·수가 바뀌면(줄 길이가 바뀐다) 끌어온 뒤에 잰다 · 패널 너비가 바뀌면 다시
+  useLayoutEffect(measure, [measure, tab, tabs, subagents.total, subagents.running, messages.total, messages.attention, past])
+  useLayoutEffect(() => {
+    const row = rowRef.current
+    if (!row || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(row)
+    return () => ro.disconnect()
+  }, [measure])
 
   // 세로 휠을 옆으로 — 넘칠 때만(탭 줄은 세로로 움직일 게 없다)
   const onWheel = (e: WheelEvent<HTMLDivElement>) => {
@@ -85,7 +113,14 @@ export function PanelTabs({ tab, tabs, subagents, messages, past, base, onChange
   )
 
   return (
-    <div className="ptabs" role="tablist" aria-label="패널 보기" onWheel={onWheel}>
+    <div
+      ref={rowRef}
+      className={`ptabs${fade.l ? ' fade-l' : ''}${fade.r ? ' fade-r' : ''}`}
+      role="tablist"
+      aria-label="패널 보기"
+      onWheel={onWheel}
+      onScroll={measure}
+    >
       {button('chat', '대화')}
       {tabs.includes('subagents') &&
         button(

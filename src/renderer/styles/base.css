@@ -1803,6 +1803,36 @@ code {
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  --ptabs-fade-l: 0px;
+  --ptabs-fade-r: 0px;
+}
+
+/*
+ * 넘쳐 가려진 탭이 있는 쪽 끝을 24px 동안 흐린다(PanelTabs 가 재어 fade-l·fade-r 를 붙인다 — 그 폭은 PanelTabs FADE_PX 와 같다).
+ * 두 번째 막은 아래 1px(경계 줄)만 덮어 그 줄은 흐리지 않는다. 막은 알파만 본다 — 색 토큰은 불투명 자리 표시(라이트·다크 같다)
+ */
+.ptabs.fade-l {
+  --ptabs-fade-l: 24px;
+}
+
+.ptabs.fade-r {
+  --ptabs-fade-r: 24px;
+}
+
+.ptabs.fade-l,
+.ptabs.fade-r {
+  -webkit-mask-image:
+    linear-gradient(to right, transparent, var(--text) var(--ptabs-fade-l), var(--text) calc(100% - var(--ptabs-fade-r)), transparent),
+    linear-gradient(var(--text), var(--text));
+  mask-image:
+    linear-gradient(to right, transparent, var(--text) var(--ptabs-fade-l), var(--text) calc(100% - var(--ptabs-fade-r)), transparent),
+    linear-gradient(var(--text), var(--text));
+  -webkit-mask-size: 100% 100%, 100% 1px;
+  mask-size: 100% 100%, 100% 1px;
+  -webkit-mask-position: 0 0, 0 100%;
+  mask-position: 0 0, 0 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
 }
 
 .ptab {
