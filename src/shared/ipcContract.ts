@@ -1,5 +1,5 @@
 import type {
-  Agent, AgentDescription, AgentId, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, SleepBlock, ThemePref, UserPart,
+  Agent, AgentDescription, AgentId, ConversationSummary, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, SleepBlock, ThemePref, UserPart,
 } from '../engine/types'
 
 export interface AgentView extends Agent {
@@ -26,6 +26,8 @@ export interface AgentView extends Agent {
   modelNow: string | null
   /** 도는 서브에이전트 — 부모의 Agent tool_use id, 시작 순(이어서 'subagents' 사건) */
   subagentsRunning: string[]
+  /** 지난 대화 수 — 지금 대화는 빼고 */
+  pastCount: number
 }
 
 export interface Snapshot {
@@ -76,6 +78,14 @@ export interface DureApi {
   describe(id: AgentId): Promise<AgentDescription>
   /** all: 지난 대화까지 · limit: 마지막 N 개(기본 500, Infinity = 전부 — 내보내기) */
   history(id: AgentId, o?: { all?: boolean; limit?: number }): Promise<HistoryItem[]>
+  /** 지난 대화 목록(새것부터, 지금 대화 포함) */
+  conversations(id: AgentId): Promise<ConversationSummary[]>
+  /** 지난 대화 한 편 읽기 — limit: 마지막 N 개 */
+  conversation(id: AgentId, key: string, o?: { limit?: number }): Promise<HistoryItem[]>
+  /** 그 지난 대화로 돌아간다 */
+  resumeConversation(id: AgentId, key: string): Promise<void>
+  /** 그 지난 대화에서 새 에이전트를 갈라 만든다 */
+  forkAgent(i: { from: AgentId; key: string; name: string; role: string }): Promise<Agent>
   /** 보낸 그림(기록의 image file) — data URL, 없으면 null */
   image(id: AgentId, file: string): Promise<string | null>
   approveMessage(id: string): Promise<void>
@@ -117,7 +127,7 @@ export const CHANNEL = { invoke: 'dure:invoke', event: 'dure:event' } as const
 /** invoke 로 부를 수 있는 이름 — DureApi 의 메서드 중 on 만 빠진다(on 은 preload 안에서 처리) */
 export const METHODS = [
   'snapshot', 'addRoom', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
-  'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'image',
+  'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'conversations', 'conversation', 'resumeConversation', 'forkAgent', 'image',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
   'setAllowBypass', 'setNotify', 'setTheme', 'setBypass',
   'sleep', 'sleepRoom', 'sleepBlock', 'sleepableIn', 'setSleepAfter',

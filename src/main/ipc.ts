@@ -39,6 +39,8 @@ export function saveName(name: string): string {
   return `${stem || '대화'}.md`
 }
 
+const CONV_BAD = '지난 대화를 부를 수 없어요'
+
 function agentViews(engine: Engine): AgentView[] {
   return engine.agents().map((a) => {
     const flags = engine.flags(a.id)
@@ -56,6 +58,7 @@ function agentViews(engine: Engine): AgentView[] {
       effortNow: engine.effortNow(a.id),
       modelNow: engine.modelNow(a.id),
       subagentsRunning: engine.subagentsRunning(a.id),
+      pastCount: engine.pastCount(a.id),
     }
   })
 }
@@ -102,6 +105,23 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   refreshUsage: (e) => e.refreshUsage(),
   describe: (e, _d, id) => e.describe(id),
   history: (e, _d, id, o) => e.history(id, o),
+  conversations: (e, _d, id) => {
+    if (typeof id !== 'string') throw new Error(CONV_BAD)
+    return e.conversations(id)
+  },
+  conversation: (e, _d, id, key, o) => {
+    if (typeof id !== 'string' || typeof key !== 'string') throw new Error(CONV_BAD)
+    return e.conversation(id, key, o)
+  },
+  resumeConversation: (e, _d, id, key) => {
+    if (typeof id !== 'string' || typeof key !== 'string') throw new Error(CONV_BAD)
+    return e.resumeConversation(id, key)
+  },
+  forkAgent: (e, _d, i) => {
+    const x = i as { from?: unknown; key?: unknown; name?: unknown; role?: unknown } | null
+    if (!x || typeof x.from !== 'string' || typeof x.key !== 'string' || typeof x.name !== 'string' || typeof x.role !== 'string') throw new Error(CONV_BAD)
+    return e.forkAgent({ from: x.from, key: x.key, name: x.name, role: x.role })
+  },
   image: (e, _d, id, file) => e.image(id, file),
   approveMessage: (e, _d, id) => e.approveMessage(id),
   dismissMessage: (e, _d, id) => e.dismissMessage(id),

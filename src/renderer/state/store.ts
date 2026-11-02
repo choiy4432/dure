@@ -53,9 +53,20 @@ export type UiState = Snapshot & {
   fresh: Record<AgentId, number>
   /** 방 목록을 열어 달라는 요청 횟수 — 흘끗 보기 창 등 바깥에서 요청하면 오른다(0 부터). 값이 바뀔 때마다 방 목록을 연다 */
   roomMenuRequest: number
+  /** 지난 대화에서 새 에이전트로 이어 가는 창의 초안 — 없으면 창이 닫혀 있다 */
+  forkDraft: ForkDraft | null
 }
 
-export type PanelTab = 'chat' | 'subagents' | 'messages'
+export interface ForkDraft {
+  from: AgentId
+  key: string
+  roomId: RoomId
+  name: string
+  role: string
+  folder: string
+}
+
+export type PanelTab = 'chat' | 'subagents' | 'messages' | 'past'
 
 /** 관계도 선 보기를 기억하는 자리(이 PC) */
 export const EDGE_MODE_KEY = 'dure.edges'
@@ -91,6 +102,9 @@ export interface Store {
   focusAgent(id: AgentId): void
   /** 방 목록을 열어 달라고 요청한다 — roomMenuRequest 가 하나 오른다 */
   requestRoomMenu(): void
+  /** 갈래 창을 연다 */
+  openFork(d: ForkDraft): void
+  closeFork(): void
   /** PC 시계를 바꿨으면 시작 시각(statusSince)을 맞춘다 — 이벤트를 받을 때도 보지만, 이벤트가 없는 동안(긴 명령)을 위해 앱이 1초마다 부른다 */
   followClock(): void
 }
@@ -136,7 +150,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   let state: UiState = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
-    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0,
+    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null,
   }
   const listeners = new Set<() => void>()
   let buffer: { ev: Ev; at: number }[] | null = null // 스냅샷을 기다리는 동안 온 이벤트(받은 시각과 함께)
@@ -321,8 +335,18 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
           else pending.push(item)
           break
         }
+        // 경계 — 지난 대화 수(pastCount)가 바뀌었다
+        if (boundary) fetchSnapshot().catch(() => {})
         const list = state.history[agentId]
         if (!list) break // 아직 안 불러온 에이전트 — 불러올 때 같이 온다
+        if (boundary && item.resumed) {
+          // 돌아간 대화 — 같은 세션의 앞 구간이 이어 보여야 한다: 목록을 지우고 엔진에서 다시 받는다
+          const { [agentId]: _h, ...history } = state.history
+          const { [agentId]: _s, ...historyStatus } = state.historyStatus
+          state = { ...state, history, historyStatus }
+          void loadHistory(agentId)
+          break
+        }
         state = { ...state, history: { ...state.history, [agentId]: boundary ? [] : [...list, item] } }
         break
       }
@@ -523,6 +547,13 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       set({ ...state, roomId, selectedAgentId: id, fresh: without(state.fresh, id) })
       tellSelected(id)
       void loadHistory(id)
+    },
+    openFork(d) {
+      set({ ...state, forkDraft: d })
+    },
+    closeFork() {
+      if (!state.forkDraft) return
+      set({ ...state, forkDraft: null })
     },
     requestRoomMenu() {
       set({ ...state, roomMenuRequest: state.roomMenuRequest + 1 })

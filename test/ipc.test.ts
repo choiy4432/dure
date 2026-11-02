@@ -56,6 +56,11 @@ function fakeEngine() {
     setModel: rec('setModel', Promise.resolve()),
     describe: rec('describe', Promise.resolve({ commands: [], models: [], permissionMode: 'default' })),
     history: rec('history', []),
+    conversations: rec('conversations', []),
+    conversation: rec('conversation', []),
+    pastCount: () => 4,
+    resumeConversation: rec('resumeConversation', Promise.resolve()),
+    forkAgent: rec('forkAgent', agent),
     image: rec('image', Promise.resolve(null)),
     approveMessage: rec('approveMessage'),
     dismissMessage: rec('dismissMessage'),
@@ -101,6 +106,22 @@ function setup(withEngine = true) {
 }
 
 describe('registerIpc', () => {
+  it('지난 대화 메서드는 글이 아닌 인자를 거절한다', async () => {
+    const { call, calls } = setup()
+    for (const [m, a] of [
+      ['conversations', [1]], ['conversation', ['a1', 2]], ['conversation', [1, 'k']], ['resumeConversation', [1, 2]],
+      ['resumeConversation', ['a1', 2]], ['forkAgent', [{ from: 'a1', key: 1, name: 'n', role: 'r' }]], ['forkAgent', [null]],
+    ] as [string, unknown[]][]) {
+      expect(await call(m, ...a), m).toMatchObject({ ok: false })
+    }
+    expect(calls).toEqual([])
+  })
+
+  it('snapshot 의 에이전트에 pastCount 가 실린다', async () => {
+    const { call } = setup()
+    const r = await call('snapshot')
+    expect(r.value.agents[0].pastCount).toBe(4)
+  })
   it('rejects methods outside the whitelist', async () => {
     const { call } = setup()
     for (const m of ['shutdown', 'on', 'constructor', '__proto__', 'start']) {
@@ -127,6 +148,8 @@ describe('registerIpc', () => {
       addAgent: [{ roomId: 'r1', name: 'n', role: 'r', folder: 'f' }], updateAgent: ['a1', { auto: true }],
       removeAgent: ['a1'], setSelected: ['a1'], sendUser: ['a1', [{ type: 'text', text: 'hi' }], { plan: true }], interrupt: ['a1'],
       newConversation: ['a1'], setModel: ['a1', null], describe: ['a1'], history: ['a1', { all: true }], image: ['a1', 'f.png'],
+      conversations: ['a1'], conversation: ['a1', 'k1', { limit: 5 }], resumeConversation: ['a1', 'k1'],
+      forkAgent: [{ from: 'a1', key: 'k1', name: 'n', role: 'r' }],
       approveMessage: ['m1'], dismissMessage: ['m1'], continueHeld: ['r1'],
       answerRequest: ['q1', { type: 'allow' }], setAutoChainLimit: [5],
       setEffort: ['a1', 'high'], refreshUsage: [], setAllowBypass: [true], setNotify: [{ finished: true }], setTheme: ['dark'], setBypass: ['a1', false],

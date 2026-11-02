@@ -5,7 +5,7 @@ import type { AgentView, DureApi, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, roomId = 'r1', over: Partial<AgentView> = {}): AgentView => ({
   id, roomId, name: id, role: '', folder: '/x', sessionId: '', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [], ...over,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [], pastCount: 0, ...over,
 })
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   claudeMissing: false,
@@ -513,7 +513,8 @@ describe('store 새 대화(boundary)', () => {
     expect(s.getState().history.b).toHaveLength(2)
 
     emit('history', { agentId: 'a', item: note('새', 4) })
-    expect(texts(s.getState().history.a)).toEqual(['새'])
+    // 경계가 스냅샷을 다시 받게 하니 그 사이 온 사건은 스냅샷 뒤에 적용된다
+    await vi.waitFor(() => expect(texts(s.getState().history.a)).toEqual(['새']))
   })
 
   it('기록을 불러오는 동안 boundary 가 오면 불러온 옛 기록도 버리고 그 뒤에 온 것만(앞에서 읽었든 뒤에서 읽었든)', async () => {
@@ -1170,5 +1171,52 @@ describe('store 끝남 · 새 결과', () => {
     s.requestRoomMenu()
     s.requestRoomMenu()
     expect(s.getState().roomMenuRequest).toBe(2)
+  })
+})
+
+describe('store 지난 대화 — resumed 경계·갈래 초안', () => {
+  const said = (text: string, t: number): HistoryItem => ({ t, kind: 'assistant', blocks: [{ type: 'text', text }] })
+
+  it('resumed 경계 — 비우지 않고 다시 불러온다', async () => {
+    let calls = 0
+    const { api, emit } = fake({ history: async () => (++calls === 1 ? [note('옛', 1)] : [said('앞 구간', 1), note('이 대화로 돌아왔어요', 5)]) })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    await vi.waitFor(() => expect(s.getState().history.a).toHaveLength(1))
+    const snaps = api.snapshot.mock.calls.length
+
+    emit('history', { agentId: 'a', item: { t: 5, kind: 'boundary', ended: 'S2', resumed: 'S1' } })
+    await vi.waitFor(() => expect(s.getState().history.a).toHaveLength(2))
+    expect(api.history).toHaveBeenCalledTimes(2)
+    expect(s.getState().history.a![0].kind).toBe('assistant')
+    await vi.waitFor(() => expect(api.snapshot.mock.calls.length).toBeGreaterThan(snaps))
+  })
+
+  it('resumed 없는 경계는 지금처럼 빈 목록 — 스냅샷은 다시 받는다', async () => {
+    const { api, emit } = fake({ history: async () => [note('옛', 1)] })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    await vi.waitFor(() => expect(s.getState().history.a).toHaveLength(1))
+    const snaps = api.snapshot.mock.calls.length
+    emit('history', { agentId: 'a', item: { t: 5, kind: 'boundary', ended: 'S2' } })
+    expect(s.getState().history.a).toEqual([])
+    expect(api.history).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(api.snapshot.mock.calls.length).toBeGreaterThan(snaps))
+  })
+
+  it('openFork·closeFork', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().forkDraft).toBeNull()
+    const d = { from: 'a', key: 'k', roomId: 'r1', name: '복사', role: '역할', folder: '/x' }
+    s.openFork(d)
+    expect(s.getState().forkDraft).toEqual(d)
+    s.closeFork()
+    expect(s.getState().forkDraft).toBeNull()
+    s.setPanelTab('a', 'past')
+    expect(s.getState().panelTab.a).toBe('past')
   })
 })
