@@ -4,7 +4,6 @@
 
 여러 Claude 에이전트를 한 창에 띄워 두고, 에이전트끼리 일을 넘기게 하는 Windows 데스크톱 앱이에요. 사람은 관계도로 흐름을 보면서 승인만 하면 돼요.
 
-> 비공식 · 팀 내부용 · Anthropic 과 무관해요. 각자 자기 Claude 구독과 PC 에 설치한 Claude Code 를 써요.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset=".github/readme/screen-dark.png">
@@ -65,7 +64,6 @@ npm start
 
 - Claude Code 를 앱에 넣어 배포하지 않아요. PC 에 설치된 `claude` 를 불러요.
 - 자격 증명 파일을 읽거나 옮기지 않고, API 키를 쓰지 않아요.
-- 제품 이름에 "Claude Code" 를 쓰지 않아요.
 
 ## 개발
 
