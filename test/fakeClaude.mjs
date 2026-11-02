@@ -45,6 +45,8 @@
 //                       → thinking_delta(토큰 null) · thinking_tokens 452 → signature_delta → assistant(thinking 블록) → 블록 끝
 //                       → text 블록 시작 · text_delta <글> → assistant <글> → 블록 끝 · message_stop → result.
 //                       줄 사이 FAKE_THINK_MS(기본 30)ms. 그새 멈추면(interrupt) 더 내지 않는다
+//   LOGINFAIL           서버 claude 로그인이 풀린 것처럼(probe24) — 글·success result 모두
+//                       "Failed to authenticate: OAuth session expired and could not be refreshed"
 //   그 밖               글 "받음: <글>"
 // MCP tools/call 은 진짜(probe14 A)처럼 params._meta = { 'claudecode/toolUseId': <그 부르기의 tool_use id> } 를 싣는다.
 // 서브에이전트 손잡이:
@@ -694,6 +696,13 @@ async function turn(text, pending = []) {
       await toolResult(id, verdict.message ?? 'denied', true);
       await finish('denied', { permission_denials: [{ tool_name: ask[1], tool_use_id: id, tool_input: { x: 1 } }] });
     }
+    return;
+  }
+  if (text.trim() === 'LOGINFAIL') {
+    // 서버 claude 의 로그인이 풀렸을 때(probe24) — 오류가 아니라 success result 로 온다
+    const said = 'Failed to authenticate: OAuth session expired and could not be refreshed';
+    await assistant([{ type: 'text', text: said }]);
+    await finish(said);
     return;
   }
   await emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '받음' } } });

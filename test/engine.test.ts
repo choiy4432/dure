@@ -1,5 +1,7 @@
-import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { createEngine, type Agent, type AgentStatus, type Engine, type EngineOptions, type HistoryItem, type Hold, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
@@ -5842,12 +5844,12 @@ async function startSsh(env: Record<string, string> = {}, extra: Partial<EngineO
     ...extra,
   });
   const mode = (m: string) => fs.writeFileSync(modeFile, m);
+  /** 가짜 ssh 기록 전부 — start·launch·cleanup·drop·exit 차례대로 */
+  const events = (): any[] =>
+    fs.existsSync(sshLog) ? fs.readFileSync(sshLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
   /** 가짜 ssh 가 받은 호출들(시작 줄) */
-  const calls = (): any[] =>
-    fs.existsSync(sshLog)
-      ? fs.readFileSync(sshLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.event === 'start')
-      : [];
-  return { e, root, home, mode, calls };
+  const calls = (): any[] => events().filter((x) => x.event === 'start');
+  return { e, root, home, mode, calls, events, sshLog };
 }
 
 test('ssh: checkRemote — 접속됨 · claude 버전 · 확인 ssh 는 BatchMode·bash -lc 이고 -R 없음 · 포트는 -p', async () => {
@@ -5979,4 +5981,364 @@ test('newAgentFolder — 서버 방은 부모 서버 폴더 기준 POSIX(../api 
   const base = folder('a');
   expect(newAgentFolder(false, base, 'sub')).toBe(path.join(base, 'sub'));
   expect(newAgentFolder(false, base, '/c/Users')).toBe(path.resolve('C:/Users'));
+});
+
+// ── 서버(SSH) 방 — 띄우기·정리·끊김·로그인 만료 ──
+describe('서버 방 띄우기', () => {
+  /** 가짜 ssh 가 남긴 지킴이·claude(끊김 흉내 등)를 끈다 — 엔진을 먼저 끄고(끄기 정리까지) 나서 */
+  afterEach(async () => {
+    await Promise.all(engines.map((x) => x.shutdown()));
+    engines = [];
+    const root = path.join(dir, 'srv');
+    if (fs.existsSync(root)) {
+      execFileSync(process.execPath, [FAKE_SSH, '--fake-reap'], { env: { ...process.env, FAKE_SSH_ROOT: root }, timeout: 20_000 });
+    }
+  });
+
+  const LOGIN_TEXT = 'Failed to authenticate: OAuth session expired and could not be refreshed';
+  const launchesIn = (ev: any[]) => ev.filter((x) => x.event === 'launch');
+  const cleanupsIn = (ev: any[]) => ev.filter((x) => x.event === 'cleanup');
+  /** 서버 방 + 에이전트 web(/home/a/web) */
+  async function remoteRoom(env: Record<string, string> = {}, extra: Partial<EngineOptions> = {}) {
+    const t = await startSsh(env, extra);
+    const room = t.e.addRoom('서버 실험', { host: 'dev' });
+    const web = t.e.addAgent({ roomId: room.id, name: 'web', role: '화면', folder: '/home/a/web' });
+    const statuses: any[] = [];
+    t.e.on('status', (s) => statuses.push(s));
+    const notices = (id: string) => t.e.history(id).flatMap((x) => (x.kind === 'notice' ? [x.text] : []));
+    return { ...t, room, web, statuses, notices };
+  }
+  const runOf = (marker: string) => marker.slice(marker.indexOf('.') + 1);
+
+  test('서버 방 — ssh 로 띄워 대화 · -R·BatchMode·bash -lc · 토큰은 서버 파일에만 · 띄운 pid 저장', async () => {
+    const { e, web, calls, events, sshLog } = await remoteRoom();
+    const done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 하나'));
+    expect(await resultText(done)).toBe('받음: echo 하나');
+
+    const start = calls().find((c) => c.kind === 'launch');
+    expect(start.host).toBe('dev');
+    expect(start.argv).toEqual(expect.arrayContaining(['-T', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-R']));
+    expect(start.command).toMatch(/^bash -lc '/);
+    const fwd = /^(\d+):127\.0\.0\.1:(\d+)$/.exec(start.forwards[0])!;
+    const remotePort = Number(fwd[1]);
+    expect(remotePort).toBeGreaterThanOrEqual(40000);
+    expect(remotePort).toBeLessThanOrEqual(49999);
+
+    const [launch] = launchesIn(events());
+    expect(launch.folder).toBe('/home/a/web');
+    expect(launch.marker.startsWith(`${web.id}.`)).toBe(true);
+    // MCP 설정은 서버의 run 폴더 파일로 — url 은 서버 쪽 원격 포트(터널이 두레로 잇는다)
+    const cfg = JSON.parse(fs.readFileSync(path.join(launch.runDir, 'mcp.json'), 'utf8')).mcpServers.dure;
+    expect(cfg.url).toBe(`http://127.0.0.1:${remotePort}/mcp`);
+    expect(cfg.headers['X-Dure-Agent']).toBe(web.id);
+    const token = String(cfg.headers.Authorization).replace(/^Bearer /, '');
+    expect(token.length).toBeGreaterThan(10);
+    expect(fs.readFileSync(path.join(launch.runDir, 'prompt.md'), 'utf8')).toContain('web');
+    // 토큰은 명령 인자 어디에도 없다 — ssh 인자·스크립트·서버 claude 인자
+    expect(fs.readFileSync(sshLog, 'utf8')).not.toContain(token);
+    const argv = lastSpawnOf('web').argv;
+    expect(JSON.stringify(argv)).not.toContain(token);
+    expect(flagValue(argv, '--mcp-config')).toBe(path.join(launch.runDir, 'mcp.json'));
+    expect(flagValue(argv, '--append-system-prompt-file')).toBe(path.join(launch.runDir, 'prompt.md'));
+    expect(argv).toEqual(expect.arrayContaining(['--disallowedTools', 'SendMessage', 'ListAgents', '--session-id', web.sessionId]));
+    // 이 PC 에는 MCP 설정을 쓰지 않는다
+    expect(fs.existsSync(path.join(dataDir, 'run', web.id, 'mcp.json'))).toBe(false);
+    // 정리에 쓸 서버 pid 와 띄우기 id
+    expect(agentOf(e, web.id).remoteLaunch).toEqual({ pid: launch.pid, run: runOf(launch.marker) });
+    expect(e.remoteIssue(web.id)).toBeNull();
+  }, 30_000);
+
+  test('두레 MCP 가 터널로 — 서버 방 에이전트의 send_message 가 다른 에이전트에게 간다', async () => {
+    const { e, root, room, web } = await remoteRoom();
+    fs.mkdirSync(path.join(root, 'home', 'a', 'api'), { recursive: true });
+    const api = e.addAgent({ roomId: room.id, name: 'api', role: '서버', folder: '/home/a/api' });
+    e.updateAgent(api.id, { auto: true });
+    const aDone = resultOf(e, web.id);
+    const bDone = resultOf(e, api.id);
+    await e.sendUser(web.id, text('SEND api: 화면 만들어 줘'));
+    expect(await resultText(aDone)).toBe('api 에게 전달했습니다.');
+    expect(await resultText(bDone)).toBe('받음: [두레 메시지 — 보낸 쪽: web(화면)]\n화면 만들어 줘');
+    expect(e.messages()).toMatchObject([{ from: web.id, to: api.id, state: 'delivered' }]);
+  }, 30_000);
+
+  test('멈추기(claude 를 내릴 때)·재우기·지우기 — ssh 를 끈 뒤 서버 정리 · 서버 claude 없음 · 저장된 pid 비움', async () => {
+    const { e, root, room, web, events } = await remoteRoom();
+    const cleaned = (marker: string) => cleanupsIn(events()).some((c) => c.marker === marker);
+
+    // 재우기
+    let done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 하나'));
+    await done;
+    const first = launchesIn(events())[0];
+    expect(await e.sleep(web.id)).toBe(true);
+    await until('재우기 정리', () => cleaned(first.marker), 10_000);
+    await until('저장된 pid 비움', () => agentOf(e, web.id).remoteLaunch === null);
+    expect(isAlive(first.pid)).toBe(false);
+    expect(fs.existsSync(first.runDir)).toBe(false); // 토큰이 든 run 폴더도 지운다
+
+    // 멈추기 — 끼운 말을 안 읽은 채 멈추면 claude 를 내려 돌려받고 --resume 으로 다시 띄운다
+    const init = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === web.id && x.event.kind === 'init');
+    await e.sendUser(web.id, text('SLOW'));
+    await init;
+    await e.sendUser(web.id, text('echo 끼움'));
+    const second = launchesIn(events()).at(-1);
+    expect(second.marker).not.toBe(first.marker);
+    await e.interrupt(web.id);
+    await until('멈추기 정리', () => cleaned(second.marker), 10_000);
+    await until('다시 띄움', () => launchesIn(events()).length === 3, 10_000);
+    const third = launchesIn(events())[2];
+    expect(isAlive(second.pid)).toBe(false);
+    expect(third.args).toContain('--resume');
+    await until('새 띄우기 저장', () => agentOf(e, web.id).remoteLaunch?.run === runOf(third.marker));
+
+    // 지우기
+    fs.mkdirSync(path.join(root, 'home', 'a', 'api'), { recursive: true });
+    const api = e.addAgent({ roomId: room.id, name: 'api', role: '서버', folder: '/home/a/api' });
+    done = resultOf(e, api.id);
+    await e.sendUser(api.id, text('echo 둘'));
+    await done;
+    const apiLaunch = launchesIn(events()).find((l) => l.marker.startsWith(`${api.id}.`));
+    await e.removeAgent(api.id);
+    await until('지우기 정리', () => cleaned(apiLaunch.marker), 10_000);
+    expect(isAlive(apiLaunch.pid)).toBe(false);
+  }, 60_000);
+
+  test('앱 끄기 — 일하는 중이어도 서버 정리를 보내고 끝날 때까지 기다린다(Review Focus 1)', async () => {
+    const { e, web, events } = await remoteRoom();
+    const init = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === web.id && x.event.kind === 'init');
+    await e.sendUser(web.id, text('SLOW'));
+    await init;
+    const [launch] = launchesIn(events());
+    await e.shutdown();
+    // shutdown 이 끝났을 땐 정리가 이미 서버에 갔다 왔다
+    expect(cleanupsIn(events()).map((c) => c.marker)).toContain(launch.marker);
+    expect(isAlive(launch.pid)).toBe(false);
+    expect(openStore(dataDir).agent(web.id)!.remoteLaunch).toBeNull();
+  }, 30_000);
+
+  test('앱 끄기 — 정리가 상한을 넘으면 그만 기다린다 · 다음에 켤 때 저장된 띄우기를 먼저 정리한다', async () => {
+    const { e, web, events } = await remoteRoom({ FAKE_SSH_CLEANUP_MS: '5000' }, { stopLimitMs: 1500 });
+    const done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 하나'));
+    await done;
+    const [launch] = launchesIn(events());
+    const t0 = Date.now();
+    await e.shutdown();
+    expect(Date.now() - t0).toBeLessThan(4500);
+    expect(openStore(dataDir).agent(web.id)!.remoteLaunch).toEqual({ pid: launch.pid, run: runOf(launch.marker) }); // 다음에 다시
+    engines = engines.filter((x) => x !== e);
+
+    const { e: e2 } = await startSsh();
+    await until('켤 때 정리', () => cleanupsIn(events()).some((c) => c.marker === launch.marker), 10_000);
+    await until('저장된 pid 비움', () => e2.agents()[0].remoteLaunch === null, 10_000);
+  }, 40_000);
+
+  test('두 에이전트 동시 — 원격 포트가 겹치지 않는다(Review Focus 2)', async () => {
+    const base = 40000 + Math.floor(Math.random() * 9000);
+    const { e, root, room, web, calls } = await remoteRoom({}, { remotePorts: { from: base, to: base + 1 } });
+    fs.mkdirSync(path.join(root, 'home', 'a', 'api'), { recursive: true });
+    const api = e.addAgent({ roomId: room.id, name: 'api', role: '서버', folder: '/home/a/api' });
+    const a = resultOf(e, web.id);
+    const b = resultOf(e, api.id);
+    await Promise.all([e.sendUser(web.id, text('echo 하나')), e.sendUser(api.id, text('echo 둘'))]);
+    expect([await resultText(a), await resultText(b)]).toEqual(['받음: echo 하나', '받음: echo 둘']);
+    const ports = calls().filter((c) => c.kind === 'launch').map((c) => Number(String(c.forwards[0]).split(':')[0]));
+    expect(ports.sort()).toEqual([base, base + 1]);
+  }, 30_000);
+
+  test('포트 겹침 — 다른 포트로 다시 띄운다(기다린 입력은 그대로 간다)', async () => {
+    const { e, web, calls, mode, notices } = await remoteRoom();
+    mode('portclash-once');
+    const done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 하나'));
+    expect(await resultText(done)).toBe('받음: echo 하나');
+    const tries = calls().filter((c) => c.kind === 'launch');
+    expect(tries).toHaveLength(2);
+    expect(tries[0].forwards[0].split(':')[0]).not.toBe(tries[1].forwards[0].split(':')[0]);
+    expect(e.remoteIssue(web.id)).toBeNull();
+    expect(e.errorText(web.id)).toBeNull();
+    expect(notices(web.id)).toEqual([]);
+  }, 30_000);
+
+  test('포트가 계속 겹치면 5번 다시 한 뒤 오류 — 보낸 말은 기다리는 줄로', async () => {
+    const busy = net.createServer();
+    await new Promise<void>((r) => busy.listen(0, '127.0.0.1', r));
+    const port = (busy.address() as net.AddressInfo).port;
+    try {
+      const { e, web, calls } = await remoteRoom({}, { remotePorts: { from: port, to: port } });
+      await e.sendUser(web.id, text('echo 하나'));
+      await until('오류', () => e.status(web.id) === 'error', 20_000);
+      expect(calls().filter((c) => c.kind === 'launch')).toHaveLength(6);
+      expect(e.errorText(web.id)).toContain(`remote port forwarding failed for listen port ${port}`);
+      expect(e.heldInput(web.id)).toBe(1);
+      expect(e.remoteIssue(web.id)).toBeNull();
+    } finally {
+      busy.close();
+    }
+  }, 40_000);
+
+  test('끊김 — 오류 아님·안내 한 줄 · 다시 보내면 옛 서버 claude 를 먼저 정리하고 --resume 으로(Review Focus 5)', async () => {
+    const { e, web, mode, events, statuses, notices } = await remoteRoom();
+    mode('drop:1500');
+    const done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 하나'));
+    expect(await resultText(done)).toBe('받음: echo 하나');
+    const [first] = launchesIn(events());
+    await until('끊김', () => e.remoteIssue(web.id) !== null, 8000);
+    expect(e.remoteIssue(web.id)).toEqual({ kind: 'disconnected', detail: null });
+    expect(e.status(web.id)).toBe('idle');
+    expect(e.errorText(web.id)).toBeNull();
+    expect(notices(web.id)).toEqual(['dev 연결이 끊겼어요 — 다시 보내면 이어서 해요']);
+    expect(statuses).toContainEqual({ agentId: web.id, status: 'idle', errorText: null, remoteIssue: { kind: 'disconnected', detail: null } });
+    // 끊긴 쪽의 서버 claude 는 남아 있다 — 다음에 띄울 때 정리하려고 pid 를 기억한다
+    expect(isAlive(first.pid)).toBe(true);
+    expect(agentOf(e, web.id).remoteLaunch).toEqual({ pid: first.pid, run: runOf(first.marker) });
+
+    mode('');
+    const again = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 둘'));
+    expect(await resultText(again)).toBe('받음: echo 둘');
+    const ev = events();
+    const firstAt = ev.findIndex((x) => x.event === 'launch' && x.marker === first.marker);
+    const ci = ev.findIndex((x) => x.event === 'cleanup' && x.marker === first.marker);
+    const si = ev.findIndex((x, i) => i > firstAt && x.event === 'start' && x.kind === 'launch');
+    expect(ci).toBeGreaterThan(-1);
+    expect(ci).toBeLessThan(si); // 정리가 끝난 뒤에 띄웠다
+    expect(ev[ci].killed).toEqual([first.pid]);
+    expect(isAlive(first.pid)).toBe(false);
+    const second = launchesIn(ev)[1];
+    expect(second.args).toContain('--resume');
+    expect(e.remoteIssue(web.id)).toBeNull();
+    expect(agentOf(e, web.id).remoteLaunch).toEqual({ pid: second.pid, run: runOf(second.marker) });
+  }, 40_000);
+
+  test('정리가 끝나야 같은 에이전트를 다시 띄운다 — 도는 옛 정리가 새 띄우기와 겹치지 않고 새 pid 를 지우지 않는다', async () => {
+    const { e, web, events } = await remoteRoom({ FAKE_SSH_CLEANUP_MS: '1500' });
+    let done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 하나'));
+    await done;
+    const [first] = launchesIn(events());
+    expect(await e.sleep(web.id)).toBe(true);
+    done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 둘')); // 정리가 도는 중
+    expect(await resultText(done)).toBe('받음: echo 둘');
+    const ev = events();
+    const firstAt = ev.findIndex((x) => x.event === 'launch' && x.marker === first.marker);
+    const ci = ev.findIndex((x) => x.event === 'cleanup' && x.marker === first.marker);
+    const si = ev.findIndex((x, i) => i > firstAt && x.event === 'start' && x.kind === 'launch');
+    expect(ci).toBeGreaterThan(-1);
+    expect(ci).toBeLessThan(si);
+    const second = launchesIn(ev)[1];
+    await sleep(300);
+    expect(agentOf(e, web.id).remoteLaunch).toEqual({ pid: second.pid, run: runOf(second.marker) });
+  }, 30_000);
+
+  test('정리가 두 번 다 안 되면 알림 한 줄 · pid 는 남겨 다음 띄우기 전에 다시 정리한다', async () => {
+    const { e, web, mode, calls, events, notices } = await remoteRoom();
+    let done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 하나'));
+    await done;
+    const [first] = launchesIn(events());
+    mode('refused'); // 띄운 세션은 그대로 — 따로 맺는 정리 ssh 만 막힌다
+    expect(await e.sleep(web.id)).toBe(true);
+    await until('알림', () => notices(web.id).includes('서버의 claude 를 끄지 못했어요 — 서버에서 직접 확인해 주세요'), 10_000);
+    expect(calls().filter((c) => c.kind === 'cleanup')).toHaveLength(2); // 한 번 더 해 봤다
+    expect(agentOf(e, web.id).remoteLaunch).toEqual({ pid: first.pid, run: runOf(first.marker) });
+
+    mode('');
+    done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 둘'));
+    expect(await resultText(done)).toBe('받음: echo 둘');
+    expect(cleanupsIn(events()).map((c) => c.marker)).toEqual([first.marker]); // 띄우기 전에 정리했다
+    expect(agentOf(e, web.id).remoteLaunch?.run).toBe(runOf(launchesIn(events())[1].marker));
+  }, 40_000);
+
+  test('로그인 만료 — remoteIssue login(답 줄은 대화에 그대로) · 다음 정상 답에서 지움', async () => {
+    const { e, web, statuses } = await remoteRoom();
+    let done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('LOGINFAIL'));
+    expect(await resultText(done)).toBe(LOGIN_TEXT);
+    expect(e.remoteIssue(web.id)).toEqual({ kind: 'login', detail: null });
+    expect(e.history(web.id).some((x) => x.kind === 'assistant' && JSON.stringify(x.blocks).includes(LOGIN_TEXT))).toBe(true);
+    expect(statuses.some((s) => s.agentId === web.id && s.remoteIssue?.kind === 'login')).toBe(true);
+    done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 둘'));
+    await done;
+    expect(e.remoteIssue(web.id)).toBeNull();
+    expect(statuses.at(-1)).toMatchObject({ agentId: web.id, remoteIssue: null });
+  }, 30_000);
+
+  test('키 거절·접속 안 됨·서버 키 바뀜·claude 없음·폴더 없음 — 종류별 안내 한 줄 · 오류 상태 아님 · 보낸 말은 기다린다', async () => {
+    const { e, room, web, mode, events, notices } = await remoteRoom();
+    const issue = async (m: string, kind: string) => {
+      mode(m);
+      await e.sendUser(web.id, text(`echo ${m}`));
+      await until(kind, () => e.remoteIssue(web.id)?.kind === kind, 10_000);
+      expect(e.status(web.id)).toBe('idle');
+      expect(e.errorText(web.id)).toBeNull();
+      return notices(web.id).at(-1);
+    };
+    expect(await issue('denied', 'denied')).toBe('dev 에 키로 접속할 수 없어요 — SSH 키를 등록해 주세요');
+    expect(e.heldInput(web.id)).toBe(1);
+    expect(await issue('refused', 'unreachable')).toBe('dev 에 접속하지 못했어요 — ssh: connect to host dev port 22: Connection refused');
+    expect(e.remoteIssue(web.id)).toEqual({ kind: 'unreachable', detail: 'ssh: connect to host dev port 22: Connection refused' });
+    expect(await issue('hostkey', 'hostkey')).toBe('dev 의 서버 키가 바뀌었어요 — 서버가 바뀐 게 맞는지 확인한 뒤 known_hosts 를 고쳐 주세요');
+    expect(await issue('noclaude', 'no-claude')).toBe('dev 에 claude 가 없어요');
+    // claude 없음은 셸이 DURE_PID 를 알린 뒤라 그 띄우기(토큰이 든 run 폴더)를 곧바로 정리한다
+    await until('claude 없음 정리', () => agentOf(e, web.id).remoteLaunch === null && cleanupsIn(events()).length === 1, 10_000);
+    expect(notices(web.id)).toHaveLength(4);
+
+    mode('');
+    const gone = e.addAgent({ roomId: room.id, name: 'gone', role: 'r', folder: '/home/a/gone' });
+    await e.sendUser(gone.id, text('echo 없음'));
+    await until('no-folder', () => e.remoteIssue(gone.id)?.kind === 'no-folder', 10_000);
+    expect(notices(gone.id)).toEqual(['서버에 그 폴더가 없어요']);
+
+    // 고치고 다시 보내면 기다리던 말부터 간다 · 안내는 지운다
+    const done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 이제'));
+    expect(await resultText(done)).toBe('받음: echo denied');
+    expect(e.remoteIssue(web.id)).toBeNull();
+  }, 60_000);
+
+  test('create_agent — 서버 방은 승인 카드 전에 서버에서 폴더를 확인한다(../api → /home/a/api) · 없으면 카드 없이 도구 오류', async () => {
+    const { e, root, web, calls } = await remoteRoom();
+    fs.mkdirSync(path.join(root, 'home', 'a', 'api'), { recursive: true });
+    const requests: PendingRequest[] = [];
+    e.on('request', (r: PendingRequest) => requests.push(r));
+    const req = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === web.id, 15_000);
+    let done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('MAKE api|백엔드|../api|'));
+    const r = await req;
+    expect(r.input).toEqual({ name: 'api', role: '백엔드', folder: '/home/a/api', task: null });
+    expect(calls().some((c) => c.kind === 'check' && c.script.includes(`cd '/home/a/api'`))).toBe(true);
+    e.answerRequest(r.id, { type: 'allow' });
+    expect(await resultText(done)).toContain('만들었어요');
+    expect(e.agents().find((x) => x.name === 'api')?.folder).toBe('/home/a/api');
+
+    const seen = requests.length;
+    done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('MAKE x|검사|../nope|'));
+    expect(await resultText(done)).toBe('서버에 그 폴더가 없어요');
+    expect(requests).toHaveLength(seen);
+    expect(e.history(web.id).filter((h) => h.kind === 'tool-result').at(-1)).toMatchObject({ isError: true, text: '서버에 그 폴더가 없어요' });
+  }, 40_000);
+
+  test('이 PC 방은 그대로 — ssh 를 부르지 않고 이 PC 의 run 폴더 설정으로 · 상태 사건에 remoteIssue 칸 없음', async () => {
+    const { e, calls } = await startSsh();
+    const { a } = setup(e);
+    const statuses: any[] = [];
+    e.on('status', (s) => statuses.push(s));
+    const done = resultOf(e, a.id);
+    await e.sendUser(a.id, text('echo 하나'));
+    expect(await resultText(done)).toBe('받음: echo 하나');
+    expect(calls()).toEqual([]);
+    const argv = lastSpawnOf('A').argv;
+    expect(flagValue(argv, '--mcp-config')).toBe(path.join(dataDir, 'run', a.id, 'mcp.json'));
+    expect(e.remoteIssue(a.id)).toBeNull();
+    expect(statuses.length).toBeGreaterThan(0);
+    expect(statuses.every((s) => !('remoteIssue' in s))).toBe(true);
+    expect(agentOf(e, a.id).remoteLaunch).toBeNull();
+  }, 20_000);
 });

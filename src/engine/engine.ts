@@ -4,7 +4,11 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONTROL_CHAR, openStore, renameRetrying, REMOTE_FOLDER_ABSOLUTE, type Store } from './store';
-import { checkScript, classifyExit, hostArgs, parseCheckOutput, posixJoin, shq, sshErrorLines, SSH_OPTIONS, type RemoteIssueKind } from './remote';
+import {
+  checkScript, classifyExit, cleanupScript, hostArgs, isLoginFailure, launchArgs, launchPreamble, parseCheckOutput, parsePid, posixJoin,
+  remoteLaunchScript, remoteRunFiles, shq, sshErrorLines, SSH_OPTIONS, type RemoteIssueKind,
+} from './remote';
+import { REMOTE_CLEANUP_FAILED, remoteIssueText } from '../shared/remoteTexts';
 import { readSshHosts, type SshHostEntry } from './sshConfig';
 import { openMessageLog, type MessageLog } from './messageLog';
 import { capPatch, lastN, openHistory, patchFromInput, trimToolInput, type History } from './history';
@@ -24,7 +28,7 @@ import { EFFORT_LEVELS, SLEEP_CHOICES, SLEEP_DEFAULT_MIN, THEME_PREFS, type Effo
 import { toContextUsage } from './usage';
 import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
 import type {
-  Agent, AgentDescription, ConversationSummary, AgentId, AgentPatch, AgentStatus, ContextUsage, CreateAgentInput, Decision, DiffHunk, EngineEventMap, HistoryItem, HistoryPart, Hold, HoldItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, StreamEvent, UserPart,
+  Agent, AgentDescription, ConversationSummary, AgentId, AgentPatch, AgentStatus, ContextUsage, CreateAgentInput, Decision, DiffHunk, EngineEventMap, HistoryItem, HistoryPart, Hold, HoldItem, PendingRequest, PlanUsage, RelayMessage, RemoteIssue, Room, RoomId, StreamEvent, UserPart,
 } from './types';
 
 export interface EngineOptions {
@@ -69,6 +73,8 @@ export interface EngineOptions {
   sleepMinuteMs?: number;
   /** 살아 있는 세션을 훑어 재우는 간격(ms) — 없으면 sleepMinuteMs(1분마다) */
   sleepSweepMs?: number;
+  /** 서버 방 원격 포트(-R)를 고르는 범위 — 없으면 REMOTE_PORT_FROM~REMOTE_PORT_TO. 시험용(좁혀서 겹침 피하기를 본다) */
+  remotePorts?: { from: number; to: number };
 }
 
 // 이벤트:
@@ -116,6 +122,11 @@ export interface Engine extends EventEmitter {
     roomId: RoomId,
     folder: string,
   ): Promise<{ ok: true; folder: string; claudeVersion: string } | { ok: false; kind: RemoteIssueKind; detail: string | null }>;
+  /**
+   * 서버 방 에이전트의 지금 문제 — 두레가 내리지 않았는데 ssh 가 끝났을 때 가른 것(접속·키·서버 키·claude·폴더·끊김 — 다음 실행이 뜨면 지운다),
+   * 서버 claude 로그인 만료(다음 정상 답에서 지운다). 없거나 이 PC 방이면 null. 바뀌면 'status' 사건(remoteIssue 칸)으로 알린다
+   */
+  remoteIssue(id: AgentId): RemoteIssue | null;
   renameRoom(id: RoomId, name: string): Room;
   removeRoom(id: RoomId): Promise<void>;
   addAgent(i: { roomId: RoomId; name: string; role: string; folder: string }): Agent;
@@ -363,6 +374,33 @@ interface SshRun {
   stdout: string;
   stderr: string;
 }
+/** 서버 방 원격 포트(-R) 범위 — 띄울 때마다 이 PC 의 다른 서버 세션이 쓰지 않는 것 하나 */
+const REMOTE_PORT_FROM = 40000;
+const REMOTE_PORT_TO = 49999;
+/** 원격 포트가 겹쳐(ExitOnForwardFailure) 시작 전에 끝나면 다른 포트로 다시 — 그 횟수, 넘으면 오류 */
+const PORT_RETRIES = 5;
+/** 띄우기 id — 서버의 표식(DURE_RUN)·run 폴더 이름. 띄우기마다 새로(옛 띄우기의 정리가 새 것을 건드리지 않게) */
+const LAUNCH_ID_LEN = 8;
+const LAUNCH_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
+/** DURE_PID 를 찾을 stderr 앞부분 — 로그인 셸 프로필이 앞에 찍을 수 있다 */
+const LAUNCH_ERR_KEEP = 8192;
+/**
+ * 서버 방 세션 하나(ssh 하나) — 그 띄우기의 원격 포트·서버 pid.
+ * started = stdout 줄을 하나라도 받았다(DURE_PID 는 치지 않는다 — claude 가 없어도 셸이 먼저 알린다) ·
+ * ended = 두레가 내렸다(endSession — 그 뒤 온 pid 는 저장하지 않고 정리) · cleanQueued = 이 띄우기의 정리를 세웠다 ·
+ * stopJob = 내린 뒤 pid 를 보고 정리할 일이 아직 줄에서 기다린다
+ */
+interface RemoteRun {
+  host: string;
+  port: number;
+  launchId: string;
+  pid: number | null;
+  err: string;
+  started: boolean;
+  ended: boolean;
+  cleanQueued: boolean;
+  stopJob: boolean;
+}
 /** /effort 의 답(로컬 명령 — 모델을 부르지 않는다): "Set effort level to max (this session only): …" (probe9) */
 const EFFORT_SET = /Set effort level to (low|medium|high|xhigh|max)\b/;
 const EFFORT_BUSY = '/effort 차례가 끝나면 보낸다';
@@ -490,7 +528,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private held = new Map<AgentId, HeldInput[]>(); // 일하는 중에 사람이 넣은 입력 — 끝나면 순서대로(붙잡힌 것은 holds 에)
   private holds = new Map<AgentId, HoldState>(); // 멈춰서 붙잡은 대기열 — 사람이 고를 때까지. 메모리만(다시 켜면 풀린다), 비면 지운다
   private errors = new Map<AgentId, string>(); // 세션 없이 남은 오류(비정상 종료·폴더 없음) — 다음 실행까지
-  private shown = new Map<AgentId, { status: AgentStatus; errorText: string | null }>();
+  private shown = new Map<AgentId, { status: AgentStatus; errorText: string | null; issue: RemoteIssue | null }>();
   private described = new WeakMap<ClaudeSession, Promise<AgentDescription>>();
   private inFlight = new WeakMap<ClaudeSession, InFlight[]>();
   // 차례 도중에 보낸 말이 안 읽힌 채 차례가 끝났다 — 그 말의 차례를 기다리는 타이머(MID_GRACE_MS)
@@ -564,6 +602,15 @@ class EngineImpl extends EventEmitter implements Engine {
   private closing: Promise<void> | null = null;
   private stopping = new Set<Promise<void>>(); // 끄는 중인 세션(상한 STOP_LIMIT_MS) — 맵에서 빠졌어도 shutdown 이 기다린다
   private unstopped = new Set<ClaudeSession>(); // stop() 이 아직 안 끝난 세션 — 상한이 먼저 지나도 shutdown 이 마지막에 직접 끈다
+  // ── 서버(SSH) 방 ──
+  private remoteRuns = new WeakMap<ClaudeSession, RemoteRun>(); // 서버 방 세션의 띄우기
+  private remoteIssues = new Map<AgentId, RemoteIssue>(); // 에이전트의 지금 서버 문제(메모리만)
+  private livePorts = new Set<number>(); // 끝나지 않은 서버 세션이 쓰는 원격 포트 — 새로 띄울 때 피한다
+  private portTries = new Map<AgentId, { n: number; failed: Set<number> }>(); // 원격 포트 겹침으로 다시 띄운 횟수·겹친 포트 — 뜨면 지운다
+  private remoteChain = new Map<AgentId, Promise<void>>(); // 에이전트마다 서버 정리 줄 — 같은 에이전트의 다음 띄우기는 이 줄이 끝난 뒤(startAfter)
+  private remoteWork = new Set<Promise<void>>(); // 도는 서버 정리 — shutdown 이 상한 안에서 기다린다
+  private cleaning = new Set<string>(); // 줄에 선 정리의 띄우기(`<에이전트>:<pid>.<띄우기>`) — 같은 띄우기를 두 번 세우지 않는다
+  private finished = false; // shutdown 이 다 끝났다 — 그 뒤에 끝난 정리는 저장·기록하지 않는다(다음에 켤 때 다시)
   private perms: Permissions;
   private router: Router;
   private mcp!: McpServerHandle;
@@ -660,6 +707,11 @@ class EngineImpl extends EventEmitter implements Engine {
   start(): void {
     if (this.started || this.closed) return;
     this.started = true;
+    // 지난번에 끄지 못한 서버 claude(끊김·비정상 종료·끄기 정리 상한) — 정리를 먼저 줄에 세운다. 기다리지 않는다(그 에이전트를 띄우는 것만 그 뒤로)
+    for (const a of this.store.agents()) {
+      const remote = this.remoteOf(a);
+      if (remote && a.remoteLaunch) this.guard(a.id, () => void this.queueClean(a.id, remote.host, a.remoteLaunch!));
+    }
     this.router.flushAll();
     this.watcher?.start();
     this.sweepTimer = setInterval(() => this.guard(null, () => this.sweep()), this.o.sleepSweepMs ?? this.minuteMs());
@@ -770,6 +822,11 @@ class EngineImpl extends EventEmitter implements Engine {
   renameRoom(id: RoomId, name: string) { return this.store.renameRoom(id, name); }
   addAgent(i: { roomId: RoomId; name: string; role: string; folder: string }) { return this.store.addAgent(i); }
 
+  remoteIssue(id: AgentId): RemoteIssue | null {
+    this.need(id);
+    return this.remoteIssues.get(id) ?? null;
+  }
+
   // ── 서버(SSH) ──
   sshAvailable(): boolean {
     const ssh = this.o.ssh;
@@ -844,6 +901,256 @@ class EngineImpl extends EventEmitter implements Engine {
     });
   }
 
+  /** 그 에이전트의 방이 서버 방이면 그 서버 — 아니면 null */
+  private remoteOf(a: Agent): { host: string } | null {
+    return this.store.rooms().find((r) => r.id === a.roomId)?.remote ?? null;
+  }
+
+  /**
+   * 서버 방 세션 — ssh 로 서버에서 claude 를 띄운다(launchArgs, ssh 의 작업 폴더 = 이 PC 의 run 폴더). MCP 설정(url = 서버 쪽 원격 포트 —
+   * -R 이 두레로 잇는다)·방 안내문은 stdin 머리말로 서버 run 폴더 파일에(토큰을 명령 인자에 싣지 않는다), claude 인자는 지금 그대로에서
+   * 그 두 경로만 서버 것으로. 저장된 옛 띄우기가 있으면 그 정리를 먼저 줄에 세우고, 그 에이전트의 정리 줄이 끝난 뒤에 띄운다(startAfter)
+   */
+  private remoteSession(
+    id: AgentId,
+    agent: Agent,
+    host: string,
+    runDir: string,
+    prompt: string,
+    argsWith: (mcpConfigPath: string, promptPath: string) => string[],
+  ): ClaudeSession {
+    const ssh = this.o.ssh!;
+    const launchId = Array.from(crypto.randomBytes(LAUNCH_ID_LEN), (b) => LAUNCH_ID_CHARS[b % LAUNCH_ID_CHARS.length]).join('');
+    const port = this.pickRemotePort(id);
+    const files = remoteRunFiles(id, launchId);
+    const script = remoteLaunchScript({ agentId: id, launchId, folder: agent.folder, claudeArgs: argsWith(files.mcp, files.prompt) });
+    const mcpJson = JSON.stringify(buildMcpConfig({ port, token: this.mcp.token, agentId: id }));
+    if (agent.remoteLaunch) void this.queueClean(id, host, agent.remoteLaunch); // 끊김·비정상 종료 뒤 남았을 수 있다
+    const gate = this.remoteChain.get(id);
+    const run: RemoteRun = { host, port, launchId, pid: null, err: '', started: false, ended: false, cleanQueued: false, stopJob: false };
+    const s = new ClaudeSession({
+      command: ssh.command,
+      args: [...(ssh.argsPrefix ?? []), ...launchArgs({ host, remotePort: port, localPort: this.mcp.port, script })],
+      cwd: runDir,
+      env: this.spawnEnv(),
+      stdinPreamble: launchPreamble(mcpJson, prompt),
+      onStderr: (chunk) => this.guard(id, () => this.noteRemotePid(id, run, chunk)),
+      ...(gate ? { startAfter: gate } : {}),
+    });
+    this.remoteRuns.set(s, run);
+    return s;
+  }
+
+  /** 원격 포트 하나 — 끝나지 않은 서버 세션이 쓰는 것은 피하고, 이번에 겹쳤던 포트도 되도록 피한다(남은 것이 없으면 그래도 고른다) */
+  private pickRemotePort(id: AgentId): number {
+    const { from, to } = this.o.remotePorts ?? { from: REMOTE_PORT_FROM, to: REMOTE_PORT_TO };
+    const failed = this.portTries.get(id)?.failed;
+    const pick = (ok: (p: number) => boolean): number | null => {
+      for (let i = 0; i < 200; i++) {
+        const p = crypto.randomInt(from, to + 1);
+        if (ok(p)) return p;
+      }
+      return null;
+    };
+    return pick((p) => !this.livePorts.has(p) && !failed?.has(p)) ?? pick((p) => !this.livePorts.has(p)) ?? crypto.randomInt(from, to + 1);
+  }
+
+  /**
+   * 띄운 셸이 stderr 로 알린 DURE_PID — 저장한다(앱이 비정상으로 꺼져도 다음에 켤 때·띄울 때 정리). 두레가 이미 내린 띄우기면 저장하지 않고
+   * 정리한다(내린 뒤 기다리는 일이 있으면 그 일이 본다)
+   */
+  private noteRemotePid(id: AgentId, run: RemoteRun, chunk: string): void {
+    if (run.pid !== null) return;
+    if (run.err.length < LAUNCH_ERR_KEEP) run.err += chunk;
+    const pid = parsePid(run.err);
+    if (pid === null) return;
+    run.pid = pid;
+    run.err = '';
+    const launch = { pid, run: run.launchId };
+    if (!run.ended) this.store.updateAgent(id, { remoteLaunch: launch });
+    else if (!run.stopJob && !run.cleanQueued) {
+      run.cleanQueued = true;
+      void this.queueClean(id, run.host, launch);
+    }
+  }
+
+  /** 서버 세션이 처음 말했다(stdout 한 줄) — 시작됨. 포트 다시 시도를 접고, 지난 접속 문제(로그인 말고 — 그건 정상 답이 지운다)를 지운다 */
+  private remoteStarted(id: AgentId, s: ClaudeSession, run: RemoteRun): void {
+    run.started = true;
+    if (this.sessions.get(id) !== s) return;
+    this.portTries.delete(id);
+    const cur = this.remoteIssues.get(id);
+    if (cur && cur.kind !== 'login') this.setRemoteIssue(id, null);
+  }
+
+  /** 서버 방 차례의 result — 로그인이 풀렸다는 글이면 login 문제(답 줄은 대화에 그대로), 정상 답이면 그 문제를 지운다 */
+  private noteRemoteResult(id: AgentId, ev: Extract<StreamEvent, { kind: 'result' }>): void {
+    const cur = this.remoteIssues.get(id);
+    if (isLoginFailure(ev.text)) {
+      if (cur?.kind !== 'login') this.setRemoteIssue(id, { kind: 'login', detail: null });
+    } else if (ev.ok && cur?.kind === 'login') this.setRemoteIssue(id, null);
+  }
+
+  /** 문제를 바꾸고 상태 사건으로 알린다(상태가 그대로여도 — remoteIssue 칸) */
+  private setRemoteIssue(id: AgentId, issue: RemoteIssue | null): void {
+    if (issue) this.remoteIssues.set(id, issue);
+    else this.remoteIssues.delete(id);
+    this.emitStatus(id);
+  }
+
+  /**
+   * 두레가 내리지 않았는데 서버 방 ssh 가 끝났다(부른 쪽이 세션을 맵에서 뺐다) — classifyExit 로 가른다(시작됨 = stdout 한 줄이라도).
+   * 포트 겹침은 다른 포트로 다시(PORT_RETRIES 번까지 — 기다린 입력은 새 세션으로). 가른 문제는 오류 대신 remoteIssue + 안내 한 줄(바뀔 때만),
+   * 보낸 줄은 기다리는 줄로. 못 가르면 지금의 '예기치 않게 종료' 길 — 오류 글은 ssh 잡음(known_hosts 경고·DURE_PID)을 뺀 stderr.
+   * 상태는 부른 쪽(exit)이 알린다
+   */
+  private remoteExited(id: AgentId, s: ClaudeSession, run: RemoteRun, code: number | null, stderr: string): void {
+    let issue = classifyExit({ code, stderr, started: run.started });
+    // DURE_PID 뒤의 255 — 서버에서 명령이 돈 뒤에 끊겼다(접속 실패가 아니다). claude 가 아직 한 줄도 안 낸 미리 띄운 세션 등
+    if (issue?.kind === 'unreachable' && run.pid !== null) issue = { kind: 'disconnected', detail: null };
+    // 끊김이면 서버 claude 가 남았을 수 있다 — 다음에 띄울 때(저장된 pid 로) 정리한다. 그 밖은 지금(claude 는 없어도 토큰이 든 run 폴더가 남는다)
+    if (issue?.kind !== 'disconnected') this.cleanExited(id, run);
+    this.guard(id, () => this.restoreInFlight(id, s));
+    this.perms.cancelForAgent(id, EXITED);
+    if (issue?.kind === 'port') {
+      const tries = this.portTries.get(id) ?? { n: 0, failed: new Set<number>() };
+      tries.failed.add(run.port);
+      if (tries.n < PORT_RETRIES) {
+        tries.n++;
+        this.portTries.set(id, tries);
+        // 다른 포트로 다시 — resumeFailed 와 같은 길(기다리는 것이 없으면 고른 에이전트만 미리 띄운다)
+        try {
+          if (this.hasWaitingWork(id)) this.ensure(id, { quiet: true });
+          else this.prewarm(id);
+        } catch {
+          return; // ensure 가 오류 상태를 남겼다
+        }
+        this.pump(id);
+        return;
+      }
+      this.portTries.delete(id);
+      issue = null; // 다시 해도 겹친다 — 오류로
+    }
+    if (issue) {
+      const cur = this.remoteIssues.get(id);
+      this.remoteIssues.set(id, issue);
+      // 같은 문제가 이어지면(고를 때마다 미리 띄우기 등) 알림 줄을 또 남기지 않는다 — 안내 띠가 계속 보여 준다
+      if (cur?.kind !== issue.kind || cur.detail !== issue.detail) this.guard(id, () => this.record(id, { kind: 'notice', text: remoteIssueText(run.host, issue) }));
+      return;
+    }
+    const why = sshErrorLines(stderr).join('\n') || `Claude 가 예기치 않게 종료됨(code ${code})`;
+    this.guard(id, () => this.record(id, { kind: 'notice', text: why }));
+    this.errors.set(id, why);
+    // 지금 문제는 이 오류다 — 지난 접속 문제는 내린다(로그인 만료는 정상 답까지 남긴다)
+    if (this.remoteIssues.get(id)?.kind !== 'login') this.remoteIssues.delete(id);
+  }
+
+  /** 스스로 끝난 서버 세션의 띄우기 — pid 를 받았으면 지금 정리를 줄에 세운다(다음 띄우기가 기다린다) */
+  private cleanExited(id: AgentId, run: RemoteRun): void {
+    if (run.pid === null || run.cleanQueued) return;
+    run.cleanQueued = true;
+    void this.queueClean(id, run.host, { pid: run.pid, run: run.launchId });
+  }
+
+  /**
+   * 두레가 서버 세션을 내린다(endSession) — ssh 를 끈 뒤(stopped) 그 띄우기를 정리한다. 그 에이전트의 정리 줄에 세워 다음 띄우기가 기다린다.
+   * pid 를 아직 못 받았으면 끈 뒤에 본다(서버에서 띄우기 전에 끝났으면 정리할 것이 없다)
+   */
+  private cleanAfterStop(id: AgentId, run: RemoteRun, stopped: Promise<void>): void {
+    if (run.cleanQueued) return;
+    if (run.pid !== null) {
+      run.cleanQueued = true;
+      void this.queueClean(id, run.host, { pid: run.pid, run: run.launchId }, stopped);
+      return;
+    }
+    run.stopJob = true;
+    void this.queueRemote(id, async () => {
+      await stopped;
+      run.stopJob = false;
+      if (run.pid === null || run.cleanQueued) return;
+      run.cleanQueued = true;
+      await this.cleanRemote(id, run.host, { pid: run.pid, run: run.launchId });
+    });
+  }
+
+  /** 그 띄우기의 정리를 그 에이전트의 정리 줄 끝에(after 가 끝난 뒤) — 같은 띄우기가 이미 줄에 있으면 세우지 않는다 */
+  private queueClean(id: AgentId, host: string, launch: { pid: number; run: string }, after?: Promise<unknown>): Promise<void> {
+    const key = `${id}:${launch.pid}.${launch.run}`;
+    if (this.cleaning.has(key)) return this.remoteChain.get(id) ?? Promise.resolve();
+    this.cleaning.add(key);
+    return this.queueRemote(id, async () => {
+      try {
+        await after;
+        await this.cleanRemote(id, host, launch);
+      } finally {
+        this.cleaning.delete(key);
+      }
+    });
+  }
+
+  /** 그 에이전트의 서버 정리 줄 끝에 일 하나 — 앞의 일이 끝난 뒤 돈다. 던지지 않는다(engine-error). shutdown 이 상한 안에서 기다린다 */
+  private queueRemote(id: AgentId, job: () => Promise<void>): Promise<void> {
+    const prev = this.remoteChain.get(id) ?? Promise.resolve();
+    const p: Promise<void> = prev.then(job).catch((e: unknown) =>
+      this.guard(id, () => this.emit('engine-error', { agentId: id, message: e instanceof Error ? e.message : String(e) })),
+    );
+    this.remoteChain.set(id, p);
+    this.remoteWork.add(p);
+    void p.finally(() => {
+      this.remoteWork.delete(p);
+      if (this.remoteChain.get(id) === p) this.remoteChain.delete(id);
+    });
+    return p;
+  }
+
+  /**
+   * 서버 정리 한 번(cleanupScript — 별도 ssh, 상한 REMOTE_CHECK_MS) — 되면 저장된 띄우기가 이것일 때만 비운다(그새 새로 띄운 것은 그대로).
+   * 안 되면 한 번 더, 그래도 안 되면 그 에이전트 기록에 알림 한 줄(저장은 남겨 다음에 다시 — 지운 에이전트면 engine-error). 던지지 않는다
+   */
+  private async cleanRemote(id: AgentId, host: string, launch: { pid: number; run: string }): Promise<void> {
+    let script: string;
+    try {
+      script = cleanupScript({ pid: launch.pid, agentId: id, launchId: launch.run });
+    } catch {
+      return; // 깨진 값 — store 가 읽을 때 거르니 오지 않는다
+    }
+    for (let i = 0; i < 2; i++) {
+      let r: SshRun | null = null;
+      try {
+        r = await this.sshRun(host, script);
+      } catch {
+        /* ssh 없음·서버 이름 — 실패로 친다 */
+      }
+      if (r?.code === 0) {
+        if (!this.finished) this.guard(id, () => this.forgetLaunch(id, launch));
+        return;
+      }
+    }
+    if (this.finished) return;
+    if (this.removing.has(id) || !this.store.agent(id)) {
+      this.guard(null, () => this.emit('engine-error', { agentId: id, message: REMOTE_CLEANUP_FAILED }));
+      return;
+    }
+    this.guard(id, () => this.record(id, { kind: 'notice', text: REMOTE_CLEANUP_FAILED }));
+  }
+
+  /** 정리한 띄우기가 아직 저장된 것이면 비운다 */
+  private forgetLaunch(id: AgentId, launch: { pid: number; run: string }): void {
+    const cur = this.store.agent(id)?.remoteLaunch;
+    if (cur && cur.pid === launch.pid && cur.run === launch.run) this.store.updateAgent(id, { remoteLaunch: null });
+  }
+
+  /** 도는 서버 정리를 기다린다 — 상한 stopLimitMs(STOP_LIMIT_MS). 못 끝낸 띄우기는 저장돼 있어 다음에 켤 때 다시 정리한다 */
+  private async waitRemoteWork(): Promise<void> {
+    if (this.remoteWork.size === 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    const limit = new Promise<void>((r) => {
+      timer = setTimeout(r, this.o.stopLimitMs ?? STOP_LIMIT_MS);
+    });
+    await Promise.race([Promise.all([...this.remoteWork]), limit]);
+    clearTimeout(timer);
+  }
+
   updateAgent(id: AgentId, p: Pick<AgentPatch, 'name' | 'role' | 'auto' | 'pos' | 'color' | 'bypassNoticeClosed'>) {
     this.need(id);
     const { name, role, auto, pos, color } = p; // model·alwaysAllow·sessionId 는 엔진이 따로 다룬다
@@ -888,6 +1195,8 @@ class EngineImpl extends EventEmitter implements Engine {
       this.forgetPastCount(id);
       this.effortBroken.delete(id);
       this.modelNows.delete(id);
+      this.remoteIssues.delete(id);
+      this.portTries.delete(id);
       if (had > 0) this.guard(id, () => this.emit('held-input', { agentId: id, count: 0 }));
       if (hadHold) this.guard(id, () => this.emit('hold', { agentId: id, hold: null }));
     }
@@ -1526,9 +1835,11 @@ class EngineImpl extends EventEmitter implements Engine {
       for (const r of this.perms.pending()) this.perms.cancelForAgent(r.agentId, EXITED);
       // 맵에서 이미 빠진 채 끄는 중인 세션(다시 띄우기·새 대화)도 기다린다 — 각각 STOP_LIMIT_MS 상한
       await Promise.all([this.stopWatcher(), ...ids.map((id) => this.endSession(id)), ...this.stopping]);
-      // 상한이 먼저 지나 아직 살아 있는 claude(바쁜 PC 에서 taskkill 이 늦음) — 앱이 닫힌 뒤 떠돌지 않게 직접 끈다
-      await Promise.all([...this.unstopped].map((s) => s.forceKill(FORCE_KILL_WAIT_MS)));
+      // 상한이 먼저 지나 아직 살아 있는 claude(바쁜 PC 에서 taskkill 이 늦음) — 앱이 닫힌 뒤 떠돌지 않게 직접 끈다.
+      // 서버 방 정리(끄기·시작 때 것)도 함께 기다린다 — 상한 안에서만(못 끝낸 띄우기는 저장돼 있어 다음에 켤 때 다시)
+      await Promise.all([this.waitRemoteWork(), ...[...this.unstopped].map((s) => s.forceKill(FORCE_KILL_WAIT_MS))]);
       await this.mcp.close();
+      this.finished = true;
     })();
     return this.closing;
   }
@@ -1578,13 +1889,22 @@ class EngineImpl extends EventEmitter implements Engine {
     const me = await this.dureCaller(agentId, toolUseId);
     // 살아 있는 세션의 부르기만 — 세션 없이 온 부르기(끝난 프로세스의 늦은 호출)의 카드는 세션 끝 정리가 치우지 못한다
     if (!s || this.sessions.get(agentId) !== s) throw new Error(EXITED);
+    const remote = this.remoteOf(me);
     const plan: CreateAgentInput = {
       name: args.name.trim(),
       role: args.role.trim(),
-      folder: newAgentFolder(!!this.store.rooms().find((r) => r.id === me.roomId)?.remote, me.folder, args.folder ?? '.'),
+      folder: newAgentFolder(!!remote, me.folder, args.folder ?? '.'),
       task: args.task?.trim() ? args.task : null,
     };
     this.checkNewAgent(me.roomId, plan); // 미리 보기 — 카드 없이 던진다
+    if (remote) {
+      // 서버 방 — 그 폴더가 서버에 있는지 카드를 띄우기 전에 확인한다(ssh). 없거나 접속이 안 되면 그 글로 던진다. 저장은 서버가 펼친 경로로
+      const r = await this.checkRemoteFolder(me.roomId, plan.folder);
+      if (!r.ok) throw new Error(remoteIssueText(remote.host, r));
+      plan.folder = r.folder;
+      // 확인하는 사이 세션이 끝났거나 지워졌다 — 카드를 띄우지 않는다
+      if (this.closed || this.removing.has(agentId) || this.sessions.get(agentId) !== s) throw new Error(EXITED);
+    }
     const res = await this.perms.request(agentId, { tool_name: CREATE_AGENT_TOOL, input: plan, tool_use_id: toolUseId }, signal, { kind: 'create-agent' });
     if (res.behavior === 'deny') throw new Error(res.message); // 거절·멈춤·세션 끝·끊김 — 그 글 그대로
     // [만들기] — 그사이 세션이 끝났거나 만든 쪽이 지워졌으면 만들지 않는다(세션 끝 정리가 카드를 먼저 거절하지만 겹쳐 지킨다)
@@ -1968,27 +2288,40 @@ class EngineImpl extends EventEmitter implements Engine {
     const live = this.sessions.get(id);
     if (live) return live;
     const wasAsleep = this.sleepOf(id).asleep; // 깨우기 — 띄우기 전에 본다(띄우면 잠듦이 아니다)
+    const remote = this.remoteOf(agent);
+    if (remote && !this.sshAvailable()) {
+      // 서버 방인데 ssh 가 없다 — 폴더 없음처럼 띄우지 않는다
+      this.errors.set(id, NO_SSH);
+      this.emitStatus(id);
+      throw new Error(NO_SSH);
+    }
 
     const runDir = path.join(this.o.dataDir, 'run', id);
     fs.mkdirSync(runDir, { recursive: true });
-    const mcpConfigPath = path.join(runDir, 'mcp.json');
-    const promptPath = path.join(runDir, 'prompt.md');
-    fs.writeFileSync(mcpConfigPath, JSON.stringify(buildMcpConfig({ port: this.mcp.port, token: this.mcp.token, agentId: id })));
     const peers = this.store.agents(agent.roomId).filter((a) => a.id !== id);
-    fs.writeFileSync(promptPath, buildRoomPrompt(agent, peers));
     const allow = this.allow;
     // 갈래(새 에이전트로 이어 가기)의 첫 실행 — 원래 세션의 기록을 이어 받은 새 세션(id = 이 에이전트의 sessionId)으로. init 까지 그대로(앱을 다시 켜도)
     const forkOf = agent.forkOf ?? null;
-    const args = buildArgs({
-      sessionId: agent.sessionId, resume: agent.started, forkOf, mcpConfigPath, promptPath, model: agent.model, name: agent.name,
-      allowBypass: allow,
-    });
-    const s = new ClaudeSession({
-      command: this.o.claude.command,
-      args: [...(this.o.claude.argsPrefix ?? []), ...args],
-      cwd: agent.folder,
-      env: this.spawnEnv(),
-    });
+    const argsWith = (mcpConfigPath: string, promptPath: string) =>
+      buildArgs({
+        sessionId: agent.sessionId, resume: agent.started, forkOf, mcpConfigPath, promptPath, model: agent.model, name: agent.name,
+        allowBypass: allow,
+      });
+    let s: ClaudeSession;
+    if (remote) s = this.remoteSession(id, agent, remote.host, runDir, buildRoomPrompt(agent, peers), argsWith);
+    else {
+      const mcpConfigPath = path.join(runDir, 'mcp.json');
+      const promptPath = path.join(runDir, 'prompt.md');
+      fs.writeFileSync(mcpConfigPath, JSON.stringify(buildMcpConfig({ port: this.mcp.port, token: this.mcp.token, agentId: id })));
+      fs.writeFileSync(promptPath, buildRoomPrompt(agent, peers));
+      s = new ClaudeSession({
+        command: this.o.claude.command,
+        args: [...(this.o.claude.argsPrefix ?? []), ...argsWith(mcpConfigPath, promptPath)],
+        cwd: agent.folder,
+        env: this.spawnEnv(),
+      });
+    }
+    const run = this.remoteRuns.get(s); // 서버 방 세션이면 그 띄우기
     this.seen.set(s, new SeenToolUses());
     // 갈래도 이어 가기 — 원래 세션의 Claude 쪽 기록이 없으면 같은 길(resumeFailed)로 새 대화
     if (forkOf) {
@@ -1998,6 +2331,8 @@ class EngineImpl extends EventEmitter implements Engine {
     // 세션 콜백 안에서 던지면 stdout 처리 중 잡히지 않은 예외가 되어 앱이 죽는다 — 모두 guard 로 감싼다
     s.on('event', (ev: StreamEvent) =>
       this.guard(id, () => {
+        // 서버 세션이 처음 말했다 — 시작됨(끊김을 가르는 근거) · 지난 접속 문제를 지운다
+        if (run && !run.started) this.remoteStarted(id, s, run);
         // 이어 갈 Claude 기록이 없다는 오류 result — 읽은 줄·기록·전달로 치지 않는다(곧 끝나면 exit 가 새 대화로)
         if (this.noteResume(s, ev)) return;
         // 보낸 줄을 읽었나 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
@@ -2023,6 +2358,7 @@ class EngineImpl extends EventEmitter implements Engine {
         else {
           // 차례의 init — 보낸 줄 없이 왔으면 Claude 가 스스로 연 차례: 서브에이전트가 끝난 뒤 기다리던 것 하나(그 result 가 pump 한다)
           if (ev.kind === 'init') this.turnStarted(id, !answered && !this.midUnread(s));
+          if (run && ev.kind === 'result') this.noteRemoteResult(id, ev);
           this.onEvent(id, ev);
         }
       }),
@@ -2031,11 +2367,14 @@ class EngineImpl extends EventEmitter implements Engine {
       this.guard(id, () => {
         // 이어 갈 기록이 없어 끝나는 세션의 오류는 알리지 않는다 — 곧 새 대화로 이어 간다(exit)
         if (s.status === 'error' && this.lostTranscript(s, s.errorText ?? '')) return;
+        // 서버 방 세션의 오류는 끝난 뒤(exit) 가른다 — ssh 잡음 섞인 글·접속 문제를 오류로 먼저 알리지 않게
+        if (s.status === 'error' && run) return;
         if (this.sessions.get(id) === s) this.emitStatus(id);
       }),
     );
-    s.on('exit', ({ expected, stderrTail }: { expected: boolean; stderrTail: string }) =>
+    s.on('exit', ({ code, expected, stderrTail }: { code: number | null; expected: boolean; stderrTail: string }) =>
       this.guard(id, () => {
+        if (run) this.livePorts.delete(run.port); // ssh 가 끝났다 — 원격 포트를 놓는다
         if (this.sessions.get(id) !== s) return; // 엔진이 끝낸 세션은 endSession 이 정리
         this.sessions.delete(id);
         this.guard(id, () => this.ungate(id, s)); // 계획 모드 답을 기다리며 쥔 입력 — 다음 실행에(보낸 줄을 되살리는 것과 같다)
@@ -2046,7 +2385,10 @@ class EngineImpl extends EventEmitter implements Engine {
         this.guard(id, () => this.forgetMode(id));
         this.guard(id, () => this.forgetSubagents(id));
         if (!expected && this.lostTranscript(s, stderrTail)) {
+          if (run) this.guard(id, () => this.cleanExited(id, run)); // 스스로 끝난 서버 claude — 다시 띄우기 전에 정리
           this.guard(id, () => this.resumeFailed(id, s)); // 오류로 멈추지 않고 새 대화로
+        } else if (!expected && run) {
+          this.guard(id, () => this.remoteExited(id, s, run, code, stderrTail));
         } else if (!expected) {
           this.guard(id, () => this.restoreInFlight(id, s)); // 기록 실패여도 아래 정리는 한다
           const why = s.errorText ?? EXITED;
@@ -2067,6 +2409,7 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     this.errors.delete(id);
     this.sessions.set(id, s);
+    if (run) this.livePorts.add(run.port); // 끝날 때(exit) 놓는다 — 그동안 다른 서버 세션은 이 포트를 피한다
     this.lastActive.set(s, performance.now());
     this.handSlept.delete(id); // 깨웠다 — 손으로 재운 표는 풀린다
     if (wasAsleep) this.waking.add(s);
@@ -2910,6 +3253,8 @@ class EngineImpl extends EventEmitter implements Engine {
     this.guard(id, () => this.forgetSubagents(id)); // 그 세션이 돌리던 서브에이전트도 함께 끝난다
     this.perms.cancelForAgent(id, EXITED);
     if (!s) return;
+    const run = this.remoteRuns.get(s);
+    if (run) run.ended = true; // 이제 온 pid 는 저장하지 않고 정리한다
     let timer: NodeJS.Timeout | undefined;
     const limit = new Promise<void>((r) => {
       timer = setTimeout(r, this.o.stopLimitMs ?? STOP_LIMIT_MS);
@@ -2918,6 +3263,8 @@ class EngineImpl extends EventEmitter implements Engine {
     const stop = s.stop(o).catch(() => undefined).finally(() => this.unstopped.delete(s));
     const stopped = Promise.race([stop, limit]).then(() => clearTimeout(timer));
     this.stopping.add(stopped);
+    // 서버 방 — ssh 를 끈 뒤 서버에 정리를 따로 보낸다(같은 에이전트의 다음 띄우기는 그 정리를 기다린다). 끄기는 기다리지 않는다
+    if (run) this.guard(id, () => this.cleanAfterStop(id, run, stopped));
     try {
       await stopped;
     } finally {
@@ -2951,10 +3298,14 @@ class EngineImpl extends EventEmitter implements Engine {
     try {
       const status = this.status(id);
       const errorText = this.errorText(id);
-      const prev = this.shown.get(id) ?? { status: 'idle', errorText: null };
-      if (prev.status === status && prev.errorText === errorText) return;
-      this.shown.set(id, { status, errorText });
-      this.emit('status', { agentId: id, status, errorText });
+      const issue = this.remoteIssues.get(id) ?? null;
+      const prev = this.shown.get(id) ?? { status: 'idle', errorText: null, issue: null };
+      if (prev.status === status && prev.errorText === errorText && prev.issue === issue) return;
+      this.shown.set(id, { status, errorText, issue });
+      // 서버 방 에이전트만 문제 칸을 싣는다 — 이 PC 방의 상태 사건은 그대로
+      const agent = this.store.agent(id);
+      const remote = !!agent && !!this.remoteOf(agent);
+      this.emit('status', remote ? { agentId: id, status, errorText, remoteIssue: issue } : { agentId: id, status, errorText });
     } finally {
       this.guard(id, () => this.emitSleep(id));
     }

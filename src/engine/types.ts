@@ -228,7 +228,10 @@ export interface Hold {
 
 export interface EngineEventMap {
   'agent-event': { agentId: AgentId; event: StreamEvent; viaApproval?: boolean };
-  status: { agentId: AgentId; status: AgentStatus; errorText: string | null };
+  /**
+   * remoteIssue = 서버 방 에이전트만 싣는다 — 지금 문제(없으면 null). 문제가 바뀌면 상태·오류 글이 그대로여도 온다. 이 PC 방 에이전트엔 칸이 없다
+   */
+  status: { agentId: AgentId; status: AgentStatus; errorText: string | null; remoteIssue?: RemoteIssue | null };
   message: RelayMessage;
   held: { roomId: RoomId };
   request: PendingRequest;
