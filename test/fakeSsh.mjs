@@ -7,7 +7,11 @@
 // 서버 = 이 PC 의 폴더 하나:
 //   FAKE_SSH_ROOT(필수)  서버의 / — 서버 경로 /home/a/web → <root>/home/a/web (.. 는 / 위로 못 간다)
 //   가짜 사용자는 늘 a  → $HOME = /home/a = <root>/home/a. ~·$HOME 은 여기로 펼친다(호스트가 me@h 여도 — 오류 글의 사용자 이름만 me)
-//   공유 기록            <root>/.fake-ssh/procs.jsonl — 띄운 가짜 claude pid·표식(따로 뜬 가짜 ssh 끼리 맞추려고), portclash-once 표시
+//   공유 기록            <root>/.fake-ssh/procs.jsonl — 띄운 가짜 claude 의 표식·지킴이 포트·비밀(따로 뜬 가짜 ssh 끼리 맞추려고), portclash-once 표시
+//
+// 가짜 claude 는 지킴이(이 파일 --fake-keeper, detached) 아래에서 돈다. 지킴이가 claude 의 stdio 를 잇고, 127.0.0.1 의 제어 포트에서
+// 띄울 때 정한 비밀(무작위 토큰)을 받아야만 자기 자식 claude 를 끈다. 정리·뒷정리는 기록의 pid 를 절대 process.kill 하지 않는다 —
+// 기록이 낡아(지킴이가 taskkill 로 죽음) pid·포트가 남의 것이 됐어도, 비밀을 아는 우리 지킴이가 아니면 아무 일도 없다.
 // 손잡이(환경 변수):
 //   FAKE_SSH_CLAUDE      띄울 claude — JSON 배열 [명령, 앞 인자…](기본 [node, test/fakeClaude.mjs]). JSON 이 아니면 명령 하나
 //   FAKE_SSH_LOG         JSON 한 줄씩: 시작 {event:'start', argv, host, user, port, forwards, command, script, kind}
@@ -17,22 +21,25 @@
 //                        noclaude                     → claude 없음: 띄우기는 DURE_PID 뒤 'bash: line 1: claude: command not found' 127, 확인은 127(글 없음)
 //                        portclash-once               → 이 root 에서 -R 이 붙은 첫 호출만 255 'Error: remote port forwarding failed for listen port <N>'
 //                        drop:<ms>                    → 띄운 claude 가 뜬 뒤 <ms> 에 255 'Connection to <host> closed by remote host.' —
-//                                                        가짜 claude 는 죽이지 않고 남긴다(진짜처럼 정리 명령이 끌 때까지). 띄우기에만 걸린다
+//                                                        가짜 claude 는 죽이지 않고 남긴다: 지킴이가 claude 의 입력을 열어 둔 채(EOF 를 넘기지 않음)
+//                                                        출력은 버리며 정리 명령·뒷정리가 끌 때까지 둔다(안전 상한 10 분). 띄우기에만 걸린다
 //   FAKE_SSH_MODE_FILE   그 파일이 있으면 FAKE_SSH_MODE 대신 그 내용(빈 파일 = 보통) — 엔진 환경을 못 바꾸는 시험이 도중에 모드를 바꾸게
 //   FAKE_SSH_CLEANUP_MS  정리 명령이 끝나기 전에 더 기다린다(진짜는 sleep 2 — 기본 0, 정리 상한 시험용)
 // 서버 환경 = 이 프로세스의 환경 — CLAUDE_CONFIG_DIR·FAKE_TRANSCRIPTS·FAKE_CLAUDE_LOG 등이 가짜 claude 에 그대로 간다.
 //   CLAUDE_CONFIG_DIR 은 이 PC 경로로 읽는다(가짜 claude 가 거기에 대화 파일을 만든다). 없으면 $HOME/.claude.
 // 셸이 $HOME 을 펼친 claude 인자(큰따옴표 run 파일 경로)는 이 PC 경로로 바꿔 넘긴다 — 가짜 claude 가 그 mcp.json 을 직접 읽는다.
-// 실제와 다른 점: 가짜 claude 가 남의 손에 죽으면 ssh 는 그 종료 코드(윈도 1) — 진짜는 exit-signal 이면 255. 정리 명령은 기다리지 않고 곧바로 끈다.
+// 정리 명령에 꺼진 claude 가 붙은 ssh 는 255(진짜: exit-signal). 실제와 다른 점: 정리 명령은 sleep 2 없이 곧바로 끈다.
 //
-// 시험 뒷정리: `node test/fakeSsh.mjs --fake-reap`(FAKE_SSH_ROOT 같게) — 이 root 에서 띄워 아직 살아 있는 가짜 claude 를 모두 끈다(끊김으로 남긴 것까지).
+// 시험 뒷정리: `node test/fakeSsh.mjs --fake-reap`(FAKE_SSH_ROOT 같게) — 이 root 에서 띄운 지킴이에게 모두 끄라고 한다(끊김으로 남긴 것까지).
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
+const SELF = fileURLToPath(import.meta.url);
+const HERE = path.dirname(SELF);
 const USER = 'a';
 const REMOTE_HOME = `/home/${USER}`;
 const VERSION = '2.1.304 (Claude Code)';
@@ -79,54 +86,57 @@ function record(obj) {
   fs.mkdirSync(stateDir(), { recursive: true });
   fs.appendFileSync(stateFile(), JSON.stringify(obj) + '\n');
 }
-/** 아직 끝난 기록이 없는 가짜 claude — pid → 표식 */
+/** 끝난 기록이 없는 띄우기 — { marker, pid, port, token }(pid 는 알림용 — 이걸로 끄지 않는다) */
 function launched() {
   const live = new Map();
   let text = '';
   try {
     text = fs.readFileSync(stateFile(), 'utf8');
   } catch {
-    return live;
+    return [];
   }
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
-    const r = JSON.parse(line);
-    if (r.launch) live.set(r.launch.pid, r.launch.marker);
-    else if (r.gone !== undefined) live.delete(r.gone);
-  }
-  return live;
-}
-function alive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (e) {
-    return e.code === 'EPERM';
-  }
-}
-/** TERM → 2 초 → KILL(진짜 정리와 같은 차례). 윈도는 둘 다 곧바로 끝낸다 */
-async function kill(pids) {
-  for (const p of pids) {
+    let r;
     try {
-      process.kill(p, 'SIGTERM');
+      r = JSON.parse(line);
     } catch {
-      /* 이미 끝남 */
+      continue;
     }
+    if (r.launch?.token) live.set(r.launch.token, r.launch);
+    else if (typeof r.gone === 'string') live.delete(r.gone);
   }
-  const wait = async (ms) => {
-    const end = Date.now() + ms;
-    while (pids.some(alive) && Date.now() < end) await sleep(25);
-  };
-  await wait(2000);
-  for (const p of pids.filter(alive)) {
-    try {
-      process.kill(p, 'SIGKILL');
-    } catch {
-      /* 이미 끝남 */
-    }
-  }
-  await wait(1000);
-  for (const p of pids) record({ gone: p });
+  return [...live.values()];
+}
+const CONTROL_TIMEOUT_MS = 3000;
+/**
+ * 지킴이에게 끄라고 한다 — 제어 포트에 비밀 한 줄. 우리 지킴이면 자식 claude 가 끝난 뒤 `killed <pid>` 로 답한다 → 그 pid.
+ * 연결이 안 되거나(지킴이 없음) 다른 답·무응답(포트가 남의 것)이면 null — 아무것도 끄지 않는다
+ */
+function stopKeeper(rec) {
+  return new Promise((resolve) => {
+    let reply = '';
+    let done = false;
+    const sock = net.connect(Number(rec.port), '127.0.0.1');
+    const end = (v) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      sock.destroy();
+      resolve(v);
+    };
+    const timer = setTimeout(() => end(null), CONTROL_TIMEOUT_MS);
+    sock.setEncoding('utf8');
+    sock.on('connect', () => sock.write(`${rec.token}\n`));
+    sock.on('data', (d) => {
+      reply += d;
+      const m = /^killed (\d+)\n/.exec(reply);
+      if (m) end(Number(m[1]));
+      else if (reply.includes('\n') || reply.length > 64) end(null);
+    });
+    sock.on('error', () => end(null));
+    sock.on('close', () => end(null));
+  });
 }
 
 // ── 셸 단어 풀기(remote.ts 가 만드는 모양만큼) ──
@@ -383,9 +393,9 @@ function runTranscripts(spec) {
 }
 
 async function runCleanup(spec) {
-  // 진짜: 표식을 가진 프로세스 ∪ (저장 pid 가 표식을 가졌으면 그 pid 와 나무). 가짜 claude 는 자식이 없어 나무 = 자기뿐
-  const targets = [...launched()].filter(([pid, marker]) => marker === spec.marker && alive(pid)).map(([pid]) => pid);
-  await kill(targets);
+  // 진짜: 표식을 가진 프로세스 ∪ (저장 pid 가 표식을 가졌으면 그 pid 와 나무). 가짜는 표식이 같은 띄우기의 지킴이에게 비밀로 끄라고 한다 —
+  // 정리 명령의 pid 로는 아무것도 끄지 않는다(표식이 다른 pid 는 건드리지 않는 진짜와 같은 결과)
+  const killed = (await Promise.all(launched().filter((r) => r.marker === spec.marker).map(stopKeeper))).filter((p) => p !== null);
   const extra = Number(process.env.FAKE_SSH_CLEANUP_MS ?? 0);
   if (extra) await sleep(extra);
   const runParent = toLocal(`${REMOTE_HOME}/.dure/run/${spec.agentId}`);
@@ -397,7 +407,7 @@ async function runCleanup(spec) {
   } catch {
     /* 다른 띄우기가 남았거나 없음 */
   }
-  log({ event: 'cleanup', pid: spec.pid, marker: spec.marker, killed: targets, removed });
+  log({ event: 'cleanup', pid: spec.pid, marker: spec.marker, killed, removed });
   finish(0);
 }
 
@@ -471,53 +481,147 @@ async function runLaunch(spec, mode, host) {
   const drop = /^drop:(\d+)$/.exec(mode);
   const [cmd, ...pre] = claudeCommand();
   const env = { ...process.env, HOME: toLocal(REMOTE_HOME), DURE_RUN: spec.marker };
-  if (drop) env.FAKE_IGNORE_STDIN_END = '1'; // 끊겨 입력이 닫혀도 남는다(진짜: 서버 claude 는 정리 명령이 끌 때까지)
-  let child;
-  try {
-    // detached — ssh 와 같은 수명이 아니다(서버의 claude 처럼). 윈도에서 detached 가 아니면 ssh 가 끝날 때 함께 죽는다
-    child = spawn(cmd, [...pre, ...spec.args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true, windowsHide: true });
-  } catch {
+  // 지킴이 — detached: ssh 와 같은 수명이 아니다(서버의 claude 처럼 — 윈도에서 detached 가 아니면 ssh 가 끝날 때 함께 죽는다).
+  // claude 는 지킴이의 보통 자식이라 지킴이가 죽으면 함께 죽는다(주인 없는 claude 는 남지 않는다)
+  const keeper = spawn(process.execPath, [SELF, '--fake-keeper'], {
+    cwd,
+    env: { ...env, FAKE_SSH_KEEPER: JSON.stringify({ cmd, args: [...pre, ...spec.args], cwd, marker: spec.marker }) },
+    stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+    detached: true,
+    windowsHide: true,
+  });
+  keeper.stdin.on('error', () => {});
+  const ready = await new Promise((resolve) => {
+    keeper.once('message', resolve);
+    keeper.once('error', () => resolve(null));
+    keeper.once('exit', () => resolve(null));
+  });
+  if (!ready?.ready) {
+    process.stderr.write(`DURE_PID=${process.pid}\n`);
     return notFound();
   }
-  if (child.pid === undefined) {
-    child.on('error', () => {});
-    return notFound();
-  }
-  const pid = child.pid;
-  record({ launch: { pid, marker: spec.marker } });
+  const pid = ready.ready.pid;
   log({ event: 'launch', pid, marker: spec.marker, folder: remotePath, cwd, args: spec.args, runDir });
-  process.stderr.write(`DURE_PID=${pid}\n`);
-  child.stdout.pipe(process.stdout, { end: false });
-  child.stderr.pipe(process.stderr, { end: false });
-  child.stdin.on('error', () => {});
-  child.on('error', () => {});
+  process.stderr.write(`DURE_PID=${pid}\n`); // claude 의 stderr 보다 먼저 — 그새 온 것은 스트림에 쌓여 있다
+  keeper.stdout.pipe(process.stdout, { end: false });
+  keeper.stderr.pipe(process.stderr, { end: false });
   let dropped = false;
-  let eofKill = false; // drop 모드에서 끊기 전에 입력이 닫혀 대신 껐다 — 진짜는 EOF 로 정상 종료(0)
-  child.on('close', (code, signal) => {
-    record({ gone: pid });
-    if (!dropped) finish(eofKill ? 0 : signal ? 255 : (code ?? 255));
+  keeper.on('close', (code) => {
+    if (!dropped) finish(code ?? 255);
   });
   input.attach({
-    write: (d) => child.stdin.write(d),
+    write: (d) => keeper.stdin.write(d),
     end: () => {
-      // 입력이 닫히면 진짜 claude 는 끝난다 — drop 모드의 claude 는 EOF 를 무시하니 끊기 전이면 대신 끈다
-      if (dropped) return;
-      if (drop) {
-        eofKill = true;
-        void kill([pid]);
-      } else child.stdin.end();
+      if (!dropped) keeper.stdin.end(); // 입력이 닫히면 진짜 claude 는 끝난다 — 지킴이가 EOF 를 넘긴다
     },
   });
   if (drop) {
     setTimeout(() => {
       if (exiting) return;
       dropped = true;
-      child.stdout.unpipe(process.stdout);
-      child.stderr.unpipe(process.stderr);
+      keeper.stdout.unpipe(process.stdout);
+      keeper.stderr.unpipe(process.stderr);
       log({ event: 'drop', pid });
-      fail(255, `Connection to ${host} closed by remote host.`);
+      // 지킴이가 '끊김'을 받은 뒤에 끝낸다 — 그래야 이 프로세스가 끝나며 생기는 EOF 를 claude 에게 넘기지 않는다
+      const go = () => fail(255, `Connection to ${host} closed by remote host.`);
+      const late = setTimeout(go, 1000);
+      keeper.on('message', (m) => {
+        if (m?.dropped) {
+          clearTimeout(late);
+          go();
+        }
+      });
+      try {
+        keeper.send({ drop: true });
+      } catch {
+        go();
+      }
     }, Number(drop[1]));
   }
+}
+
+const ORPHAN_MAX_MS = 10 * 60_000;
+/**
+ * 지킴이(--fake-keeper) — 가짜 claude 하나를 자식으로 띄워 stdio 를 잇고, 127.0.0.1 제어 포트에서 비밀 한 줄을 받으면 그 자식만 끈다.
+ * 기록 { marker, pid, port, token } 을 남기고 ssh 에게 { ready: { pid } } 를 알린다. 끊김({ drop }) 뒤에는 입력 EOF 를 넘기지 않고
+ * 출력을 버린다 — 진짜 서버의 남은 claude 처럼 정리될 때까지(안전 상한 ORPHAN_MAX_MS). 끝날 때 { gone: token }.
+ */
+async function keeperMain() {
+  const cfg = JSON.parse(process.env.FAKE_SSH_KEEPER);
+  delete process.env.FAKE_SSH_KEEPER;
+  const token = randomBytes(16).toString('hex');
+  const send = (m) => {
+    try {
+      if (process.connected) process.send(m);
+    } catch {
+      /* ssh 가 이미 없음 */
+    }
+  };
+  const exitKeeper = (code) => {
+    setTimeout(() => process.exit(code), 500); // 끊긴 뒤라 stdout 이 깨져 콜백이 안 와도
+    process.stdout.write('', () => process.stderr.write('', () => process.exit(code)));
+  };
+  process.stdout.on('error', () => {});
+  process.stderr.on('error', () => {});
+  let child = null;
+  let stoppedBy = null; // 비밀을 대고 끄라고 한 연결 — claude 가 끝난 뒤 답한다
+  const control = net.createServer((sock) => {
+    let line = '';
+    sock.setEncoding('utf8');
+    sock.on('error', () => {});
+    sock.on('data', (d) => {
+      line += d;
+      const i = line.indexOf('\n');
+      if (i < 0) {
+        if (line.length > 64) sock.destroy();
+        return;
+      }
+      if (line.slice(0, i) !== token || !child || stoppedBy) return void sock.destroy(); // 비밀이 다르면 아무것도 하지 않는다
+      stoppedBy = sock;
+      child.kill('SIGTERM'); // 자식 핸들로 — pid 를 다시 찾지 않는다
+      setTimeout(() => child.kill('SIGKILL'), 2000).unref();
+    });
+  });
+  await new Promise((resolve, reject) => {
+    control.once('error', reject);
+    control.listen(0, '127.0.0.1', resolve);
+  });
+  const port = control.address().port;
+  try {
+    child = spawn(cfg.cmd, cfg.args, { cwd: cfg.cwd, env: process.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    child.on('error', () => {});
+  } catch {
+    child = null;
+  }
+  if (!child?.pid) {
+    send({ notFound: true });
+    control.close();
+    return exitKeeper(127);
+  }
+  const pid = child.pid;
+  let dropped = false;
+  record({ launch: { marker: cfg.marker, pid, port, token } });
+  child.stdin.on('error', () => {});
+  child.stdout.on('data', (d) => dropped || process.stdout.write(d));
+  child.stderr.on('data', (d) => dropped || process.stderr.write(d));
+  process.stdin.on('data', (d) => dropped || child.stdin.write(d));
+  process.stdin.on('end', () => dropped || child.stdin.end());
+  process.stdin.on('error', () => {});
+  process.on('message', (m) => {
+    if (!m?.drop || dropped) return;
+    dropped = true;
+    setTimeout(() => child.kill('SIGKILL'), ORPHAN_MAX_MS).unref();
+    send({ dropped: true });
+  });
+  process.on('disconnect', () => {});
+  child.on('close', (code, signal) => {
+    record({ gone: token });
+    control.close();
+    const status = stoppedBy || signal ? 255 : (code ?? 255); // 정리로 꺼진 claude — ssh 는 exit-signal 로 255
+    if (stoppedBy) stoppedBy.end(`killed ${pid}\n`, () => exitKeeper(status));
+    else exitKeeper(status);
+  });
+  send({ ready: { pid } });
 }
 
 function hostKeyChanged(host) {
@@ -551,16 +655,17 @@ function readMode() {
   return MODES.includes(mode) || /^drop:\d+$/.test(mode) ? mode : null;
 }
 
+/** 뒷정리 — 이 root 의 모든 지킴이에게 비밀로 끄라고 한다. 끈 claude pid 를 한 줄씩 */
 async function reap() {
-  const pids = [...launched().keys()].filter(alive);
-  await kill(pids);
-  process.stdout.write(pids.join('\n') + (pids.length ? '\n' : ''));
+  const killed = (await Promise.all(launched().map(stopKeeper))).filter((p) => p !== null);
+  process.stdout.write(killed.map((p) => `${p}\n`).join(''));
   finish(0);
 }
 
 async function main() {
   if (!ROOT) return fail(2, 'fakeSsh: FAKE_SSH_ROOT 가 필요해요');
   const argv = process.argv.slice(2);
+  if (argv[0] === '--fake-keeper') return keeperMain();
   if (argv[0] === '--fake-reap') return reap();
   const o = parseArgs(argv);
   if (!o.host) return fail(255, 'usage: ssh [-46AaCfGgKkMNnqsTtVvXxYy] [-o option] [-p port] [-R address] destination [command]');

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
@@ -23,6 +23,7 @@ let sshLog: string;
 let claudeLog: string;
 let children: ChildProcess[] = [];
 let servers: net.Server[] = [];
+let conns: net.Socket[] = [];
 
 beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dure-fakessh-'));
@@ -36,12 +37,23 @@ beforeEach(() => {
 afterEach(async () => {
   for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill();
   children = [];
-  // 끊김으로 남긴 가짜 claude 까지 — 가짜 ssh 의 정리 손잡이
-  spawnSync(process.execPath, [FAKE_SSH, '--fake-reap'], { env: env(), windowsHide: true });
+  // 끊김으로 남긴 가짜 claude 까지 — 가짜 ssh 의 정리 손잡이. 비동기로(spawnSync 면 이 프로세스의 시험 서버가 그동안 답하지 못한다)
+  await reap();
+  for (const c of conns) c.destroy();
+  conns = [];
   await Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r()))));
   servers = [];
   fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-});
+}, 20000);
+
+/** node test/fakeSsh.mjs --fake-reap — 끈 claude pid 들 */
+async function reap(): Promise<string> {
+  const child = spawn(process.execPath, [FAKE_SSH, '--fake-reap'], { env: env(), windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  let out = '';
+  child.stdout!.setEncoding('utf8').on('data', (d: string) => (out += d));
+  await new Promise((r) => child.on('close', r));
+  return out;
+}
 
 /** 이 시험의 환경 — 바깥의 FAKE_*·CLAUDE_CONFIG_DIR 는 버린다(진짜 ~/.claude 에 쓰지 않게) */
 function env(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
@@ -100,6 +112,10 @@ async function freePort(): Promise<number> {
 }
 async function listen(s: net.Server): Promise<number> {
   servers.push(s);
+  s.on('connection', (c: net.Socket) => {
+    c.on('error', () => {});
+    conns.push(c);
+  });
   await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
   return (s.address() as net.AddressInfo).port;
 }
@@ -313,8 +329,48 @@ describe('끊김·정리', () => {
     const c = await sshDone(remote(cleanupScript({ pid, agentId: AGENT, launchId: l.launchId })));
     expect(c.code).toBe(0);
     await until(() => !alive(pid), 5000, '가짜 claude 꺼짐');
-    expect(await l.run.exit).not.toBe(0);
+    expect(await l.run.exit).toBe(255); // 진짜: 서버 claude 가 신호로 끝나면 ssh 는 255
     expect(fs.existsSync(l.runDir)).toBe(false);
+  }, 20000);
+
+  it('drop 모드라도 끊기기 전에 입력이 닫히면 claude 는 EOF 로 끝나고 ssh 는 0', async () => {
+    const l = await launch({ env: { FAKE_SSH_MODE: 'drop:10000' } });
+    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
+    const pid = await pidOf(l.run);
+    l.run.child.stdin!.end();
+    expect(await l.run.exit).toBe(0);
+    await until(() => !alive(pid), 5000, '가짜 claude 꺼짐');
+  }, 20000);
+
+  it('남은 기록의 pid·포트가 남의 것이 됐어도 정리·뒷정리는 아무것도 끄지 않는다', async () => {
+    // 우리가 띄우지 않은 살아 있는 프로세스 — 낡은 기록이 그 pid 를 가리킨다
+    const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { windowsHide: true, stdio: 'ignore' });
+    children.push(other);
+    const otherPid = other.pid!;
+    await until(() => alive(otherPid), 5000, '남의 프로세스');
+    const deadPort = await freePort(); // 지킴이가 죽어 아무도 안 듣는 포트
+    const chatty = await listen(net.createServer((s) => s.end('HTTP/1.1 400 Bad Request\r\n\r\n'))); // 포트를 다른 프로그램이 물려받음
+    const silent = await listen(net.createServer((s) => s.on('error', () => {}))); // 답하지 않는 남의 서버
+    const rec = (port: number, n: number) => JSON.stringify({ launch: { marker: `${AGENT}.${LAUNCH}`, pid: otherPid, port, token: String(n).repeat(32) } });
+    fs.mkdirSync(path.join(root, '.fake-ssh'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.fake-ssh', 'procs.jsonl'), [rec(deadPort, 1), rec(chatty, 2), rec(silent, 3)].join('\n') + '\n');
+
+    const c = await sshDone(remote(cleanupScript({ pid: otherPid, agentId: AGENT, launchId: LAUNCH })));
+    expect(c.code).toBe(0);
+    expect(logLines().find((x) => x.event === 'cleanup')).toMatchObject({ pid: otherPid, killed: [] });
+    expect(await reap()).toBe('');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(alive(otherPid)).toBe(true);
+  }, 30000);
+
+  it('뒷정리(--fake-reap)는 우리 지킴이에게 비밀을 대고 남은 claude 를 끈다', async () => {
+    const l = await launch({ env: { FAKE_SSH_MODE: 'drop:200' } });
+    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
+    const pid = await pidOf(l.run);
+    expect(await l.run.exit).toBe(255);
+    expect(alive(pid)).toBe(true);
+    expect((await reap()).trim()).toBe(String(pid));
+    await until(() => !alive(pid), 5000, '가짜 claude 꺼짐');
   }, 20000);
 
   it('정리 명령 — 표식(띄우기 id)이 다르면 그 pid 를 건드리지 않는다', async () => {
