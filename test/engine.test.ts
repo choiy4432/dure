@@ -5365,3 +5365,139 @@ test('예전 경계(ended 없음) 앞 대화는 old', async () => {
   expect(list[0]).toMatchObject({ title: '옛', current: false, resumable: false, why: 'old' });
   expect(e2.pastCount(a.id)).toBe(1);
 });
+
+// ── 이 대화로 돌아가기 · 이어 가기 실패 ──
+/** 지난 대화 시험용 — Claude 대화 파일을 시험 폴더에 남긴다. env 는 그 객체 그대로 엔진에 간다(시험 도중 고치면 다음 실행부터) */
+async function startConv(): Promise<{ e: Engine; env: Record<string, string>; claudeDir: string }> {
+  const claudeDir = path.join(dir, 'claude');
+  const env: Record<string, string> = { FAKE_CLAUDE_LOG: logFile, CLAUDE_CONFIG_DIR: claudeDir, FAKE_TRANSCRIPTS: '1' };
+  const e = await start({}, false, { env });
+  return { e, env, claudeDir };
+}
+const RESUME_LOST = 'Claude 쪽 기록이 없어 이어 가지 못했어요 — 새 대화로 시작해요';
+/** 그 에이전트의 'status' 사건을 모은다(부른 뒤부터) */
+function statusEvents(e: Engine, id: string): StatusEvent[] {
+  const got: StatusEvent[] = [];
+  e.on('status', (x: StatusEvent) => x.agentId === id && got.push(x));
+  return got;
+}
+/** 마지막 경계와 그 뒤 줄 */
+function lastBoundary(items: HistoryItem[]): { bound: HistoryItem; next: HistoryItem | undefined } {
+  const i = items.map((x) => x.kind).lastIndexOf('boundary');
+  return { bound: items[i], next: items[i + 1] };
+}
+
+test('돌아가기 — 경계·알림·세션·--resume 대상', async () => {
+  const { e } = await startConv();
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 둘');
+  const s2 = agentOf(e, a.id).sessionId;
+  expect(e.pastCount(a.id)).toBe(1);
+  expect(e.conversations(a.id).filter((c) => !c.current).map((c) => c.key)).toEqual([s1]);
+
+  await e.resumeConversation(a.id, s1);
+
+  const { bound, next } = lastBoundary(e.history(a.id, { all: true }));
+  expect(bound).toMatchObject({ kind: 'boundary', ended: s2, resumed: s1 });
+  expect(next).toMatchObject({ kind: 'notice', text: '이 대화로 돌아왔어요' });
+  expect(agentOf(e, a.id)).toMatchObject({ sessionId: s1, started: true });
+  expect(e.pastCount(a.id)).toBe(1); // 기억을 버렸다 — 이제 지난 대화는 S2
+  expect(e.conversations(a.id).filter((c) => !c.current).map((c) => c.key)).toEqual([s2]);
+
+  await talk(e, a.id, 'echo 셋');
+  expect(flagValue(lastSpawnOf('A').argv, '--resume')).toBe(s1);
+  expect(convUserTexts(e.history(a.id))).toEqual(['echo 하나', 'echo 셋']);
+});
+
+test('돌아가기 막힘 — 일하는 중·30일 지난 대화·지금 대화·없는 대화는 거절하고 기록·세션 그대로', async () => {
+  const { e, claudeDir } = await startConv();
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 둘');
+  const s2 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 셋');
+  const s3 = agentOf(e, a.id).sessionId;
+  fs.rmSync(path.join(claudeDir, 'projects', 'fake', `${s1}.jsonl`));
+  const before = e.history(a.id, { all: true }).length;
+
+  await expect(e.resumeConversation(a.id, s1)).rejects.toThrow('30일이 지나 이어 갈 수 없어요');
+  await expect(e.resumeConversation(a.id, s3)).rejects.toThrow('그 대화를 찾을 수 없어요');
+  await expect(e.resumeConversation(a.id, 'nope')).rejects.toThrow('그 대화를 찾을 수 없어요');
+
+  const init = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === a.id && x.event.kind === 'init');
+  await e.sendUser(a.id, text('SLOW'));
+  await init;
+  await expect(e.resumeConversation(a.id, s2)).rejects.toThrow('일이 끝나면 돌아갈 수 있어요');
+  expect(agentOf(e, a.id)).toMatchObject({ sessionId: s3, started: true });
+  expect(e.status(a.id)).toBe('working');
+  const added = e.history(a.id, { all: true }).slice(before);
+  expect(added.filter((x) => x.kind === 'boundary' || x.kind === 'notice')).toEqual([]);
+});
+
+test('이어 가기 실패: 돌아간 대화의 Claude 기록이 없으면 새 대화로', async () => {
+  const { e, env } = await startConv();
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 둘');
+  const s2 = agentOf(e, a.id).sessionId;
+  env.FAKE_MISSING_SESSIONS = s1; // 목록엔 이어 갈 수 있다고 나왔는데 Claude 쪽엔 없다
+  await e.resumeConversation(a.id, s1);
+  const statuses = statusEvents(e, a.id);
+
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 넷'));
+  expect(await resultText(done)).toBe('받음: echo 넷');
+
+  const now = agentOf(e, a.id);
+  expect([s1, s2]).not.toContain(now.sessionId);
+  expect(now.started).toBe(true);
+  expect(flagValue(spawnsOf('A').at(-2)!.argv, '--resume')).toBe(s1); // 이어 가 보고
+  expect(flagValue(lastSpawnOf('A').argv, '--session-id')).toBe(now.sessionId); // 새 대화로
+  expect(lastSpawnOf('A').argv).not.toContain('--resume');
+  const all = e.history(a.id, { all: true });
+  const { bound, next } = lastBoundary(all);
+  expect(bound).toMatchObject({ kind: 'boundary', ended: s1 });
+  expect(bound).not.toHaveProperty('resumed');
+  expect(next).toMatchObject({ kind: 'notice', text: RESUME_LOST });
+  expect(all.some((x) => x.kind === 'result' && x.subtype === 'error_during_execution')).toBe(false);
+  expect(statuses.some((x) => x.status === 'error')).toBe(false);
+  expect(e.status(a.id)).not.toBe('error');
+  expect(e.errorText(a.id)).toBeNull();
+  expect(convUserTexts(e.history(a.id))).toEqual(['echo 넷']);
+});
+
+test('이어 가기 실패: 평소 --resume 도 Claude 기록이 없으면 오류로 멈추지 않고 새 대화로(30일 넘게 쉰 에이전트)', async () => {
+  const { e, env } = await startConv();
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  env.FAKE_MISSING_SESSIONS = s1; // 쉬는 사이 Claude 쪽 기록이 지워졌다
+  expect(await e.sleep(a.id)).toBe(true);
+  const statuses = statusEvents(e, a.id);
+
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 둘'));
+  expect(await resultText(done)).toBe('받음: echo 둘');
+
+  const now = agentOf(e, a.id);
+  expect(now.sessionId).not.toBe(s1);
+  expect(flagValue(spawnsOf('A').at(-2)!.argv, '--resume')).toBe(s1);
+  expect(flagValue(lastSpawnOf('A').argv, '--session-id')).toBe(now.sessionId);
+  const all = e.history(a.id, { all: true });
+  const { bound, next } = lastBoundary(all);
+  expect(bound).toMatchObject({ kind: 'boundary', ended: s1 });
+  expect(bound).not.toHaveProperty('resumed');
+  expect(next).toMatchObject({ kind: 'notice', text: RESUME_LOST });
+  expect(all.some((x) => x.kind === 'result' && x.subtype === 'error_during_execution')).toBe(false);
+  expect(statuses.some((x) => x.status === 'error')).toBe(false);
+  expect(e.errorText(a.id)).toBeNull();
+  expect(convUserTexts(e.history(a.id))).toEqual(['echo 둘']);
+});

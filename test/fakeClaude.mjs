@@ -86,6 +86,16 @@ if (knob === myName) process.exit(1);
 const hang = knob === `${myName}:hang`;
 const mute = knob === `${myName}:mute`;
 
+// FAKE_MISSING_SESSIONS=<쉼표로 id> — 그 id 로 --resume 하면 Claude 쪽 대화 기록이 없는 것처럼(probe21): 입력을 기다리지 않고
+// init 없이 오류 result 한 줄 → stderr 'No conversation found with session ID: <id>' → exit 1
+const resumeId = flag('--resume');
+const missing = !!resumeId && (process.env.FAKE_MISSING_SESSIONS ?? '').split(',').includes(resumeId);
+if (missing) {
+  process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: '' }) + '\n', () =>
+    process.stderr.write(`No conversation found with session ID: ${resumeId}\n`, () => process.exit(1)),
+  );
+}
+
 const sessionId = process.env.FAKE_INIT_SESSION || (flag('--resume') ?? flag('--session-id') ?? 'fake-session'); // FAKE_INIT_SESSION: init 이 다른 session_id 를 알린다
 let model = flag('--model') ?? 'claude-opus-5-5'; // --model 이 없으면 기본 모델이 풀린 id 를 알린다
 // 내 Claude 설정의 기본 모드(get_settings 의 effective.permissions.defaultMode) — 세션은 이 모드로 시작한다.
@@ -812,7 +822,9 @@ async function control(msg) {
   }
 }
 
-if (hang) {
+if (missing) {
+  // 위에서 끝난다 — 입력을 읽지 않는다
+} else if (hang) {
   process.stdin.resume(); // 받기만 하고 버린다
   process.stdin.on('end', () => process.exit(0));
 } else {

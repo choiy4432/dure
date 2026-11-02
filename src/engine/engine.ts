@@ -218,6 +218,12 @@ export interface Engine extends EventEmitter {
   conversation(id: AgentId, key: string, o?: { limit?: number }): HistoryItem[];
   /** 지금 대화를 뺀, user 있는 대화 수 */
   pastCount(id: AgentId): number;
+  /**
+   * 그 지난 대화로 돌아간다 — 계획 모드를 끄고 지금 세션을 끝낸 뒤 경계(ended·resumed)·알림 한 줄을 남기고 그 세션으로(다음 실행은 --resume).
+   * 고른 에이전트면 미리 띄운다. 던진다(글은 그대로 화면에): 일하는 중·카드를 기다림·붙잡은 입력이 있음 · 이어 갈 수 없는 대화(old·gone) ·
+   * 없는 key·지금 대화
+   */
+  resumeConversation(id: AgentId, key: string): Promise<void>;
   /** 사람이 보낸 그림(기록의 file) — data URL. 이름이 틀리거나 없으면 null, 없는 에이전트면 던진다 */
   image(id: AgentId, file: string): Promise<string | null>;
   messages(f?: Parameters<MessageLog['list']>[0]): RelayMessage[];
@@ -245,6 +251,23 @@ const stoppedHeldNotice = (n: number) => `멈췄어요 — Claude 가 아직 읽
 /** 붙잡기 목록의 글 — 첫 줄을 이만큼까지(코드 포인트로) */
 const HOLD_TEXT_MAX = 200;
 const NO_AGENT = '에이전트를 찾을 수 없습니다.';
+const NO_CONVERSATION = '그 대화를 찾을 수 없어요';
+/** 돌아가기를 막는 까닭 — 재울 수 없는 까닭(blockOf)과 같은 표 */
+const RESUME_BLOCKED: Record<SleepBlock, string> = {
+  working: '일이 끝나면 돌아갈 수 있어요',
+  subagents: '일이 끝나면 돌아갈 수 있어요',
+  background: '일이 끝나면 돌아갈 수 있어요',
+  unread: '일이 끝나면 돌아갈 수 있어요',
+  asking: '기다리는 카드를 먼저 처리해 주세요',
+  'waiting-input': '붙잡아 둔 입력을 먼저 처리해 주세요',
+};
+/** 이어 갈 수 없는 대화 — old: 세션을 모름 · gone: Claude 쪽 대화 파일이 없음 */
+const RESUME_WHY: Record<'old' | 'gone', string> = { old: '예전 대화라 읽기만 돼요', gone: '30일이 지나 이어 갈 수 없어요' };
+const RESUMED_NOTICE = '이 대화로 돌아왔어요';
+/** --resume 했는데 Claude 쪽 대화 기록이 없었다(probe21) — 새 대화로 이어 간다 */
+const RESUME_LOST_NOTICE = 'Claude 쪽 기록이 없어 이어 가지 못했어요 — 새 대화로 시작해요';
+/** 그때 claude 의 stderr — `No conversation found with session ID: <id>`(probe21) */
+const NO_TRANSCRIPT_ERR = 'No conversation found';
 const LIMIT_INVALID = '상한은 1 이상이어야 해요.';
 const THEME_INVALID = '화면 테마는 라이트·다크·Windows 따라감 중 하나예요';
 const DURE_TOOL_PREFIX = 'mcp__dure__';
@@ -447,6 +470,10 @@ class EngineImpl extends EventEmitter implements Engine {
   private offsInFlight = new WeakMap<ClaudeSession, number>(); // 진행 중인 끄기(settleOff) 수 — init 이 bypass 여도 겹쳐 끄지 않는다
   private modelNows = new Map<AgentId, string>(); // 마지막 init 의 풀린 모델 id
   private pastCounts = new Map<AgentId, number>(); // pastCount 기억 — forgetPastCount 가 버린다
+  // 이어 가기 — --resume 으로 띄워 아직 init 을 못 본 세션 → 이어 간 세션 id(init 에서 빠진다). Claude 쪽 대화 기록이 없으면 init 없이
+  // 오류 result 한 줄을 내고 끝난다(probe21) — 그 result 는 기록·전달하지 않고 resumeLost 에 표시만, 끝나면(exit) 새 대화로
+  private resuming = new WeakMap<ClaudeSession, string>();
+  private resumeLost = new WeakSet<ClaudeSession>();
   private effortNows = new Map<AgentId, EffortLevel>(); // Claude 에게 마지막으로 읽은 지금 effort
   // effort 는 세션 명령 `/effort <단계>` 로 정한다 — 설정 층(apply_flag_settings)엔 max 가 없어 조용히 무시되고,
   // get_settings 는 세션 값을 모른다(probe9). 사람 입력처럼 한 줄씩 쓰지만 기록·사건·작업 중 표시는 남기지 않는다.
@@ -1134,6 +1161,35 @@ class EngineImpl extends EventEmitter implements Engine {
     this.pump(id);
   }
 
+  async resumeConversation(id: AgentId, key: string) {
+    const agent = this.need(id);
+    const target = this.conversations(id).find((c) => c.key === key && !c.current);
+    if (!target) throw new Error(NO_CONVERSATION);
+    const block = this.resumeBlock(id);
+    if (block) throw new Error(RESUME_BLOCKED[block]);
+    if (target.why) throw new Error(RESUME_WHY[target.why]);
+    // 새 대화와 같은 길 — 계획 모드는 끈 채로, 손으로 재운 표는 풀어 고른 에이전트면 돌아간 대화로 미리 띄운다
+    this.wantPlan(id, false);
+    this.handSlept.delete(id);
+    const ended = agent.started ? agent.sessionId : null; // 한 마디라도 한 대화만 — 다시 돌아올 수 있게
+    const ending = this.endSession(id);
+    this.guard(id, () => this.record(id, ended ? { kind: 'boundary', ended, resumed: key } : { kind: 'boundary', resumed: key }));
+    this.guard(id, () => this.record(id, { kind: 'notice', text: RESUMED_NOTICE }));
+    this.store.updateAgent(id, { sessionId: key, started: true });
+    this.forgetPastCount(id); // 경계를 남길 때 버렸지만 그 history 사건을 듣는 쪽이 옛 세션으로 다시 셌을 수 있다
+    this.guard(id, () => this.setContext(id, null));
+    this.emitStatus(id);
+    await ending;
+    this.prewarm(id);
+  }
+
+  /** 돌아가기를 막는 까닭 — 재울 수 없는 까닭(blockOf)과 같다. 세션이 없어도 기다리는·붙잡은 입력이 있으면 막는다 */
+  private resumeBlock(id: AgentId): SleepBlock | null {
+    const block = this.blockOf(id);
+    if (block !== 'no-session') return block;
+    return (this.held.get(id)?.length ?? 0) > 0 || this.holds.has(id) ? 'waiting-input' : null;
+  }
+
   async setModel(id: AgentId, model: string | null) {
     this.need(id);
     this.store.updateAgent(id, { model });
@@ -1768,9 +1824,12 @@ class EngineImpl extends EventEmitter implements Engine {
       env: this.spawnEnv(),
     });
     this.seen.set(s, new SeenToolUses());
+    if (agent.started) this.resuming.set(s, agent.sessionId);
     // 세션 콜백 안에서 던지면 stdout 처리 중 잡히지 않은 예외가 되어 앱이 죽는다 — 모두 guard 로 감싼다
     s.on('event', (ev: StreamEvent) =>
       this.guard(id, () => {
+        // 이어 갈 Claude 기록이 없다는 오류 result — 읽은 줄·기록·전달로 치지 않는다(곧 끝나면 exit 가 새 대화로)
+        if (this.noteResume(s, ev)) return;
         // 보낸 줄을 읽었나 — 끝내는 중인 세션이어도 센다(endSession 이 본다)
         const answered = this.noteRead(s, ev);
         if (this.sessions.get(id) !== s) return;
@@ -1800,10 +1859,12 @@ class EngineImpl extends EventEmitter implements Engine {
     );
     s.on('status', () =>
       this.guard(id, () => {
+        // 이어 갈 기록이 없어 끝나는 세션의 오류는 알리지 않는다 — 곧 새 대화로 이어 간다(exit)
+        if (s.status === 'error' && this.lostTranscript(s, s.errorText ?? '')) return;
         if (this.sessions.get(id) === s) this.emitStatus(id);
       }),
     );
-    s.on('exit', ({ expected }: { expected: boolean }) =>
+    s.on('exit', ({ expected, stderrTail }: { expected: boolean; stderrTail: string }) =>
       this.guard(id, () => {
         if (this.sessions.get(id) !== s) return; // 엔진이 끝낸 세션은 endSession 이 정리
         this.sessions.delete(id);
@@ -1814,7 +1875,9 @@ class EngineImpl extends EventEmitter implements Engine {
         this.guard(id, () => this.forgetEffortNow(id));
         this.guard(id, () => this.forgetMode(id));
         this.guard(id, () => this.forgetSubagents(id));
-        if (!expected) {
+        if (!expected && this.lostTranscript(s, stderrTail)) {
+          this.guard(id, () => this.resumeFailed(id, s)); // 오류로 멈추지 않고 새 대화로
+        } else if (!expected) {
           this.guard(id, () => this.restoreInFlight(id, s)); // 기록 실패여도 아래 정리는 한다
           const why = s.errorText ?? EXITED;
           this.guard(id, () => this.record(id, { kind: 'notice', text: why }));
@@ -1864,6 +1927,47 @@ class EngineImpl extends EventEmitter implements Engine {
     // 내 설정 읽기(기다리지 않는다) — 고른 effort 가 없으면 지금 effort 를, 허용이면 내 기본 권한 모드를(bySettings 의 근거)
     if (!effortSent || allow) void this.readClaudeSettings(id, s);
     return s;
+  }
+
+  /**
+   * --resume 실행의 init 전 사건 — init 이면 이어 왔다(표시를 지운다). 오류 result(error_during_execution)면 Claude 쪽 대화 기록이 없다는
+   * 뜻이라(probe21) 표시만 하고 true — 그 사건은 버린다
+   */
+  private noteResume(s: ClaudeSession, ev: StreamEvent): boolean {
+    if (!this.resuming.has(s)) return false;
+    if (ev.kind === 'init') this.resuming.delete(s);
+    if (ev.kind !== 'result' || ev.subtype !== 'error_during_execution') return false;
+    this.resumeLost.add(s);
+    return true;
+  }
+
+  /** --resume 실행이 init 없이 끝난 까닭이 Claude 쪽 대화 기록이 없어서인가 — 그 오류 result 를 봤거나 stderr 가 그렇게 말한다 */
+  private lostTranscript(s: ClaudeSession, stderr: string): boolean {
+    return this.resuming.has(s) && (this.resumeLost.has(s) || stderr.includes(NO_TRANSCRIPT_ERR));
+  }
+
+  /**
+   * --resume 으로 띄운 세션이 Claude 쪽 대화 기록이 없어 끝났다(30일이 지나 지워짐 · 돌아간 대화의 기록이 없음) — 오류로 멈추지 않고
+   * 새 대화로: 경계(이어 가려던 세션) · 알림 한 줄 · 새 세션 id. 보낸 줄은 되살려 새 대화로 보내고, 기다리는 것이 없으면 고른 에이전트만
+   * 미리 띄운다. 상태는 부른 쪽(exit)이 알린다
+   */
+  private resumeFailed(id: AgentId, s: ClaudeSession): void {
+    const ended = this.resuming.get(s)!;
+    this.guard(id, () => this.record(id, { kind: 'boundary', ended }));
+    this.guard(id, () => this.record(id, { kind: 'notice', text: RESUME_LOST_NOTICE }));
+    this.store.updateAgent(id, { sessionId: crypto.randomUUID(), started: false });
+    this.forgetPastCount(id);
+    this.guard(id, () => this.setContext(id, null));
+    this.guard(id, () => this.restoreInFlight(id, s));
+    this.perms.cancelForAgent(id, EXITED);
+    // 되살린 내 말·다시 queued 가 된 메시지 — 새 대화로 띄워 보낸다(restartAfterEffort 와 같다)
+    try {
+      if (this.hasWaitingWork(id)) this.ensure(id, { quiet: true });
+      else this.prewarm(id);
+    } catch {
+      return; // 폴더 없음 등 — ensure 가 status error·errorText 를 남겼다
+    }
+    this.pump(id);
   }
 
   /** 고른 effort 를 살아 있는 세션에 — 있으면 /effort 를 줄 맨 앞에 세우고(한가하면 바로), 없으면 내 설정을 읽는다 */
