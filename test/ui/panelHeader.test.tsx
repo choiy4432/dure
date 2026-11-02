@@ -474,6 +474,7 @@ describe('AgentMenu', () => {
     fireEvent.click(item('새 대화'))
     const dlg = screen.getByRole('alertdialog')
     expect(dlg.textContent).toContain('지금까지 대화를 접고 새로 시작할까요?')
+    expect(dlg.textContent).toContain("지금 대화는 '지난 대화'에서 다시 볼 수 있어요.")
     expect(api.newConversation).not.toHaveBeenCalled()
     await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '새로 시작' })) })
     await settle()

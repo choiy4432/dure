@@ -82,6 +82,13 @@ export const IMAGE_GONE = '그림을 찾을 수 없어요'
 export const RENEW_CONFIRM = {
   title: '지금까지 대화를 접고 새로 시작할까요?',
   confirmLabel: '새로 시작',
+  body: "지금 대화는 '지난 대화'에서 다시 볼 수 있어요.",
+} as const
+
+/** 갈래 창 — 지난 대화에서 새 에이전트로 이어 가기 */
+export const FORK_DIALOG = {
+  title: '새 에이전트로 이어 가기',
+  folderNote: '원래 에이전트와 같은 폴더예요',
 } as const
 
 /** 지난 대화 탭 — 탭 이름 · 지금 배지 · 날짜 줄 꼬리 · 읽기 띠 · 아래 줄 안내·단추 · 긴 대화의 앞 줄 */

@@ -28,6 +28,7 @@ export function App() {
     }
   })
   const announced = useAttention()
+  const fork = useDure(s => s.forkDraft)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [askAllow, setAskAllow] = useState(false)
   const close = () => setDialog(null)
@@ -77,6 +78,9 @@ export function App() {
         </Presence>
         <Presence show={dialog === 'agent'}>
           {v.roomId !== null && <AddAgentDialog roomId={v.roomId} onClose={close} />}
+        </Presence>
+        <Presence show={fork !== null}>
+          {fork && <AddAgentDialog roomId={fork.roomId} fork={fork} onClose={() => getStore().closeFork()} />}
         </Presence>
         <Presence show={dialog === 'settings'}>
           <SettingsDialog onClose={close} onAskAllow={() => setAskAllow(true)} />

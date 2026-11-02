@@ -188,6 +188,7 @@ export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef }: Props
       <ConfirmDialog
         open={ask === 'renew'}
         title={RENEW_CONFIRM.title}
+        body={RENEW_CONFIRM.body}
         confirmLabel={RENEW_CONFIRM.confirmLabel}
         onConfirm={renew}
         onCancel={() => setAsk(null)}

@@ -1,8 +1,8 @@
 import { useId, useRef, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import type { RoomId } from '../../engine/types'
-import { getStore } from '../state/store'
-import { errorMessage, fieldError } from '../lib/words'
+import { getStore, type ForkDraft } from '../state/store'
+import { errorMessage, fieldError, FORK_DIALOG } from '../lib/words'
 import { placeMissing } from '../map/layout'
 import { markFresh } from '../map/freshNodes'
 import { FormDialog } from './FormDialog'
@@ -18,14 +18,16 @@ function fieldOf(message: string): Field {
 
 interface Props {
   roomId: RoomId
+  /** 있으면 갈래 모드 — 지난 대화를 새 에이전트로 이어 간다(폴더는 원래 에이전트와 같게 고정) */
+  fork?: ForkDraft
   onClose: () => void
 }
 
 /** 에이전트 추가 — 폴더 · 이름 · 역할 한 줄. 셋 다 있어야 추가, 엔진 오류는 그 칸 아래(이름 겹침은 해요체 안내로) */
-export function AddAgentDialog({ roomId, onClose }: Props) {
-  const [folder, setFolder] = useState<string | null>(null)
-  const [name, setName] = useState('')
-  const [role, setRole] = useState('')
+export function AddAgentDialog({ roomId, fork, onClose }: Props) {
+  const [folder, setFolder] = useState<string | null>(fork?.folder ?? null)
+  const [name, setName] = useState(fork?.name ?? '')
+  const [role, setRole] = useState(fork?.role ?? '')
   const [error, setError] = useState<{ field: Field; message: string } | null>(null)
   const picking = useRef(false)
   const [busy, setBusy] = useState(false)
@@ -61,13 +63,16 @@ export function AddAgentDialog({ roomId, onClose }: Props) {
     const store = getStore()
     let agentId: string
     try {
-      const agent = await window.dure.addAgent({ roomId, name: name.trim(), role: role.trim(), folder })
+      const agent = fork
+        ? await window.dure.forkAgent({ from: fork.from, key: fork.key, name: name.trim(), role: role.trim() })
+        : await window.dure.addAgent({ roomId, name: name.trim(), role: role.trim(), folder })
       agentId = agent.id
       markFresh(agent.id)
       // 자리 — 이 방의 카드와 겹치지 않는 첫 칸(관계도가 같은 셈으로 정하는 자리)을 새로 받기 전에 한 번 저장.
       // 저장된 자리로 오므로 관계도가 {0,0} 을 보고 또 정해 저장하지 않는다. 실패하면 관계도가 대신 정한다.
       const seats = store.getState().agents.filter(a => a.roomId === roomId).map(a => ({ id: a.id, pos: a.pos }))
-      const pos = placeMissing([...seats, { id: agent.id, pos: agent.pos }]).get(agent.id)
+      // 갈래는 원래 에이전트 카드 가까이(by) — placeNear 는 agent-added 사건이 채우는 맵이라, 같은 셈(placeMissing by)을 여기서 직접
+      const pos = placeMissing([...seats, { id: agent.id, pos: agent.pos, by: fork?.from }]).get(agent.id)
       if (pos) await window.dure.updateAgent(agent.id, { pos }).catch(e => console.error('두레: 새 에이전트 자리를 저장하지 못했어요', e))
     } catch (e) {
       // 어느 칸인지는 엔진 원문으로 가리고, 보이는 글은 해요체 안내로(이름 겹침)
@@ -95,7 +100,7 @@ export function AddAgentDialog({ roomId, onClose }: Props) {
 
   return (
     <FormDialog
-      title="에이전트 추가"
+      title={fork ? FORK_DIALOG.title : '에이전트 추가'}
       submitLabel="추가"
       canSubmit={canSubmit}
       busy={busy}
@@ -115,18 +120,21 @@ export function AddAgentDialog({ roomId, onClose }: Props) {
           >
             {folder ?? '아직 고르지 않았어요'}
           </span>
-          <button
-            ref={folderButton}
-            type="button"
-            className="btn sec"
-            onClick={() => void pick()}
-            disabled={busy}
-            aria-describedby={`${id}-fl ${id}-fp${folderError ? ` ${errorId}` : ''}`}
-          >
-            <FolderOpen className="i" aria-hidden="true" />
-            폴더 고르기
-          </button>
+          {!fork && (
+            <button
+              ref={folderButton}
+              type="button"
+              className="btn sec"
+              onClick={() => void pick()}
+              disabled={busy}
+              aria-describedby={`${id}-fl ${id}-fp${folderError ? ` ${errorId}` : ''}`}
+            >
+              <FolderOpen className="i" aria-hidden="true" />
+              폴더 고르기
+            </button>
+          )}
         </div>
+        {fork && <p className="fld-note">{FORK_DIALOG.folderNote}</p>}
         {folderError && (
           <p className="fe" id={errorId}>
             {folderError}

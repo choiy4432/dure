@@ -4561,6 +4561,14 @@ code {
   border-color: var(--danger);
 }
 
+/* 폴더 칸 아래 한 줄 안내(갈래 창) */
+.fld-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
 /* 숫자 칸 + 단위 */
 .fld-num {
   display: flex;

@@ -397,6 +397,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
       <ConfirmDialog
         open={askClear}
         title={RENEW_CONFIRM.title}
+        body={RENEW_CONFIRM.body}
         confirmLabel={RENEW_CONFIRM.confirmLabel}
         onConfirm={renew}
         onCancel={() => setAskClear(false)}

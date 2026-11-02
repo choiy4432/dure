@@ -10,7 +10,7 @@ const agent = (id: string, roomId: string, name: string, pos: { x: number; y: nu
 })
 
 let snapshot: Snapshot
-let api: Record<'addAgent' | 'updateAgent' | 'pickFolder', ReturnType<typeof vi.fn>>
+let api: Record<'addAgent' | 'updateAgent' | 'pickFolder' | 'forkAgent', ReturnType<typeof vi.fn>>
 
 beforeEach(() => {
   vi.resetModules()
@@ -34,6 +34,16 @@ beforeEach(() => {
       }
       if (i.folder === 'C:\\gone') throw new Error(`폴더를 찾을 수 없습니다: ${i.folder}`)
       const a: AgentView = { ...agent('n1', i.roomId, i.name.trim(), { x: 0, y: 0 }), role: i.role, folder: i.folder }
+      snapshot = { ...snapshot, agents: [...snapshot.agents, a] }
+      const { status: _s, errorText: _e, bypass: _b, heldInput: _h, ...plain } = a
+      return plain as Agent
+    }),
+    forkAgent: vi.fn(async (i: { from: string; key: string; name: string; role: string }) => {
+      const src = snapshot.agents.find(x => x.id === i.from)!
+      if (snapshot.agents.some(a => a.roomId === src.roomId && a.name === i.name.trim())) {
+        throw new Error(`이미 있는 이름입니다: ${i.name.trim()}`)
+      }
+      const a: AgentView = { ...agent('f1', src.roomId, i.name.trim(), { x: 0, y: 0 }), role: i.role, folder: src.folder }
       snapshot = { ...snapshot, agents: [...snapshot.agents, a] }
       const { status: _s, errorText: _e, bypass: _b, heldInput: _h, ...plain } = a
       return plain as Agent
@@ -205,5 +215,46 @@ describe('AddAgentDialog', () => {
     fireEvent.click(within(dlg).getByRole('button', { name: '취소' }))
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(api.addAgent).not.toHaveBeenCalled()
+  })
+
+  describe('갈래', () => {
+    const draft = { from: 'a2', key: 'k1', roomId: 'r1', name: '웹 화면 2', role: '화면 · 문구', folder: 'C:\w' }
+    const openFork = async () => {
+      const store = await renderApp()
+      await act(async () => { store.openFork(draft) })
+      return { store, dlg: screen.getByRole('dialog', { name: '새 에이전트로 이어 가기' }) }
+    }
+
+    it('갈래 — 미리 채움·폴더 고정·forkAgent', async () => {
+      const { store, dlg } = await openFork()
+      expect((within(dlg).getByRole('textbox', { name: '이름' }) as HTMLInputElement).value).toBe('웹 화면 2')
+      expect((within(dlg).getByRole('textbox', { name: '역할' }) as HTMLInputElement).value).toBe('화면 · 문구')
+      expect(within(dlg).getByText('C:\w')).toBeTruthy()
+      expect(within(dlg).getByText('원래 에이전트와 같은 폴더예요')).toBeTruthy()
+      expect(within(dlg).queryByRole('button', { name: '폴더 고르기' })).toBeNull()
+
+      await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '추가' })) })
+      await settle()
+      expect(api.forkAgent).toHaveBeenCalledWith({ from: 'a2', key: 'k1', name: '웹 화면 2', role: '화면 · 문구' })
+      expect(api.addAgent).not.toHaveBeenCalled()
+      expect(screen.queryByRole('dialog', { name: '새 에이전트로 이어 가기' })).toBeNull()
+      expect(store.getState().forkDraft).toBeNull()
+      expect(store.getState().selectedAgentId).toBe('f1')
+      // 자리는 원래 에이전트(a2) 옆 빈 칸에 한 번
+      expect(api.updateAgent).toHaveBeenCalledTimes(1)
+      const pos = api.updateAgent.mock.calls[0][1].pos
+      expect(Math.hypot(pos.x - 424, pos.y - 64)).toBeLessThan(Math.hypot(784 - 424, 0) + 1)
+    })
+
+    it('갈래 — 이름 겹침 오류는 이름 칸에', async () => {
+      const { store, dlg } = await openFork()
+      fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '기획' } })
+      await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '추가' })) })
+      await settle()
+      const name = within(dlg).getByRole('textbox', { name: '이름' })
+      expect(name.getAttribute('aria-invalid')).toBe('true')
+      expect(within(dlg).getByText('‘기획’이라는 에이전트가 이미 있어요. 다른 이름을 써 주세요.')).toBeTruthy()
+      expect(store.getState().forkDraft).not.toBeNull()
+    })
   })
 })
