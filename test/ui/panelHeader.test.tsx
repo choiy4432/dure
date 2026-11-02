@@ -25,7 +25,7 @@ const DESC: AgentDescription = {
 }
 
 let snapshot: Snapshot
-let api: Record<'describe' | 'setModel' | 'updateAgent' | 'removeAgent' | 'newConversation' | 'interrupt' | 'openFolder' | 'setBypass' | 'sleep' | 'sleepBlock',ReturnType<typeof vi.fn>>
+let api: Record<'describe' | 'setModel' | 'updateAgent' | 'removeAgent' | 'newConversation' | 'interrupt' | 'openAgentFolder' | 'setBypass' | 'sleep' | 'sleepBlock',ReturnType<typeof vi.fn>>
 
 // 엔진처럼 — 바꾼 값은 다음 스냅샷에 들어 있다(엔진은 에이전트 바뀜 이벤트를 보내지 않는다)
 const patch = (id: string, p: Partial<AgentView>) => {
@@ -55,7 +55,7 @@ beforeEach(() => {
     }),
     newConversation: vi.fn(async (_id: string) => {}),
     interrupt: vi.fn(async (_id: string) => {}),
-    openFolder: vi.fn(async (_path: string) => {}),
+    openAgentFolder: vi.fn(async (_id: string) => {}),
     setBypass: vi.fn(async (_id: string, _on: boolean) => {}),
     sleep: vi.fn(async (_id: string) => true),
     sleepBlock: vi.fn(async (_id: string): Promise<string | null> => null),
@@ -516,11 +516,11 @@ describe('AgentMenu', () => {
     expect(saveConversation).not.toHaveBeenCalled()
   })
 
-  it('폴더 열기는 openFolder(에이전트 폴더)', async () => {
+  it('폴더 열기는 openAgentFolder(에이전트 id)', async () => {
     await renderPanel()
     openMenu()
     await act(async () => { fireEvent.click(item('폴더 열기')) })
-    expect(api.openFolder).toHaveBeenCalledWith('C:\\w')
+    expect(api.openAgentFolder).toHaveBeenCalledWith('w')
     expect(screen.queryByRole('menu')).toBeNull()
   })
 

@@ -20,6 +20,7 @@ function fakeEngine() {
   Object.assign(e, {
     rooms: () => [{ id: 'r1', name: '방', createdAt: 1 }],
     agents: () => [{ ...agent, bypassOn: true }],
+    folderTarget: (_id: string) => ({ kind: 'local', path: agent.folder }),
     status: () => 'idle',
     errorText: () => null,
     flags: () => ({ bypass: true, bySettings: false, pending: true }), // 서로 다른 값 — 칸이 뒤바뀌면 잡힌다
@@ -93,7 +94,7 @@ function setup(withEngine = true) {
   const ipc = { handle: (ch: string, fn: Fn) => void handlers.set(ch, fn) }
   const sent: [string, any][] = []
   const deps = {
-    pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), isAppPage,
+    pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), openExternal: vi.fn(async (_url: string) => {}), isAppPage,
     setTaskbar: vi.fn(async () => {}), flashWindow: vi.fn(async () => {}), focusWindow: vi.fn(async () => {}),
     applyTheme: vi.fn(), saveText: vi.fn(async (name: string, _text: string) => `C:/docs/${name}`),
   }
@@ -133,7 +134,7 @@ describe('registerIpc', () => {
     const handlers = new Map<string, Fn>()
     registerIpc({ handle: (c, f) => void handlers.set(c, f) }, fakeEngine().engine, () => {}, {
       pickFolder: async () => null,
-      openFolder: async () => {},
+      openFolder: async () => {}, openExternal: async () => {},
       isAppPage,
       setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {}, saveText: async () => null,
     })
@@ -213,7 +214,7 @@ describe('registerIpc', () => {
     registerIpc({ handle: () => {} }, e.engine, () => {
       throw new Error('Object has been destroyed')
     }, {
-      pickFolder: async () => null, openFolder: async () => {}, isAppPage,
+      pickFolder: async () => null, openFolder: async () => {}, openExternal: async () => {}, isAppPage,
       setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {}, saveText: async () => null,
     })
     expect(() => e.engine.emit('held', { roomId: 'r1' })).not.toThrow()
@@ -252,12 +253,27 @@ describe('registerIpc', () => {
     expect(deps.saveText).toHaveBeenCalledTimes(3)
   })
 
-  it('openFolder only opens a registered agent folder', async () => {
+  it('openAgentFolder — 등록된 에이전트만 · 이 PC 방은 폴더 열기', async () => {
     const { call, deps } = setup()
-    expect(await call('openFolder', 'C:/Windows')).toMatchObject({ ok: false })
+    expect(await call('openAgentFolder', 'ghost')).toMatchObject({ ok: false })
+    expect(await call('openAgentFolder', 5)).toMatchObject({ ok: false })
     expect(deps.openFolder).not.toHaveBeenCalled()
-    expect((await call('openFolder', 'C:/work/a')).ok).toBe(true)
+    expect((await call('openAgentFolder', 'a1')).ok).toBe(true)
     expect(deps.openFolder).toHaveBeenCalledWith('C:/work/a')
+    expect(deps.openExternal).not.toHaveBeenCalled()
+  })
+
+  it('openAgentFolder — 서버 방이면 VS Code 원격 창 주소 · 못 열면 VS Code 글', async () => {
+    const { call, deps, engine } = setup()
+    ;(engine as any).folderTarget = () => ({ kind: 'remote', host: 'dev', path: '/home/a/web' })
+    expect((await call('openAgentFolder', 'a1')).ok).toBe(true)
+    expect(deps.openExternal).toHaveBeenCalledWith('vscode://vscode-remote/ssh-remote+dev/home/a/web')
+    expect(deps.openFolder).not.toHaveBeenCalled()
+    ;(engine as any).folderTarget = () => ({ kind: 'remote', host: 'me@h:2222', path: '/home/a/my web' })
+    await call('openAgentFolder', 'a1')
+    expect(deps.openExternal).toHaveBeenLastCalledWith('vscode://vscode-remote/ssh-remote+me%40h%3A2222/home/a/my%20web')
+    deps.openExternal.mockRejectedValueOnce(new Error('x'))
+    expect(await call('openAgentFolder', 'a1')).toEqual({ ok: false, error: 'VS Code 를 찾지 못했어요' })
   })
 
   it('setAllowBypass · setBypass 는 인자 그대로 엔진으로 가고 엔진 오류 문구가 그대로 돌아온다', async () => {

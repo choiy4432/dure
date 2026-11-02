@@ -109,7 +109,8 @@ export interface DureApi {
   /** 재우기까지의 시간(분, 0 = 끔) 저장 */
   setSleepAfter(min: number): Promise<void>
   pickFolder(): Promise<string | null>
-  openFolder(path: string): Promise<void>
+  /** 그 에이전트의 폴더 열기 — 이 PC 방은 탐색기, 서버 방은 VS Code 원격 창 */
+  openAgentFolder(id: AgentId): Promise<void>
   /** 대화 내보내기 — 저장 창(처음 이름 fileName, 문서 폴더)으로 글을 저장한다. 저장한 경로, 취소면 null */
   saveConversation(fileName: string, text: string): Promise<string | null>
   /** 작업표시줄 배지(할 일 개수 + 아이콘 PNG data URL; png 가 null 이거나 count 0 이면 지움) */
@@ -132,7 +133,7 @@ export const METHODS = [
   'setAllowBypass', 'setNotify', 'setTheme', 'setBypass',
   'sleep', 'sleepRoom', 'sleepBlock', 'sleepableIn', 'setSleepAfter',
   'setPlanMode', 'resumeHold', 'dropHoldItem', 'dropHold', 'revokeAlwaysAllow',
-  'pickFolder', 'openFolder', 'saveConversation', 'setTaskbar', 'flashWindow', 'focusWindow',
+  'pickFolder', 'openAgentFolder', 'saveConversation', 'setTaskbar', 'flashWindow', 'focusWindow',
 ] as const satisfies readonly Exclude<keyof DureApi, 'on'>[]
 
 /** 엔진 이벤트 전부 — 새 이벤트를 EngineEventMap 에 더하면 여기서 타입 오류가 난다 */

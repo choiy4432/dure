@@ -6,7 +6,7 @@ import path from 'node:path';
 import { CONTROL_CHAR, openStore, renameRetrying, REMOTE_FOLDER_ABSOLUTE, type Store } from './store';
 import {
   checkScript, classifyExit, cleanupScript, hostArgs, isLoginFailure, launchArgs, launchPreamble, parseCheckOutput, parsePid, posixJoin,
-  remoteLaunchScript, remoteRunFiles, shq, sshErrorLines, SSH_OPTIONS, type RemoteIssueKind,
+  remoteLaunchScript, remoteRunFiles, shq, sshErrorLines, SSH_OPTIONS, transcriptCheckScript, type RemoteIssueKind,
 } from './remote';
 import { REMOTE_CLEANUP_FAILED, remoteIssueText } from '../shared/remoteTexts';
 import { readSshHosts, type SshHostEntry } from './sshConfig';
@@ -249,8 +249,10 @@ export interface Engine extends EventEmitter {
   /** 화면이 사용량을 볼 때 — 마지막 값이 1분보다 오래됐으면 다시 묻는다 */
   refreshUsage(): void;
   history(id: AgentId, o?: { all?: boolean; limit?: number }): HistoryItem[];
-  /** 대화 목록 — 새것부터. user 없는 대화는 빠진다. Claude 대화 파일은 있는지만 본다(부를 때마다 새로) */
-  conversations(id: AgentId): ConversationSummary[];
+  /** 대화 목록 — 새것부터. user 없는 대화는 빠진다. Claude 대화 파일은 있는지만 본다(부를 때마다 새로) — 서버 방은 서버의 기록을 ssh 로(5초 한도, 못 보면 모두 이어 갈 수 있음) */
+  conversations(id: AgentId): Promise<ConversationSummary[]>;
+  /** 폴더 열기 대상 — 이 PC 방은 이 PC 폴더, 서버 방은 서버와 서버 폴더 */
+  folderTarget(id: AgentId): FolderTarget;
   /** 한 대화(key)의 마지막 limit(기본 500)줄 — 없는 key 는 [] */
   conversation(id: AgentId, key: string, o?: { limit?: number }): HistoryItem[];
   /** 지금 대화를 뺀, user 있는 대화 수 */
@@ -266,7 +268,7 @@ export interface Engine extends EventEmitter {
    * 그 대화의 줄을 새 에이전트 기록에 복사하고(그림 파일도 — 복사 못 한 그림은 file 없이) 알림 한 줄. 첫 실행만 그 세션에서 갈래 친다
    * (--resume <그 세션> --fork-session). 원래 에이전트의 기록·세션은 그대로. 던진다: 이어 갈 수 없는 대화(old·gone) · 없는 key·지금 대화
    */
-  forkAgent(i: { from: AgentId; key: string; name: string; role: string }): Agent;
+  forkAgent(i: { from: AgentId; key: string; name: string; role: string }): Promise<Agent>;
   /** 사람이 보낸 그림(기록의 file) — data URL. 이름이 틀리거나 없으면 null, 없는 에이전트면 던진다 */
   image(id: AgentId, file: string): Promise<string | null>;
   messages(f?: Parameters<MessageLog['list']>[0]): RelayMessage[];
@@ -369,8 +371,13 @@ const EFFORT_UNKNOWN = '알 수 없는 effort 예요.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
 const NO_SSH = '윈도우 OpenSSH 를 찾지 못했어요';
 const NOT_REMOTE = '서버 방이 아니에요';
+/** 폴더 열기 대상 */
+export type FolderTarget = { kind: 'local'; path: string } | { kind: 'remote'; host: string; path: string };
+
 /** 확인 ssh(접속·폴더) 한 번의 상한 — ssh 자신의 ConnectTimeout(10초) 뒤 로그인 셸까지 */
 const REMOTE_CHECK_MS = 15_000;
+/** 지난 대화 기록 확인 ssh 의 상한(ConnectTimeout 도 같이) — 화면이 오래 기다리지 않게 */
+const REMOTE_QUICK_MS = 5_000;
 /** ssh 확인 결과 — code = 종료 코드(못 띄웠거나 시간 초과면 null) */
 interface SshRun {
   code: number | null;
@@ -883,15 +890,16 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /** 확인 ssh — 셸 없이(execFile), 상한 REMOTE_CHECK_MS, -R 없음. ssh 가 없으면 NO_SSH 로 던진다 */
-  private sshRun(host: string, script: string): Promise<SshRun> {
+  private sshRun(host: string, script: string, quick = false): Promise<SshRun> {
     const ssh = this.o.ssh;
     if (!ssh || !this.sshAvailable()) return Promise.reject(new Error(NO_SSH));
-    const args = [...(ssh.argsPrefix ?? []), ...SSH_OPTIONS, ...hostArgs(host), 'bash -lc ' + shq(script)];
+    const opts = quick ? SSH_OPTIONS.map((o) => (o === 'ConnectTimeout=10' ? `ConnectTimeout=${REMOTE_QUICK_MS / 1000}` : o)) : SSH_OPTIONS;
+    const args = [...(ssh.argsPrefix ?? []), ...opts, ...hostArgs(host), 'bash -lc ' + shq(script)];
     return new Promise((resolve, reject) => {
       const child = execFile(
         ssh.command,
         args,
-        { windowsHide: true, timeout: REMOTE_CHECK_MS, env: { ...process.env, ...this.o.env }, encoding: 'utf8' },
+        { windowsHide: true, timeout: quick ? REMOTE_QUICK_MS : REMOTE_CHECK_MS, env: { ...process.env, ...this.o.env }, encoding: 'utf8' },
         (err, stdout, stderr) => {
           if (!err) return resolve({ code: 0, stdout, stderr });
           const code: unknown = err.code;
@@ -1619,7 +1627,7 @@ class EngineImpl extends EventEmitter implements Engine {
 
   async resumeConversation(id: AgentId, key: string) {
     const agent = this.need(id);
-    const target = this.conversations(id).find((c) => c.key === key && !c.current);
+    const target = (await this.conversations(id)).find((c) => c.key === key && !c.current);
     if (!target) throw new Error(NO_CONVERSATION);
     const block = this.resumeBlock(id);
     if (block) throw new Error(RESUME_BLOCKED[block]);
@@ -1639,9 +1647,9 @@ class EngineImpl extends EventEmitter implements Engine {
     this.prewarm(id);
   }
 
-  forkAgent(i: { from: AgentId; key: string; name: string; role: string }): Agent {
+  async forkAgent(i: { from: AgentId; key: string; name: string; role: string }): Promise<Agent> {
     const src = this.need(i.from);
-    const target = this.conversations(i.from).find((c) => c.key === i.key && !c.current);
+    const target = (await this.conversations(i.from)).find((c) => c.key === i.key && !c.current);
     if (!target) throw new Error(NO_CONVERSATION);
     if (target.why) throw new Error(pastWhyText(target.why, target.at, Date.now()));
     const conv = this.splitOf(i.from).find((c) => c.key === i.key)!;
@@ -1789,7 +1797,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const from = this.log.get(messageId)?.from;
     return from ? this.store.agent(from)?.name ?? null : null;
   }
-  conversations(id: AgentId): ConversationSummary[] {
+  async conversations(id: AgentId): Promise<ConversationSummary[]> {
     const agent = this.need(id);
     const cur = agent.sessionId;
     const rows = this.splitOf(id).flatMap((c) => {
@@ -1797,14 +1805,35 @@ class EngineImpl extends EventEmitter implements Engine {
       return f ? [{ c, f }] : [];
     });
     const past = rows.filter((r) => r.c.key !== cur && r.c.sessionId);
-    const alive = existingSessions(claudeDirOf(this.o.env), past.map((r) => r.c.sessionId!));
+    const alive = await this.aliveSessions(agent, past.map((r) => r.c.sessionId!));
     return rows
       .map(({ c, f }): ConversationSummary => {
         const current = c.key === cur;
-        const why = current ? null : !c.sessionId ? 'old' : alive.has(c.sessionId) ? null : 'gone';
+        const why = current ? null : !c.sessionId ? 'old' : !alive || alive.has(c.sessionId) ? null : 'gone';
         return { key: c.key, current, ...f, resumable: !current && why === null, why };
       })
       .sort((x, y) => y.at - x.at);
+  }
+  /**
+   * Claude 쪽 기록이 있는 세션 id — 이 PC 방은 이 PC 의 파일, 서버 방은 서버에서 ssh 한 번(접속 한도 REMOTE_QUICK_MS).
+   * null = 알 수 없음(서버에 못 닿음 등) → 막지 않고 모두 이어 갈 수 있음으로 — 이어 가다 실패하면 새 대화 길이 받는다
+   */
+  private async aliveSessions(agent: Agent, ids: string[]): Promise<Set<string> | null> {
+    const remote = this.remoteOf(agent);
+    if (!remote) return existingSessions(claudeDirOf(this.o.env), ids);
+    if (ids.length === 0) return new Set();
+    try {
+      const run = await this.sshRun(remote.host, transcriptCheckScript(ids), true);
+      if (run.code !== 0) return null;
+      return new Set(run.stdout.split(/\r?\n/).map((l) => l.trim()));
+    } catch {
+      return null;
+    }
+  }
+  folderTarget(id: AgentId): FolderTarget {
+    const agent = this.need(id);
+    const remote = this.remoteOf(agent);
+    return remote ? { kind: 'remote', host: remote.host, path: agent.folder } : { kind: 'local', path: agent.folder };
   }
   conversation(id: AgentId, key: string, o: { limit?: number } = {}): HistoryItem[] {
     this.need(id);

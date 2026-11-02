@@ -162,6 +162,9 @@ if (!app.requestSingleInstanceLock()) {
             const err = await shell.openPath(path)
             if (err) throw new Error(err)
           },
+          async openExternal(url) {
+            await shell.openExternal(url)
+          },
           async saveText(fileName, text) {
             const testDir = process.env.DURE_E2E_SAVE_DIR
             if (testDir) {

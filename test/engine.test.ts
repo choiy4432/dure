@@ -5330,7 +5330,7 @@ test('지난 대화 목록 — 새것부터, 지금 대화 표시, 이유', asyn
   const secondId = (e.history(a.id, { all: true }).filter((x) => x.kind === 'boundary')[1] as any).ended;
   expect(second.ended).not.toBe(secondId);
   fs.rmSync(path.join(claudeDir, 'projects', 'fake', `${secondId}.jsonl`));
-  const list = e.conversations(a.id);
+  const list = (await e.conversations(a.id));
   expect(list.map((c) => c.title)).toEqual(['echo 셋', 'echo 둘', 'echo 하나']);
   expect(list.map((c) => c.current)).toEqual([true, false, false]);
   expect(list.map((c) => c.resumable)).toEqual([false, false, true]);
@@ -5346,7 +5346,7 @@ test('conversation(key) — 그 대화의 줄만', async () => {
   await talk(e, a.id, 'echo 하나');
   await e.newConversation(a.id);
   await talk(e, a.id, 'echo 둘');
-  const first = e.conversations(a.id).find((c) => !c.current)!;
+  const first = (await e.conversations(a.id)).find((c) => !c.current)!;
   expect(convUserTexts(e.conversation(a.id, first.key))).toEqual(['echo 하나']);
   expect(e.conversation(a.id, 'nope')).toEqual([]);
   expect(e.conversation(a.id, first.key, { limit: 1 })).toHaveLength(1);
@@ -5363,7 +5363,7 @@ test('예전 경계(ended 없음) 앞 대화는 old', async () => {
   fs.mkdirSync(path.join(dataDir, 'history'), { recursive: true });
   fs.writeFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
   const e2 = await start();
-  const list = e2.conversations(a.id);
+  const list = (await e2.conversations(a.id));
   expect(list).toHaveLength(1);
   expect(list[0]).toMatchObject({ title: '옛', current: false, resumable: false, why: 'old' });
   expect(e2.pastCount(a.id)).toBe(1);
@@ -5399,7 +5399,7 @@ test('돌아가기 — 경계·알림·세션·--resume 대상', async () => {
   await talk(e, a.id, 'echo 둘');
   const s2 = agentOf(e, a.id).sessionId;
   expect(e.pastCount(a.id)).toBe(1);
-  expect(e.conversations(a.id).filter((c) => !c.current).map((c) => c.key)).toEqual([s1]);
+  expect((await e.conversations(a.id)).filter((c) => !c.current).map((c) => c.key)).toEqual([s1]);
 
   await e.resumeConversation(a.id, s1);
 
@@ -5408,7 +5408,7 @@ test('돌아가기 — 경계·알림·세션·--resume 대상', async () => {
   expect(next).toMatchObject({ kind: 'notice', text: '이 대화로 돌아왔어요' });
   expect(agentOf(e, a.id)).toMatchObject({ sessionId: s1, started: true });
   expect(e.pastCount(a.id)).toBe(1); // 기억을 버렸다 — 이제 지난 대화는 S2
-  expect(e.conversations(a.id).filter((c) => !c.current).map((c) => c.key)).toEqual([s2]);
+  expect((await e.conversations(a.id)).filter((c) => !c.current).map((c) => c.key)).toEqual([s2]);
 
   await talk(e, a.id, 'echo 셋');
   expect(flagValue(lastSpawnOf('A').argv, '--resume')).toBe(s1);
@@ -5435,7 +5435,7 @@ test('돌아간 대화를 Claude 가 다른 세션 id 로 이어 가도 지금 �
   const h = e.history(a.id);
   expect(h[0]).toMatchObject({ kind: 'notice', text: '이 대화로 돌아왔어요' });
   expect(convUserTexts(h)).toEqual(['echo 셋']);
-  const list = e.conversations(a.id);
+  const list = (await e.conversations(a.id));
   expect(list.filter((c) => c.current)).toMatchObject([{ key: other, title: 'echo 셋', why: null }]);
   expect(list.filter((c) => !c.current).map((c) => c.key)).toEqual([s2, s1]);
   expect(e.conversation(a.id, other)).toEqual(h);
@@ -5479,13 +5479,13 @@ test('이어 갈 수 없는 이유 — Claude 기록이 없으면 30일이 넘�
   fs.mkdirSync(path.join(dataDir, 'history'), { recursive: true });
   fs.writeFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
   const e2 = await start({}, false, { env });
-  expect(e2.conversations(a.id).map((c) => [c.title, c.why])).toEqual([['요즘', 'gone'], ['오래된', 'gone']]);
+  expect((await e2.conversations(a.id)).map((c) => [c.title, c.why])).toEqual([['요즘', 'gone'], ['오래된', 'gone']]);
 
   await expect(e2.resumeConversation(a.id, oldId)).rejects.toThrow('30일이 지나 이어 갈 수 없어요');
   await expect(e2.resumeConversation(a.id, newId)).rejects.toThrow('Claude 쪽 기록이 없어 이어 갈 수 없어요');
-  const fork = (key: string) => () => e2.forkAgent({ from: a.id, key, name: 'A 2', role: '기획' });
-  expect(fork(oldId)).toThrow('30일이 지나 이어 갈 수 없어요');
-  expect(fork(newId)).toThrow('Claude 쪽 기록이 없어 이어 갈 수 없어요');
+  const fork = (key: string) => e2.forkAgent({ from: a.id, key, name: 'A 2', role: '기획' });
+  await expect(fork(oldId)).rejects.toThrow('30일이 지나 이어 갈 수 없어요');
+  await expect(fork(newId)).rejects.toThrow('Claude 쪽 기록이 없어 이어 갈 수 없어요');
 });
 
 test('돌아가기 막힘 — 일하는 중·Claude 기록이 없는 대화·지금 대화·없는 대화는 거절하고 기록·세션 그대로', async () => {
@@ -5675,11 +5675,11 @@ test('갈래 — 새 에이전트, 줄 복사·알림, 첫 실행만 --fork-sess
   await e.setModel(a.id, 'haiku');
   await e.setEffort(a.id, 'low'); // 갈래의 첫 실행은 /effort 부터 — 그 차례의 init 도 갈래 친 세션이다
   e.updateAgent(a.id, { auto: true });
-  const first = e.conversations(a.id).find((c) => c.key === s1)!;
+  const first = (await e.conversations(a.id)).find((c) => c.key === s1)!;
   const src = agentOf(e, a.id);
   const aBefore = e.history(a.id, { all: true });
 
-  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+  const made = await e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
 
   expect(made).toMatchObject({
     name: 'A 2', role: '기획', roomId: src.roomId, folder: src.folder, forkOf: s1, started: false,
@@ -5715,7 +5715,7 @@ test('갈래 — 새 에이전트, 줄 복사·알림, 첫 실행만 --fork-sess
 test('갈래 — 첫 init 의 저장은 한 번에(started·forkOf 함께) — 뒤 저장만 실패해 다시 갈래 치는 일이 없게', async () => {
   const { e } = await startConv();
   const { a, s1 } = await pastOfA(e);
-  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+  const made = await e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
   const store = (e as any).store;
   const realUpdate = store.updateAgent.bind(store);
   const patches: object[] = [];
@@ -5731,7 +5731,7 @@ test('갈래 — 첫 init 의 저장은 한 번에(started·forkOf 함께) — �
 test('갈래 — 앱을 다시 켜도 첫 실행 전이면 --fork-session', async () => {
   const { e, env } = await startConv();
   const { a, s1 } = await pastOfA(e);
-  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+  const made = await e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
   await e.shutdown();
 
   const e2 = await start({}, false, { env });
@@ -5747,7 +5747,7 @@ test('갈래 — 앱을 다시 켜도 첫 실행 전이면 --fork-session', asyn
 test('갈래 실패 — 새 대화로', async () => {
   const { e, env } = await startConv();
   const { a, s1 } = await pastOfA(e);
-  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+  const made = await e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
   env.FAKE_MISSING_SESSIONS = s1; // 만든 사이 Claude 쪽 기록이 지워졌다
   const aBefore = e.history(a.id, { all: true });
   const statuses = statusEvents(e, made.id);
@@ -5774,7 +5774,7 @@ test('갈래 실패 — 새 대화로', async () => {
   expect(statuses.some((x) => x.status === 'error')).toBe(false);
   expect(e.errorText(made.id)).toBeNull();
   expect(convUserTexts(e.history(made.id))).toEqual(['echo 둘']);
-  expect(e.conversations(made.id).find((c) => !c.current)).toMatchObject({ title: 'echo 하나', resumable: false, why: 'old' });
+  expect((await e.conversations(made.id)).find((c) => !c.current)).toMatchObject({ title: 'echo 하나', resumable: false, why: 'old' });
   expect(e.history(a.id, { all: true })).toEqual(aBefore);
 });
 
@@ -5787,13 +5787,13 @@ test('갈래 — 지난 대화가 아니거나 이어 갈 수 없거나 이름�
   await talk(e, a.id, 'echo 셋');
   const s3 = agentOf(e, a.id).sessionId;
   fs.rmSync(path.join(claudeDir, 'projects', 'fake', `${s2}.jsonl`));
-  const fork = (key: string, name = 'A 2') => () => e.forkAgent({ from: a.id, key, name, role: '기획' });
+  const fork = (key: string, name = 'A 2') => e.forkAgent({ from: a.id, key, name, role: '기획' });
 
-  expect(fork(s2)).toThrow('Claude 쪽 기록이 없어 이어 갈 수 없어요');
-  expect(fork(s3)).toThrow('그 대화를 찾을 수 없어요');
-  expect(fork('nope')).toThrow('그 대화를 찾을 수 없어요');
-  expect(fork(s1, 'a')).toThrow('이미 있는 이름입니다');
-  expect(fork(s1, ' ')).toThrow('이름을 입력하세요');
+  await expect(fork(s2)).rejects.toThrow('Claude 쪽 기록이 없어 이어 갈 수 없어요');
+  await expect(fork(s3)).rejects.toThrow('그 대화를 찾을 수 없어요');
+  await expect(fork('nope')).rejects.toThrow('그 대화를 찾을 수 없어요');
+  await expect(fork(s1, 'a')).rejects.toThrow('이미 있는 이름입니다');
+  await expect(fork(s1, ' ')).rejects.toThrow('이름을 입력하세요');
   expect(e.agents().map((x) => x.name)).toEqual(['A', 'B']);
 });
 
@@ -5814,7 +5814,7 @@ test('갈래 — 그림은 새 에이전트 칸으로 복사, 복사 못 한 그
   fs.rmSync(path.join(dataDir, 'images', a.id, p2.file)); // 지워진 그림
   await e.newConversation(a.id);
 
-  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+  const made = await e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
 
   const parts = (e.history(made.id).find((x) => x.kind === 'user') as any).parts;
   expect(parts[1]).toEqual(p1);
@@ -5966,8 +5966,56 @@ test('서버 방 갈래 — 새 에이전트도 같은 방·같은 서버 폴더
   fs.mkdirSync(path.join(claudeDir, 'projects', 'fake'), { recursive: true });
   fs.writeFileSync(path.join(claudeDir, 'projects', 'fake', `${s1}.jsonl`), '{}\n');
   const { e } = await startSsh({ CLAUDE_CONFIG_DIR: claudeDir });
-  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+  const made = await e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
   expect(made).toMatchObject({ roomId: room.id, folder: '/home/a/web', forkOf: s1, remoteLaunch: null });
+});
+
+describe('서버 방 지난 대화', () => {
+  afterEach(async () => {
+    await Promise.all(engines.map((x) => x.shutdown()));
+    engines = [];
+    const root = path.join(dir, 'srv');
+    if (fs.existsSync(root)) {
+      execFileSync(process.execPath, [FAKE_SSH, '--fake-reap'], { env: { ...process.env, FAKE_SSH_ROOT: root }, timeout: 20_000 });
+    }
+  });
+
+  /** 서버 방 에이전트가 두 대화를 한 뒤 — 첫 대화가 지난 대화. 서버 기록 폴더 = <dir>/srv-claude */
+  async function twoConversations() {
+    const claudeDir = path.join(dir, 'srv-claude');
+    const t = await startSsh({ CLAUDE_CONFIG_DIR: claudeDir, FAKE_TRANSCRIPTS: '1' });
+    const room = t.e.addRoom('서버 실험', { host: 'dev' });
+    const web = t.e.addAgent({ roomId: room.id, name: 'web', role: '화면', folder: '/home/a/web' });
+    let done = resultOf(t.e, web.id);
+    await t.e.sendUser(web.id, text('echo 하나'));
+    await done;
+    const first = agentOf(t.e, web.id).sessionId;
+    await t.e.newConversation(web.id);
+    done = resultOf(t.e, web.id);
+    await t.e.sendUser(web.id, text('echo 둘'));
+    await done;
+    return { ...t, web, first, claudeDir };
+  }
+  const pastOf = async (e: Engine, id: string) => (await e.conversations(id)).find((c) => !c.current)!;
+
+  test('서버 기록 파일이 있으면 resumable · 지우면 gone · 확인은 ssh 한 번(접속 한도 5초)', async () => {
+    const { e, web, first, claudeDir, calls } = await twoConversations();
+    expect(fs.existsSync(path.join(claudeDir, 'projects', 'fake', `${first}.jsonl`))).toBe(true);
+    const before = calls().length;
+    expect(await pastOf(e, web.id)).toMatchObject({ resumable: true, why: null });
+    const check = calls().slice(before);
+    expect(check).toHaveLength(1);
+    expect(check[0].argv).toEqual(expect.arrayContaining(['ConnectTimeout=5']));
+    expect(check[0].argv).not.toContain('ConnectTimeout=10');
+    fs.rmSync(path.join(claudeDir, 'projects', 'fake', `${first}.jsonl`));
+    expect(await pastOf(e, web.id)).toMatchObject({ resumable: false, why: 'gone' });
+  }, 30_000);
+
+  test('접속이 안 되면 막지 않고 모두 resumable', async () => {
+    const { e, web, mode } = await twoConversations();
+    mode('refused');
+    expect(await pastOf(e, web.id)).toMatchObject({ resumable: true, why: null });
+  }, 30_000);
 });
 
 test('newAgentFolder — 서버 방은 부모 서버 폴더 기준 POSIX(../api → /home/a/api, Git Bash 꼴로 바꾸지 않음, ~ 는 그대로 — 저장 검사가 거절) · 이 PC 방은 지금 그대로', () => {

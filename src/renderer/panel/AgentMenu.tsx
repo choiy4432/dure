@@ -74,7 +74,7 @@ export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef }: Props
   }
 
   const openFolder = () => {
-    window.dure.openFolder(agent.folder).catch(e => onError(errorMessage(e)))
+    window.dure.openAgentFolder(agent.id).catch(e => onError(errorMessage(e)))
   }
 
   // 지금 대화(마지막 새 대화 뒤) 전부를 마크다운으로 — 저장 창은 main 이 연다. 취소면 아무 말 없이

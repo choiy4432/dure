@@ -11,6 +11,8 @@ export interface IpcLike {
 export interface IpcDeps {
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
+  /** 기본 앱으로 주소 열기(VS Code 원격 창) — 못 열면 던진다 */
+  openExternal(url: string): Promise<void>
   /** 저장 창으로 글을 저장 — 저장한 경로, 취소면 null. 이름은 이미 다듬어 온다(saveName) */
   saveText(fileName: string, text: string): Promise<string | null>
   /** 작업표시줄 배지 — count 가 0 이면 지운다. 엔진을 거치지 않는 창 쪽 일이라 deps 로 받는다 */
@@ -27,6 +29,7 @@ export interface IpcDeps {
 
 const NOT_ALLOWED = '허용되지 않은 요청이에요'
 const FOLDER_NOT_ALLOWED = '등록된 에이전트의 폴더만 열 수 있어요'
+const VSCODE_MISSING = 'VS Code 를 찾지 못했어요'
 const SAVE_BAD = '저장할 이름과 글이 필요해요'
 
 /**
@@ -148,10 +151,16 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   setTaskbar: (_e, d, count, png) => d.setTaskbar(count as number, (png ?? null) as string | null),
   flashWindow: (_e, d) => d.flashWindow(),
   focusWindow: (_e, d) => d.focusWindow(),
-  openFolder: (e, d, path) => {
-    // renderer 가 임의 경로를 열지 못하게 — 등록된 에이전트의 폴더만
-    if (!e.agents().some((a) => a.folder === path)) throw new Error(FOLDER_NOT_ALLOWED)
-    return d.openFolder(path)
+  openAgentFolder: async (e, d, id) => {
+    // renderer 가 임의 경로를 열지 못하게 — 등록된 에이전트의 폴더만(경로는 엔진이 에이전트에서 푼다)
+    if (typeof id !== 'string' || !e.agents().some((a) => a.id === id)) throw new Error(FOLDER_NOT_ALLOWED)
+    const t = e.folderTarget(id)
+    if (t.kind === 'local') return d.openFolder(t.path)
+    try {
+      await d.openExternal('vscode://vscode-remote/ssh-remote+' + encodeURIComponent(t.host) + encodeURI(t.path))
+    } catch {
+      throw new Error(VSCODE_MISSING)
+    }
   },
 }
 
