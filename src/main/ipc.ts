@@ -157,7 +157,7 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
     const t = e.folderTarget(id)
     if (t.kind === 'local') return d.openFolder(t.path)
     try {
-      await d.openExternal('vscode://vscode-remote/ssh-remote+' + encodeURIComponent(t.host) + encodeURI(t.path))
+      await d.openExternal('vscode://vscode-remote/ssh-remote+' + encodeURIComponent(t.host) + t.path.split('/').map(encodeURIComponent).join('/'))
     } catch {
       throw new Error(VSCODE_MISSING)
     }

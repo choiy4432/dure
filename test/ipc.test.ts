@@ -272,6 +272,11 @@ describe('registerIpc', () => {
     ;(engine as any).folderTarget = () => ({ kind: 'remote', host: 'me@h:2222', path: '/home/a/my web' })
     await call('openAgentFolder', 'a1')
     expect(deps.openExternal).toHaveBeenLastCalledWith('vscode://vscode-remote/ssh-remote+me%40h%3A2222/home/a/my%20web')
+    for (const [p, enc] of [['/home/a/proj#1', 'proj%231'], ['/home/a/q?x', 'q%3Fx'], ['/home/a/my dir', 'my%20dir']]) {
+      ;(engine as any).folderTarget = () => ({ kind: 'remote', host: 'dev', path: p })
+      await call('openAgentFolder', 'a1')
+      expect(deps.openExternal).toHaveBeenLastCalledWith('vscode://vscode-remote/ssh-remote+dev/home/a/' + enc)
+    }
     deps.openExternal.mockRejectedValueOnce(new Error('x'))
     expect(await call('openAgentFolder', 'a1')).toEqual({ ok: false, error: 'VS Code 를 찾지 못했어요' })
   })

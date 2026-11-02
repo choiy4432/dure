@@ -1825,7 +1825,7 @@ class EngineImpl extends EventEmitter implements Engine {
     try {
       const run = await this.sshRun(remote.host, transcriptCheckScript(ids), true);
       if (run.code !== 0) return null;
-      return new Set(run.stdout.split(/\r?\n/).map((l) => l.trim()));
+      return new Set(run.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
     } catch {
       return null;
     }
