@@ -265,8 +265,9 @@ function PastRead({ agentId, conv, now, onBack, onResumed }: {
           </button>
         )}
         {lines.map((line, i) => (
-          // 끝에서 센 자리 — 앞 줄을 모두 받아 위에 붙어도 같은 줄은 같은 key(펼친 하는 일이 다른 줄로 옮겨 가지 않게)
-          <ChatItem key={lines.length - i} line={line} agentId={agentId} />
+          // 끝에서 센 자리 — 앞 줄을 모두 받아 위에 붙어도 같은 줄은 같은 key(펼친 하는 일이 다른 줄로 옮겨 가지 않게).
+          // agentId 는 그림 보기용 — 서브에이전트 요약 줄은 누를 수 없게(서브에이전트 탭은 지금 대화 것)
+          <ChatItem key={lines.length - i} line={line} agentId={agentId} navigable={false} />
         ))}
       </section>
       <div className="pc-back">

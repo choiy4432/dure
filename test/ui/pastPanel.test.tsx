@@ -280,6 +280,31 @@ describe('지난 대화 탭', () => {
     expect(store.getState().forkDraft).toEqual({ from: 'w', key: 'S2', roomId: 'r1', name: '웹 화면 3', role: '프론트 구현', folder: 'C:\\web' })
   })
 
+  it('읽기의 서브에이전트 요약 줄은 누를 수 없다 — 그 탭은 지금 대화 것', async () => {
+    conversation.mockResolvedValueOnce([
+      { t: 1, kind: 'user', source: 'human', parts: [{ type: 'text', text: '경쟁사 조사해 줘' }] },
+      {
+        t: 2, kind: 'assistant', blocks: [
+          { type: 'text', text: '맡길게요' },
+          { type: 'tool_use', id: 'A', name: 'Agent', input: { description: 'A사 조사', subagent_type: 'general-purpose', prompt: 'p' } },
+        ],
+      },
+      { t: 3, kind: 'subagent-start', toolUseId: 'A', taskId: 'task-A', description: 'A사 조사', subagentType: 'general-purpose', parentTaskId: null },
+      { t: 4, kind: 'tool-result', toolUseId: 'A', isError: false, text: 'Async agent launched successfully. agentId: aaa', viaApproval: false },
+      { t: 5, kind: 'subagent-end', toolUseId: 'A', taskId: 'task-A', status: 'completed', summary: '끝', toolUses: null, durationMs: null },
+    ])
+    const { store } = await openPast()
+    const go = vi.spyOn(store, 'showSubagents')
+    await read(1)
+    const body = screen.getByRole('region', { name: '로그인 화면 오류 메시지를 친절하게 정리해 줘' })
+    const row = within(body).getByText('서브에이전트에게 맡김')
+    expect(within(body).queryByRole('button', { name: /서브에이전트에게 맡김/ })).toBeNull()
+    expect(row.closest('button')).toBeNull()
+    fireEvent.click(row)
+    expect(go).not.toHaveBeenCalled()
+    expect(store.getState().panelTab.w).toBe('past')
+  })
+
   it('돌아가기 실패 글 — 아래 줄에', async () => {
     resumeConversation.mockRejectedValueOnce(new Error('기다리는 카드를 먼저 처리해 주세요'))
     const { store } = await openPast()

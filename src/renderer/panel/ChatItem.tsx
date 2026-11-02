@@ -119,34 +119,49 @@ const COUNT_GROUPS = [
  * 서브에이전트 요약 한 줄(시안 2안) — 한 답 안에서 이어 맡긴 서브에이전트를 하는 일 상자 한 줄로.
  * Bot · '서브에이전트 N개에게 맡김'(하나면 설명 + '서브에이전트에게 맡김') · 상태별 개수(0 인 묶음은 뺀다) · 화살표.
  * 누르면 서브에이전트 탭으로 가 이 줄의 차례 묶음을 보인다(key = 첫 Agent 의 tool_use id).
+ * navigable 이 아니면(지난 대화 읽기 — 서브에이전트 탭은 지금 대화 것) 단추·화살표 없이 같은 모양의 글 줄.
  */
-function SubagentsRow({ part, agentId }: { part: SubagentsPart; agentId?: AgentId }) {
+function SubagentsRow({ part, agentId, navigable }: { part: SubagentsPart; agentId?: AgentId; navigable: boolean }) {
   const one = part.ids.length === 1
   const counts = COUNT_GROUPS.filter(g => part.counts[g.key] > 0)
+  const title = (one && part.description) || undefined
+  const body = (
+    <>
+      <Bot className="i" aria-hidden="true" />{' '}
+      {one && part.description && (
+        <>
+          <span className="sa-sum-d trunc">{part.description}</span>{' '}
+        </>
+      )}
+      <span className="act-v">{one ? '서브에이전트에게 맡김' : `서브에이전트 ${part.ids.length}개에게 맡김`}</span>{' '}
+      <span className="sa-sum-n" role="img" aria-label={counts.map(g => `${g.word} ${part.counts[g.key]}`).join(', ')}>
+        {counts.map(g => (
+          <span key={g.key}>
+            <i className={`dot ${g.dot}`} aria-hidden="true" />
+            {part.counts[g.key]}
+          </span>
+        ))}
+      </span>
+    </>
+  )
+  if (!navigable)
+    return (
+      <li>
+        <div className="act sa-sum still" title={title}>
+          {body}
+        </div>
+      </li>
+    )
   return (
     <li>
       <button
         type="button"
         className="act sa-sum"
         disabled={!agentId}
-        title={(one && part.description) || undefined}
+        title={title}
         onClick={() => agentId && getStore().showSubagents(agentId, part.key)}
       >
-        <Bot className="i" aria-hidden="true" />{' '}
-        {one && part.description && (
-          <>
-            <span className="sa-sum-d trunc">{part.description}</span>{' '}
-          </>
-        )}
-        <span className="act-v">{one ? '서브에이전트에게 맡김' : `서브에이전트 ${part.ids.length}개에게 맡김`}</span>{' '}
-        <span className="sa-sum-n" role="img" aria-label={counts.map(g => `${g.word} ${part.counts[g.key]}`).join(', ')}>
-          {counts.map(g => (
-            <span key={g.key}>
-              <i className={`dot ${g.dot}`} aria-hidden="true" />
-              {part.counts[g.key]}
-            </span>
-          ))}
-        </span>
+        {body}
         <ArrowRight className="i sa-sum-go" aria-hidden="true" />
       </button>
     </li>
@@ -168,12 +183,14 @@ interface Props {
   line: ChatLine
   /** 줄 번호(앞에 숨긴 줄 포함) — 뿌리 요소의 data-line. 새 줄이 들어올 때 ChatList 가 집는다 */
   index?: number
-  /** 이 대화의 에이전트 — 서브에이전트 요약 줄을 누르면 그 에이전트의 서브에이전트 탭으로 간다 */
+  /** 이 대화의 에이전트 — 서브에이전트 요약 줄을 누르면 그 에이전트의 서브에이전트 탭으로 간다 · 보낸 그림을 그 에이전트 칸에서 읽는다 */
   agentId?: AgentId
+  /** 서브에이전트 요약 줄을 눌러 서브에이전트 탭으로 갈 수 있나(기본 true) — 지난 대화 읽기는 false(그 탭은 지금 대화 것). 그림은 그대로 보인다 */
+  navigable?: boolean
 }
 
 /** 대화 한 줄 — 사람 말풍선 · 전달된 메시지 · Claude 블록(+ 하는 일 · 서브에이전트 요약) · 알림 · 명령 출력 · 흐르는 글 */
-function ChatItemView({ line, index, agentId }: Props) {
+function ChatItemView({ line, index, agentId, navigable = true }: Props) {
   switch (line.kind) {
     case 'me':
       return (
@@ -220,7 +237,7 @@ function ChatItemView({ line, index, agentId }: Props) {
               <Markdown key={i} text={p.text} />
             ) : p.type === 'subagents' ? (
               <ul key={i} className="acts">
-                <SubagentsRow part={p} agentId={agentId} />
+                <SubagentsRow part={p} agentId={agentId} navigable={navigable} />
               </ul>
             ) : (
               <ul key={i} className="acts">
@@ -262,7 +279,7 @@ function samePart(p: ClaudePart, q: ClaudePart): boolean {
 const sameList = (x: (string | null)[], y: (string | null)[]) => x.length === y.length && x.every((v, i) => v === y[i])
 
 function sameLine(prev: Props, next: Props): boolean {
-  if (prev.index !== next.index || prev.agentId !== next.agentId) return false
+  if (prev.index !== next.index || prev.agentId !== next.agentId || prev.navigable !== next.navigable) return false
   const a = prev.line
   const b = next.line
   if (a === b) return true

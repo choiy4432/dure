@@ -3291,6 +3291,11 @@ code {
   color: var(--muted);
 }
 
+/* 누를 수 없는 요약 줄(지난 대화 읽기) — 같은 모양, 올려도 바탕이 바뀌지 않는다(.act:hover 와 같은 무게라 뒤에 둔다) */
+.act.still:hover {
+  background: none;
+}
+
 /* 알림 — 가운데 작은 회색 */
 .note {
   align-self: center;
