@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
-import { resolveClaudeCommand } from './claudeCommand'
+import { resolveClaudeCommand, resolveSshCommand } from './claudeCommand'
 import { logEngineErrors, registerIpc } from './ipc'
 import { appPageMatcher, focusExisting, guardNavigation } from './window'
 import { TITLE_BAR_HEIGHT, windowColors } from './windowTheme'
@@ -134,6 +134,8 @@ if (!app.requestSingleInstanceLock()) {
         engine = await createEngine({
           dataDir: app.getPath('userData'),
           claude,
+          // 서버(SSH) 방 — 기본은 윈도우 OpenSSH, 시험·개발은 DURE_SSH_COMMAND/ARGS
+          ssh: resolveSshCommand(process.env),
           autoStart: false,
           ...sleepKnob,
         })

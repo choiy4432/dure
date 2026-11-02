@@ -1,17 +1,22 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { hostArgs } from './remote';
 import { EFFORT_LEVELS, type Agent, type AgentId, type AgentPatch, type ContextUsage, type EffortLevel, type Room, type RoomId } from './types';
 
 export interface Store {
   rooms(): Room[];
   agents(roomId?: RoomId): Agent[];
   agent(id: AgentId): Agent | undefined;
-  addRoom(name: string): Room;
+  /** remote = 서버(SSH) 방 — host 는 앞뒤 빈칸을 자르고 hostArgs 로 검사(아니면 던진다). 없으면 이 PC 방 */
+  addRoom(name: string, remote?: { host: string } | null): Room;
   renameRoom(id: RoomId, name: string): Room;
   removeRoom(id: RoomId): void;
   addAgent(input: { roomId: RoomId; name: string; role: string; folder: string }): Agent;
-  /** addAgent 가 더하기 전에 하는 검사 그대로(방·이름 빔·방 안 이름 겹침·폴더) — 더하지 않고 던지기만 한다 */
+  /**
+   * addAgent 가 더하기 전에 하는 검사 그대로(방·이름 빔·방 안 이름 겹침·폴더) — 더하지 않고 던지기만 한다.
+   * 서버 방의 폴더는 이 PC 에서 찾지 않고 '/' 로 시작하는지만 본다(있는지는 ssh 확인이 맡는다)
+   */
   checkAgent(input: { roomId: RoomId; name: string; folder: string }): void;
   updateAgent(id: AgentId, patch: AgentPatch): Agent;
   removeAgent(id: AgentId): void;
@@ -66,6 +71,25 @@ function savedContext(v: unknown): ContextUsage | null {
   };
 }
 
+/** 저장된 서버 방 표시 — host 가 빈 글이 아닌 글일 때만, 아니면 null(이 PC 방) */
+function savedRemote(v: unknown): { host: string } | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const host = (v as Record<string, unknown>).host;
+  return typeof host === 'string' && host ? { host } : null;
+}
+
+const RUN_ID = /^[A-Za-z0-9._-]+$/;
+/** 저장된 서버 claude 띄우기 — 양의 정수 pid 와 안전한 띄우기 id 일 때만, 아니면 null */
+function savedLaunch(v: unknown): { pid: number; run: string } | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const { pid, run } = v as Record<string, unknown>;
+  if (!Number.isInteger(pid) || (pid as number) <= 0) return null;
+  if (typeof run !== 'string' || !RUN_ID.test(run) || run.includes('..')) return null;
+  return { pid: pid as number, run };
+}
+
+export const REMOTE_FOLDER_ABSOLUTE = '서버 폴더는 / 로 시작하는 전체 경로로 적어 주세요';
+
 function load(file: string): State {
   const empty: State = { version: 1, rooms: [], agents: [] };
   if (!fs.existsSync(file)) return empty;
@@ -74,10 +98,10 @@ function load(file: string): State {
     if (!raw || !Array.isArray(raw.rooms) || !Array.isArray(raw.agents)) throw new Error('bad shape');
     return {
       version: 1,
-      rooms: raw.rooms,
+      rooms: raw.rooms.map((r: Room) => ({ ...r, remote: savedRemote(r.remote) })),
       agents: raw.agents.map((a: Agent) => ({
         ...a, effort: savedEffort(a.effort), lastContext: savedContext(a.lastContext), bypassOn: a.bypassOn === true, bypassNoticeClosed: a.bypassNoticeClosed === true,
-        forkOf: typeof a.forkOf === 'string' && a.forkOf ? a.forkOf : null,
+        forkOf: typeof a.forkOf === 'string' && a.forkOf ? a.forkOf : null, remoteLaunch: savedLaunch(a.remoteLaunch),
       })),
     };
   } catch {
@@ -115,8 +139,12 @@ export function openStore(dataDir: string): Store {
     }
   };
   const checkAgent = ({ roomId, name, folder }: { roomId: RoomId; name: string; folder: string }) => {
-    needRoom(roomId);
+    const room = needRoom(roomId);
     checkName(roomId, name);
+    if (room.remote) {
+      if (!folder.startsWith('/')) throw new Error(REMOTE_FOLDER_ABSOLUTE);
+      return;
+    }
     if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
       throw new Error(`폴더를 찾을 수 없습니다: ${folder}`);
     }
@@ -129,9 +157,11 @@ export function openStore(dataDir: string): Store {
       const a = state.agents.find((x) => x.id === id);
       return a ? clone(a) : undefined;
     },
-    addRoom(name) {
+    addRoom(name, remote) {
       if (!name.trim()) throw new Error('이름을 입력하세요');
-      const room: Room = { id: crypto.randomUUID(), name: name.trim(), createdAt: Date.now() };
+      const host = remote ? (typeof remote.host === 'string' ? remote.host.trim() : '') : null;
+      if (host !== null) hostArgs(host); // 빔·공백·- 시작이면 던진다
+      const room: Room = { id: crypto.randomUUID(), name: name.trim(), createdAt: Date.now(), remote: host !== null ? { host } : null };
       state.rooms.push(room);
       save();
       return clone(room);
@@ -156,6 +186,7 @@ export function openStore(dataDir: string): Store {
         id: crypto.randomUUID(), roomId, name: name.trim(), role, folder,
         sessionId: crypto.randomUUID(), started: false, auto: false, model: null,
         alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, lastContext: null, bypassOn: false, bypassNoticeClosed: false, forkOf: null,
+        remoteLaunch: null,
       };
       state.agents.push(agent);
       save();

@@ -5,6 +5,8 @@ export interface Room {
   id: RoomId;
   name: string;
   createdAt: number;
+  /** 서버(SSH) 방 — host = ssh 대상 그대로(별칭·사용자@주소[:포트]). 이 PC 방·옛 기록은 null. 만든 뒤 바꾸지 않는다 */
+  remote?: { host: string } | null;
 }
 
 /** Windows 알림 — asks: 승인·질문이 올 때 · finished: 일을 끝냈을 때(창이 가려져 있을 때만 뜬다) */
@@ -68,10 +70,12 @@ export interface Agent {
   bypassNoticeClosed?: boolean;
   /** 첫 실행에 갈래 칠 원래 세션 id(새 에이전트로 이어 가기) — 첫 init 에서 null. 옛 기록엔 없음 → null */
   forkOf?: string | null;
+  /** 서버 방 — 띄운 서버 claude 의 pid 와 그 띄우기 id(정리에 쓴다). 정리하면 null. 이 PC 방·옛 기록은 null */
+  remoteLaunch?: { pid: number; run: string } | null;
 }
 
 export type AgentPatch = Partial<
-  Pick<Agent, 'name' | 'role' | 'auto' | 'model' | 'alwaysAllow' | 'pos' | 'color' | 'started' | 'sessionId' | 'effort' | 'lastContext' | 'bypassOn' | 'bypassNoticeClosed' | 'forkOf'>
+  Pick<Agent, 'name' | 'role' | 'auto' | 'model' | 'alwaysAllow' | 'pos' | 'color' | 'started' | 'sessionId' | 'effort' | 'lastContext' | 'bypassOn' | 'bypassNoticeClosed' | 'forkOf' | 'remoteLaunch'>
 >;
 
 export type MessageState = 'pending' | 'held' | 'queued' | 'delivered' | 'dismissed';

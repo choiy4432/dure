@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { resolveClaudeCommand } from '../src/main/claudeCommand'
+import { join } from 'node:path'
+import { resolveClaudeCommand, resolveSshCommand } from '../src/main/claudeCommand'
 
 describe('resolveClaudeCommand', () => {
   it('uses DURE_CLAUDE_COMMAND with JSON args', () => {
@@ -25,5 +26,24 @@ describe('resolveClaudeCommand', () => {
   })
   it('returns null when nothing found', () => {
     expect(resolveClaudeCommand({}, () => null)).toBeNull()
+  })
+})
+
+describe('resolveSshCommand', () => {
+  it('uses DURE_SSH_COMMAND with JSON args', () => {
+    const r = resolveSshCommand({ DURE_SSH_COMMAND: 'node', DURE_SSH_ARGS: '["fakeSsh.mjs"]', SystemRoot: 'D:\\Win' })
+    expect(r).toEqual({ command: 'node', argsPrefix: ['fakeSsh.mjs'] })
+  })
+  it('defaults args to []', () => {
+    expect(resolveSshCommand({ DURE_SSH_COMMAND: 'node' })).toEqual({ command: 'node', argsPrefix: [] })
+  })
+  it('throws on broken or non-array JSON', () => {
+    const msg = 'DURE_SSH_ARGS 는 JSON 배열이어야 해요'
+    expect(() => resolveSshCommand({ DURE_SSH_COMMAND: 'n', DURE_SSH_ARGS: '{oops' })).toThrow(msg)
+    expect(() => resolveSshCommand({ DURE_SSH_COMMAND: 'n', DURE_SSH_ARGS: '[1]' })).toThrow(msg)
+  })
+  it('defaults to Windows OpenSSH under SystemRoot (C:\\Windows when unset)', () => {
+    expect(resolveSshCommand({ SystemRoot: 'D:\\Win' })).toEqual({ command: join('D:\\Win', 'System32', 'OpenSSH', 'ssh.exe'), argsPrefix: [] })
+    expect(resolveSshCommand({})).toEqual({ command: join('C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe'), argsPrefix: [] })
   })
 })

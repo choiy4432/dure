@@ -1,8 +1,11 @@
 import { EventEmitter } from 'node:events';
+import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { openStore, renameRetrying, type Store } from './store';
+import { openStore, renameRetrying, REMOTE_FOLDER_ABSOLUTE, type Store } from './store';
+import { checkScript, classifyExit, hostArgs, posixJoin, shq, SSH_OPTIONS, type RemoteIssueKind } from './remote';
+import { readSshHosts, type SshHostEntry } from './sshConfig';
 import { openMessageLog, type MessageLog } from './messageLog';
 import { capPatch, lastN, openHistory, patchFromInput, trimToolInput, type History } from './history';
 import { conversationFacts, splitConversations, type Conversation } from './conversations';
@@ -27,6 +30,10 @@ import type {
 export interface EngineOptions {
   dataDir: string;
   claude: { command: string; argsPrefix?: string[] };
+  /** 서버(SSH) 방의 ssh — 기본은 윈도우 OpenSSH(main 이 정한다). 없으면 서버 방을 못 만든다. 시험은 가짜 ssh */
+  ssh?: { command: string; argsPrefix?: string[] };
+  /** ~/.ssh/config 를 찾는 홈 — 없으면 os.homedir(). 시험용(진짜 ~/.ssh 를 읽지 않게) */
+  sshHome?: string;
   autoChainLimit?: number;
   env?: NodeJS.ProcessEnv;
   /** 기본 true — false 면 대기 메시지 전달(flushAll)을 미루고 engine.start() 가 한다(리스너를 붙인 뒤 부르기 위함) */
@@ -93,7 +100,22 @@ export interface Engine extends EventEmitter {
   start(): void;
   rooms(): Room[];
   agents(roomId?: RoomId): Agent[];
-  addRoom(name: string): Room;
+  /** remote = 서버(SSH) 방(host 는 hostArgs 로 검사) — ssh 가 없으면(sshAvailable false) 던진다 */
+  addRoom(name: string, remote?: { host: string } | null): Room;
+  /** 서버 방에 쓸 ssh 실행 파일이 있는가 — 화면이 서버 칸을 그리기 전에 묻는다 */
+  sshAvailable(): boolean;
+  /** ~/.ssh/config 의 서버 목록(리터럴 Host 만) — 없거나 못 읽으면 [] */
+  sshHosts(): SshHostEntry[];
+  /** 서버에 접속해 claude 를 찾는다(ssh 한 번, 상한 15초) — 서버 이름이 올바르지 않거나 ssh 가 없으면 던진다 */
+  checkRemote(host: string): Promise<{ ok: true; claudeVersion: string } | { ok: false; kind: RemoteIssueKind; detail: string | null }>;
+  /**
+   * 서버 방의 폴더가 서버에 있는가 + claude — folder = 서버가 펼친 절대 경로(`~`·`~/x` 입력은 $HOME 아래로).
+   * '/'·'~'·'~/' 로 시작하지 않으면 ssh 없이 던진다
+   */
+  checkRemoteFolder(
+    roomId: RoomId,
+    folder: string,
+  ): Promise<{ ok: true; folder: string; claudeVersion: string } | { ok: false; kind: RemoteIssueKind; detail: string | null }>;
   renameRoom(id: RoomId, name: string): Room;
   removeRoom(id: RoomId): Promise<void>;
   addAgent(i: { roomId: RoomId; name: string; role: string; folder: string }): Agent;
@@ -310,6 +332,15 @@ function fromGitBashPath(p: string): string {
   const m = /^\/([A-Za-z])(\/.*)?$/s.exec(p);
   return m ? `${m[1].toUpperCase()}:${m[2] ?? '/'}` : p;
 }
+
+/**
+ * create_agent 의 폴더 — 만든 쪽 폴더 기준. 서버 방은 POSIX 로 잇는다(Git Bash 꼴로 바꾸지 않음).
+ * 서버 방의 `~`·`~/…` 는 이을 수 없어 그대로 둔다 — 저장 검사가 '/ 로 시작하는 전체 경로' 로 거절한다
+ */
+export function newAgentFolder(remote: boolean, base: string, rel: string): string {
+  if (!remote) return path.resolve(base, fromGitBashPath(rel));
+  return rel === '~' || rel.startsWith('~/') ? rel : posixJoin(base, rel);
+}
 /** 부른 tool_use id 를 스트림에서 못 봤을 때 기다리는 한도 — 그 줄은 보통 부르기보다 먼저 온다(probe13·14) */
 const SEEN_WAIT_MS = 2000;
 /** 끝 알림 뒤 스스로 시작한 차례는 곧바로 온다(probe13) — 멈추기로 끝났으면 오지 않으니(probe14 C) 짧게만 기다린다 */
@@ -323,6 +354,16 @@ const SLEEP_MINUTE_MS = 60_000;
 const SLEEP_INVALID = '고를 수 없는 시간이에요';
 const EFFORT_UNKNOWN = '알 수 없는 effort 예요.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
+const NO_SSH = '윈도우 OpenSSH 를 찾지 못했어요';
+const NOT_REMOTE = '서버 방이 아니에요';
+/** 확인 ssh(접속·폴더) 한 번의 상한 — ssh 자신의 ConnectTimeout(10초) 뒤 로그인 셸까지 */
+const REMOTE_CHECK_MS = 15_000;
+/** ssh 확인 결과 — code = 종료 코드(못 띄웠거나 시간 초과면 null) */
+interface SshRun {
+  code: number | null;
+  stdout: string;
+  stderr: string;
+}
 /** /effort 의 답(로컬 명령 — 모델을 부르지 않는다): "Set effort level to max (this session only): …" (probe9) */
 const EFFORT_SET = /Set effort level to (low|medium|high|xhigh|max)\b/;
 const EFFORT_BUSY = '/effort 차례가 끝나면 보낸다';
@@ -723,9 +764,91 @@ class EngineImpl extends EventEmitter implements Engine {
   // ── 방·에이전트 ──
   rooms() { return this.store.rooms(); }
   agents(roomId?: RoomId) { return this.store.agents(roomId); }
-  addRoom(name: string) { return this.store.addRoom(name); }
+  addRoom(name: string, remote?: { host: string } | null) {
+    if (remote && !this.sshAvailable()) throw new Error(NO_SSH);
+    return this.store.addRoom(name, remote);
+  }
   renameRoom(id: RoomId, name: string) { return this.store.renameRoom(id, name); }
   addAgent(i: { roomId: RoomId; name: string; role: string; folder: string }) { return this.store.addAgent(i); }
+
+  // ── 서버(SSH) ──
+  sshAvailable(): boolean {
+    const ssh = this.o.ssh;
+    return !!ssh && (ssh.command === process.execPath || fs.existsSync(ssh.command));
+  }
+
+  sshHosts(): SshHostEntry[] {
+    return readSshHosts(this.o.sshHome ?? undefined);
+  }
+
+  async checkRemote(host: string): Promise<{ ok: true; claudeVersion: string } | { ok: false; kind: RemoteIssueKind; detail: string | null }> {
+    const h = host.trim();
+    hostArgs(h); // 올바르지 않으면 ssh 없이 던진다
+    const r = await this.remoteCheck(h, undefined);
+    return r.ok ? { ok: true, claudeVersion: r.claudeVersion } : r;
+  }
+
+  async checkRemoteFolder(
+    roomId: RoomId,
+    folder: string,
+  ): Promise<{ ok: true; folder: string; claudeVersion: string } | { ok: false; kind: RemoteIssueKind; detail: string | null }> {
+    const room = this.store.rooms().find((r) => r.id === roomId);
+    if (!room) throw new Error(`방을 찾을 수 없습니다: ${roomId}`);
+    if (!room.remote) throw new Error(NOT_REMOTE);
+    const f = folder.trim();
+    // 서버 전체 경로 · ~ · ~/… 만(~사용자 는 아님) — 줄바꿈 같은 제어 문자도 받지 않는다
+    if (!(f.startsWith('/') || f === '~' || f.startsWith('~/')) || CONTROL_CHAR.test(f)) throw new Error(REMOTE_FOLDER_ABSOLUTE);
+    const r = await this.remoteCheck(room.remote.host, f);
+    if (!r.ok) return r;
+    // 서버가 펼친 폴더가 없으면(찍히지 않음) 그 폴더를 확인하지 못한 것
+    return r.folder ? { ok: true, folder: r.folder, claudeVersion: r.claudeVersion } : { ok: false, kind: 'no-folder', detail: null };
+  }
+
+  /**
+   * 확인 ssh 한 번(checkScript) — 0 이 아닌 종료는 classifyExit(시작 전)로, 그 밖(시간 초과·모르는 종료)은 접속 실패 + ssh 오류 첫 줄.
+   * 됐으면 stdout 끝에서 읽는다(로그인 셸 프로필이 앞에 찍을 수 있다): 마지막 줄 = claude 버전, folder 를 줬으면 그 앞 줄 = 펼친 폴더
+   */
+  private async remoteCheck(
+    host: string,
+    folder: string | undefined,
+  ): Promise<{ ok: true; folder: string | null; claudeVersion: string } | { ok: false; kind: RemoteIssueKind; detail: string | null }> {
+    const run = await this.sshRun(host, checkScript(folder));
+    if (run.code !== 0) {
+      const issue = classifyExit({ code: run.code, stderr: run.stderr, started: false });
+      if (issue) return { ok: false, ...issue };
+      const first = run.stderr.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? null;
+      return { ok: false, kind: 'unreachable', detail: first };
+    }
+    const lines = run.stdout.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l.trim() !== '');
+    const last = lines.at(-1)?.trim();
+    if (!last) return { ok: false, kind: 'no-claude', detail: null };
+    // `claude --version` 은 번호 뒤에 이름이 붙는다 — 번호만
+    const claudeVersion = /\d+(?:\.\d+)+\S*/.exec(last)?.[0] ?? last;
+    const resolved = folder === undefined ? null : lines.at(-2) ?? null;
+    return { ok: true, folder: resolved?.startsWith('/') ? resolved : null, claudeVersion };
+  }
+
+  /** 확인 ssh — 셸 없이(execFile), 상한 REMOTE_CHECK_MS, -R 없음. ssh 가 없으면 NO_SSH 로 던진다 */
+  private sshRun(host: string, script: string): Promise<SshRun> {
+    const ssh = this.o.ssh;
+    if (!ssh || !this.sshAvailable()) return Promise.reject(new Error(NO_SSH));
+    const args = [...(ssh.argsPrefix ?? []), ...SSH_OPTIONS, ...hostArgs(host), 'bash -lc ' + shq(script)];
+    return new Promise((resolve, reject) => {
+      const child = execFile(
+        ssh.command,
+        args,
+        { windowsHide: true, timeout: REMOTE_CHECK_MS, env: { ...process.env, ...this.o.env }, encoding: 'utf8' },
+        (err, stdout, stderr) => {
+          if (!err) return resolve({ code: 0, stdout, stderr });
+          const code: unknown = err.code;
+          if (code === 'ENOENT') return reject(new Error(NO_SSH));
+          // 못 띄움(글 코드)·시간 초과(null)는 code null — 글이 없으면 그 오류 글을 stderr 자리에
+          resolve({ code: typeof code === 'number' ? code : null, stdout, stderr: stderr || (typeof code === 'string' ? err.message : '') });
+        },
+      );
+      child.stdin?.end(); // 확인 명령은 입력을 읽지 않는다
+    });
+  }
 
   updateAgent(id: AgentId, p: Pick<AgentPatch, 'name' | 'role' | 'auto' | 'pos' | 'color' | 'bypassNoticeClosed'>) {
     this.need(id);
@@ -1464,7 +1587,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const plan: CreateAgentInput = {
       name: args.name.trim(),
       role: args.role.trim(),
-      folder: path.resolve(me.folder, fromGitBashPath(args.folder ?? '.')),
+      folder: newAgentFolder(!!this.store.rooms().find((r) => r.id === me.roomId)?.remote, me.folder, args.folder ?? '.'),
       task: args.task?.trim() ? args.task : null,
     };
     this.checkNewAgent(me.roomId, plan); // 미리 보기 — 카드 없이 던진다

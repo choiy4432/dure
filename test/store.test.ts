@@ -270,3 +270,78 @@ test('checkAgent: addAgent 와 같은 검사·문구(방·이름 빔·이름 겹
   expect(() => s.checkAgent({ roomId: r.id, name: 'n', folder: dir })).not.toThrow();
   expect(s.agents().map((a) => a.name)).toEqual(['world']);
 });
+
+// ── 서버(SSH) 방 ──
+test('서버 방 — addRoom(이름, { host }) 를 저장하고 다시 열어도 남는다 · 이 PC 방은 remote null', () => {
+  const s = openStore(dir);
+  const local = s.addRoom('이 PC');
+  const remote = s.addRoom('서버 실험', { host: 'dev' });
+  const port = s.addRoom('포트', { host: ' me@10.0.0.12:2222 ' });
+  expect(local.remote).toBeNull();
+  expect(remote).toMatchObject({ name: '서버 실험', remote: { host: 'dev' } });
+  expect(port.remote).toEqual({ host: 'me@10.0.0.12:2222' }); // 앞뒤 빈칸만 자른다
+  expect(s.addRoom('n', null).remote).toBeNull();
+  expect(openStore(dir).rooms()).toEqual([local, remote, port, expect.objectContaining({ name: 'n', remote: null })]);
+});
+
+test('서버 방 — host 가 빔·공백 포함·- 시작이면 거절하고 저장하지 않는다', () => {
+  const s = openStore(dir);
+  for (const host of ['', '  ', 'a b', '-oProxyCommand=x', 'a\tb']) {
+    expect(() => s.addRoom('R', { host })).toThrow('서버 이름이 올바르지 않아요');
+  }
+  expect(s.rooms()).toEqual([]);
+  expect(openStore(dir).rooms()).toEqual([]);
+});
+
+test('옛 state.json — 방 remote·에이전트 remoteLaunch 칸이 없거나 깨졌으면 null · 맞으면 그대로', () => {
+  const s = openStore(dir);
+  const r = s.addRoom('A');
+  const ids = ['none', 'num', 'neg', 'run', 'ok'].map((name) => s.addAgent({ roomId: r.id, name, role: 'r', folder: dir }).id);
+  expect(s.agent(ids[0])!.remoteLaunch).toBeNull();
+  const file = path.join(dir, 'state.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete raw.rooms[0].remote;
+  raw.rooms.push({ id: 'bad', name: '깨진 방', createdAt: 1, remote: { host: 3 } }, { id: 'srv', name: '서버', createdAt: 2, remote: { host: 'dev', x: 1 } });
+  const launch: Record<string, unknown> = {
+    num: 7,
+    neg: { pid: -1, run: 'abcd1234' },
+    run: { pid: 12, run: '../x' },
+    ok: { pid: 4242, run: 'abcd1234' },
+  };
+  for (const ag of raw.agents) {
+    if (ag.name === 'none') delete ag.remoteLaunch;
+    else ag.remoteLaunch = launch[ag.name];
+  }
+  fs.writeFileSync(file, JSON.stringify(raw));
+  const back = openStore(dir);
+  expect(back.rooms().map((x) => x.remote)).toEqual([null, null, { host: 'dev' }]);
+  expect(ids.map((id) => back.agent(id)!.remoteLaunch)).toEqual([null, null, null, null, { pid: 4242, run: 'abcd1234' }]);
+  expect(fs.readdirSync(dir).filter((f) => f.includes('.broken-'))).toEqual([]);
+});
+
+test('remoteLaunch — updateAgent 로 저장하면 다시 열어도 남고 null 로 지운다', () => {
+  const s = openStore(dir);
+  const r = s.addRoom('서버', { host: 'dev' });
+  const a = s.addAgent({ roomId: r.id, name: 'x', role: 'r', folder: '/home/a/web' });
+  s.updateAgent(a.id, { remoteLaunch: { pid: 99, run: 'k3j2h1g0' } });
+  expect(openStore(dir).agent(a.id)!.remoteLaunch).toEqual({ pid: 99, run: 'k3j2h1g0' });
+  s.updateAgent(a.id, { remoteLaunch: null });
+  expect(openStore(dir).agent(a.id)!.remoteLaunch).toBeNull();
+});
+
+test('서버 방 에이전트 폴더 — / 로 시작하는 전체 경로면 이 PC 에 없어도 된다 · 상대·~·빈 경로는 거절 · 이 PC 방은 지금 그대로', () => {
+  const s = openStore(dir);
+  const r = s.addRoom('서버 실험', { host: 'dev' });
+  const a = s.addAgent({ roomId: r.id, name: 'web', role: 'r', folder: '/home/a/web' });
+  expect(a.folder).toBe('/home/a/web');
+  expect(openStore(dir).agent(a.id)!.folder).toBe('/home/a/web');
+  const msg = '서버 폴더는 / 로 시작하는 전체 경로로 적어 주세요';
+  for (const folder of ['web', '~/web', '~', '', 'C:\work', './web']) {
+    expect(() => s.addAgent({ roomId: r.id, name: `n${folder}`, role: 'r', folder })).toThrow(msg);
+    expect(() => s.checkAgent({ roomId: r.id, name: `n${folder}`, folder })).toThrow(msg);
+  }
+  expect(() => s.checkAgent({ roomId: r.id, name: 'WEB', folder: '/srv' })).toThrow('이미 있는 이름입니다: WEB'); // 이름 검사는 그대로 먼저
+  expect(s.agents(r.id)).toHaveLength(1);
+  const local = s.addRoom('이 PC');
+  expect(() => s.addAgent({ roomId: local.id, name: 'x', role: 'r', folder: '/home/a/web' })).toThrow('폴더를 찾을 수 없습니다: /home/a/web');
+});

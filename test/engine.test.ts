@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createEngine, type Agent, type AgentStatus, type Engine, type EngineOptions, type HistoryItem, type Hold, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
+import { newAgentFolder } from '../src/engine/engine';
 import { openMessageLog } from '../src/engine/messageLog';
 import { joinDeliveries } from '../src/engine/router';
 import { openStore } from '../src/engine/store';
@@ -5818,4 +5819,164 @@ test('갈래 — 그림은 새 에이전트 칸으로 복사, 복사 못 한 그
   expect(await e.image(made.id, p1.file)).toBe(`data:image/png;base64,${one}`);
   expect(parts[2]).toEqual({ type: 'image', mediaType: 'image/png', bytes: p2.bytes });
   expect(await e.image(a.id, p1.file)).toBe(`data:image/png;base64,${one}`); // 원래 것 그대로
+});
+
+// ── 서버(SSH) 방 ──
+const FAKE_SSH = path.resolve('test/fakeSsh.mjs');
+const NO_SSH = '윈도우 OpenSSH 를 찾지 못했어요';
+const REMOTE_ABS = '서버 폴더는 / 로 시작하는 전체 경로로 적어 주세요';
+const VERSION = '2.1.304';
+/**
+ * 가짜 ssh 로 띄운 엔진 — 서버 / = <dir>/srv, $HOME = /home/a 아래 web 만 있다. 모드는 modeFile 에 써서 도중에 바꾼다.
+ * sshHome = 임시 홈(진짜 ~/.ssh 를 읽지 않게)
+ */
+async function startSsh(env: Record<string, string> = {}, extra: Partial<EngineOptions> = {}) {
+  const root = path.join(dir, 'srv');
+  fs.mkdirSync(path.join(root, 'home', 'a', 'web'), { recursive: true });
+  const sshLog = path.join(dir, 'ssh.log');
+  const modeFile = path.join(dir, 'ssh-mode');
+  const home = path.join(dir, 'home');
+  const e = await start({ FAKE_SSH_ROOT: root, FAKE_SSH_LOG: sshLog, FAKE_SSH_MODE_FILE: modeFile, ...env }, false, {
+    ssh: { command: process.execPath, argsPrefix: [FAKE_SSH] },
+    sshHome: home,
+    ...extra,
+  });
+  const mode = (m: string) => fs.writeFileSync(modeFile, m);
+  /** 가짜 ssh 가 받은 호출들(시작 줄) */
+  const calls = (): any[] =>
+    fs.existsSync(sshLog)
+      ? fs.readFileSync(sshLog, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((x) => x.event === 'start')
+      : [];
+  return { e, root, home, mode, calls };
+}
+
+test('ssh: checkRemote — 접속됨 · claude 버전 · 확인 ssh 는 BatchMode·bash -lc 이고 -R 없음 · 포트는 -p', async () => {
+  const { e, calls } = await startSsh();
+  expect(await e.checkRemote('dev')).toEqual({ ok: true, claudeVersion: VERSION });
+  expect(await e.checkRemote(' me@10.0.0.12:2222 ')).toEqual({ ok: true, claudeVersion: VERSION });
+  const [a, b] = calls();
+  expect(a).toMatchObject({ host: 'dev', kind: 'check', forwards: [] });
+  expect(a.argv).toEqual(expect.arrayContaining(['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']));
+  expect(a.argv).not.toContain('-R');
+  expect(a.command).toMatch(/^bash -lc '/);
+  expect(b).toMatchObject({ host: 'me@10.0.0.12', user: 'me', port: 2222, kind: 'check' });
+}, 20_000);
+
+test('ssh: checkRemote 문제 — 키 거절·접속 안 됨(ssh 오류 첫 줄)·서버 키 바뀜·claude 없음', async () => {
+  const { e, mode } = await startSsh();
+  mode('denied');
+  expect(await e.checkRemote('dev')).toEqual({ ok: false, kind: 'denied', detail: null });
+  mode('refused');
+  expect(await e.checkRemote('dev')).toEqual({ ok: false, kind: 'unreachable', detail: 'ssh: connect to host dev port 22: Connection refused' });
+  mode('hostkey');
+  expect(await e.checkRemote('dev')).toEqual({ ok: false, kind: 'hostkey', detail: null });
+  mode('noclaude');
+  expect(await e.checkRemote('dev')).toEqual({ ok: false, kind: 'no-claude', detail: null });
+  mode('');
+  expect(await e.checkRemote('dev')).toEqual({ ok: true, claudeVersion: VERSION });
+}, 30_000);
+
+test('ssh: checkRemote — 올바르지 않은 서버 이름은 ssh 를 띄우지 않고 던진다', async () => {
+  const { e, calls } = await startSsh();
+  for (const host of ['', 'a b', '-oProxyCommand=calc']) {
+    await expect(e.checkRemote(host)).rejects.toThrow('서버 이름이 올바르지 않아요');
+  }
+  expect(calls()).toEqual([]);
+});
+
+test('ssh: checkRemoteFolder — 있는 폴더는 서버가 펼친 경로와 버전 · ~ 는 $HOME 으로 · 없는 폴더 no-folder · claude 없음·키 거절', async () => {
+  const { e, mode, calls } = await startSsh();
+  const room = e.addRoom('서버 실험', { host: 'dev' });
+  const ok = (folder: string) => ({ ok: true, folder, claudeVersion: VERSION });
+  expect(await e.checkRemoteFolder(room.id, '/home/a/web')).toEqual(ok('/home/a/web'));
+  expect(await e.checkRemoteFolder(room.id, ' /home/a/x/../web/ ')).toEqual(ok('/home/a/web'));
+  expect(await e.checkRemoteFolder(room.id, '~/web')).toEqual(ok('/home/a/web'));
+  expect(await e.checkRemoteFolder(room.id, '~')).toEqual(ok('/home/a'));
+  expect(await e.checkRemoteFolder(room.id, '/home/a/nope')).toEqual({ ok: false, kind: 'no-folder', detail: null });
+  expect(calls().every((c) => c.host === 'dev' && c.kind === 'check' && c.forwards.length === 0)).toBe(true);
+  mode('noclaude');
+  expect(await e.checkRemoteFolder(room.id, '/home/a/web')).toEqual({ ok: false, kind: 'no-claude', detail: null });
+  mode('denied');
+  expect(await e.checkRemoteFolder(room.id, '/home/a/web')).toEqual({ ok: false, kind: 'denied', detail: null });
+}, 30_000);
+
+test('ssh: checkRemoteFolder — 상대·빈·~사용자·줄바꿈 경로는 ssh 없이 / 전체 경로 글로 던진다 · 이 PC 방·없는 방도 던진다', async () => {
+  const { e, calls } = await startSsh();
+  const room = e.addRoom('서버 실험', { host: 'dev' });
+  for (const f of ['web', '', '  ', '~a/web', 'C:\\work', '/home/a\nweb']) {
+    await expect(e.checkRemoteFolder(room.id, f)).rejects.toThrow(REMOTE_ABS);
+  }
+  const local = e.addRoom('이 PC');
+  await expect(e.checkRemoteFolder(local.id, '/home/a/web')).rejects.toThrow('서버 방이 아니에요');
+  await expect(e.checkRemoteFolder('ghost', '/home/a/web')).rejects.toThrow('방을 찾을 수 없습니다: ghost');
+  expect(calls()).toEqual([]);
+});
+
+test('ssh: sshHosts — 엔진의 sshHome 아래 .ssh/config 를 읽는다(와일드카드 빼고) · 없으면 []', async () => {
+  const { e, home } = await startSsh();
+  expect(e.sshHosts()).toEqual([]);
+  fs.mkdirSync(path.join(home, '.ssh'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.ssh', 'config'), 'Host gpu-box # 연구실\n  HostName 10.0.0.12\n  User me\nHost *\n  User x\n');
+  expect(e.sshHosts()).toEqual([{ host: 'gpu-box', user: 'me', hostName: '10.0.0.12', port: null }]);
+});
+
+test('ssh: sshAvailable — 설정한 ssh 실행 파일이 있을 때만 · 없으면 서버 방 만들기·확인은 OpenSSH 글로 던진다 · 이 PC 방은 그대로', async () => {
+  const { e } = await startSsh();
+  expect(e.sshAvailable()).toBe(true);
+  const missing = await start({}, false, { dataDir: path.join(dir, 'data2'), ssh: { command: path.join(dir, 'no', 'ssh.exe') } });
+  expect(missing.sshAvailable()).toBe(false);
+  expect(() => missing.addRoom('서버', { host: 'dev' })).toThrow(NO_SSH);
+  expect(missing.rooms()).toEqual([]);
+  await expect(missing.checkRemote('dev')).rejects.toThrow(NO_SSH);
+  expect(missing.addRoom('이 PC').remote).toBeNull();
+  const none = await start({}, false, { dataDir: path.join(dir, 'data3') }); // ssh 손잡이 없음
+  expect(none.sshAvailable()).toBe(false);
+  expect(() => none.addRoom('서버', { host: 'dev' })).toThrow(NO_SSH);
+});
+
+test('서버 방 — engine.addRoom 저장 · 에이전트 폴더는 서버 전체 경로(이 PC 에 없어도) · 상대 경로는 거절 · 올바르지 않은 host 거절', async () => {
+  const { e } = await startSsh();
+  const room = e.addRoom('서버 실험', { host: 'dev' });
+  expect(room.remote).toEqual({ host: 'dev' });
+  expect(e.rooms()).toEqual([room]);
+  const a = e.addAgent({ roomId: room.id, name: 'web', role: '화면', folder: '/home/a/web' });
+  expect(a).toMatchObject({ folder: '/home/a/web', remoteLaunch: null });
+  expect(() => e.addAgent({ roomId: room.id, name: 'x', role: 'r', folder: 'web' })).toThrow(REMOTE_ABS);
+  expect(() => e.addRoom('나쁜', { host: 'a b' })).toThrow('서버 이름이 올바르지 않아요');
+  expect(e.addRoom('이 PC').remote).toBeNull();
+});
+
+test('서버 방 갈래 — 새 에이전트도 같은 방·같은 서버 폴더', async () => {
+  const claudeDir = path.join(dir, 'claude');
+  const s1 = '11111111-1111-4111-8111-111111111111';
+  const s = openStore(dataDir);
+  const room = s.addRoom('서버', { host: 'dev' });
+  const a = s.addAgent({ roomId: room.id, name: 'A', role: '기획', folder: '/home/a/web' });
+  const now = Date.now();
+  fs.mkdirSync(path.join(dataDir, 'history'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dataDir, 'history', `${a.id}.jsonl`),
+    [
+      { t: now - 2000, kind: 'user', source: 'human', parts: [{ type: 'text', text: '하나' }] },
+      { t: now - 1000, kind: 'boundary', ended: s1 },
+    ].map((l) => JSON.stringify(l)).join('\n') + '\n',
+  );
+  fs.mkdirSync(path.join(claudeDir, 'projects', 'fake'), { recursive: true });
+  fs.writeFileSync(path.join(claudeDir, 'projects', 'fake', `${s1}.jsonl`), '{}\n');
+  const { e } = await startSsh({ CLAUDE_CONFIG_DIR: claudeDir });
+  const made = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+  expect(made).toMatchObject({ roomId: room.id, folder: '/home/a/web', forkOf: s1, remoteLaunch: null });
+});
+
+test('newAgentFolder — 서버 방은 부모 서버 폴더 기준 POSIX(../api → /home/a/api, Git Bash 꼴로 바꾸지 않음, ~ 는 그대로 — 저장 검사가 거절) · 이 PC 방은 지금 그대로', () => {
+  expect(newAgentFolder(true, '/home/a/web', '../api')).toBe('/home/a/api');
+  expect(newAgentFolder(true, '/home/a/web', '.')).toBe('/home/a/web');
+  expect(newAgentFolder(true, '/home/a/web', 'sub/x')).toBe('/home/a/web/sub/x');
+  expect(newAgentFolder(true, '/home/a/web', '/srv/x/../y')).toBe('/srv/y');
+  expect(newAgentFolder(true, '/home/a/web', '/c/Users')).toBe('/c/Users');
+  expect(newAgentFolder(true, '/home/a/web', '~/x')).toBe('~/x');
+  expect(newAgentFolder(true, '/home/a/web', '~')).toBe('~');
+  const base = folder('a');
+  expect(newAgentFolder(false, base, 'sub')).toBe(path.join(base, 'sub'));
+  expect(newAgentFolder(false, base, '/c/Users')).toBe(path.resolve('C:/Users'));
 });
