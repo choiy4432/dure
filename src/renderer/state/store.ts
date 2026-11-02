@@ -328,15 +328,19 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
             : boundary ? without(state.fresh, agentId)
             : state.fresh,
         }
+        // 경계 — 지난 대화 수(pastCount)만 따로 받아 합친다(스냅샷 주기는 사건을 붙잡아 둔다)
+        if (boundary) refreshPastCount()
         const pending = loading.get(agentId)
         if (pending) {
           // 불러오는 중 — 경계만 맨 앞에 남겨, 불러온 기록(경계 앞이거나 이미 그 뒤에 왔다)도 버리게 한다
-          if (boundary) pending.splice(0, pending.length, item)
+          if (boundary) {
+            pending.splice(0, pending.length, item)
+            // 돌아간 대화면 앞 구간은 이 경계만으로 모른다 — 불러오기가 끝나면 다시 불러온다
+            if (item.resumed) reloadAfter.add(agentId)
+          }
           else pending.push(item)
           break
         }
-        // 경계 — 지난 대화 수(pastCount)가 바뀌었다
-        if (boundary) fetchSnapshot().catch(() => {})
         const list = state.history[agentId]
         if (!list) break // 아직 안 불러온 에이전트 — 불러올 때 같이 온다
         if (boundary && item.resumed) {
@@ -440,6 +444,17 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     }
   }
 
+  /** 경계 뒤 지난 대화 수만 새로 받아 합친다 — 다른 칸·사건 흐름은 건드리지 않는다. 실패는 다음 스냅샷이 메운다 */
+  const refreshPastCount = () => {
+    api.snapshot().then((snap) => {
+      const counts = new Map(snap.agents.map(a => [a.id, a.pastCount]))
+      if (!state.agents.some(a => counts.has(a.id) && counts.get(a.id) !== a.pastCount)) return
+      set({ ...state, agents: state.agents.map(a => (counts.has(a.id) ? { ...a, pastCount: counts.get(a.id)! } : a)) })
+    }).catch(() => {})
+  }
+  /** 불러오는 중 돌아간 대화 경계가 온 에이전트 — 불러오기가 끝나면 다시 불러온다 */
+  const reloadAfter = new Set<AgentId>()
+
   // 스냅샷 요청은 한 번에 하나만 — 도중에 또 오면 끝난 뒤 한 번 더 받는다
   let inflight: Promise<void> | null = null
   let rerun = false
@@ -497,6 +512,12 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
         historyStatus: { ...state.historyStatus, [id]: { state: 'ready' } },
         lastText,
       })
+      if (reloadAfter.delete(id)) {
+        const { [id]: _h, ...history } = state.history
+        const { [id]: _s, ...historyStatus } = state.historyStatus
+        set({ ...state, history, historyStatus })
+        void loadHistory(id)
+      }
     } catch (e) {
       loading.delete(id)
       const error = e instanceof Error ? e.message : String(e)

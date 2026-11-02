@@ -513,8 +513,7 @@ describe('store 새 대화(boundary)', () => {
     expect(s.getState().history.b).toHaveLength(2)
 
     emit('history', { agentId: 'a', item: note('새', 4) })
-    // 경계가 스냅샷을 다시 받게 하니 그 사이 온 사건은 스냅샷 뒤에 적용된다
-    await vi.waitFor(() => expect(texts(s.getState().history.a)).toEqual(['새']))
+    expect(texts(s.getState().history.a)).toEqual(['새'])
   })
 
   it('기록을 불러오는 동안 boundary 가 오면 불러온 옛 기록도 버리고 그 뒤에 온 것만(앞에서 읽었든 뒤에서 읽었든)', async () => {
@@ -1218,5 +1217,51 @@ describe('store 지난 대화 — resumed 경계·갈래 초안', () => {
     expect(s.getState().forkDraft).toBeNull()
     s.setPanelTab('a', 'past')
     expect(s.getState().panelTab.a).toBe('past')
+  })
+
+  const pc = (n: number) => snap({ agents: [agent('a', 'r1', { pastCount: n }), agent('b'), agent('c', 'r2')] })
+
+  it('경계는 pastCount 만 합치고 사건을 붙잡지 않는다 — 다시 불러온 목록에 든 줄은 한 번만', async () => {
+    let calls = 0
+    const dup = note('돌아왔어요', 5)
+    const { api, emit } = fake({
+      snapshot: async () => pc(3),
+      history: async () => (++calls === 1 ? [note('옛', 1)] : [said('앞', 1), dup]),
+    })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    await vi.waitFor(() => expect(s.getState().history.a).toHaveLength(1))
+    emit('history', { agentId: 'a', item: { t: 5, kind: 'boundary', ended: 'S2', resumed: 'S1' } })
+    emit('history', { agentId: 'a', item: dup })
+    await vi.waitFor(() => expect(s.getState().history.a).toHaveLength(2))
+    await new Promise(r => setTimeout(r, 20))
+    expect(s.getState().history.a!.filter(i => i.kind === 'notice')).toHaveLength(1)
+    expect(s.getState().agents.find(x => x.id === 'a')!.pastCount).toBe(3)
+  })
+
+  it('불러오는 중 경계가 와도 pastCount 를 갱신한다', async () => {
+    let release!: (v: HistoryItem[]) => void
+    const { api, emit } = fake({ snapshot: async () => pc(2), history: () => new Promise<HistoryItem[]>(r => { release = r }) })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    emit('history', { agentId: 'a', item: { t: 5, kind: 'boundary', ended: 'S2' } })
+    await vi.waitFor(() => expect(s.getState().agents.find(x => x.id === 'a')!.pastCount).toBe(2))
+    release([])
+  })
+
+  it('불러오는 중 resumed 경계가 오면 끝난 뒤 다시 불러온다', async () => {
+    const rel: ((v: HistoryItem[]) => void)[] = []
+    const { api, emit } = fake({ history: () => new Promise<HistoryItem[]>(r => { rel.push(r) }) })
+    const s = createStore(api)
+    await s.init()
+    s.selectAgent('a')
+    emit('history', { agentId: 'a', item: { t: 5, kind: 'boundary', ended: 'S2', resumed: 'S1' } })
+    rel[0]([note('옛', 1)])
+    await vi.waitFor(() => expect(api.history).toHaveBeenCalledTimes(2))
+    rel[1]([said('앞 구간', 1), note('돌아왔어요', 5)])
+    await vi.waitFor(() => expect(s.getState().history.a).toHaveLength(2))
+    expect(s.getState().history.a![0].kind).toBe('assistant')
   })
 })
