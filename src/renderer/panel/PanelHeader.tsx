@@ -12,6 +12,9 @@ import { LevelSwitch } from './LevelSwitch'
 import { Presence } from '../lib/presence'
 import { ExpandBox } from '../lib/ExpandBox'
 
+/** 잘 끝난 일 한 줄(대화를 저장함)이 보이는 시간 */
+const NOTICE_MS = 6000
+
 // 상태 알약 — 작업 중 초록 · 내 승인 필요 앰버 · 쉬는 중 회색 · 멈춤 빨강
 const PILL: Record<DisplayStatus, { tone: string; dot: string }> = {
   working: { tone: 'w', dot: 'g' },
@@ -41,10 +44,18 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
   const allowBypass = useDure(s => s.allowBypass)
   const [editing, setEditing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // 잘 끝난 일 한 줄(대화를 저장함) — 잠깐 보이고 사라진다. 오류가 있으면 오류가 먼저
+  const [notice, setNotice] = useState<string | null>(null)
   const [stopping, setStopping] = useState(false)
   const savingAuto = useRef(false)
   const menuButton = useRef<HTMLButtonElement>(null)
   const refocus = useRef(false)
+
+  useEffect(() => {
+    if (!notice) return
+    const t = setTimeout(() => setNotice(null), NOTICE_MS)
+    return () => clearTimeout(t)
+  }, [notice])
 
   // 바꾸기를 마치면 포커스를 메뉴 버튼으로 — 버튼은 입력칸이 닫힌 뒤에야 다시 생긴다
   useEffect(() => {
@@ -127,7 +138,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
                   <Square className="i ph-stop" size={11} strokeWidth={1.2} absoluteStrokeWidth aria-hidden="true" />
                   멈추기
                 </button>
-                <AgentMenu agent={agent} onEdit={() => setEditing(true)} onError={setError} buttonRef={menuButton} />
+                <AgentMenu agent={agent} onEdit={() => setEditing(true)} onError={setError} onNotice={setNotice} buttonRef={menuButton} />
               </div>
             </>
           )}
@@ -183,6 +194,11 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
         {error && (
           <p className="ph-msg" role="alert">
             {error}
+          </p>
+        )}
+        {!error && notice && (
+          <p className="ph-msg ok" role="status">
+            {notice}
           </p>
         )}
       </div>

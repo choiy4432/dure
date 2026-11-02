@@ -90,7 +90,7 @@ function setup(withEngine = true) {
   const deps = {
     pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), isAppPage,
     setTaskbar: vi.fn(async () => {}), flashWindow: vi.fn(async () => {}), focusWindow: vi.fn(async () => {}),
-    applyTheme: vi.fn(),
+    applyTheme: vi.fn(), saveText: vi.fn(async (name: string, _text: string) => `C:/docs/${name}`),
   }
   const fe = fakeEngine()
   registerIpc(ipc, withEngine ? fe.engine : null, (ch, p) => sent.push([ch, p]), deps)
@@ -114,7 +114,7 @@ describe('registerIpc', () => {
       pickFolder: async () => null,
       openFolder: async () => {},
       isAppPage,
-      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {},
+      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {}, saveText: async () => null,
     })
     expect(await handlers.get(CHANNEL.invoke)!(fromApp, null)).toMatchObject({ ok: false })
     expect(await handlers.get(CHANNEL.invoke)!(fromApp, { method: 5 })).toMatchObject({ ok: false })
@@ -191,7 +191,7 @@ describe('registerIpc', () => {
       throw new Error('Object has been destroyed')
     }, {
       pickFolder: async () => null, openFolder: async () => {}, isAppPage,
-      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {},
+      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {}, saveText: async () => null,
     })
     expect(() => e.engine.emit('held', { roomId: 'r1' })).not.toThrow()
   })
@@ -214,6 +214,19 @@ describe('registerIpc', () => {
     ;(engine as any).setTheme = () => { throw new Error('화면 테마는 라이트·다크·Windows 따라감 중 하나예요') }
     expect(await call('setTheme', 'blue')).toEqual({ ok: false, error: '화면 테마는 라이트·다크·Windows 따라감 중 하나예요' })
     expect(deps.applyTheme).toHaveBeenCalledTimes(1)
+  })
+
+  it('saveConversation — 파일 이름을 다듬어(경로·쓸 수 없는 글자 빼고 .md) 창 쪽 저장으로 · 글이 아니면 거절', async () => {
+    const { call, deps } = setup()
+    expect(await call('saveConversation', '..\\..\\웹:화면-대화-2026-10-28.md', '# 대화')).toEqual({ ok: true, value: 'C:/docs/웹_화면-대화-2026-10-28.md' })
+    expect(deps.saveText).toHaveBeenLastCalledWith('웹_화면-대화-2026-10-28.md', '# 대화')
+    await call('saveConversation', 'a/b/메모', 'x')
+    expect(deps.saveText).toHaveBeenLastCalledWith('메모.md', 'x')
+    await call('saveConversation', '  ', 'x') // 이름이 비면 '대화.md'
+    expect(deps.saveText).toHaveBeenLastCalledWith('대화.md', 'x')
+    expect(await call('saveConversation', 5, 'x')).toMatchObject({ ok: false })
+    expect(await call('saveConversation', 'a.md', null)).toMatchObject({ ok: false })
+    expect(deps.saveText).toHaveBeenCalledTimes(3)
   })
 
   it('openFolder only opens a registered agent folder', async () => {

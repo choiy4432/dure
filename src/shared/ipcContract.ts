@@ -74,7 +74,8 @@ export interface DureApi {
   setEffort(id: AgentId, level: EffortLevel): Promise<void>
   refreshUsage(): Promise<void>
   describe(id: AgentId): Promise<AgentDescription>
-  history(id: AgentId, o?: { all?: boolean }): Promise<HistoryItem[]>
+  /** all: 지난 대화까지 · limit: 마지막 N 개(기본 500, Infinity = 전부 — 내보내기) */
+  history(id: AgentId, o?: { all?: boolean; limit?: number }): Promise<HistoryItem[]>
   /** 보낸 그림(기록의 image file) — data URL, 없으면 null */
   image(id: AgentId, file: string): Promise<string | null>
   approveMessage(id: string): Promise<void>
@@ -99,6 +100,8 @@ export interface DureApi {
   setSleepAfter(min: number): Promise<void>
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
+  /** 대화 내보내기 — 저장 창(처음 이름 fileName, 문서 폴더)으로 글을 저장한다. 저장한 경로, 취소면 null */
+  saveConversation(fileName: string, text: string): Promise<string | null>
   /** 작업표시줄 배지(할 일 개수 + 아이콘 PNG data URL; png 가 null 이거나 count 0 이면 지움) */
   setTaskbar(count: number, png: string | null): Promise<void>
   /** 초점이 없을 때 작업표시줄 단추 깜박임 */
@@ -119,7 +122,7 @@ export const METHODS = [
   'setAllowBypass', 'setNotify', 'setTheme', 'setBypass',
   'sleep', 'sleepRoom', 'sleepBlock', 'sleepableIn', 'setSleepAfter',
   'setPlanMode', 'resumeHold', 'dropHoldItem', 'dropHold', 'revokeAlwaysAllow',
-  'pickFolder', 'openFolder', 'setTaskbar', 'flashWindow', 'focusWindow',
+  'pickFolder', 'openFolder', 'saveConversation', 'setTaskbar', 'flashWindow', 'focusWindow',
 ] as const satisfies readonly Exclude<keyof DureApi, 'on'>[]
 
 /** 엔진 이벤트 전부 — 새 이벤트를 EngineEventMap 에 더하면 여기서 타입 오류가 난다 */

@@ -11,6 +11,8 @@ export interface IpcLike {
 export interface IpcDeps {
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
+  /** 저장 창으로 글을 저장 — 저장한 경로, 취소면 null. 이름은 이미 다듬어 온다(saveName) */
+  saveText(fileName: string, text: string): Promise<string | null>
   /** 작업표시줄 배지 — count 가 0 이면 지운다. 엔진을 거치지 않는 창 쪽 일이라 deps 로 받는다 */
   setTaskbar(count: number, png: string | null): Promise<void>
   /** 초점이 없는 창의 작업표시줄 단추를 깜박인다 */
@@ -25,6 +27,17 @@ export interface IpcDeps {
 
 const NOT_ALLOWED = '허용되지 않은 요청이에요'
 const FOLDER_NOT_ALLOWED = '등록된 에이전트의 폴더만 열 수 있어요'
+const SAVE_BAD = '저장할 이름과 글이 필요해요'
+
+/**
+ * 저장 창의 처음 이름 — renderer 가 준 이름에서 경로를 떼고(마지막 / · \ 뒤만) Windows 가 못 쓰는 글자를 _ 로, 끝은 .md.
+ * 비면 '대화.md'. 사람이 저장 창에서 고르는 이름이라 처음 값만 다듬는다
+ */
+export function saveName(name: string): string {
+  const base = (name.split(/[\\/]/).pop() ?? '').replace(/[<>:"|?*\u0000-\u001f]/g, '_').trim()
+  const stem = base.replace(/\.md$/i, '').replace(/^[.\s]+/, '')
+  return `${stem || '대화'}.md`
+}
 
 function agentViews(engine: Engine): AgentView[] {
   return engine.agents().map((a) => {
@@ -108,6 +121,10 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   sleepableIn: (e, _d, roomId) => e.sleepableIn(roomId),
   setSleepAfter: (e, _d, min) => e.setSleepAfter(min),
   pickFolder: (_e, d) => d.pickFolder(),
+  saveConversation: (_e, d, name, text) => {
+    if (typeof name !== 'string' || typeof text !== 'string') throw new Error(SAVE_BAD)
+    return d.saveText(saveName(name), text)
+  },
   setTaskbar: (_e, d, count, png) => d.setTaskbar(count as number, (png ?? null) as string | null),
   flashWindow: (_e, d) => d.flashWindow(),
   focusWindow: (_e, d) => d.focusWindow(),

@@ -481,6 +481,40 @@ describe('AgentMenu', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
+  it('대화 내보내기 — 지금 대화 전체를 마크다운으로 저장 창에, 저장하면 "저장했어요 · 이름" · 취소면 아무 말 없음', async () => {
+    const items = [{ t: Date.now(), kind: 'user', source: 'human', parts: [{ type: 'text', text: '안녕' }] }]
+    const history = vi.fn(async () => items)
+    const saveConversation = vi.fn(async (name: string, _text: string): Promise<string | null> => `C:\\Users\\me\\Documents\\${name}`)
+    Object.assign((window as any).dure, { history, saveConversation })
+    await renderPanel()
+    openMenu()
+    await act(async () => { fireEvent.click(item('대화 내보내기')) })
+    await settle()
+    expect(history).toHaveBeenCalledWith('w', { limit: Infinity })
+    const [name, text] = saveConversation.mock.calls[0]
+    expect(name).toMatch(/^웹 화면-대화-\d{4}-\d{2}-\d{2}\.md$/)
+    expect(text).toContain('# 웹 화면 — 대화')
+    expect(text).toContain('안녕')
+    expect(screen.getByText(`저장했어요 · ${name}`).getAttribute('role')).toBe('status')
+    saveConversation.mockResolvedValueOnce(null) // 저장 창에서 취소
+    openMenu()
+    await act(async () => { fireEvent.click(item('대화 내보내기')) })
+    await settle()
+    expect(screen.queryByText(/저장했어요/)).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('대화 내보내기 — 내보낼 대화가 없으면 안내, 저장 창은 열지 않는다', async () => {
+    const saveConversation = vi.fn(async () => null)
+    Object.assign((window as any).dure, { history: vi.fn(async () => []), saveConversation })
+    await renderPanel()
+    openMenu()
+    await act(async () => { fireEvent.click(item('대화 내보내기')) })
+    await settle()
+    expect(screen.getByRole('alert').textContent).toBe('내보낼 대화가 아직 없어요')
+    expect(saveConversation).not.toHaveBeenCalled()
+  })
+
   it('폴더 열기는 openFolder(에이전트 폴더)', async () => {
     await renderPanel()
     openMenu()

@@ -1631,6 +1631,11 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* 잘 끝난 일(대화를 저장함) — 오류 빨강이 아니라 보조 글색 */
+.ph-msg.ok {
+  color: var(--text-2);
+}
+
 /* 이름·역할 바꾸기 */
 .ph-edit {
   flex: 1;

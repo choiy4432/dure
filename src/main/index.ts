@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
 import { join } from 'node:path'
+import { writeFile } from 'node:fs/promises'
 import { createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
 import { resolveClaudeCommand } from './claudeCommand'
@@ -120,6 +121,7 @@ if (!app.requestSingleInstanceLock()) {
 
   // Test-only hooks: DURE_SMOKE_EXIT_MS (self-quit after N ms), DURE_NO_DIALOG=1 (skip the error box, still exit 1),
   // DURE_USER_DATA and DURE_E2E_FOLDERS (above) — the E2E (e2e/app.spec.ts) sets them with DURE_CLAUDE_COMMAND/ARGS.
+  // DURE_E2E_SAVE_DIR — saveText writes there without the save dialog.
   void app
     .whenReady()
     .then(async () => {
@@ -157,6 +159,25 @@ if (!app.requestSingleInstanceLock()) {
           async openFolder(path) {
             const err = await shell.openPath(path)
             if (err) throw new Error(err)
+          },
+          async saveText(fileName, text) {
+            const testDir = process.env.DURE_E2E_SAVE_DIR
+            if (testDir) {
+              const file = join(testDir, fileName)
+              await writeFile(file, text, 'utf8')
+              return file
+            }
+            // 처음 자리는 문서 폴더 — 저장 창은 창을 부모로(앱 뒤에 숨지 않게)
+            const options: Electron.SaveDialogOptions = {
+              defaultPath: join(app.getPath('documents'), fileName),
+              filters: [{ name: '마크다운', extensions: ['md'] }],
+            }
+            const r = mainWindow && !mainWindow.isDestroyed()
+              ? await dialog.showSaveDialog(mainWindow, options)
+              : await dialog.showSaveDialog(options)
+            if (r.canceled || !r.filePath) return null
+            await writeFile(r.filePath, text, 'utf8')
+            return r.filePath
           },
           async setTaskbar(count, png) {
             if (!mainWindow || mainWindow.isDestroyed()) return

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type Ref } from 'react'
-import { Ellipsis, FolderOpen, MessageSquarePlus, Moon, ShieldCheck, Pencil, Trash2 } from 'lucide-react'
+import { Ellipsis, FileDown, FolderOpen, MessageSquarePlus, Moon, ShieldCheck, Pencil, Trash2 } from 'lucide-react'
 import type { SleepBlock } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { getStore } from '../state/store'
@@ -8,6 +8,7 @@ import { moveMenuFocus, useDismiss } from '../lib/popover'
 import { MotionDiv, Presence } from '../lib/presence'
 import { MOTION } from '../lib/motion'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
+import { conversationMarkdown, exportFileName } from '../lib/exportConversation'
 import { AlwaysAllowDialog } from './AlwaysAllowDialog'
 
 interface Props {
@@ -16,17 +17,21 @@ interface Props {
   onEdit: () => void
   /** 폴더 열기 등이 실패했을 때 엔진 문구 */
   onError: (message: string) => void
+  /** 잘 끝난 일을 알리는 한 줄(대화를 저장함) — null 이면 지운다 */
+  onNotice: (message: string | null) => void
   /** 메뉴 버튼 — 바꾸기를 마친 뒤 포커스를 돌려받는 자리 */
   buttonRef?: Ref<HTMLButtonElement>
 }
 
 type Ask = 'renew' | 'remove' | 'always' | null
 
+const EXPORT_EMPTY = '내보낼 대화가 아직 없어요'
+
 /** 재울 수 있나 — undefined 는 아직 묻는 중, 'no-session' 은 재울 게 없음, null 은 지금 재울 수 있음 */
 type SleepCheck = SleepBlock | 'no-session' | null | undefined
 
-/** 패널 머리의 … 메뉴 — 이름·역할 바꾸기 · 새 대화 · 지금 재우기 · 폴더 열기 · 항상 허용한 일 · 지우기 */
-export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
+/** 패널 머리의 … 메뉴 — 이름·역할 바꾸기 · 새 대화 · 지금 재우기 · 폴더 열기 · 대화 내보내기 · 항상 허용한 일 · 지우기 */
+export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef }: Props) {
   const [open, setOpen] = useState(false)
   const [ask, setAsk] = useState<Ask>(null)
   const [sleepCheck, setSleepCheck] = useState<SleepCheck>(undefined)
@@ -70,6 +75,23 @@ export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
 
   const openFolder = () => {
     window.dure.openFolder(agent.folder).catch(e => onError(errorMessage(e)))
+  }
+
+  // 지금 대화(마지막 새 대화 뒤) 전부를 마크다운으로 — 저장 창은 main 이 연다. 취소면 아무 말 없이
+  const exportChat = async () => {
+    onNotice(null)
+    try {
+      const items = await window.dure.history(agent.id, { limit: Infinity })
+      const text = conversationMarkdown({ agent, items, now: Date.now() })
+      if (text === null) {
+        onError(EXPORT_EMPTY)
+        return
+      }
+      const saved = await window.dure.saveConversation(exportFileName(agent.name, Date.now()), text)
+      if (saved) onNotice(`저장했어요 · ${saved.split(/[\\/]/).pop()}`)
+    } catch (e) {
+      onError(errorMessage(e))
+    }
   }
 
   const sleepNow = () => {
@@ -146,6 +168,10 @@ export function AgentMenu({ agent, onEdit, onError, buttonRef }: Props) {
           <button type="button" role="menuitem" className="mi" onClick={choose(openFolder)}>
             <FolderOpen className="i" aria-hidden="true" />
             폴더 열기
+          </button>
+          <button type="button" role="menuitem" className="mi" onClick={choose(() => void exportChat())}>
+            <FileDown className="i" aria-hidden="true" />
+            대화 내보내기
           </button>
           <button type="button" role="menuitem" className="mi" onClick={choose(() => setAsk('always'))}>
             <ShieldCheck className="i" aria-hidden="true" />
