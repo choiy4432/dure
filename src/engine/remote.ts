@@ -31,7 +31,7 @@ export function shq(s: string): string {
 // id 는 셸 명령·경로에 그대로 들어가니 안전한 글자만
 const SAFE_ID = /^[A-Za-z0-9._-]+$/;
 function safeId(id: string): string {
-  if (!SAFE_ID.test(id)) throw new Error('올바르지 않은 id');
+  if (!SAFE_ID.test(id) || id === '.' || id.includes('..')) throw new Error('올바르지 않은 id');
   return id;
 }
 
@@ -91,9 +91,11 @@ export function cleanupScript(a: { pid: number; agentId: string; launchId: strin
   if (!Number.isInteger(a.pid) || a.pid <= 0) throw new Error('올바르지 않은 pid');
   const dir = remoteRunDir(a.agentId, a.launchId);
   return [
-    `mk() { for e in /proc/[0-9]*/environ; do tr '\\0' '\\n' 2>/dev/null < "$e" | grep -qx "DURE_RUN=$1" && { p=\${e#/proc/}; echo "\${p%/environ}"; }; done; }`,
+    `mk() { for e in /proc/[0-9]*/environ; do tr '\\0' '\\n' 2>/dev/null < "$e" | grep -qxF "DURE_RUN=$1" && { p=\${e#/proc/}; echo "\${p%/environ}"; }; done; }`,
     'desc() { for c in $(pgrep -P "$1"); do echo "$c"; desc "$c"; done; }',
-    `l="${a.pid} $(desc ${a.pid}) $(mk ${marker(a.agentId, a.launchId)})"`,
+    // 저장해 둔 pid 는 다른 프로세스가 물려받았을 수 있다 — /proc 이 있으면 표식이 맞을 때만 그 pid 와 나무를 넣는다
+    `m=${marker(a.agentId, a.launchId)}`,
+    `if [ -r /proc/self/environ ]; then l="$(mk $m)"; tr '\\0' '\\n' 2>/dev/null < /proc/${a.pid}/environ | grep -qxF "DURE_RUN=$m" && l="${a.pid} $(desc ${a.pid}) $l"; else l="${a.pid} $(desc ${a.pid})"; fi`,
     `ss=$(ps -o sid= -p "$(echo $l | tr ' ' ,)" 2>/dev/null | sort -u)`,
     'kill -TERM $l 2>/dev/null; for x in $ss; do pkill -TERM -s $x; done',
     'sleep 2',
@@ -105,7 +107,10 @@ export function cleanupScript(a: { pid: number; agentId: string; launchId: strin
 /** 폴더가 있으면 첫 줄 = 펼친 폴더, 마지막 줄 = claude 버전. 종료 3 = 폴더 없음 · 127 = claude 없음 */
 export function checkScript(folder?: string): string {
   const tail = 'command -v claude >/dev/null || exit 127; claude --version';
-  return folder ? `cd ${shq(folder)} && pwd -P || exit 3; ${tail}` : tail;
+  if (!folder) return tail;
+  // 작은따옴표 안에서는 ~ 가 펼쳐지지 않는다 — ~ 와 ~/하위 는 $HOME 으로
+  const cd = folder === '~' ? 'cd "$HOME"' : folder.startsWith('~/') ? `cd "$HOME"/${shq(folder.slice(2))}` : `cd ${shq(folder)}`;
+  return `${cd} && pwd -P || exit 3; ${tail}`;
 }
 
 // 서버의 claude 기록(projects 아래 <id>.jsonl)이 있는 id 만 한 줄씩
@@ -119,22 +124,23 @@ export type RemoteIssueKind = 'unreachable' | 'denied' | 'hostkey' | 'no-claude'
 
 export function classifyExit(a: { code: number | null; stderr: string; started: boolean }): { kind: RemoteIssueKind; detail: string | null } | null {
   const { code, stderr } = a;
+  // 시작한 뒤의 stderr 에는 로그인 프로필 잡음이 섞인다 — 끊김만 분류하고 나머지는 지금의 '예기치 않게 종료' 길로
+  if (a.started) return code === 255 ? { kind: 'disconnected', detail: null } : null;
   if (code === 255) {
     if (/remote port forwarding failed/i.test(stderr)) return { kind: 'port', detail: null };
     if (/Permission denied/i.test(stderr)) return { kind: 'denied', detail: null };
     if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(stderr)) return { kind: 'hostkey', detail: null };
-    if (a.started) return { kind: 'disconnected', detail: null };
-    const first = stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l) ?? null;
+    const first = stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !/^Warning: Permanently added/i.test(l)) ?? null;
     return { kind: 'unreachable', detail: first };
   }
-  if (code === 127 || /command not found/i.test(stderr)) return { kind: 'no-claude', detail: null };
+  if (code === 127 || /claude: (command )?not found/i.test(stderr)) return { kind: 'no-claude', detail: null };
   if (code === 3) return { kind: 'no-folder', detail: null };
   return null;
 }
 
 /** 띄운 셸이 stderr 로 알리는 `DURE_PID=<숫자>` — 정리 때 쓴다 */
 export function parsePid(stderrChunk: string): number | null {
-  const m = /^DURE_PID=(\d+)\s*$/m.exec(stderrChunk);
+  const m = /^DURE_PID=(\d+)\r?\n/m.exec(stderrChunk);
   return m ? Number(m[1]) : null;
 }
 

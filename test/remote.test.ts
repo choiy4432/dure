@@ -55,6 +55,10 @@ describe('실행 폴더', () => {
     expect(() => remoteRunDir('a;b', 'x')).toThrow();
     expect(() => remoteRunDir('a', '$(x)')).toThrow();
     expect(() => remoteRunDir('', 'x')).toThrow();
+    for (const bad of ['.', '..', 'a..b']) {
+      expect(() => remoteRunDir(bad, 'x')).toThrow();
+      expect(() => remoteRunDir('a', bad)).toThrow();
+    }
   });
 });
 
@@ -142,7 +146,9 @@ describe('cleanupScript', () => {
   const s = cleanupScript({ pid: 4242, agentId: 'ag1', launchId: 'ab12cd34' });
   it('표식·나무·SID·TERM→KILL→run 폴더', () => {
     expect(s).toContain('DURE_RUN=$1');
-    expect(s).toContain('mk ag1.ab12cd34');
+    expect(s).toContain('m=ag1.ab12cd34');
+    expect(s).toContain('grep -qxF "DURE_RUN=$m"');
+    expect(s).toContain('[ -r /proc/self/environ ]');
     expect(s).toContain('desc 4242');
     expect(s).toContain(`tr '\\0' '\\n' 2>/dev/null < "$e"`);
     expect(s.indexOf('-TERM')).toBeLessThan(s.indexOf('sleep 2'));
@@ -165,7 +171,7 @@ describe('cleanupScript', () => {
       const dir = join(tmp, '.dure', 'run', 'ag1', 'ab12cd34');
       execFileSync('bash', ['-c', `mkdir -p ${shq(posix(dir))}`]);
       writeFileSync(join(dir, 'mcp.json'), '{}');
-      const r = spawnSync('bash', ['-c', cleanupScript({ pid: 999999, agentId: 'ag1', launchId: 'ab12cd34' })], {
+      const r = spawnSync('bash', ['-c', cleanupScript({ pid: 2147483646, agentId: 'ag1', launchId: 'ab12cd34' })], {
         encoding: 'utf8', env: { ...process.env, HOME: posix(tmp) },
       });
       expect(r.status).toBe(0);
@@ -176,10 +182,49 @@ describe('cleanupScript', () => {
   }, 30000);
 });
 
+describe('cleanupScript — 표식이 안 맞는 pid 는 건드리지 않는다', () => {
+  it.skipIf(!hasBash)('남의 살아 있는 프로세스는 그대로', () => {
+    const holder = spawnSync('bash', ['-c', 'sleep 60 >/dev/null 2>&1 & echo $!; disown'], { encoding: 'utf8' });
+    const pid = Number(holder.stdout.trim());
+    expect(pid).toBeGreaterThan(0);
+    try {
+      const alive = () => spawnSync('bash', ['-c', `kill -0 ${pid}`]).status === 0;
+      expect(alive()).toBe(true);
+      const tmp = mkdtempSync(join(tmpdir(), 'dure-guard-'));
+      try {
+        const r = spawnSync('bash', ['-c', cleanupScript({ pid, agentId: 'ag1', launchId: 'ab12cd34' })], { encoding: 'utf8', env: { ...process.env, HOME: posix(tmp) } });
+        expect(r.status).toBe(0);
+      } finally { rmSync(tmp, { recursive: true, force: true }); }
+      expect(alive()).toBe(true);
+    } finally {
+      spawnSync('bash', ['-c', `kill -9 ${pid} 2>/dev/null; true`]);
+    }
+  }, 30000);
+});
+
 describe('checkScript', () => {
   it('폴더 없이', () => expect(checkScript()).toBe('command -v claude >/dev/null || exit 127; claude --version'));
   it('폴더 있으면 cd && pwd -P', () => {
     expect(checkScript(`/a b/it's`)).toBe(`cd '/a b/it'\\''s' && pwd -P || exit 3; command -v claude >/dev/null || exit 127; claude --version`);
+  });
+});
+
+describe('checkScript — ~', () => {
+  it('~ 는 $HOME 으로', () => {
+    expect(checkScript('~')).toContain('cd "$HOME" && pwd -P || exit 3');
+    expect(checkScript('~/my dir')).toContain(`cd "$HOME"/'my dir' && pwd -P`);
+  });
+  it.skipIf(!hasBash)('bash 에서 ~/my dir 이 $HOME 아래로 풀린다', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'dure-tilde-'));
+    try {
+      execFileSync('bash', ['-c', `mkdir -p ${shq(posix(tmp))}/"my dir"`]);
+      const run = (f: string) => spawnSync('bash', ['-c', checkScript(f).split('; command')[0]], { encoding: 'utf8', env: { ...process.env, HOME: posix(tmp) } });
+      const r = run('~/my dir');
+      expect(r.status).toBe(0);
+      expect(r.stdout.trim()).toMatch(/my dir$/);
+      expect(run('~').status).toBe(0);
+      expect(run('~/nope').status).toBe(3);
+    } finally { rmSync(tmp, { recursive: true, force: true }); }
   });
 });
 
@@ -222,6 +267,17 @@ describe('classifyExit', () => {
     expect(c(127)?.kind).toBe('no-claude');
     expect(c(1, 'bash: claude: command not found')?.kind).toBe('no-claude');
   });
+  it('시작 뒤: 잡음은 분류하지 않고 255 만 끊김', () => {
+    expect(c(1, 'bash: nvm: command not found', true)).toBeNull();
+    expect(c(0, 'bash: claude: command not found', true)).toBeNull();
+    expect(c(127, '', true)).toBeNull();
+    expect(c(255, 'Permission denied noise', true)).toEqual({ kind: 'disconnected', detail: null });
+  });
+  it('시작 전: 프로필 잡음(nvm)은 no-claude 가 아니다', () => expect(c(1, 'bash: nvm: command not found')).toBeNull());
+  it('unreachable detail 은 known_hosts 경고를 건너뛴다', () => {
+    expect(c(255, "Warning: Permanently added 'h' (ED25519) to the list of known hosts.\nssh: connect to host h port 22: Connection refused")?.detail)
+      .toBe('ssh: connect to host h port 22: Connection refused');
+  });
   it('3 = no-folder', () => expect(c(3)?.kind).toBe('no-folder'));
   it('0·1·null = null', () => {
     expect(c(0)).toBeNull();
@@ -234,6 +290,11 @@ describe('작은 것들', () => {
   it('parsePid', () => {
     expect(parsePid('x\nDURE_PID=4242\n')).toBe(4242);
     expect(parsePid('nothing')).toBeNull();
+    expect(parsePid('DURE_PID=4242\r\n')).toBe(4242);
+    // 줄이 둘로 쪼개져 온 첫 조각은 숫자가 잘렸을 수 있다
+    expect(parsePid('DURE_PID=12')).toBeNull();
+    expect(parsePid('x\nDURE_PID=12')).toBeNull();
+    expect(parsePid('DURE_PID=12' + '194\n')).toBe(12194);
   });
   it('isLoginFailure', () => {
     expect(isLoginFailure('Failed to authenticate: OAuth session expired…')).toBe(true);
