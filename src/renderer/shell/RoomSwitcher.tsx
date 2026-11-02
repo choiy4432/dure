@@ -1,23 +1,25 @@
 import {
-  useCallback, useMemo, useEffect, useId, useRef, useState, type CSSProperties, type FocusEvent, type FormEvent, type KeyboardEvent,
+  useCallback, useMemo, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FocusEvent, type FormEvent, type KeyboardEvent,
 } from 'react'
-import { Check, ChevronDown, Ellipsis, Moon, Pencil, Plus, Trash2 } from 'lucide-react'
-import type { Room, RoomId } from '../../engine/types'
+import { Check, ChevronDown, Ellipsis, Monitor, Moon, Pencil, Plus, Server, Trash2, TriangleAlert } from 'lucide-react'
+import type { Room, RoomId, SshHostEntry } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { roomTotal, todoCounts } from '../state/attention'
-import { errorMessage, josa, SLEEP_ROOM } from '../lib/words'
-import { moveMenuFocus, useDismiss } from '../lib/popover'
+import { errorMessage, josa, REMOTE, serverLine, SLEEP_ROOM, sshAddress } from '../lib/words'
+import { moveMenuFocus, OPTION, useDismiss } from '../lib/popover'
 import { MotionDiv, Presence } from '../lib/presence'
 import { MOTION } from '../lib/motion'
 import { ConfirmDialog } from './ConfirmDialog'
 import { FormDialog } from './FormDialog'
+import { RemoteCheckLine, ServerTag, useRemoteCheck } from './RemoteCheck'
 
 /**
- * 방을 만들고 그 방으로 — 위 띠 목록의 '새 방'과 빈 화면의 '방 만들기'가 같이 쓴다.
+ * 방을 만들고 그 방으로 — 위 띠 목록의 '새 방'과 빈 화면의 '방 만들기'가 같이 쓴다(둘 다 새 방 대화상자).
  * 엔진은 방이 생겼다는 이벤트를 보내지 않으므로 새로 받는다. 방은 이미 생겼으니 새로 받지 못한 건 던지지 않는다.
+ * 이 PC 방은 이름만 넘긴다(옛 꼴 그대로).
  */
-async function createRoom(name: string): Promise<void> {
-  const room = await window.dure.addRoom(name)
+async function createRoom(name: string, remote: { host: string } | null): Promise<void> {
+  const room = remote ? await window.dure.addRoom(name, remote) : await window.dure.addRoom(name)
   const store = getStore()
   try {
     await store.refresh()
@@ -27,7 +29,30 @@ async function createRoom(name: string): Promise<void> {
   }
 }
 
-type Editing = { kind: 'rename'; id: RoomId } | { kind: 'new' } | null
+/**
+ * ~/.ssh/config 의 서버 목록 — on 일 때(서버 방이 있을 때 · 새 방 창) 받는다. again 이 바뀌면 다시(목록을 열 때).
+ * 못 받으면 빈 목록(서버 방 표시는 host 만). 받기 전엔 null
+ */
+function useSshHosts(on: boolean, again?: unknown): SshHostEntry[] | null {
+  const [hosts, setHosts] = useState<SshHostEntry[] | null>(null)
+  useEffect(() => {
+    if (!on) return
+    let stale = false
+    Promise.resolve()
+      .then(() => window.dure.sshHosts())
+      .then(
+        h => { if (!stale) setHosts(h) },
+        e => {
+          console.error('두레: 서버 목록을 읽지 못했어요', e)
+          if (!stale) setHosts(old => old ?? [])
+        },
+      )
+    return () => { stale = true }
+  }, [on, again])
+  return hosts
+}
+
+type Editing = { kind: 'rename'; id: RoomId } | null
 interface Ask {
   id: RoomId
   name: string
@@ -45,6 +70,9 @@ export function RoomSwitcher() {
   const current = v.rooms.find(r => r.id === v.roomId)
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Editing>(null)
+  const [creating, setCreating] = useState(false)
+  // 서버 방 표시(<host> · <user>@<hostName>) — 서버 방이 있을 때만, 목록을 열 때마다 다시 읽는다
+  const hosts = useSshHosts(v.rooms.some(r => r.remote), open)
   const [menu, setMenu] = useState<{ id: RoomId; at: CSSProperties } | null>(null)
   const [ask, setAsk] = useState<Ask | null>(null)
   /** 열린 방 메뉴에서 지금 재울 수 있는 에이전트 수 — null 은 아직 묻는 중 */
@@ -160,9 +188,10 @@ export function RoomSwitcher() {
     setEditing(null)
   }
 
-  const create = async (name: string) => {
-    await createRoom(name)
+  // 새 방 — 목록을 닫고 대화상자(닫히면 포커스는 방 버튼으로)
+  const startCreate = () => {
     closeToButton()
+    setCreating(true)
   }
 
   // 지우기 — 목록을 닫고 확인만 남긴다(확인이 닫히면 포커스는 방 버튼으로)
@@ -243,6 +272,12 @@ export function RoomSwitcher() {
           onClick={() => (open ? closeToButton() : setOpen(true))}
         >
           <span className="room-name">{current?.name}</span>
+          {current?.remote && (
+            <>
+              {' '}
+              <ServerTag host={current.remote.host} title={serverLine(current.remote.host, hosts)} />
+            </>
+          )}
           {elsewhere && <span className="dot a room-dot" role="img" aria-label="다른 방에 할 일 있음" />}
           <ChevronDown className="i" aria-hidden="true" />
         </button>
@@ -271,7 +306,18 @@ export function RoomSwitcher() {
                         aria-current={r.id === v.roomId ? 'true' : undefined}
                         onClick={() => pick(r.id)}
                       >
-                        <span className="rs-n">{r.name}</span>
+                        {r.remote ? (
+                          // 서버 방 — 이름 아래 흐린 <host> · <user>@<hostName>
+                          <span className="rs-tx">
+                            <span className="rs-n">{r.name}</span>{' '}
+                            <span className="rs-sub">
+                              <Server className="i" aria-hidden="true" />
+                              <span className="trunc">{serverLine(r.remote.host, hosts)}</span>
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="rs-n">{r.name}</span>
+                        )}
                         <RoomTodo t={todo[r.id]} />
                         {r.id === v.roomId && <Check className="i mi-ck" aria-hidden="true" />}
                       </button>
@@ -325,34 +371,15 @@ export function RoomSwitcher() {
               ))}
             </ul>
             <div className="pop-sep" role="separator" />
-            {editing?.kind === 'new' ? (
-              <NameForm
-                label="새 방 이름"
-                placeholder="새 방 이름"
-                initial=""
-                submitLabel="만들기"
-                onSubmit={create}
-                onCancel={() => {
-                  refocus.current = 'new'
-                  setEditing(null)
-                }}
-              />
-            ) : (
-              <button
-                type="button"
-                className="mi"
-                data-nav="new"
-                onClick={() => {
-                  setMenu(null)
-                  setEditing({ kind: 'new' })
-                }}
-              >
-                <Plus className="i" aria-hidden="true" />새 방
-              </button>
-            )}
+            <button type="button" className="mi" data-nav="new" onClick={startCreate}>
+              <Plus className="i" aria-hidden="true" />새 방
+            </button>
           </MotionDiv>
         </Presence>
       </span>
+      <Presence show={creating}>
+        <NewRoomDialog onClose={() => setCreating(false)} />
+      </Presence>
       <ConfirmDialog
         open={ask !== null}
         title={ask ? `방 ${ask.name}${josa(ask.name, '을/를')} 지울까요?` : ''}
@@ -392,7 +419,6 @@ function RoomTodo({ t }: { t: { asks: number; messages: number; held: number } |
 
 interface NameFormProps {
   label: string
-  placeholder?: string
   initial: string
   submitLabel: string
   /** 다듬은(앞뒤 빈칸 뺀) 이름 — 실패하면 그 문구를 칸 아래에 */
@@ -400,8 +426,8 @@ interface NameFormProps {
   onCancel: () => void
 }
 
-/** 목록 안 한 줄 이름 입력 — Enter·버튼으로 보내고 Esc 로 접는다 */
-function NameForm({ label, placeholder, initial, submitLabel, onSubmit, onCancel }: NameFormProps) {
+/** 목록 안 한 줄 이름 입력(이름 바꾸기) — Enter·버튼으로 보내고 Esc 로 접는다 */
+function NameForm({ label, initial, submitLabel, onSubmit, onCancel }: NameFormProps) {
   const [name, setName] = useState(initial)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -442,7 +468,6 @@ function NameForm({ label, placeholder, initial, submitLabel, onSubmit, onCancel
           ref={input}
           className="inp"
           aria-label={label}
-          placeholder={placeholder}
           value={name}
           onChange={e => {
             setName(e.target.value)
@@ -466,18 +491,120 @@ function NameForm({ label, placeholder, initial, submitLabel, onSubmit, onCancel
   )
 }
 
-/** 방이 하나도 없을 때(빈 화면의 '방 만들기') — 이름만 적는 대화상자 */
+/** 직접 입력한 서버 — 입력을 이만큼 멈추면 확인한다 */
+const TYPE_PAUSE_MS = 600
+
+type Where = 'local' | 'server'
+
+/**
+ * 새 방(목록의 '새 방' · 빈 화면의 '방 만들기') — 이름 · 어디서 일하나요(이 PC | 서버(SSH)).
+ * 서버면 서버 칸 = ~/.ssh/config 의 서버 목록 + 직접 입력. 고르는 즉시(직접 입력은 입력을 멈춘 뒤 · Enter) 접속을 확인하고,
+ * 서버 방은 확인이 된 뒤에만 만든다. ssh 가 없으면 스위치의 서버 칸이 꺼지고 그 자리에 안내.
+ */
 export function NewRoomDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [where, setWhere] = useState<Where>('local')
+  /** 이 PC 에 ssh 가 있나 — null 은 묻는 중(그동안 서버 칸은 꺼 둔다) */
+  const [ssh, setSsh] = useState<boolean | null>(null)
+  const hosts = useSshHosts(true)
+  /** 목록에서 고른 서버 */
+  const [listHost, setListHost] = useState<string | null>(null)
+  /** '직접 입력…' 을 골랐다 */
+  const [typing, setTyping] = useState(false)
+  const [typed, setTyped] = useState('')
+  const serverArea = useRef<HTMLDivElement>(null)
+  const typedInput = useRef<HTMLInputElement>(null)
+  // 다시 그린 뒤 옮길 포커스 — 서버 칸이 처음 보일 때 · 직접 입력칸이 생길 때
+  const focusNext = useRef<'server' | 'typed' | null>(null)
+  const { check, start, reset, settled } = useRemoteCheck(
+    target => target,
+    async target => {
+      const r = await window.dure.checkRemote(target)
+      return r.ok ? { ok: true, value: target, claudeVersion: r.claudeVersion } : r
+    },
+  )
   const id = useId()
+
+  useEffect(() => {
+    let stale = false
+    Promise.resolve()
+      .then(() => window.dure.sshAvailable())
+      .then(
+        ok => { if (!stale) setSsh(ok) },
+        e => console.error('두레: ssh 가 있는지 묻지 못했어요', e), // 모르면 서버 칸은 꺼 둔 채 — 없다고 말하지는 않는다
+      )
+    return () => { stale = true }
+  }, [])
+
+  // 목록이 비면(~/.ssh/config 없음) 서버 칸은 바로 입력칸
+  const noList = hosts !== null && hosts.length === 0
+  const inputMode = typing || noList
+  const target = inputMode ? typed.trim() : listHost ?? ''
+  // 지금 칸과 맞는 확인만 보인다
+  const shown = check.state !== 'idle' && check.target === target ? check : { state: 'idle' as const }
+  const serverReady = shown.state === 'ok' && target !== ''
+  const canSubmit = name.trim() !== '' && (where === 'local' || serverReady)
+
+  useLayoutEffect(() => {
+    const to = focusNext.current
+    if (!to) return
+    focusNext.current = null
+    if (to === 'typed') typedInput.current?.focus()
+    else serverArea.current?.querySelector<HTMLElement>('button, input')?.focus()
+  })
+
+  // 직접 입력 — 입력을 멈추면 잠시 뒤 확인(Enter 로 이미 묻고 있으면 또 묻지 않는다)
+  useEffect(() => {
+    if (where !== 'server' || !inputMode) return
+    const host = typed.trim()
+    if (!host) return
+    const t = setTimeout(() => {
+      if (!settled(host)) start(host)
+    }, TYPE_PAUSE_MS)
+    return () => clearTimeout(t)
+  }, [where, inputMode, typed, settled, start])
+
+  const toServer = () => {
+    if (where === 'server' || ssh !== true) return
+    setWhere('server')
+    focusNext.current = 'server'
+  }
+
+  const pickHost = (host: string) => {
+    setTyping(false)
+    setListHost(host)
+    if (!settled(host)) start(host)
+  }
+
+  const pickTyped = () => {
+    setTyping(true)
+    focusNext.current = 'typed'
+    const host = typed.trim()
+    if (!host) reset()
+    else if (!settled(host)) start(host)
+  }
+
+  const onTyped = (text: string) => {
+    setTyped(text)
+    if (!settled(text.trim())) reset()
+  }
+
+  // Enter — 확인이 됐으면 그대로 만들기(대화상자 보내기), 아니면 기다리지 않고 바로 확인
+  const onTypedKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+    if (serverReady) return
+    e.preventDefault()
+    const host = typed.trim()
+    if (host && !settled(host)) start(host)
+  }
 
   const submit = async () => {
     setBusy(true)
     setError(null)
     try {
-      await createRoom(name.trim())
+      await createRoom(name.trim(), where === 'server' ? { host: target } : null)
       onClose()
     } catch (e) {
       setError(errorMessage(e))
@@ -485,15 +612,10 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const checkId = `${id}-c`
+
   return (
-    <FormDialog
-      title="새 방"
-      submitLabel="만들기"
-      canSubmit={name.trim() !== ''}
-      busy={busy}
-      onSubmit={() => void submit()}
-      onClose={onClose}
-    >
+    <FormDialog title="새 방" submitLabel="만들기" canSubmit={canSubmit} busy={busy} onSubmit={() => void submit()} onClose={onClose}>
       <div className="fld">
         <label className="fld-l" htmlFor={id}>
           이름
@@ -517,6 +639,205 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
           </p>
         )}
       </div>
+      <div className="fld">
+        <span className="fld-l" id={`${id}-w`}>
+          {REMOTE.where}
+        </span>
+        <div className="seg where" role="radiogroup" aria-labelledby={`${id}-w`}>
+          <button type="button" role="radio" aria-checked={where === 'local'} onClick={() => setWhere('local')}>
+            <Monitor className="i" aria-hidden="true" />
+            {REMOTE.local}
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={where === 'server'}
+            disabled={ssh !== true}
+            aria-describedby={ssh === false ? `${id}-ns` : undefined}
+            onClick={toServer}
+          >
+            <Server className="i" aria-hidden="true" />
+            {REMOTE.server}
+          </button>
+        </div>
+        {/* ssh 가 없으면 서버 칸 자리에 */}
+        {ssh === false && (
+          <p className="rchk bad" id={`${id}-ns`}>
+            <TriangleAlert className="i" aria-hidden="true" />
+            <span>{REMOTE.noSsh}</span>
+          </p>
+        )}
+      </div>
+      {where === 'server' && (
+        <div className="fld" ref={serverArea}>
+          <span className="fld-l" id={`${id}-s`}>
+            {REMOTE.serverLabel}
+          </span>
+          {!noList && (
+            <ServerPicker
+              hosts={hosts ?? []}
+              host={typing ? null : listHost}
+              typing={typing}
+              labelId={`${id}-s`}
+              describedBy={shown.state !== 'idle' && !typing ? checkId : undefined}
+              onHost={pickHost}
+              onTyped={pickTyped}
+            />
+          )}
+          {inputMode && (
+            <input
+              ref={typedInput}
+              className="inp mono"
+              aria-label={REMOTE.typedLabel}
+              placeholder={REMOTE.typedExample}
+              value={typed}
+              onChange={e => onTyped(e.target.value)}
+              onKeyDown={onTypedKey}
+              aria-describedby={shown.state !== 'idle' ? checkId : undefined}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          )}
+          <RemoteCheckLine id={checkId} check={shown} okText={REMOTE.connected} />
+        </div>
+      )}
     </FormDialog>
+  )
+}
+
+interface ServerPickerProps {
+  hosts: SshHostEntry[]
+  /** 목록에서 고른 서버 — 없으면 null */
+  host: string | null
+  /** '직접 입력…' 을 골랐다 */
+  typing: boolean
+  /** 칸 라벨('서버') — 단추와 목록의 이름 */
+  labelId: string
+  /** 확인 줄 */
+  describedBy?: string
+  onHost: (host: string) => void
+  /** '직접 입력…' — 입력칸으로 포커스는 부른 쪽이 */
+  onTyped: () => void
+}
+
+/** 서버 목록 단추 + 목록 상자 — 줄마다 host + 흐린 user@hostName, 끝에 직접 입력…. ↑↓·Home·End 로 옮기고 Enter 로 고르고 Esc 는 목록만 닫는다 */
+function ServerPicker({ hosts, host, typing, labelId, describedBy, onHost, onTyped }: ServerPickerProps) {
+  const [open, setOpen] = useState(false)
+  const wrap = useRef<HTMLDivElement>(null)
+  const button = useRef<HTMLButtonElement>(null)
+  const box = useRef<HTMLDivElement>(null)
+  const valueId = useId()
+  const close = useCallback(() => setOpen(false), [])
+  useDismiss(open, wrap, close)
+
+  // 열리면 고른 줄(없으면 첫 줄)로
+  useEffect(() => {
+    if (!open) return
+    const b = box.current
+    ;(b?.querySelector<HTMLElement>('[aria-selected="true"]') ?? b?.querySelector<HTMLElement>(OPTION))?.focus()
+  }, [open])
+
+  const chosen = host === null ? undefined : hosts.find(h => h.host === host)
+  const chosenAddr = chosen ? sshAddress(chosen) : null
+
+  const pick = (h: string) => {
+    setOpen(false)
+    button.current?.focus()
+    onHost(h)
+  }
+
+  const pickTyped = () => {
+    setOpen(false)
+    onTyped()
+  }
+
+  const onButtonKey = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    e.preventDefault()
+    setOpen(true)
+  }
+
+  const onListKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
+      button.current?.focus()
+      return
+    }
+    if (e.key === 'Tab') {
+      setOpen(false)
+      return
+    }
+    moveMenuFocus(e, OPTION)
+  }
+
+  return (
+    <div className="mp srv-pick" ref={wrap}>
+      <button
+        ref={button}
+        type="button"
+        className="inp srv-sel"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-labelledby={`${labelId} ${valueId}`}
+        aria-describedby={describedBy}
+        onClick={() => setOpen(o => !o)}
+        onKeyDown={onButtonKey}
+      >
+        <span id={valueId} className="srv-v">
+          {typing ? (
+            REMOTE.typed
+          ) : host === null ? (
+            <span className="srv-ph">{REMOTE.pick}</span>
+          ) : (
+            <>
+              <Server className="i" aria-hidden="true" />
+              <span className="srv-h">{host}</span>
+              {chosenAddr && (
+                <>
+                  {' '}
+                  <small>{chosenAddr}</small>
+                </>
+              )}
+            </>
+          )}
+        </span>
+        <ChevronDown className="i srv-cv" aria-hidden="true" />
+      </button>
+      <Presence show={open}>
+        <MotionDiv
+          motion={MOTION.pop}
+          origin="top left"
+          ref={box}
+          className="pop srv-pop"
+          role="listbox"
+          aria-labelledby={labelId}
+          data-own-esc=""
+          onKeyDown={onListKey}
+        >
+          {hosts.map(h => {
+            const addr = sshAddress(h)
+            return (
+              <button key={h.host} type="button" role="option" aria-selected={!typing && h.host === host} className="mi" onClick={() => pick(h.host)}>
+                <Server className="i" aria-hidden="true" />
+                <span className="srv-h">{h.host}</span>
+                {addr && (
+                  <>
+                    {' '}
+                    <small>{addr}</small>
+                  </>
+                )}
+              </button>
+            )
+          })}
+          {hosts.length > 0 && <div className="pop-sep" aria-hidden="true" />}
+          <button type="button" role="option" aria-selected={typing} className="mi" onClick={pickTyped}>
+            <span className="srv-h">{REMOTE.typed}</span>{' '}
+            <small aria-hidden="true">{REMOTE.typedExample}</small>
+          </button>
+        </MotionDiv>
+      </Presence>
+    </div>
   )
 }

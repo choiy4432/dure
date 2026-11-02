@@ -1,6 +1,6 @@
 // 화면 문구 도우미 — 조사(이/가 …)와 '방금 · N분 전' 같은 시각 말
 
-import type { MessageState, SleepBlock, UsageWindow } from '../../engine/types'
+import type { MessageState, SleepBlock, SshHostEntry, UsageWindow } from '../../engine/types'
 import { hasBatchim } from '../../shared/josa'
 import type { DisplayStatus, Phase } from '../state/selectors'
 
@@ -90,6 +90,40 @@ export const FORK_DIALOG = {
   title: '새 에이전트로 이어 가기',
   folderNote: '원래 에이전트와 같은 폴더예요',
 } as const
+
+/** 서버(SSH) 방 — 새 방 스위치·서버 칸·확인 줄·에이전트 추가의 서버 폴더(설계 4.1·4.2 문구 표). 문제 글은 shared/remoteTexts */
+export const REMOTE = {
+  where: '어디서 일하나요',
+  local: '이 PC',
+  server: '서버(SSH)',
+  serverLabel: '서버',
+  /** 서버 목록 단추 — 아직 고르지 않았을 때 */
+  pick: '골라 주세요',
+  typed: '직접 입력…',
+  typedExample: '사용자@주소',
+  /** 직접 입력칸의 읽는 이름 */
+  typedLabel: '서버 주소',
+  noSsh: '윈도우 OpenSSH 를 찾지 못했어요',
+  checking: '확인하는 중…',
+  connected: (version: string) => `접속됨 · claude ${version}`,
+  folderOk: (version: string) => `폴더가 있어요 · claude ${version}`,
+  folderExample: '/home/<사용자>/projects/web',
+  check: '확인',
+} as const
+
+/** ~/.ssh/config 한 줄의 흐린 주소 — user@hostName(없는 칸은 뺀다). 덧붙일 게 없으면 null */
+export function sshAddress(e: SshHostEntry): string | null {
+  const name = e.hostName ?? e.host
+  const addr = e.user ? `${e.user}@${name}` : name
+  return addr === e.host ? null : addr
+}
+
+/** 서버 방 표시 한 줄 — '<host> · <user>@<hostName>', 목록에 없거나 덧붙일 게 없으면 host 만 */
+export function serverLine(host: string, hosts: readonly SshHostEntry[] | null): string {
+  const e = hosts?.find(h => h.host === host)
+  const addr = e ? sshAddress(e) : null
+  return addr ? `${host} · ${addr}` : host
+}
 
 /** 지난 대화 탭 — 탭 이름 · 지금 배지 · 날짜 줄 꼬리 · 읽기 띠 · 아래 줄 안내·단추 · 긴 대화의 앞 줄 */
 export const PAST = {

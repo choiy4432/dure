@@ -4436,6 +4436,28 @@ code {
   white-space: nowrap;
 }
 
+/* 서버 방 줄 — 이름 아래 흐린 <host> · <user>@<hostName> */
+.rs-tx {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.rs-sub {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.rs-sub .i {
+  width: 13px;
+  height: 13px;
+}
+
 .rs-todo {
   display: inline-flex;
   align-items: center;
@@ -4473,7 +4495,7 @@ code {
   color: var(--text);
 }
 
-/* 목록 안 이름 입력(새 방 · 이름 바꾸기) */
+/* 목록 안 이름 입력(이름 바꾸기) */
 .rs-form {
   flex: 1;
   min-width: 0;
@@ -4544,7 +4566,7 @@ code {
   transition: background-color 0.15s, color 0.15s;
 }
 
-.seg button:hover {
+.seg button:hover:not(:disabled) {
   color: var(--text);
 }
 
@@ -4624,6 +4646,169 @@ code {
 .inp[type="number"]::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+
+/* ── 서버(SSH) 방 ──────────────────────────────────── */
+
+/* 서버 알약 — 서버 아이콘 + host(위 띠 방 이름 뒤 · 에이전트 추가의 폴더 라벨 옆) */
+.srv {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--subtle);
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.srv .i {
+  width: 13px;
+  height: 13px;
+}
+
+/* 위 띠 방 버튼 안 — 이름 바로 뒤에 한 단 낮게 */
+.room .srv {
+  height: 20px;
+  margin-left: -2px;
+}
+
+/* 라벨 + 알약 한 줄(서버 방 에이전트 추가의 '폴더') */
+.fld-lr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 서버 경로·주소 — 고정폭 */
+.inp.mono,
+.fld-path.mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  letter-spacing: 0;
+}
+
+/* 어디서 일하나요 — 칸마다 아이콘 + 글 */
+.seg.where button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.seg button:disabled {
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+/* 서버 목록 단추 — 입력칸 모양, 고른 서버(host + 흐린 user@hostName) · 오른쪽 끝 펼침 */
+.mp.srv-pick {
+  display: flex;
+  width: 100%;
+}
+
+.srv-sel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+
+.srv-sel[aria-expanded="true"] {
+  border-color: var(--primary);
+  box-shadow: var(--ring-soft);
+}
+
+/* 마우스로 고른 뒤 돌아온 포커스엔 고리를 두지 않는다(키보드로 오면 .inp:focus 그대로) */
+.srv-sel:focus:not(:focus-visible):not([aria-expanded="true"]) {
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+.srv-v {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.srv-v .i,
+.srv-pop .mi .i {
+  color: var(--text-3);
+}
+
+.srv-h {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.srv-v small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.srv-ph {
+  color: var(--muted);
+}
+
+.srv-cv {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+/* 서버 목록 — 단추 폭 그대로, 줄 오른쪽에 흐린 주소 */
+.pop.srv-pop {
+  right: 0;
+  min-width: 0;
+  max-width: none;
+}
+
+.srv-pop .mi small {
+  flex: none;
+  margin-left: auto;
+  padding-left: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.srv-pop .mi[aria-selected="true"] {
+  background: var(--hover);
+}
+
+/* 확인 줄 — 확인 중 흐리게 · 됨 초록 · 문제 앰버 */
+.rchk {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.rchk .i {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+}
+
+.rchk.ok {
+  color: var(--ok-text);
+}
+
+.rchk.bad {
+  color: var(--warn-text);
 }
 
 /* effort 칸은 줄지 않는다 — 막대·이름은 자를 수 없어 .mp 의 min-width: 0 으로 줄면 칩 테두리 밖으로 넘쳤다.

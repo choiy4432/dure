@@ -14,9 +14,12 @@ export function useDismiss(open: boolean, wrap: RefObject<HTMLElement | null>, o
 
 const ITEM = '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'
 
-/** 메뉴 안 ↑↓ · Home · End 로 항목 사이를 옮긴다 — 처리했으면 true */
-export function moveMenuFocus(e: KeyboardEvent<HTMLElement>): boolean {
-  const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(ITEM))
+/** 목록 상자(서버 고르기)의 항목 */
+export const OPTION = '[role="option"]:not(:disabled)'
+
+/** 메뉴 안 ↑↓ · Home · End 로 항목 사이를 옮긴다 — 처리했으면 true. 목록 상자는 item = OPTION */
+export function moveMenuFocus(e: KeyboardEvent<HTMLElement>, item = ITEM): boolean {
+  const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>(item))
   if (items.length === 0) return false
   const i = items.indexOf(document.activeElement as HTMLElement)
   let next = -1

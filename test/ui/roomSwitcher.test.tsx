@@ -11,7 +11,13 @@ const agent = (id: string, roomId: string, name: string, pos = { x: 64, y: 64 })
 })
 
 let snapshot: Snapshot
-let api: Record<'addRoom' | 'renameRoom' | 'removeRoom' | 'sleepRoom' | 'sleepableIn', ReturnType<typeof vi.fn>>
+let api: Record<'addRoom' | 'renameRoom' | 'removeRoom' | 'sleepRoom' | 'sleepableIn' | 'sshAvailable' | 'sshHosts' | 'checkRemote', ReturnType<typeof vi.fn>>
+
+/** ~/.ssh/config 의 서버 — dev 는 사용자·주소를 알고, gpu 는 주소만 안다 */
+const HOSTS = [
+  { host: 'dev', user: 'a', hostName: '10.0.0.5', port: null },
+  { host: 'gpu', user: null, hostName: 'gpu.internal', port: null },
+]
 
 beforeEach(() => {
   vi.resetModules()
@@ -25,12 +31,15 @@ beforeEach(() => {
   // 엔진처럼 — 바뀐 방은 다음 스냅샷에 들어 있다(방 바뀜 이벤트는 없다)
   let next = 4
   api = {
-    addRoom: vi.fn(async (name: string) => {
+    addRoom: vi.fn(async (name: string, remote?: { host: string } | null) => {
       if (!name.trim()) throw new Error('이름을 입력하세요')
-      const r = room(`r${next++}`, name.trim())
+      const r: Room = { ...room(`r${next++}`, name.trim()), ...(remote ? { remote } : {}) }
       snapshot = { ...snapshot, rooms: [...snapshot.rooms, r] }
       return r
     }),
+    sshAvailable: vi.fn(async () => true),
+    sshHosts: vi.fn(async () => HOSTS),
+    checkRemote: vi.fn(async (_host: string) => ({ ok: true, claudeVersion: '2.1.304' })),
     renameRoom: vi.fn(async (id: string, name: string) => {
       snapshot = { ...snapshot, rooms: snapshot.rooms.map(r => (r.id === id ? { ...r, name: name.trim() } : r)) }
       return snapshot.rooms.find(r => r.id === id)
@@ -116,14 +125,27 @@ describe('RoomSwitcher — 방 고르기', () => {
   })
 })
 
+/** 목록의 '새 방' → 새 방 대화상자(목록은 닫힌다) */
+const openNewRoom = async () => {
+  fireEvent.click(within(openList()).getByRole('button', { name: '새 방' }))
+  await settle() // ssh 있는지·서버 목록을 받는다
+  return screen.getByRole('dialog', { name: '새 방' })
+}
+const makeButton = (dlg: HTMLElement) => within(dlg).getByRole('button', { name: '만들기' }) as HTMLButtonElement
+
 describe('RoomSwitcher — 새 방', () => {
-  it('새 방은 목록 안 입력칸 — 만들면 그 방으로 바뀌고 목록이 닫힌다', async () => {
+  it('목록의 새 방은 대화상자 — 이름을 적어 만들면 그 방으로 바뀌고, 이 PC 방은 이름만 넘긴다', async () => {
     const store = await renderApp()
-    const list = openList()
-    fireEvent.click(within(list).getByRole('button', { name: '새 방' }))
-    const input = within(list).getByRole('textbox', { name: '새 방 이름' }) as HTMLInputElement
+    const dlg = await openNewRoom()
+    expect(screen.queryByRole('dialog', { name: '방' })).toBeNull() // 목록은 닫고 대화상자만
+    const input = within(dlg).getByRole('textbox', { name: '이름' }) as HTMLInputElement
     expect(document.activeElement).toBe(input)
-    const make = within(list).getByRole('button', { name: '만들기' }) as HTMLButtonElement
+    // 어디서 일하나요 — 기본 이 PC
+    const where = within(dlg).getByRole('radiogroup', { name: '어디서 일하나요' })
+    expect(within(where).getByRole('radio', { name: '이 PC' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(where).getByRole('radio', { name: '서버(SSH)' }).getAttribute('aria-checked')).toBe('false')
+    expect(within(dlg).queryByRole('button', { name: /^서버/ })).toBeNull() // 서버 칸은 서버를 고를 때만
+    const make = makeButton(dlg)
     expect(make.disabled).toBe(true) // 이름이 비면 못 만든다
     fireEvent.change(input, { target: { value: '   ' } })
     expect(make.disabled).toBe(true)
@@ -133,27 +155,27 @@ describe('RoomSwitcher — 새 방', () => {
     await act(async () => { fireEvent.click(make) })
     await settle()
     expect(api.addRoom).toHaveBeenCalledWith('겨울 준비')
-    expect(screen.queryByRole('dialog', { name: '방' })).toBeNull()
+    expect(api.checkRemote).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: '새 방' })).toBeNull()
     expect(store.getState().roomId).toBe('r4')
     expect(roomButton().textContent).toBe('겨울 준비')
+    expect(document.activeElement).toBe(roomButton())
   })
 
-  it('새 방 — 엔진 오류는 입력칸 아래 그대로, Esc 는 입력만 접는다', async () => {
+  it('새 방 — 엔진 오류는 이름 칸 아래 그대로, Esc 는 대화상자를 닫고 방 버튼으로', async () => {
     api.addRoom.mockRejectedValueOnce(new Error('저장하지 못했어요: 디스크가 가득 찼어요'))
     await renderApp()
-    const list = openList()
-    fireEvent.click(within(list).getByRole('button', { name: '새 방' }))
-    const input = within(list).getByRole('textbox', { name: '새 방 이름' })
+    const dlg = await openNewRoom()
+    const input = within(dlg).getByRole('textbox', { name: '이름' })
     fireEvent.change(input, { target: { value: '겨울 준비' } })
-    await act(async () => { fireEvent.submit(input.closest('form')!) })
+    await act(async () => { fireEvent.click(makeButton(dlg)) })
     await settle()
-    expect(within(list).getByText('저장하지 못했어요: 디스크가 가득 찼어요')).toBeTruthy()
+    expect(within(dlg).getByText('저장하지 못했어요: 디스크가 가득 찼어요')).toBeTruthy()
     expect(input.getAttribute('aria-invalid')).toBe('true')
 
     fireEvent.keyDown(input, { key: 'Escape' })
-    expect(within(list).queryByRole('textbox')).toBeNull()
-    expect(screen.getByRole('dialog', { name: '방' })).toBeTruthy() // 목록은 그대로
-    expect(document.activeElement).toBe(within(list).getByRole('button', { name: '새 방' }))
+    expect(screen.queryByRole('dialog', { name: '새 방' })).toBeNull()
+    expect(document.activeElement).toBe(roomButton())
   })
 
   it('방이 없을 때 빈 화면의 방 만들기 — 대화상자에서 이름을 적어 만든다', async () => {
@@ -173,6 +195,201 @@ describe('RoomSwitcher — 새 방', () => {
     expect(store.getState().roomId).toBe('r4')
     expect(roomButton().textContent).toBe('여름 캠페인')
     expect(screen.getByText('첫 에이전트를 추가해 보세요')).toBeTruthy()
+  })
+})
+
+/** 결과를 손으로 내주는 약속 — 확인 중 모습·늦게 온 옛 답을 본다 */
+function deferred<T>() {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>(r => { resolve = r })
+  return { promise, resolve }
+}
+type Check = { ok: true; claudeVersion: string } | { ok: false; kind: string; detail: string | null }
+
+describe('새 방 — 서버(SSH)', () => {
+  const serverButton = (dlg: HTMLElement) => within(dlg).getByRole('button', { name: /^서버 / }) as HTMLButtonElement
+  const toServer = (dlg: HTMLElement) => fireEvent.click(within(dlg).getByRole('radio', { name: '서버(SSH)' }))
+  const openHosts = (dlg: HTMLElement) => {
+    fireEvent.click(serverButton(dlg))
+    return within(dlg).getByRole('listbox', { name: '서버' })
+  }
+
+  it('스위치 서버 → 목록에 host·user@hostName → 고르면 바로 확인 → 접속됨 뒤에만 만들기 → addRoom(이름, { host })', async () => {
+    const answer = deferred<Check>()
+    api.checkRemote.mockReturnValueOnce(answer.promise)
+    const store = await renderApp()
+    const dlg = await openNewRoom()
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '서버 실험' } })
+    toServer(dlg)
+    expect(within(dlg).getByRole('radio', { name: '서버(SSH)' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(dlg).queryByText('~/.ssh/config 의 서버 · VS Code 원격과 같은 키로 접속해요')).toBeNull() // 안내 줄은 뺐다
+    expect(makeButton(dlg).disabled).toBe(true) // 서버를 고르기 전
+
+    const box = openHosts(dlg)
+    expect(serverButton(dlg).getAttribute('aria-expanded')).toBe('true')
+    const options = within(box).getAllByRole('option')
+    // 줄마다 host + 흐린 user@hostName(없는 칸은 뺀다) · 끝에 직접 입력…(흐린 예시는 읽지 않는다)
+    expect(options.map(o => o.textContent)).toEqual(['dev a@10.0.0.5', 'gpu gpu.internal', '직접 입력… 사용자@주소'])
+    expect(within(box).getByRole('option', { name: '직접 입력…' })).toBe(options[2])
+    expect(document.activeElement).toBe(options[0])
+
+    await act(async () => { fireEvent.click(options[0]) })
+    expect(within(dlg).queryByRole('listbox')).toBeNull()
+    expect(document.activeElement).toBe(serverButton(dlg))
+    expect(serverButton(dlg).textContent).toContain('dev')
+    expect(serverButton(dlg).textContent).toContain('a@10.0.0.5')
+    expect(api.checkRemote).toHaveBeenCalledWith('dev')
+    expect(within(dlg).getByRole('status').textContent).toBe('확인하는 중…')
+    expect(makeButton(dlg).disabled).toBe(true)
+
+    await act(async () => { answer.resolve({ ok: true, claudeVersion: '2.1.304' }) })
+    expect(within(dlg).getByRole('status').textContent).toBe('접속됨 · claude 2.1.304')
+    expect(makeButton(dlg).disabled).toBe(false)
+
+    // 이 PC 로 돌아가면 서버 칸은 접히고 만들기는 이름만 본다 — 다시 서버면 고른 서버·확인이 그대로
+    fireEvent.click(within(dlg).getByRole('radio', { name: '이 PC' }))
+    expect(within(dlg).queryByRole('button', { name: /^서버 / })).toBeNull()
+    toServer(dlg)
+    expect(within(dlg).getByRole('status').textContent).toBe('접속됨 · claude 2.1.304')
+
+    await act(async () => { fireEvent.click(makeButton(dlg)) })
+    await settle()
+    expect(api.addRoom).toHaveBeenCalledWith('서버 실험', { host: 'dev' })
+    expect(api.checkRemote).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog', { name: '새 방' })).toBeNull()
+    expect(store.getState().roomId).toBe('r4')
+    // 위 띠 방 이름 뒤 서버 알약
+    expect(roomButton().querySelector('.room-name')!.textContent).toBe('서버 실험')
+    expect(roomButton().querySelector('.srv')!.textContent).toBe('dev')
+  })
+
+  it('확인에 실패하면 그 글(경고) — 만들기는 꺼진 채', async () => {
+    api.checkRemote.mockResolvedValueOnce({ ok: false, kind: 'denied', detail: null })
+    await renderApp()
+    const dlg = await openNewRoom()
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '서버 실험' } })
+    toServer(dlg)
+    const devOption = within(openHosts(dlg)).getByRole('option', { name: /^dev/ })
+    await act(async () => { fireEvent.click(devOption) })
+    await settle()
+    expect(within(dlg).getByRole('alert').textContent).toBe('dev 에 키로 접속할 수 없어요 — SSH 키를 등록해 주세요')
+    expect(within(dlg).queryByRole('status')).toBeNull()
+    expect(makeButton(dlg).disabled).toBe(true)
+    // 경고 줄은 서버 단추가 가리킨다(칸 테두리는 시안처럼 그대로)
+    expect(serverButton(dlg).getAttribute('aria-describedby')).toBe(within(dlg).getByRole('alert').id)
+  })
+
+  it('접속 실패는 ssh 오류 첫 줄을 뒤에 · 다른 서버를 고르면 늦게 온 옛 답은 버린다', async () => {
+    const first = deferred<Check>()
+    api.checkRemote.mockReturnValueOnce(first.promise).mockResolvedValueOnce({ ok: false, kind: 'unreachable', detail: 'Connection timed out' })
+    await renderApp()
+    const dlg = await openNewRoom()
+    toServer(dlg)
+    const devOption = within(openHosts(dlg)).getByRole('option', { name: /^dev/ })
+    await act(async () => { fireEvent.click(devOption) })
+    const gpuOption = within(openHosts(dlg)).getByRole('option', { name: /^gpu/ })
+    await act(async () => { fireEvent.click(gpuOption) })
+    await settle()
+    expect(api.checkRemote).toHaveBeenLastCalledWith('gpu')
+    expect(within(dlg).getByRole('alert').textContent).toBe('gpu 에 접속하지 못했어요 — Connection timed out')
+    await act(async () => { first.resolve({ ok: true, claudeVersion: '2.1.304' }) }) // dev 의 답 — 이미 지난 일
+    expect(within(dlg).queryByText(/접속됨/)).toBeNull()
+    expect(within(dlg).getByRole('alert').textContent).toBe('gpu 에 접속하지 못했어요 — Connection timed out')
+  })
+
+  it('직접 입력 — 고르면 입력칸으로, Enter 면 바로 · 입력을 멈추면 잠시 뒤 확인', async () => {
+    await renderApp()
+    const dlg = await openNewRoom()
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '직접' } })
+    toServer(dlg)
+    fireEvent.click(within(openHosts(dlg)).getByRole('option', { name: '직접 입력…' }))
+    const typed = within(dlg).getByRole('textbox', { name: '서버 주소' }) as HTMLInputElement
+    expect(typed.placeholder).toBe('사용자@주소')
+    expect(document.activeElement).toBe(typed)
+
+    // Enter — 기다리지 않고 바로(대화상자를 보내지 않는다)
+    fireEvent.change(typed, { target: { value: ' me@10.1.1.1 ' } })
+    await act(async () => { fireEvent.keyDown(typed, { key: 'Enter' }) })
+    await settle()
+    expect(api.checkRemote).toHaveBeenCalledTimes(1)
+    expect(api.checkRemote).toHaveBeenLastCalledWith('me@10.1.1.1')
+    expect(screen.getByRole('dialog', { name: '새 방' })).toBeTruthy()
+    expect(within(dlg).getByRole('status').textContent).toBe('접속됨 · claude 2.1.304')
+    expect(makeButton(dlg).disabled).toBe(false)
+
+    // 글을 바꾸면 확인이 풀리고, 멈춘 뒤에 다시 확인한다
+    fireEvent.change(typed, { target: { value: 'me@10.1.1.2' } })
+    expect(makeButton(dlg).disabled).toBe(true)
+    expect(within(dlg).queryByText(/접속됨/)).toBeNull()
+    expect(api.checkRemote).toHaveBeenCalledTimes(1)
+    await act(async () => { await new Promise(r => setTimeout(r, 750)) })
+    expect(api.checkRemote).toHaveBeenCalledTimes(2)
+    expect(api.checkRemote).toHaveBeenLastCalledWith('me@10.1.1.2')
+    expect(makeButton(dlg).disabled).toBe(false)
+
+    await act(async () => { fireEvent.click(makeButton(dlg)) })
+    await settle()
+    expect(api.addRoom).toHaveBeenCalledWith('직접', { host: 'me@10.1.1.2' })
+  })
+
+  it('서버 목록 키보드 — ↑↓ 로 옮기고 Esc 는 목록만 닫고 서버 버튼으로', async () => {
+    await renderApp()
+    const dlg = await openNewRoom()
+    toServer(dlg)
+    const box = openHosts(dlg)
+    const options = within(box).getAllByRole('option')
+    fireEvent.keyDown(options[0], { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(options[1])
+    fireEvent.keyDown(options[1], { key: 'ArrowUp' })
+    expect(document.activeElement).toBe(options[0])
+    fireEvent.keyDown(options[0], { key: 'End' })
+    expect(document.activeElement).toBe(options[2])
+    fireEvent.keyDown(options[2], { key: 'Escape' })
+    expect(within(dlg).queryByRole('listbox')).toBeNull()
+    expect(screen.getByRole('dialog', { name: '새 방' })).toBeTruthy() // 대화상자는 그대로
+    expect(document.activeElement).toBe(serverButton(dlg))
+    expect(api.checkRemote).not.toHaveBeenCalled()
+  })
+
+  it('ssh 가 없으면 서버 칸이 꺼지고 그 자리에 안내', async () => {
+    api.sshAvailable.mockResolvedValue(false)
+    await renderApp()
+    const dlg = await openNewRoom()
+    const server = within(dlg).getByRole('radio', { name: '서버(SSH)' }) as HTMLButtonElement
+    expect(server.disabled).toBe(true)
+    expect(within(dlg).getByText('윈도우 OpenSSH 를 찾지 못했어요')).toBeTruthy()
+    fireEvent.click(server)
+    expect(within(dlg).getByRole('radio', { name: '이 PC' }).getAttribute('aria-checked')).toBe('true')
+  })
+})
+
+describe('RoomSwitcher — 서버 방 표시', () => {
+  it('위 띠 방 이름 뒤 알약 · 방 목록 서버 방 줄 아래 흐린 <host> · <user>@<hostName>(모르면 host 만)', async () => {
+    snapshot = {
+      ...snapshot,
+      rooms: [{ ...room('r1', '웹 리뉴얼'), remote: { host: 'dev' } }, { ...room('r2', '직접 방'), remote: { host: 'me@10.1.1.1' } }, room('r3', '빈 방')],
+    }
+    await renderApp()
+    await settle()
+    const pill = roomButton().querySelector('.srv')!
+    expect(pill.textContent).toBe('dev')
+    expect(pill.getAttribute('title')).toBe('dev · a@10.0.0.5')
+    expect(api.sshHosts).toHaveBeenCalled()
+
+    const list = openList()
+    await settle()
+    expect(list.querySelector('[data-nav="r1"] .rs-sub')!.textContent).toBe('dev · a@10.0.0.5')
+    expect(list.querySelector('[data-nav="r2"] .rs-sub')!.textContent).toBe('me@10.1.1.1')
+    expect(list.querySelector('[data-nav="r3"] .rs-sub')).toBeNull()
+    expect(list.querySelector('[data-nav="r3"]')!.textContent).toBe('빈 방')
+  })
+
+  it('이 PC 방만 있으면 서버 목록을 묻지 않는다', async () => {
+    await renderApp()
+    openList()
+    await settle()
+    expect(api.sshHosts).not.toHaveBeenCalled()
+    expect(roomButton().querySelector('.srv')).toBeNull()
   })
 })
 

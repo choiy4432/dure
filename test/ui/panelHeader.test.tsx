@@ -584,6 +584,52 @@ describe('PanelHeader — 띠', () => {
   })
 })
 
+describe('PanelHeader — 서버 안내 띠', () => {
+  const serverRoom = () => {
+    snapshot.rooms = [{ id: 'r1', name: '웹 리뉴얼', createdAt: 1, remote: { host: 'dev' } }]
+  }
+  const band = () => document.querySelector<HTMLElement>('.band.warn.rmt')
+
+  it('로그인 만료 — 머리 아래 앰버 띠에 제목과 설명 두 줄', async () => {
+    serverRoom()
+    snapshot.agents = [agent('w', { name: '웹 화면', remoteIssue: { kind: 'login', detail: null } })]
+    await renderPanel()
+    const b = band()!
+    expect(b.querySelector('.band-t')!.textContent).toBe('dev 의 claude 로그인이 만료됐어요')
+    expect(b.querySelector('.band-h')!.textContent).toBe('서버 터미널에서 claude 를 실행해 /login 해 주세요 — 다시 보내면 이어서 해요')
+    expect(b.querySelector('svg')).not.toBeNull()
+    expect(b.previousElementSibling?.classList.contains('ph')).toBe(true) // 머리 바로 아래
+  })
+
+  it('끊김 — 한 줄', async () => {
+    serverRoom()
+    snapshot.agents = [agent('w', { name: '웹 화면', remoteIssue: { kind: 'disconnected', detail: null } })]
+    await renderPanel()
+    const b = band()!
+    expect(b.querySelector('.band-t')!.textContent).toBe('dev 연결이 끊겼어요 — 다시 보내면 이어서 해요')
+    expect(b.querySelector('.band-h')).toBeNull()
+  })
+
+  it('접속 실패는 ssh 오류 첫 줄까지 · 문제가 풀리면(status 사건) 띠가 사라진다', async () => {
+    serverRoom()
+    snapshot.agents = [agent('w', { name: '웹 화면', remoteIssue: { kind: 'unreachable', detail: 'Connection refused' } })]
+    let emit!: (p: unknown) => void
+    ;(window as any).dure.on = (k: string, fn: (p: unknown) => void) => {
+      if (k === 'status') emit = fn
+      return () => {}
+    }
+    await renderPanel()
+    expect(band()!.textContent).toBe('dev 에 접속하지 못했어요 — Connection refused')
+    await act(async () => { emit({ agentId: 'w', status: 'idle', errorText: null, remoteIssue: null }) })
+    expect(band()).toBeNull()
+  })
+
+  it('이 PC 방 에이전트는 띠가 없다', async () => {
+    await renderPanel()
+    expect(band()).toBeNull()
+  })
+})
+
 describe('PanelHeader — 맡기는 정도 스위치', () => {
   const lv = () => screen.getByRole('slider', { name: '맡기는 정도' })
   const text = () => lv().getAttribute('aria-valuetext')

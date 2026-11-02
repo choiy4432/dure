@@ -1,11 +1,12 @@
-import { useId, useRef, useState } from 'react'
+import { useId, useRef, useState, type KeyboardEvent } from 'react'
 import { FolderOpen } from 'lucide-react'
 import type { RoomId } from '../../engine/types'
-import { getStore, type ForkDraft } from '../state/store'
-import { errorMessage, fieldError, FORK_DIALOG } from '../lib/words'
+import { getStore, useDure, type ForkDraft } from '../state/store'
+import { errorMessage, fieldError, FORK_DIALOG, REMOTE } from '../lib/words'
 import { placeMissing } from '../map/layout'
 import { markFresh } from '../map/freshNodes'
 import { FormDialog } from './FormDialog'
+import { RemoteCheckLine, ServerTag, useRemoteCheck } from './RemoteCheck'
 
 type Field = 'folder' | 'name' | 'other'
 
@@ -23,18 +24,34 @@ interface Props {
   onClose: () => void
 }
 
-/** 에이전트 추가 — 폴더 · 이름 · 역할 한 줄. 셋 다 있어야 추가, 엔진 오류는 그 칸 아래(이름 겹침은 해요체 안내로) */
+/**
+ * 에이전트 추가 — 폴더 · 이름 · 역할 한 줄. 셋 다 있어야 추가, 엔진 오류는 그 칸 아래(이름 겹침은 해요체 안내로).
+ * 서버 방이면 폴더 = 서버 경로 입력칸 + 확인(checkRemoteFolder) — 확인이 된 뒤에만 추가, 저장하는 폴더는 서버가 펼친 경로.
+ * 갈래는 어느 방이든 폴더 고정.
+ */
 export function AddAgentDialog({ roomId, fork, onClose }: Props) {
+  const remote = useDure(s => s.rooms.find(r => r.id === roomId)?.remote ?? null)
+  const serverMode = remote !== null && !fork
   const [folder, setFolder] = useState<string | null>(fork?.folder ?? null)
+  const [path, setPath] = useState('')
   const [name, setName] = useState(fork?.name ?? '')
   const [role, setRole] = useState(fork?.role ?? '')
   const [error, setError] = useState<{ field: Field; message: string } | null>(null)
   const picking = useRef(false)
   const [busy, setBusy] = useState(false)
   const folderButton = useRef<HTMLButtonElement>(null)
+  const pathInput = useRef<HTMLInputElement>(null)
   const nameInput = useRef<HTMLInputElement>(null)
   const id = useId()
   const errorId = `${id}-e`
+  const checkId = `${id}-c`
+  const { check, start, reset, settled } = useRemoteCheck(
+    () => remote?.host ?? '',
+    async target => {
+      const r = await window.dure.checkRemoteFolder(roomId, target)
+      return r.ok ? { ok: true, value: r.folder, claudeVersion: r.claudeVersion } : r
+    },
+  )
 
   const errorOf = (f: Field) => (error?.field === f ? error.message : null)
   const clear = (f: Field) => setError(e => (e?.field === f ? null : e))
@@ -56,8 +73,25 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
     }
   }
 
+  // 서버 폴더 — 지금 칸과 맞는 확인만 보인다(칸을 바꾸면 확인이 풀린다)
+  const target = path.trim()
+  const shown = check.state !== 'idle' && check.target === target ? check : { state: 'idle' as const }
+  const serverFolder = shown.state === 'ok' ? shown.value : null
+
+  const checkFolder = () => {
+    if (target && !settled(target)) start(target)
+  }
+
+  // Enter — 확인이 됐으면 그대로 추가(대화상자 보내기), 아니면 확인
+  const onPathKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing || serverFolder !== null) return
+    e.preventDefault()
+    checkFolder()
+  }
+
   const submit = async () => {
-    if (!folder) return
+    const chosen = serverMode ? serverFolder : folder
+    if (!chosen) return
     setBusy(true)
     setError(null)
     const store = getStore()
@@ -65,7 +99,7 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
     try {
       const agent = fork
         ? await window.dure.forkAgent({ from: fork.from, key: fork.key, name: name.trim(), role: role.trim() })
-        : await window.dure.addAgent({ roomId, name: name.trim(), role: role.trim(), folder })
+        : await window.dure.addAgent({ roomId, name: name.trim(), role: role.trim(), folder: chosen })
       agentId = agent.id
       markFresh(agent.id)
       // 자리 — 이 방의 카드와 겹치지 않는 첫 칸(관계도가 같은 셈으로 정하는 자리)을 새로 받기 전에 한 번 저장.
@@ -80,7 +114,7 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
       const field = fieldOf(raw)
       setError({ field, message: fieldError(raw) })
       setBusy(false)
-      if (field === 'folder') folderButton.current?.focus()
+      if (field === 'folder') (serverMode ? pathInput : folderButton).current?.focus()
       else if (field === 'name') nameInput.current?.focus()
       return
     }
@@ -94,9 +128,10 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
     onClose()
   }
 
-  const canSubmit = folder !== null && name.trim() !== '' && role.trim() !== ''
+  const canSubmit = (serverMode ? serverFolder !== null : folder !== null) && name.trim() !== '' && role.trim() !== ''
   const folderError = errorOf('folder')
   const nameError = errorOf('name')
+  const pathDescribed = [shown.state !== 'idle' && checkId, folderError && errorId].filter(Boolean).join(' ') || undefined
 
   return (
     <FormDialog
@@ -109,31 +144,68 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
       error={errorOf('other')}
     >
       <div className="fld">
-        <span className="fld-l" id={`${id}-fl`}>
-          폴더
-        </span>
-        <div className="fld-row">
-          <span
-            id={`${id}-fp`}
-            className={`fld-path${folder ? ' f' : ''}${folderError ? ' bad' : ''}`}
-            title={folder ?? undefined}
-          >
-            {folder ?? '아직 고르지 않았어요'}
-          </span>
-          {!fork && (
-            <button
-              ref={folderButton}
-              type="button"
-              className="btn sec"
-              onClick={() => void pick()}
-              disabled={busy}
-              aria-describedby={`${id}-fl ${id}-fp${folderError ? ` ${errorId}` : ''}`}
-            >
-              <FolderOpen className="i" aria-hidden="true" />
-              폴더 고르기
-            </button>
+        <div className="fld-lr">
+          {serverMode ? (
+            <label className="fld-l" htmlFor={`${id}-fi`}>
+              폴더
+            </label>
+          ) : (
+            <span className="fld-l" id={`${id}-fl`}>
+              폴더
+            </span>
           )}
+          {remote && <ServerTag host={remote.host} />}
         </div>
+        {serverMode ? (
+          <>
+            <div className="fld-row">
+              <input
+                ref={pathInput}
+                id={`${id}-fi`}
+                className="inp mono"
+                placeholder={REMOTE.folderExample}
+                value={path}
+                onChange={e => {
+                  setPath(e.target.value)
+                  clear('folder')
+                  if (!settled(e.target.value.trim())) reset()
+                }}
+                onKeyDown={onPathKey}
+                aria-invalid={folderError ? true : undefined}
+                aria-describedby={pathDescribed}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <button type="button" className="btn sec" onClick={checkFolder} disabled={busy || !target}>
+                {REMOTE.check}
+              </button>
+            </div>
+            <RemoteCheckLine id={checkId} check={shown} okText={REMOTE.folderOk} />
+          </>
+        ) : (
+          <div className="fld-row">
+            <span
+              id={`${id}-fp`}
+              className={`fld-path${folder ? ' f' : ''}${remote ? ' mono' : ''}${folderError ? ' bad' : ''}`}
+              title={folder ?? undefined}
+            >
+              {folder ?? '아직 고르지 않았어요'}
+            </span>
+            {!fork && (
+              <button
+                ref={folderButton}
+                type="button"
+                className="btn sec"
+                onClick={() => void pick()}
+                disabled={busy}
+                aria-describedby={`${id}-fl ${id}-fp${folderError ? ` ${errorId}` : ''}`}
+              >
+                <FolderOpen className="i" aria-hidden="true" />
+                폴더 고르기
+              </button>
+            )}
+          </div>
+        )}
         {fork && <p className="fld-note">{FORK_DIALOG.folderNote}</p>}
         {folderError && (
           <p className="fe" id={errorId}>

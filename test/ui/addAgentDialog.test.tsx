@@ -10,7 +10,7 @@ const agent = (id: string, roomId: string, name: string, pos: { x: number; y: nu
 })
 
 let snapshot: Snapshot
-let api: Record<'addAgent' | 'updateAgent' | 'pickFolder' | 'forkAgent', ReturnType<typeof vi.fn>>
+let api: Record<'addAgent' | 'updateAgent' | 'pickFolder' | 'forkAgent' | 'checkRemoteFolder', ReturnType<typeof vi.fn>>
 
 beforeEach(() => {
   vi.resetModules()
@@ -52,6 +52,8 @@ beforeEach(() => {
       snapshot = { ...snapshot, agents: snapshot.agents.map(a => (a.id === id ? { ...a, ...p } : a)) }
       return snapshot.agents.find(a => a.id === id)
     }),
+    // 서버처럼 — ~ 는 펼친 경로로 돌려준다
+    checkRemoteFolder: vi.fn(async (_roomId: string, folder: string) => ({ ok: true, folder: folder.replace(/^~/, '/home/a'), claudeVersion: '2.1.304' })),
   }
   ;(window as any).dure = { ...api, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
 })
@@ -256,5 +258,116 @@ describe('AddAgentDialog', () => {
       expect(within(dlg).getByText('‘기획’이라는 에이전트가 이미 있어요. 다른 이름을 써 주세요.')).toBeTruthy()
       expect(store.getState().forkDraft).not.toBeNull()
     })
+  })
+})
+
+describe('AddAgentDialog — 서버 방', () => {
+  beforeEach(() => {
+    snapshot = { ...snapshot, rooms: snapshot.rooms.map(r => (r.id === 'r1' ? { ...r, remote: { host: 'dev' } } : r)) }
+  })
+
+  const folderInput = (dlg: HTMLElement) => within(dlg).getByRole('textbox', { name: '폴더' }) as HTMLInputElement
+  const check = (dlg: HTMLElement) => act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '확인' })) })
+  const addButton = (dlg: HTMLElement) => within(dlg).getByRole('button', { name: '추가' }) as HTMLButtonElement
+
+  it('폴더 라벨 옆 서버 알약 · 경로 입력칸 + 확인(폴더 고르기 없음) · 확인 됨 뒤에만 추가 → 돌아온 펼친 경로로', async () => {
+    const store = await renderApp()
+    const { dlg } = openDialog()
+    const input = folderInput(dlg)
+    expect(document.activeElement).toBe(input) // 폴더가 첫 칸
+    expect(input.placeholder).toBe('/home/<사용자>/projects/web')
+    expect(input.classList.contains('mono')).toBe(true)
+    const pill = dlg.querySelector('.fld .srv')!
+    expect(pill.textContent).toBe('dev')
+    expect(within(dlg).queryByRole('button', { name: '폴더 고르기' })).toBeNull()
+    const confirm = within(dlg).getByRole('button', { name: '확인' }) as HTMLButtonElement
+    expect(confirm.disabled).toBe(true) // 경로가 비면 확인할 게 없다
+
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '웹 화면 2' } })
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '역할' }), { target: { value: '프론트 구현' } })
+    expect(addButton(dlg).disabled).toBe(true) // 폴더 확인 전
+
+    fireEvent.change(input, { target: { value: ' ~/projects/web ' } })
+    await check(dlg)
+    await settle()
+    expect(api.checkRemoteFolder).toHaveBeenCalledWith('r1', '~/projects/web')
+    expect(within(dlg).getByRole('status').textContent).toBe('폴더가 있어요 · claude 2.1.304')
+    expect(addButton(dlg).disabled).toBe(false)
+
+    await act(async () => { fireEvent.click(addButton(dlg)) })
+    await settle()
+    expect(api.addAgent).toHaveBeenCalledWith({ roomId: 'r1', name: '웹 화면 2', role: '프론트 구현', folder: '/home/a/projects/web' })
+    expect(api.pickFolder).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: '에이전트 추가' })).toBeNull()
+    expect(store.getState().selectedAgentId).toBe('n1')
+  })
+
+  it('경로를 바꾸면 확인이 풀린다 · Enter 는 확인(보내지 않는다) · 확인하는 동안 확인하는 중…', async () => {
+    let done!: (v: unknown) => void
+    api.checkRemoteFolder.mockImplementationOnce(() => new Promise(r => { done = r }))
+    await renderApp()
+    const { dlg } = openDialog()
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '웹' } })
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '역할' }), { target: { value: '화면' } })
+    const input = folderInput(dlg)
+    fireEvent.change(input, { target: { value: '/srv/web' } })
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }) })
+    expect(api.checkRemoteFolder).toHaveBeenCalledWith('r1', '/srv/web')
+    expect(within(dlg).getByRole('status').textContent).toBe('확인하는 중…')
+    expect(addButton(dlg).disabled).toBe(true)
+    await act(async () => { done({ ok: true, folder: '/srv/web', claudeVersion: '2.1.304' }) })
+    expect(addButton(dlg).disabled).toBe(false)
+    expect(api.addAgent).not.toHaveBeenCalled()
+
+    fireEvent.change(input, { target: { value: '/srv/web2' } })
+    expect(addButton(dlg).disabled).toBe(true)
+    expect(within(dlg).queryByRole('status')).toBeNull()
+  })
+
+  it('폴더가 없으면 그 글(경고) — 추가는 꺼진 채, 확인 전에 바꾼 경로의 늦은 답은 버린다', async () => {
+    let late!: (v: unknown) => void
+    api.checkRemoteFolder
+      .mockImplementationOnce(() => new Promise(r => { late = r }))
+      .mockResolvedValueOnce({ ok: false, kind: 'no-folder', detail: null })
+    await renderApp()
+    const { dlg } = openDialog()
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '웹' } })
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '역할' }), { target: { value: '화면' } })
+    const input = folderInput(dlg)
+    fireEvent.change(input, { target: { value: '/srv/old' } })
+    await check(dlg)
+    fireEvent.change(input, { target: { value: '/srv/gone' } })
+    await check(dlg)
+    await settle()
+    expect(within(dlg).getByRole('alert').textContent).toBe('서버에 그 폴더가 없어요')
+    expect(input.getAttribute('aria-describedby')).toBe(within(dlg).getByRole('alert').id)
+    expect(addButton(dlg).disabled).toBe(true)
+    await act(async () => { late({ ok: true, folder: '/srv/old', claudeVersion: '2.1.304' }) })
+    expect(addButton(dlg).disabled).toBe(true)
+    expect(within(dlg).queryByText(/폴더가 있어요/)).toBeNull()
+  })
+
+  it('접속 문제는 서버 이름을 넣은 글', async () => {
+    api.checkRemoteFolder.mockResolvedValueOnce({ ok: false, kind: 'no-claude', detail: null })
+    await renderApp()
+    const { dlg } = openDialog()
+    fireEvent.change(folderInput(dlg), { target: { value: '/srv/web' } })
+    await check(dlg)
+    await settle()
+    expect(within(dlg).getByRole('alert').textContent).toBe('dev 에 claude 가 없어요')
+  })
+
+  it('갈래는 지금처럼 폴더 고정 — 서버 알약은 보이고 확인은 없다', async () => {
+    const store = await renderApp()
+    await act(async () => { store.openFork({ from: 'a2', key: 'k1', roomId: 'r1', name: '웹 화면 2', role: '화면', folder: '/home/a/web' }) })
+    const dlg = screen.getByRole('dialog', { name: '새 에이전트로 이어 가기' })
+    expect(within(dlg).getByText('/home/a/web')).toBeTruthy()
+    expect(dlg.querySelector('.fld .srv')!.textContent).toBe('dev')
+    expect(within(dlg).queryByRole('button', { name: '확인' })).toBeNull()
+    expect(within(dlg).queryByRole('textbox', { name: '폴더' })).toBeNull()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '추가' })) })
+    await settle()
+    expect(api.forkAgent).toHaveBeenCalledWith({ from: 'a2', key: 'k1', name: '웹 화면 2', role: '화면' })
+    expect(api.checkRemoteFolder).not.toHaveBeenCalled()
   })
 })

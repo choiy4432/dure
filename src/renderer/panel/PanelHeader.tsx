@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { CircleAlert, Moon, ShieldAlert, Square, X } from 'lucide-react'
+import { CircleAlert, Moon, ShieldAlert, Square, TriangleAlert, X } from 'lucide-react'
 import type { AgentId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
+import { REMOTE_LOGIN_HELP, remoteIssueText } from '../../shared/remoteTexts'
 import { getStore, useDure } from '../state/store'
 import { displayStatus, sleepLook, type DisplayStatus } from '../state/selectors'
 import { errorMessage, fieldError, initial, SLEEP_HINT, SLEEP_WORD, STATUS_WORD } from '../lib/words'
@@ -35,11 +36,13 @@ interface Props {
   onModelOpenChange?: (open: boolean) => void
 }
 
-/** 패널 머리(시안 .ph) — 아바타·이름·역할·멈추기·메뉴 / 상태 알약·모델 칩·자동 스위치(허용이 켜져 있으면 끔·자동·묻지 않음 세 칸) + 오류·묻지 않음 띠 */
+/** 패널 머리(시안 .ph) — 아바타·이름·역할·멈추기·메뉴 / 상태 알약·모델 칩·자동 스위치(허용이 켜져 있으면 끔·자동·묻지 않음 세 칸) + 서버 문제·오류·묻지 않음 띠 */
 export function PanelHeader({ agentId, description, onLoadDescription, onRetryDescribe, modelOpen, onModelOpenChange }: Props) {
   const v = useDure(s => {
     const agent = s.agents.find(a => a.id === agentId)
-    return agent ? { agent, status: displayStatus(agent, s.requests) } : null
+    // 서버 방이면 그 서버 — 안내 띠 글에 쓴다
+    const host = agent ? s.rooms.find(r => r.id === agent.roomId)?.remote?.host ?? null : null
+    return agent ? { agent, status: displayStatus(agent, s.requests), host } : null
   })
   const allowBypass = useDure(s => s.allowBypass)
   const [editing, setEditing] = useState(false)
@@ -65,7 +68,8 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
   }, [editing])
 
   if (!v) return null
-  const { agent, status } = v
+  const { agent, status, host } = v
+  const issue = host ? agent.remoteIssue : null
   const pill = PILL[status]
   const sleep = sleepLook(agent, status)
   const canStop = (status === 'working' || status === 'awaiting') && !stopping
@@ -202,6 +206,16 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
           </p>
         )}
       </div>
+      {/* 서버 방 문제(로그인 만료·끊김·접속 실패 …) — 로그인은 제목 + 할 일 두 줄, 나머지는 한 줄 */}
+      {issue && host && (
+        <div className="band warn rmt">
+          <TriangleAlert className="i" aria-hidden="true" />
+          <div className="band-tx">
+            <span className="band-t">{remoteIssueText(host, issue)}</span>
+            {issue.kind === 'login' && <span className="band-h">{REMOTE_LOGIN_HELP}</span>}
+          </div>
+        </div>
+      )}
       {status === 'error' && (
         <div className="band err">
           <CircleAlert className="i" aria-hidden="true" />

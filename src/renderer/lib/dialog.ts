@@ -53,6 +53,8 @@ export function useDialogFocus(
       const dlg = box.current
       if (!dlg) return
       if (e.key === 'Escape') {
+        // 안에 떠 있는 목록(서버 고르기)은 Esc 를 스스로 받는다 — 목록만 닫히고 대화상자는 그대로
+        if ((e.target as Element | null)?.closest?.('[data-own-esc]') && dlg.contains(e.target as Node)) return
         e.preventDefault()
         e.stopPropagation()
         live.current.onEscape()
