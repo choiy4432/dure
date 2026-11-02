@@ -144,8 +144,9 @@ export type HistoryItem = { t: number } & (
   | { kind: 'local-output'; text: string }
   | { kind: 'result'; ok: boolean; subtype: string }
   | { kind: 'notice'; text: string } // 멈춤·오류·종료 같은 알림
-  // 새 대화 경계 — ended: 끝난 대화의 세션 id(한 마디라도 한 대화만, 2026-10-28 부터). 그 대화로 돌아갈 때(--resume) 쓴다
-  | { kind: 'boundary'; ended?: string }
+  // 새 대화 경계 — ended: 끝난 대화의 세션 id(한 마디라도 한 대화만, 2026-10-28 부터). 그 대화로 돌아갈 때(--resume) 쓴다.
+  // resumed: 이 경계 뒤 구간이 돌아간 세션(지난 대화로 돌아갔을 때만)
+  | { kind: 'boundary'; ended?: string; resumed?: string }
 );
 
 export type SessionStatus = 'idle' | 'working' | 'stopped' | 'error';

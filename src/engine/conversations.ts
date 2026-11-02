@@ -1,0 +1,77 @@
+import type { HistoryItem } from './types';
+
+/** 세션 id — 세션을 모르는 구간은 `seg:<구간 번호(0부터)>` */
+export type ConversationKey = string;
+
+export interface Conversation {
+  key: ConversationKey;
+  sessionId: string | null;
+  /** 시간순, 경계 줄 없음 */
+  items: HistoryItem[];
+}
+
+/**
+ * 기록(경계 포함)을 대화별로 나눈다 — 처음 나타난 순서.
+ * 구간 k 의 세션 = 구간을 연 경계의 resumed ?? 구간을 닫은 경계의 ended ?? (마지막 구간이면 지금 세션) ?? 모름.
+ * 세션이 같은 구간은 처음 나타난 대화에 이어 붙인다(지난 대화로 돌아갔다 온 경우)
+ */
+export function splitConversations(items: HistoryItem[], currentSessionId: string): Conversation[] {
+  const segs: { items: HistoryItem[]; opened?: string; closed?: string }[] = [{ items: [] }];
+  for (const it of items) {
+    if (it.kind === 'boundary') {
+      segs[segs.length - 1].closed = it.ended;
+      segs.push({ items: [], opened: it.resumed });
+    } else segs[segs.length - 1].items.push(it);
+  }
+  const out: Conversation[] = [];
+  const byKey = new Map<ConversationKey, Conversation>();
+  segs.forEach((seg, k) => {
+    if (!seg.items.length) return;
+    const last = k === segs.length - 1;
+    const sessionId = seg.opened ?? seg.closed ?? (last ? currentSessionId : null);
+    const key = sessionId ?? `seg:${k}`;
+    const had = byKey.get(key);
+    if (had) had.items.push(...seg.items);
+    else {
+      const c: Conversation = { key, sessionId, items: [...seg.items] };
+      byKey.set(key, c);
+      out.push(c);
+    }
+  });
+  return out;
+}
+
+export interface ConversationFacts {
+  title: string;
+  at: number;
+  turns: number;
+  lastReply: string;
+}
+
+const firstLine = (s: string) => s.split('\n')[0].trim();
+const textOf = (parts: { type: string; text?: string }[]) =>
+  parts.filter((p) => p.type === 'text').map((p) => p.text ?? '').join('');
+
+/** 목록에 보일 사실 — 사람 말·넘겨받은 말(user)이 없으면 null(목록에 안 나온다) */
+export function conversationFacts(c: Conversation, senderName: (messageId: string) => string | null): ConversationFacts | null {
+  const users = c.items.filter((i): i is Extract<HistoryItem, { kind: 'user' }> => i.kind === 'user');
+  if (!users.length) return null;
+  const first = users[0];
+  const line = firstLine(textOf(first.parts));
+  let title: string;
+  if (!line) {
+    title = `그림 ${first.parts.filter((p) => p.type === 'image').length}장`;
+  } else if (first.source === 'relay') {
+    const from = first.messageId ? senderName(first.messageId) : null;
+    title = from ? `${from}에게서 온 메시지: ${line}` : `받은 메시지: ${line}`;
+  } else title = line;
+  let lastReply = '';
+  for (let i = c.items.length - 1; i >= 0; i--) {
+    const it = c.items[i];
+    if (it.kind === 'assistant' && !it.parent) {
+      lastReply = firstLine(it.blocks.map((b) => (b.type === 'text' ? b.text : '')).join(''));
+      break;
+    }
+  }
+  return { title, at: c.items[c.items.length - 1].t, turns: users.length, lastReply };
+}
