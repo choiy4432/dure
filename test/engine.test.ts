@@ -5310,3 +5310,58 @@ test('잠듦: 시작한 적 있고 세션이 없을 때 — 새 에이전트·�
   await talk(e2, c.id); // 처음 띄우는 새 에이전트 — 이어 갈 대화가 없어 잠듦도 깨우는 중도 아니다
   expect(cEvents).toEqual([]);
 });
+
+// ── 지난 대화 목록 ──
+const convUserTexts = (items: HistoryItem[]) => items.filter((x) => x.kind === 'user').map((x: any) => x.parts[0].text);
+
+test('지난 대화 목록 — 새것부터, 지금 대화 표시, 이유', async () => {
+  const claudeDir = path.join(dir, 'claude');
+  const e = await start({ CLAUDE_CONFIG_DIR: claudeDir, FAKE_TRANSCRIPTS: '1' });
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 둘');
+  const second = e.history(a.id, { all: true }).filter((x) => x.kind === 'boundary')[0] as any;
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 셋');
+  const secondId = (e.history(a.id, { all: true }).filter((x) => x.kind === 'boundary')[1] as any).ended;
+  expect(second.ended).not.toBe(secondId);
+  fs.rmSync(path.join(claudeDir, 'projects', 'fake', `${secondId}.jsonl`));
+  const list = e.conversations(a.id);
+  expect(list.map((c) => c.title)).toEqual(['echo 셋', 'echo 둘', 'echo 하나']);
+  expect(list.map((c) => c.current)).toEqual([true, false, false]);
+  expect(list.map((c) => c.resumable)).toEqual([false, false, true]);
+  expect(list.map((c) => c.why)).toEqual([null, 'gone', null]);
+  expect(list.map((c) => c.turns)).toEqual([1, 1, 1]);
+  expect(e.pastCount(a.id)).toBe(2);
+});
+
+test('conversation(key) — 그 대화의 줄만', async () => {
+  const claudeDir = path.join(dir, 'claude');
+  const e = await start({ CLAUDE_CONFIG_DIR: claudeDir, FAKE_TRANSCRIPTS: '1' });
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 둘');
+  const first = e.conversations(a.id).find((c) => !c.current)!;
+  expect(convUserTexts(e.conversation(a.id, first.key))).toEqual(['echo 하나']);
+  expect(e.conversation(a.id, 'nope')).toEqual([]);
+  expect(e.conversation(a.id, first.key, { limit: 1 })).toHaveLength(1);
+});
+
+test('예전 경계(ended 없음) 앞 대화는 old', async () => {
+  const e1 = await start();
+  const { a } = setup(e1);
+  await e1.shutdown();
+  const lines = [
+    { t: 1, kind: 'user', source: 'human', parts: [{ type: 'text', text: '옛' }] },
+    { t: 2, kind: 'boundary' },
+  ];
+  fs.mkdirSync(path.join(dataDir, 'history'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const e2 = await start();
+  const list = e2.conversations(a.id);
+  expect(list).toHaveLength(1);
+  expect(list[0]).toMatchObject({ title: '옛', current: false, resumable: false, why: 'old' });
+  expect(e2.pastCount(a.id)).toBe(1);
+});

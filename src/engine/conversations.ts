@@ -48,7 +48,8 @@ export interface ConversationFacts {
   lastReply: string;
 }
 
-const firstLine = (s: string) => s.split('\n')[0].trim();
+/** 글 있는 첫 줄(앞뒤 공백 뺀) — 없으면 '' */
+const firstLine = (s: string) => s.split('\n').map((l) => l.trim()).find((l) => l) ?? '';
 const textOf = (parts: { type: string; text?: string }[]) =>
   parts.filter((p) => p.type === 'text').map((p) => p.text ?? '').join('');
 
@@ -60,7 +61,8 @@ export function conversationFacts(c: Conversation, senderName: (messageId: strin
   const line = firstLine(textOf(first.parts));
   let title: string;
   if (!line) {
-    title = `그림 ${first.parts.filter((p) => p.type === 'image').length}장`;
+    const n = first.parts.filter((p) => p.type === 'image').length;
+    title = n > 0 ? `그림 ${n}장` : '';
   } else if (first.source === 'relay') {
     const from = first.messageId ? senderName(first.messageId) : null;
     title = from ? `${from}에게서 온 메시지: ${line}` : `받은 메시지: ${line}`;
@@ -69,8 +71,8 @@ export function conversationFacts(c: Conversation, senderName: (messageId: strin
   for (let i = c.items.length - 1; i >= 0; i--) {
     const it = c.items[i];
     if (it.kind === 'assistant' && !it.parent) {
-      lastReply = firstLine(it.blocks.map((b) => (b.type === 'text' ? b.text : '')).join(''));
-      break;
+      const line = firstLine(it.blocks.map((b) => (b.type === 'text' ? b.text : '')).join(''));
+      if (line) { lastReply = line; break; } // 도구만 있는 답은 건너뛴다
     }
   }
   return { title, at: c.items[c.items.length - 1].t, turns: users.length, lastReply };

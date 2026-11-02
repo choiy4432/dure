@@ -121,8 +121,16 @@ async function emit(obj) {
   }
 }
 
-const init = () =>
-  emit({ type: 'system', subtype: 'init', session_id: sessionId, model, permissionMode, slash_commands: ['compact'], tools: ['Bash'] });
+// FAKE_TRANSCRIPTS=1 + CLAUDE_CONFIG_DIR — 진짜처럼 Claude 대화 파일(빈 파일)을 남긴다. 이미 있으면 그대로
+function touchTranscript() {
+  const cfg = process.env.CLAUDE_CONFIG_DIR;
+  if (process.env.FAKE_TRANSCRIPTS !== '1' || !cfg) return;
+  const f = path.join(cfg, 'projects', 'fake', `${sessionId}.jsonl`);
+  if (fs.existsSync(f)) return;
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, '');
+}
+const init = () => (touchTranscript(), emit({ type: 'system', subtype: 'init', session_id: sessionId, model, permissionMode, slash_commands: ['compact'], tools: ['Bash'] }));
 const result = async (text, extra = {}) => {
   await emit({ type: 'result', subtype: 'success', is_error: false, result: text, permission_denials: [], ...extra });
   // FAKE_STATUS_AFTER_RESULT=1 — result 뒤, 차례 밖에 부모 표시 없는 API 상태 줄(서브에이전트의 요청·늦게 온 끝 흉내)

@@ -5,7 +5,8 @@ import path from 'node:path';
 import { openStore, renameRetrying, type Store } from './store';
 import { openMessageLog, type MessageLog } from './messageLog';
 import { capPatch, lastN, openHistory, patchFromInput, trimToolInput, type History } from './history';
-import { splitConversations } from './conversations';
+import { conversationFacts, splitConversations, type Conversation } from './conversations';
+import { claudeDirOf, existingSessions } from './claudeSessions';
 import { openImageStore, type ImageStore } from './imageStore';
 import { buildArgs, buildMcpConfig, buildUsageArgs, CREATE_AGENT_TOOL, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
@@ -19,7 +20,7 @@ import { EFFORT_LEVELS, SLEEP_CHOICES, SLEEP_DEFAULT_MIN, THEME_PREFS, type Effo
 import { toContextUsage } from './usage';
 import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
 import type {
-  Agent, AgentDescription, AgentId, AgentPatch, AgentStatus, ContextUsage, CreateAgentInput, Decision, DiffHunk, EngineEventMap, HistoryItem, HistoryPart, Hold, HoldItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, StreamEvent, UserPart,
+  Agent, AgentDescription, ConversationSummary, AgentId, AgentPatch, AgentStatus, ContextUsage, CreateAgentInput, Decision, DiffHunk, EngineEventMap, HistoryItem, HistoryPart, Hold, HoldItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, StreamEvent, UserPart,
 } from './types';
 
 export interface EngineOptions {
@@ -211,6 +212,12 @@ export interface Engine extends EventEmitter {
   /** 화면이 사용량을 볼 때 — 마지막 값이 1분보다 오래됐으면 다시 묻는다 */
   refreshUsage(): void;
   history(id: AgentId, o?: { all?: boolean; limit?: number }): HistoryItem[];
+  /** 대화 목록 — 새것부터. user 없는 대화는 빠진다. Claude 대화 파일은 있는지만 본다(부를 때마다 새로) */
+  conversations(id: AgentId): ConversationSummary[];
+  /** 한 대화(key)의 마지막 limit(기본 500)줄 — 없는 key 는 [] */
+  conversation(id: AgentId, key: string, o?: { limit?: number }): HistoryItem[];
+  /** 지금 대화를 뺀, user 있는 대화 수 */
+  pastCount(id: AgentId): number;
   /** 사람이 보낸 그림(기록의 file) — data URL. 이름이 틀리거나 없으면 null, 없는 에이전트면 던진다 */
   image(id: AgentId, file: string): Promise<string | null>;
   messages(f?: Parameters<MessageLog['list']>[0]): RelayMessage[];
@@ -439,6 +446,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private settingsDefaultOf = new Map<AgentId, string>(); // 에이전트마다 마지막으로 읽은 내 기본 권한 모드 — 세션이 끝난 뒤 다음 모드 예측에(메모리만)
   private offsInFlight = new WeakMap<ClaudeSession, number>(); // 진행 중인 끄기(settleOff) 수 — init 이 bypass 여도 겹쳐 끄지 않는다
   private modelNows = new Map<AgentId, string>(); // 마지막 init 의 풀린 모델 id
+  private pastCounts = new Map<AgentId, number>(); // pastCount 기억 — forgetPastCount 가 버린다
   private effortNows = new Map<AgentId, EffortLevel>(); // Claude 에게 마지막으로 읽은 지금 effort
   // effort 는 세션 명령 `/effort <단계>` 로 정한다 — 설정 층(apply_flag_settings)엔 max 가 없어 조용히 무시되고,
   // get_settings 는 세션 값을 모른다(probe9). 사람 입력처럼 한 줄씩 쓰지만 기록·사건·작업 중 표시는 남기지 않는다.
@@ -718,6 +726,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.planWant.delete(id);
       this.planShown.delete(id);
       this.effortNows.delete(id);
+      this.forgetPastCount(id);
       this.effortBroken.delete(id);
       this.modelNows.delete(id);
       if (had > 0) this.guard(id, () => this.emit('held-input', { agentId: id, count: 0 }));
@@ -1227,6 +1236,49 @@ class EngineImpl extends EventEmitter implements Engine {
     const cur = splitConversations(all, sid).find((c) => c.key === sid);
     return cur ? lastN(cur.items, o.limit ?? 500) : [];
   }
+  /** 기록을 대화로 나눈다 — 세션 id 를 모르는 지금 세션은 '' */
+  private splitOf(id: AgentId): Conversation[] {
+    const sid = this.store.agent(id)?.sessionId ?? '';
+    return splitConversations(this.hist.read(id, { sinceBoundary: false, limit: Infinity }), sid);
+  }
+  /** 넘겨받은 말의 보낸 쪽 — 메시지 기록의 from 에이전트의 지금 이름(없으면 null) */
+  private senderNameOf(messageId: string): string | null {
+    const from = this.log.get(messageId)?.from;
+    return from ? this.store.agent(from)?.name ?? null : null;
+  }
+  conversations(id: AgentId): ConversationSummary[] {
+    const agent = this.need(id);
+    const cur = agent.sessionId;
+    const rows = this.splitOf(id).flatMap((c) => {
+      const f = conversationFacts(c, (m) => this.senderNameOf(m));
+      return f ? [{ c, f }] : [];
+    });
+    const past = rows.filter((r) => r.c.key !== cur && r.c.sessionId);
+    const alive = existingSessions(claudeDirOf(this.o.env), past.map((r) => r.c.sessionId!));
+    return rows
+      .map(({ c, f }): ConversationSummary => {
+        const current = c.key === cur;
+        const why = current ? null : !c.sessionId ? 'old' : alive.has(c.sessionId) ? null : 'gone';
+        return { key: c.key, current, ...f, resumable: !current && why === null, why };
+      })
+      .sort((x, y) => y.at - x.at);
+  }
+  conversation(id: AgentId, key: string, o: { limit?: number } = {}): HistoryItem[] {
+    this.need(id);
+    const c = this.splitOf(id).find((x) => x.key === key);
+    return c ? lastN(c.items, o.limit ?? 500) : [];
+  }
+  pastCount(id: AgentId): number {
+    const agent = this.need(id);
+    let n = this.pastCounts.get(id);
+    if (n === undefined) {
+      n = this.splitOf(id).filter((c) => c.key !== agent.sessionId && conversationFacts(c, () => null)).length;
+      this.pastCounts.set(id, n);
+    }
+    return n;
+  }
+  /** 지난 대화 수 기억을 버린다 — 경계를 남길 때·이어 갈 때·에이전트를 지울 때 */
+  private forgetPastCount(id: AgentId): void { this.pastCounts.delete(id); }
   async image(id: AgentId, file: string): Promise<string | null> {
     this.need(id);
     const img = typeof file === 'string' ? this.images.read(id, file) : null;
@@ -1591,6 +1643,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private record(id: AgentId, item: HistoryItem | (Omit<HistoryItem, 't'> & { t?: number })): void {
     const full = { t: Date.now(), ...item } as HistoryItem;
     this.hist.append(id, full);
+    if (full.kind === 'boundary') this.forgetPastCount(id);
     this.guard(id, () => this.emit('history', { agentId: id, item: full }));
   }
 

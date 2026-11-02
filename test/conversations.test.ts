@@ -72,3 +72,18 @@ test('facts: turns·lastReply·at', () => {
   expect(conversationFacts(c, none)).toEqual({ title: 'a', at: 6, turns: 2, lastReply: '부모 답' });
   expect(conversationFacts(conv([u(1, 'a')]), none)?.lastReply).toBe('');
 });
+
+test('facts: 제목은 첫 줄이 비면 그다음 글 있는 줄 · 글이 없으면 그림 N장 · 둘 다 없으면 빈 칸', () => {
+  expect(conversationFacts(conv([u(1, '\n  \n둘째 줄\n셋')]), none)?.title).toBe('둘째 줄');
+  expect(conversationFacts(conv([r(1, '\n\n일해', 'm1')]), () => '기획')?.title).toBe('기획에게서 온 메시지: 일해');
+  const img = { type: 'image' as const, mediaType: 'image/png', bytes: 3 };
+  const withImg = (parts: any[]): HistoryItem => ({ t: 1, kind: 'user', source: 'human', parts });
+  expect(conversationFacts(conv([withImg([{ type: 'text', text: ' \n' }, img, img])]), none)?.title).toBe('그림 2장');
+  expect(conversationFacts(conv([withImg([{ type: 'text', text: '' }])]), none)?.title).toBe('');
+});
+
+test('facts: lastReply 는 글이 있는 마지막 부모 답 — 도구만 있는 답은 건너뛴다', () => {
+  const tool: HistoryItem = { t: 3, kind: 'assistant', blocks: [{ type: 'tool_use', id: 't', name: 'Bash', input: {} } as any] };
+  expect(conversationFacts(conv([u(1, 'a'), a(2, '글 답'), tool]), none)?.lastReply).toBe('글 답');
+  expect(conversationFacts(conv([u(1, 'a'), tool]), none)?.lastReply).toBe('');
+});

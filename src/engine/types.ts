@@ -132,6 +132,19 @@ export type StreamEvent =
   | { kind: 'compacted' }
   | { kind: 'ignored'; type: string };
 
+/** 지난 대화 목록의 한 줄 — key 는 세션 id(세션을 모르면 seg:<n>) */
+export interface ConversationSummary {
+  key: string;
+  current: boolean;
+  title: string;
+  at: number;
+  turns: number;
+  lastReply: string;
+  resumable: boolean;
+  /** 이어 갈 수 없는 이유 — old: 세션을 모름 · gone: Claude 쪽 대화 파일이 없음 */
+  why: 'old' | 'gone' | null;
+}
+
 /** 그림의 file = 그림 칸(images/<에이전트>/)에 저장한 이름 — 저장 전에 보낸 그림·저장을 못 한 그림엔 없다 */
 export type HistoryPart = { type: 'text'; text: string } | { type: 'image'; mediaType: string; bytes: number; file?: string };
 export type HistoryItem = { t: number } & (
