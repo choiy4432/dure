@@ -20,6 +20,7 @@ import { PanelTabs, ViewShown, panelId, tabId } from './PanelTabs'
 import { SubagentMap } from './SubagentMap'
 import { Inbox } from './Inbox'
 import { MessageList } from './MessageList'
+import { PastPanel } from './PastPanel'
 
 const IDLE: Described = { state: 'idle' }
 
@@ -104,8 +105,8 @@ const NO_ITEMS: HistoryItem[] = []
 const NO_IDS: string[] = []
 
 /**
- * 머리 아래 — [대화 | 서브에이전트 N | 메시지 N] 탭(서브에이전트는 지금 대화에 하나라도 있었을 때, 메시지는 주고받은 게 있을 때만) → 고정 카드 →
- * 대화 목록 · 서브에이전트 지도 · 메시지 목록 → 입력창.
+ * 머리 아래 — [대화 | 서브에이전트 N | 메시지 N | 지난 대화 N] 탭(서브에이전트는 지금 대화에 하나라도 있었을 때, 메시지는 주고받은 게 있을 때,
+ * 지난 대화는 하나라도 있을 때만) → 고정 카드 → 대화 목록 · 서브에이전트 지도 · 메시지 목록 · 지난 대화 → 입력창.
  * pins·chat·composer 는 AgentPanel 이 만든 요소 그대로 받는다 — 기록이 늘어 이 칸이 다시 그려져도 셋은 다시 그리지 않는다(제 구독으로 그린다).
  * 입력창은 대화 탭에만 보인다 — 서브에이전트 탭에선 숨겨 두기만 해서(hidden) 쓰던 글·붙인 이미지가 그대로 남는다.
  * 대화 칸은 탭이 생기고 사라져도 같은 요소라 대화 목록이 다시 붙지 않는다. 탭이 있으면 두 칸을 함께 그려 두고 고르지 않은 칸은 숨긴다(hidden) —
@@ -128,6 +129,7 @@ function PanelBody({ agentId, name, pins, chat, composer, seen }: {
       running: s.agents.find(a => a.id === agentId)?.subagentsRunning ?? NO_IDS,
       tab: s.panelTab[agentId] ?? 'chat',
       focus: f && f.agentId === agentId ? f : null,
+      past: s.agents.find(a => a.id === agentId)?.pastCount ?? 0,
     }
   })
   // 메시지 탭의 수·점 — 받은 것 + 보낸 것 / 이 에이전트가 받은 것 가운데 내 확인 필요(관계도 카드의 받은 메시지와 같은 셈)
@@ -138,15 +140,17 @@ function PanelBody({ agentId, name, pins, chat, composer, seen }: {
     const t: PanelTab[] = ['chat']
     if (tree.total > 0) t.push('subagents')
     if (msg.total > 0) t.push('messages')
+    if (v.past > 0) t.push('past')
     return t
-  }, [tree.total, msg.total])
+  }, [tree.total, msg.total, v.past])
   const tabs = shownTabs.length > 1
   const tab = shownTabs.includes(v.tab) ? v.tab : 'chat'
   const base = useId()
 
-  // 새 대화로 서브에이전트가 0 이 되면(메시지가 없어져도) 대화 탭으로 — 다음에 다시 생겨도 대화를 보던 그대로
+  // 새 대화로 서브에이전트가 0 이 되면(메시지·지난 대화가 없어져도) 대화 탭으로 — 다음에 다시 생겨도 대화를 보던 그대로.
+  // 메시지·지난 대화 수는 기록과 상관없어 불러오기를 기다리지 않는다
   useEffect(() => {
-    if ((v.ready || v.tab === 'messages') && !shownTabs.includes(v.tab)) getStore().setPanelTab(agentId, 'chat')
+    if ((v.ready || v.tab === 'messages' || v.tab === 'past') && !shownTabs.includes(v.tab)) getStore().setPanelTab(agentId, 'chat')
   }, [shownTabs, v.ready, v.tab, agentId])
 
   return (
@@ -157,6 +161,7 @@ function PanelBody({ agentId, name, pins, chat, composer, seen }: {
           tabs={shownTabs}
           subagents={{ total: tree.total, running: tree.running > 0 || v.running.length > 0 }}
           messages={msg}
+          past={v.past}
           base={base}
           onChange={t => getStore().setPanelTab(agentId, t)}
         />
@@ -189,6 +194,20 @@ function PanelBody({ agentId, name, pins, chat, composer, seen }: {
           aria-labelledby={tabId(base, 'messages')}
         >
           <MessageList agentId={agentId} />
+        </div>
+      )}
+      {shownTabs.includes('past') && (
+        <div
+          className="pnl-view"
+          hidden={tab !== 'past'}
+          role="tabpanel"
+          id={panelId(base, 'past')}
+          aria-labelledby={tabId(base, 'past')}
+        >
+          {/* 보이는 동안만 목록을 받는다 — 탭을 열 때마다 새로 */}
+          <ViewShown value={tab === 'past'}>
+            <PastPanel key={agentId} agentId={agentId} />
+          </ViewShown>
         </div>
       )}
       <div className="pnl-cmp" hidden={tab !== 'chat'}>

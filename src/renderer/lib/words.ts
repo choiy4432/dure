@@ -84,6 +84,34 @@ export const RENEW_CONFIRM = {
   confirmLabel: '새로 시작',
 } as const
 
+/** 지난 대화 탭 — 탭 이름 · 지금 배지 · 날짜 줄 꼬리 · 읽기 띠 · 아래 줄 안내·단추 · 긴 대화의 앞 줄 */
+export const PAST = {
+  tab: '지난 대화',
+  current: '지금',
+  turns: (n: number) => `${n}차례`,
+  readOnly: '읽기만',
+  /** 글·그림 없는 첫 말 — 제목이 빈 대화 */
+  untitled: '(내용 없음)',
+  back: '목록으로',
+  note: '돌아가도 지금 대화는 지난 대화에 남아요.',
+  fork: '새 에이전트로 이어 가기',
+  resume: '이 대화로 돌아가기',
+  more: '앞 줄 모두 보기',
+} as const
+
+/** 이어 갈 수 없는 이유 — old: 세션을 모름 · gone: Claude 쪽 대화 파일이 없음(목록 셋째 줄 · 읽기 아래 줄) */
+export const PAST_WHY: Record<'old' | 'gone', string> = {
+  old: '예전 대화라 읽기만 돼요',
+  gone: '30일이 지나 이어 갈 수 없어요',
+}
+
+/** 돌아가기를 막는 까닭 — 읽기 아래 줄(엔진이 거절하는 글과 같다) */
+export const RESUME_BLOCK_WORD: Record<'working' | 'asking' | 'held', string> = {
+  working: '일이 끝나면 돌아갈 수 있어요',
+  asking: '기다리는 카드를 먼저 처리해 주세요',
+  held: '붙잡아 둔 입력을 먼저 처리해 주세요',
+}
+
 /** 아바타 글자 — 이름의 첫 글자(영문은 대문자) */
 export function initial(name: string): string {
   return Array.from(name.trim())[0]?.toUpperCase() ?? '?'

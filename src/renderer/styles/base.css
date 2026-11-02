@@ -1783,27 +1783,35 @@ code {
   background-clip: padding-box;
 }
 
-/* 패널 탭 [대화 | 서브에이전트 N](시안 2안) — 머리 바로 아래면 머리의 아래 줄 대신 탭 줄이 경계가 된다 */
+/* 패널 탭 [대화 | 서브에이전트 N | 메시지 N | 지난 대화 N](시안 2안) — 머리 바로 아래면 머리의 아래 줄 대신 탭 줄이 경계가 된다 */
 .ph:has(+ .ptabs) {
   padding-bottom: 8px;
   border-bottom: 0;
 }
 
+/*
+ * 좁은 패널(360px 언저리)에선 탭 넷이 다 안 들어간다 — 줄이 옆으로 밀린다(스크롤 막대 없이 · 휠·←/→ 로, PanelTabs).
+ * 아래 줄은 테두리 대신 안쪽 그림자 — 밀리는 칸(overflow)은 테두리 자리로 삐져나온 탭 밑줄을 자르므로, 줄을 칸 안에 그려 밑줄이 그 위에 덮이게
+ */
 .ptabs {
+  position: relative; /* 탭의 offsetLeft 기준 — 고른 탭을 보이게 끌어올 때(PanelTabs) */
   flex: none;
   display: flex;
   gap: 4px;
   padding: 0 10px;
-  border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 -1px 0 var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
 
 .ptab {
+  flex: none;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   height: 36px;
   padding: 0 10px;
-  margin-bottom: -1px;
   border-bottom: 2px solid transparent;
   font-size: 13px;
   font-weight: 500;
@@ -2017,6 +2025,173 @@ code {
 
 .mrow .pin-err {
   padding: 0 14px 0 44px;
+}
+
+/*
+ * 지난 대화 탭(시안 B — pc-B1 목록 · pc-B2 읽기). 목록 줄 = 제목 13px/500(+ 지금 배지) · 날짜 줄 12px · 마지막 답(또는 이유) 12px 한 줄 말줄임.
+ * 읽기 = 위 띠(옅은 바탕 · ‹ · 제목 · 날짜) → 대화(.conv 그대로) → 아래 줄(위 테두리 · 안내 + 두 단추, 좁으면 단추가 아래 줄로)
+ */
+.pc-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pc-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.pc-list::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-box);
+  border: 3px solid var(--bg);
+}
+
+.pc-list > .conv-st {
+  margin-top: 18px;
+}
+
+.pc-it {
+  flex: none;
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: var(--radius-ctl);
+  text-align: left;
+  transition: background-color 0.15s;
+}
+
+.pc-it:hover {
+  background: var(--hover);
+}
+
+.pc-it:focus-visible {
+  outline-offset: -2px;
+}
+
+.pc-t {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.pc-tt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 지금 대화 배지 — 파란 알약 */
+.pc-cur {
+  flex: none;
+  height: 18px;
+  padding: 0 6px;
+  border: 1px solid var(--primary-soft-border);
+  border-radius: var(--radius-pill);
+  background: var(--primary-soft);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--primary-text);
+}
+
+.pc-m {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.pc-s {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 이어 갈 수 없는 대화 — 제목만 한 단 옅게 */
+.pc-old .pc-t {
+  color: var(--text-2);
+}
+
+/* 읽기 — 칸 어디를 눌러도 초점이 여기 머문다(Esc = 목록). 칸 자체는 누르는 것이 아니라 초점 테두리를 긋지 않는다 */
+.pc-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pc-view:focus {
+  outline: none;
+}
+
+.pc-band {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--subtle);
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.pc-band > b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pc-band-d {
+  flex: none;
+  white-space: nowrap;
+}
+
+.pc-back {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.pc-back p {
+  flex: 1 1 180px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+/* 돌아가기를 엔진이 거절한 글 — 다음 동작까지 */
+.pc-back .pc-err {
+  color: var(--danger-text);
+  overflow-wrap: anywhere;
+}
+
+.pc-acts {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 /* 받은 메시지 카드(시안 .pin) */
