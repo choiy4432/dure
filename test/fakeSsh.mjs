@@ -264,13 +264,15 @@ function classify(script) {
       args: exec.slice(2).map((w) => (w.home ? toLocal(w.value) : w.value)),
     };
   }
-  // 확인(checkScript) — [cd <폴더> && pwd -P || exit 3;] command -v claude >/dev/null || exit 127; claude --version
+  // 확인(checkScript) — [cd <폴더> || exit 3; printf '\nDURE_DIR='; pwd -P;] command -v claude >/dev/null || exit 127; claude --version
   const last = cmds.at(-1);
   if (last && same(last, ['claude', '--version'])) {
     const probe = cmds.at(-2);
     if (!probe || !same(probe, ['command', '-v', 'claude', '>/dev/null', '||', 'exit', '127'])) return { kind: 'unknown' };
     if (cmds.length === 2) return { kind: 'check', folder: null };
-    if (cmds.length === 3 && same(cmds[0], ['cd', null, '&&', 'pwd', '-P', '||', 'exit', '3'])) return { kind: 'check', folder: cmds[0][1].value };
+    if (
+      cmds.length === 5 && same(cmds[0], ['cd', null, '||', 'exit', '3']) && same(cmds[1], ['printf', '\\nDURE_DIR=']) && same(cmds[2], ['pwd', '-P'])
+    ) return { kind: 'check', folder: cmds[0][1].value };
     return { kind: 'unknown' };
   }
   // 기록 확인(transcriptCheckScript) — d="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; for i in '<id>' …; do … done
@@ -371,7 +373,7 @@ function runCheck(spec, mode) {
     const remotePath = remoteAbs(spec.folder);
     const k = kindOf(toLocal(remotePath));
     if (k !== 'dir') return fail(3, `bash: line 1: cd: ${spec.folder}: ${k ? 'Not a directory' : 'No such file or directory'}`);
-    process.stdout.write(remotePath + '\n'); // pwd -P — 링크는 풀지 않는다
+    process.stdout.write(`\nDURE_DIR=${remotePath}\n`); // printf 표식 + pwd -P — 링크는 풀지 않는다
   }
   if (mode === 'noclaude') return finish(127); // command -v 는 말없이 실패
   process.stdout.write(VERSION + '\n');

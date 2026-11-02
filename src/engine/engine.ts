@@ -3,8 +3,8 @@ import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { openStore, renameRetrying, REMOTE_FOLDER_ABSOLUTE, type Store } from './store';
-import { checkScript, classifyExit, hostArgs, posixJoin, shq, SSH_OPTIONS, type RemoteIssueKind } from './remote';
+import { CONTROL_CHAR, openStore, renameRetrying, REMOTE_FOLDER_ABSOLUTE, type Store } from './store';
+import { checkScript, classifyExit, hostArgs, parseCheckOutput, posixJoin, shq, sshErrorLines, SSH_OPTIONS, type RemoteIssueKind } from './remote';
 import { readSshHosts, type SshHostEntry } from './sshConfig';
 import { openMessageLog, type MessageLog } from './messageLog';
 import { capPatch, lastN, openHistory, patchFromInput, trimToolInput, type History } from './history';
@@ -311,9 +311,8 @@ const SUBAGENT_DURE_TOOL: string = DENY.subagentDureTool;
 const ROLE_EMPTY = '역할을 입력하세요';
 /**
  * create_agent 의 이름·역할 — 시스템 안내문·메시지 머리에 그대로 들어가니 줄을 나누는 글자는 받지 않고, 길이도 묶는다
- * (사람이 더하는 길은 그대로 — 이 검사는 create_agent 에만). 제어 문자 = C0·DEL·C1, 그리고 줄 나눔 문자(U+2028·2029)
+ * (사람이 더하는 길은 그대로 — 이 검사는 create_agent 에만). 제어 문자 = C0·DEL·C1, 그리고 줄 나눔 문자(U+2028·2029) — store 의 CONTROL_CHAR
  */
-const CONTROL_CHAR = /[\p{Cc}\u2028\u2029]/u;
 const NAME_MAX = 40;
 const ROLE_MAX = 200;
 const NAME_CONTROL = '이름에 줄바꿈이나 제어 문자를 쓸 수 없어요';
@@ -806,7 +805,7 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * 확인 ssh 한 번(checkScript) — 0 이 아닌 종료는 classifyExit(시작 전)로, 그 밖(시간 초과·모르는 종료)은 접속 실패 + ssh 오류 첫 줄.
-   * 됐으면 stdout 끝에서 읽는다(로그인 셸 프로필이 앞에 찍을 수 있다): 마지막 줄 = claude 버전, folder 를 줬으면 그 앞 줄 = 펼친 폴더
+   * 됐으면 parseCheckOutput(로그인 셸 프로필이 앞에 찍을 수 있다): 마지막 줄 = claude 버전, folder 를 줬으면 DURE_DIR= 줄 = 펼친 폴더
    */
   private async remoteCheck(
     host: string,
@@ -816,16 +815,11 @@ class EngineImpl extends EventEmitter implements Engine {
     if (run.code !== 0) {
       const issue = classifyExit({ code: run.code, stderr: run.stderr, started: false });
       if (issue) return { ok: false, ...issue };
-      const first = run.stderr.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? null;
-      return { ok: false, kind: 'unreachable', detail: first };
+      return { ok: false, kind: 'unreachable', detail: sshErrorLines(run.stderr)[0] ?? null };
     }
-    const lines = run.stdout.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l.trim() !== '');
-    const last = lines.at(-1)?.trim();
-    if (!last) return { ok: false, kind: 'no-claude', detail: null };
-    // `claude --version` 은 번호 뒤에 이름이 붙는다 — 번호만
-    const claudeVersion = /\d+(?:\.\d+)+\S*/.exec(last)?.[0] ?? last;
-    const resolved = folder === undefined ? null : lines.at(-2) ?? null;
-    return { ok: true, folder: resolved?.startsWith('/') ? resolved : null, claudeVersion };
+    const out = parseCheckOutput(run.stdout);
+    if (!out.claudeVersion) return { ok: false, kind: 'no-claude', detail: null };
+    return { ok: true, folder: folder === undefined ? null : out.folder, claudeVersion: out.claudeVersion };
   }
 
   /** 확인 ssh — 셸 없이(execFile), 상한 REMOTE_CHECK_MS, -R 없음. ssh 가 없으면 NO_SSH 로 던진다 */

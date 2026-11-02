@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   hostArgs, SSH_OPTIONS, shq, remoteRunDir, remoteRunFiles, remoteLaunchScript, launchArgs, launchPreamble,
-  cleanupScript, checkScript, transcriptCheckScript, classifyExit, parsePid, isLoginFailure, posixJoin,
+  cleanupScript, checkScript, transcriptCheckScript, classifyExit, parsePid, isLoginFailure, posixJoin, parseCheckOutput, sshErrorLines, isSafeId,
 } from '../src/engine/remote';
 
 const hasBash = (() => {
@@ -204,15 +204,17 @@ describe('cleanupScript — 표식이 안 맞는 pid 는 건드리지 않는다'
 
 describe('checkScript', () => {
   it('폴더 없이', () => expect(checkScript()).toBe('command -v claude >/dev/null || exit 127; claude --version'));
-  it('폴더 있으면 cd && pwd -P', () => {
-    expect(checkScript(`/a b/it's`)).toBe(`cd '/a b/it'\\''s' && pwd -P || exit 3; command -v claude >/dev/null || exit 127; claude --version`);
+  it('폴더 있으면 cd 뒤 새 줄에 표식 DURE_DIR= + pwd -P — 로그인 셸 프로필이 줄바꿈 없이 찍어도 붙지 않게', () => {
+    expect(checkScript(`/a b/it's`)).toBe(
+      `cd '/a b/it'\\''s' || exit 3; printf '\\nDURE_DIR='; pwd -P; command -v claude >/dev/null || exit 127; claude --version`,
+    );
   });
 });
 
 describe('checkScript — ~', () => {
   it('~ 는 $HOME 으로', () => {
-    expect(checkScript('~')).toContain('cd "$HOME" && pwd -P || exit 3');
-    expect(checkScript('~/my dir')).toContain(`cd "$HOME"/'my dir' && pwd -P`);
+    expect(checkScript('~')).toContain(`cd "$HOME" || exit 3; printf '\\nDURE_DIR='; pwd -P;`);
+    expect(checkScript('~/my dir')).toContain(`cd "$HOME"/'my dir' || exit 3;`);
   });
   it.skipIf(!hasBash)('bash 에서 ~/my dir 이 $HOME 아래로 풀린다', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'dure-tilde-'));
@@ -221,7 +223,7 @@ describe('checkScript — ~', () => {
       const run = (f: string) => spawnSync('bash', ['-c', checkScript(f).split('; command')[0]], { encoding: 'utf8', env: { ...process.env, HOME: posix(tmp) } });
       const r = run('~/my dir');
       expect(r.status).toBe(0);
-      expect(r.stdout.trim()).toMatch(/my dir$/);
+      expect(r.stdout).toMatch(/^\nDURE_DIR=.*my dir\n$/);
       expect(run('~').status).toBe(0);
       expect(run('~/nope').status).toBe(3);
     } finally { rmSync(tmp, { recursive: true, force: true }); }
@@ -303,4 +305,39 @@ describe('작은 것들', () => {
     expect(isLoginFailure('알았어')).toBe(false);
   });
   it('posixJoin', () => expect(posixJoin('/home/a/web', '../api')).toBe('/home/a/api'));
+});
+
+describe('parseCheckOutput — 확인 출력 읽기', () => {
+  it('폴더·버전', () => {
+    expect(parseCheckOutput('\nDURE_DIR=/home/a/web\n2.1.304 (Claude Code)\n')).toEqual({ folder: '/home/a/web', claudeVersion: '2.1.304' });
+  });
+  it('프로필이 줄바꿈 없이 찍은 잡음은 표식 줄에 붙지 않는다 · CRLF', () => {
+    expect(parseCheckOutput('Welcome!\r\nnvm ready\nDURE_DIR=/srv/x y\r\n2.1.316 (Claude Code)\r\n')).toEqual({ folder: '/srv/x y', claudeVersion: '2.1.316' });
+    expect(parseCheckOutput('motd without newline\nDURE_DIR=/home/a\n2.1.304 (Claude Code)\n')).toEqual({ folder: '/home/a', claudeVersion: '2.1.304' });
+  });
+  it('폴더 없이 — 버전만(프로필 잡음 뒤 마지막 줄)', () => {
+    expect(parseCheckOutput('hello\n2.1.304 (Claude Code)\n')).toEqual({ folder: null, claudeVersion: '2.1.304' });
+  });
+  it('표식이 / 로 시작하지 않으면 폴더 없음 · 빈 출력은 버전 없음', () => {
+    expect(parseCheckOutput('DURE_DIR=\n2.1.304\n').folder).toBeNull();
+    expect(parseCheckOutput('')).toEqual({ folder: null, claudeVersion: null });
+  });
+});
+
+describe('sshErrorLines — ssh·서버 stderr 의 뜻 있는 줄', () => {
+  it('known_hosts 경고·DURE_PID·빈 줄은 뺀다', () => {
+    expect(sshErrorLines("Warning: Permanently added 'h' (ED25519) to the list of known hosts.\r\nDURE_PID=4242\n\n  fake crash  \nx\n")).toEqual(['fake crash', 'x']);
+  });
+  it('classifyExit 의 접속 실패 첫 줄도 같은 거르기 — DURE_PID 줄은 첫 줄이 아니다', () => {
+    expect(classifyExit({ code: 255, stderr: 'DURE_PID=12\nConnection to dev closed by remote host.\n', started: false })).toEqual({
+      kind: 'unreachable', detail: 'Connection to dev closed by remote host.',
+    });
+  });
+});
+
+describe('isSafeId', () => {
+  it('셸·경로에 그대로 넣어도 되는 id 만', () => {
+    expect(['abcd1234', 'a-b_c.d', 'x'].every(isSafeId)).toBe(true);
+    expect(['', '.', '..', 'a..b', '../x', 'a/b', 'a b', "a'b", 'a;b'].some(isSafeId)).toBe(false);
+  });
 });

@@ -296,7 +296,7 @@ test('서버 방 — host 가 빔·공백 포함·- 시작이면 거절하고 �
 test('옛 state.json — 방 remote·에이전트 remoteLaunch 칸이 없거나 깨졌으면 null · 맞으면 그대로', () => {
   const s = openStore(dir);
   const r = s.addRoom('A');
-  const ids = ['none', 'num', 'neg', 'run', 'ok'].map((name) => s.addAgent({ roomId: r.id, name, role: 'r', folder: dir }).id);
+  const ids = ['none', 'num', 'neg', 'run', 'dot', 'ok'].map((name) => s.addAgent({ roomId: r.id, name, role: 'r', folder: dir }).id);
   expect(s.agent(ids[0])!.remoteLaunch).toBeNull();
   const file = path.join(dir, 'state.json');
   const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -306,6 +306,7 @@ test('옛 state.json — 방 remote·에이전트 remoteLaunch 칸이 없거나 
     num: 7,
     neg: { pid: -1, run: 'abcd1234' },
     run: { pid: 12, run: '../x' },
+    dot: { pid: 13, run: '.' },
     ok: { pid: 4242, run: 'abcd1234' },
   };
   for (const ag of raw.agents) {
@@ -315,7 +316,7 @@ test('옛 state.json — 방 remote·에이전트 remoteLaunch 칸이 없거나 
   fs.writeFileSync(file, JSON.stringify(raw));
   const back = openStore(dir);
   expect(back.rooms().map((x) => x.remote)).toEqual([null, null, { host: 'dev' }]);
-  expect(ids.map((id) => back.agent(id)!.remoteLaunch)).toEqual([null, null, null, null, { pid: 4242, run: 'abcd1234' }]);
+  expect(ids.map((id) => back.agent(id)!.remoteLaunch)).toEqual([null, null, null, null, null, { pid: 4242, run: 'abcd1234' }]);
   expect(fs.readdirSync(dir).filter((f) => f.includes('.broken-'))).toEqual([]);
 });
 
@@ -336,7 +337,7 @@ test('서버 방 에이전트 폴더 — / 로 시작하는 전체 경로면 이
   expect(a.folder).toBe('/home/a/web');
   expect(openStore(dir).agent(a.id)!.folder).toBe('/home/a/web');
   const msg = '서버 폴더는 / 로 시작하는 전체 경로로 적어 주세요';
-  for (const folder of ['web', '~/web', '~', '', 'C:\work', './web']) {
+  for (const folder of ['web', '~/web', '~', '', 'C:\\work', './web', '/home/a\nweb', '/home/a\u2028x', '/home/a\tweb']) {
     expect(() => s.addAgent({ roomId: r.id, name: `n${folder}`, role: 'r', folder })).toThrow(msg);
     expect(() => s.checkAgent({ roomId: r.id, name: `n${folder}`, folder })).toThrow(msg);
   }

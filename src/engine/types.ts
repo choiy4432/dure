@@ -1,6 +1,14 @@
 export type RoomId = string;
 export type AgentId = string;
 
+/** 서버(SSH) 방의 문제 종류 — port 는 엔진이 다른 포트로 다시 띄우는 데만 쓴다(화면엔 오지 않는다) */
+export type RemoteIssueKind = 'unreachable' | 'denied' | 'hostkey' | 'no-claude' | 'no-folder' | 'disconnected' | 'login' | 'port';
+/** 서버 방 에이전트의 지금 문제 — detail = 접속 실패의 ssh 오류 첫 줄(그 밖은 null) */
+export interface RemoteIssue {
+  kind: RemoteIssueKind;
+  detail: string | null;
+}
+
 export interface Room {
   id: RoomId;
   name: string;

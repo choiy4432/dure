@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildArgs } from '../src/engine/claudeArgs';
 import {
-  checkScript, classifyExit, cleanupScript, hostArgs, launchArgs, launchPreamble, parsePid, remoteLaunchScript,
+  checkScript, classifyExit, cleanupScript, hostArgs, launchArgs, launchPreamble, parseCheckOutput, parsePid, remoteLaunchScript,
   remoteRunFiles, shq, SSH_OPTIONS, transcriptCheckScript,
 } from '../src/engine/remote';
 
@@ -152,11 +152,12 @@ describe('확인 명령', () => {
   it('폴더가 있으면 펼친 경로와 버전', async () => {
     const r = await sshDone(remote(checkScript('/home/a/web')));
     expect(r.code).toBe(0);
-    expect(r.stdout.trim().split(/\r?\n/)).toEqual(['/home/a/web', '2.1.304 (Claude Code)']);
+    expect(r.stdout).toBe('\nDURE_DIR=/home/a/web\n2.1.304 (Claude Code)\n');
+    expect(parseCheckOutput(r.stdout)).toEqual({ folder: '/home/a/web', claudeVersion: '2.1.304' });
   });
   it('~ 는 가짜 사용자 a 의 $HOME', async () => {
-    expect((await sshDone(remote(checkScript('~/web')))).stdout.trim().split(/\r?\n/)[0]).toBe('/home/a/web');
-    expect((await sshDone(remote(checkScript('~')))).stdout.trim().split(/\r?\n/)[0]).toBe('/home/a');
+    expect(parseCheckOutput((await sshDone(remote(checkScript('~/web')))).stdout).folder).toBe('/home/a/web');
+    expect(parseCheckOutput((await sshDone(remote(checkScript('~')))).stdout).folder).toBe('/home/a');
   });
   it('폴더 없이 — 버전만', async () => {
     const r = await sshDone(remote(checkScript()));
@@ -168,7 +169,7 @@ describe('확인 명령', () => {
     fs.mkdirSync(path.join(root, ...weird.split('/').filter(Boolean)), { recursive: true });
     const r = await sshDone(remote(checkScript(weird)));
     expect(r.code).toBe(0);
-    expect(r.stdout.trim().split(/\r?\n/)[0]).toBe(weird);
+    expect(parseCheckOutput(r.stdout).folder).toBe(weird);
   });
   it('없는 폴더 → 3', async () => {
     const r = await sshDone(remote(checkScript('/home/a/nope')));

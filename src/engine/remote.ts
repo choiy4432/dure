@@ -1,4 +1,5 @@
 import path from 'node:path';
+import type { RemoteIssue } from './types';
 
 // 서버(SSH) 방 — 서버에서 claude 를 띄우고·확인하고·정리하는 명령과 종료 분류. 순수 함수만(프로세스·파일 없음).
 // 서버 모양은 실측으로 정했다: docs/findings/2026-11-02-ssh-remote-probe.md (probe25)
@@ -30,8 +31,12 @@ export function shq(s: string): string {
 
 // id 는 셸 명령·경로에 그대로 들어가니 안전한 글자만
 const SAFE_ID = /^[A-Za-z0-9._-]+$/;
+/** 셸 명령·서버 경로에 그대로 넣어도 되는 id 인가 — 에이전트 id·띄우기 id(저장값을 읽을 때도 이것으로) */
+export function isSafeId(id: string): boolean {
+  return SAFE_ID.test(id) && id !== '.' && !id.includes('..');
+}
 function safeId(id: string): string {
-  if (!SAFE_ID.test(id) || id === '.' || id.includes('..')) throw new Error('올바르지 않은 id');
+  if (!isSafeId(id)) throw new Error('올바르지 않은 id');
   return id;
 }
 
@@ -104,13 +109,26 @@ export function cleanupScript(a: { pid: number; agentId: string; launchId: strin
   ].join('; ');
 }
 
-/** 폴더가 있으면 첫 줄 = 펼친 폴더, 마지막 줄 = claude 버전. 종료 3 = 폴더 없음 · 127 = claude 없음 */
+/**
+ * 폴더가 있으면 새 줄에 DURE_DIR=<펼친 폴더>, 마지막 줄 = claude 버전(parseCheckOutput 이 읽는다). 종료 3 = 폴더 없음 · 127 = claude 없음.
+ * 표식 앞에서 줄을 바꾼다 — 로그인 셸 프로필이 줄바꿈 없이 찍은 글이 경로에 붙지 않게
+ */
 export function checkScript(folder?: string): string {
   const tail = 'command -v claude >/dev/null || exit 127; claude --version';
   if (!folder) return tail;
   // 작은따옴표 안에서는 ~ 가 펼쳐지지 않는다 — ~ 와 ~/하위 는 $HOME 으로
   const cd = folder === '~' ? 'cd "$HOME"' : folder.startsWith('~/') ? `cd "$HOME"/${shq(folder.slice(2))}` : `cd ${shq(folder)}`;
-  return `${cd} && pwd -P || exit 3; ${tail}`;
+  return `${cd} || exit 3; printf '\\nDURE_DIR='; pwd -P; ${tail}`;
+}
+
+/** checkScript 의 출력 — folder = 마지막 DURE_DIR= 줄(/ 로 시작할 때만), claudeVersion = 그 밖의 마지막 줄의 번호(앞의 프로필 잡음은 버린다) */
+export function parseCheckOutput(stdout: string): { folder: string | null; claudeVersion: string | null } {
+  const lines = stdout.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l.trim() !== '');
+  const dir = lines.filter((l) => l.startsWith('DURE_DIR=')).at(-1)?.slice('DURE_DIR='.length) ?? null;
+  const last = lines.filter((l) => !l.startsWith('DURE_DIR=')).at(-1)?.trim();
+  // `claude --version` 은 번호 뒤에 이름이 붙는다 — 번호만
+  const claudeVersion = last ? (/\d+(?:\.\d+)+\S*/.exec(last)?.[0] ?? last) : null;
+  return { folder: dir?.startsWith('/') ? dir : null, claudeVersion };
 }
 
 // 서버의 claude 기록(projects 아래 <id>.jsonl)이 있는 id 만 한 줄씩
@@ -120,9 +138,20 @@ export function transcriptCheckScript(ids: string[]): string {
   return `d="\${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; for i in ${list}; do for f in "$d"/projects/*/"$i".jsonl; do [ -e "$f" ] && { echo "$i"; break; }; done; done`;
 }
 
-export type RemoteIssueKind = 'unreachable' | 'denied' | 'hostkey' | 'no-claude' | 'no-folder' | 'disconnected' | 'login' | 'port';
+export type { RemoteIssueKind } from './types';
 
-export function classifyExit(a: { code: number | null; stderr: string; started: boolean }): { kind: RemoteIssueKind; detail: string | null } | null {
+/**
+ * ssh·서버 stderr 의 뜻 있는 줄 — 앞뒤 빈칸을 자르고 빈 줄·처음 보는 서버 키를 받아 둔 경고(accept-new)·띄우기의 DURE_PID 줄은 뺀다.
+ * 접속 실패 첫 줄(classifyExit)과 엔진의 오류 글이 같이 쓴다
+ */
+export function sshErrorLines(stderr: string): string[] {
+  return stderr
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !/^Warning: Permanently added/i.test(l) && !/^DURE_PID=\d+$/.test(l));
+}
+
+export function classifyExit(a: { code: number | null; stderr: string; started: boolean }): RemoteIssue | null {
   const { code, stderr } = a;
   // 시작한 뒤의 stderr 에는 로그인 프로필 잡음이 섞인다 — 끊김만 분류하고 나머지는 지금의 '예기치 않게 종료' 길로
   if (a.started) return code === 255 ? { kind: 'disconnected', detail: null } : null;
@@ -130,8 +159,7 @@ export function classifyExit(a: { code: number | null; stderr: string; started: 
     if (/remote port forwarding failed/i.test(stderr)) return { kind: 'port', detail: null };
     if (/Permission denied/i.test(stderr)) return { kind: 'denied', detail: null };
     if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(stderr)) return { kind: 'hostkey', detail: null };
-    const first = stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l && !/^Warning: Permanently added/i.test(l)) ?? null;
-    return { kind: 'unreachable', detail: first };
+    return { kind: 'unreachable', detail: sshErrorLines(stderr)[0] ?? null };
   }
   if (code === 127 || /claude: (command )?not found/i.test(stderr)) return { kind: 'no-claude', detail: null };
   if (code === 3) return { kind: 'no-folder', detail: null };

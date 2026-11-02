@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { hostArgs } from './remote';
+import { hostArgs, isSafeId } from './remote';
 import { EFFORT_LEVELS, type Agent, type AgentId, type AgentPatch, type ContextUsage, type EffortLevel, type Room, type RoomId } from './types';
 
 export interface Store {
@@ -78,17 +78,18 @@ function savedRemote(v: unknown): { host: string } | null {
   return typeof host === 'string' && host ? { host } : null;
 }
 
-const RUN_ID = /^[A-Za-z0-9._-]+$/;
-/** 저장된 서버 claude 띄우기 — 양의 정수 pid 와 안전한 띄우기 id 일 때만, 아니면 null */
+/** 저장된 서버 claude 띄우기 — 양의 정수 pid 와 안전한 띄우기 id(remote.ts 와 같은 검사)일 때만, 아니면 null */
 function savedLaunch(v: unknown): { pid: number; run: string } | null {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
   const { pid, run } = v as Record<string, unknown>;
   if (!Number.isInteger(pid) || (pid as number) <= 0) return null;
-  if (typeof run !== 'string' || !RUN_ID.test(run) || run.includes('..')) return null;
+  if (typeof run !== 'string' || !isSafeId(run)) return null;
   return { pid: pid as number, run };
 }
 
 export const REMOTE_FOLDER_ABSOLUTE = '서버 폴더는 / 로 시작하는 전체 경로로 적어 주세요';
+/** 줄바꿈 같은 제어 문자 — 이름·역할·서버 폴더에 쓰지 않는다(서버 폴더는 셸 명령에 들어간다) */
+export const CONTROL_CHAR = /[\p{Cc}\u2028\u2029]/u;
 
 function load(file: string): State {
   const empty: State = { version: 1, rooms: [], agents: [] };
@@ -142,7 +143,7 @@ export function openStore(dataDir: string): Store {
     const room = needRoom(roomId);
     checkName(roomId, name);
     if (room.remote) {
-      if (!folder.startsWith('/')) throw new Error(REMOTE_FOLDER_ABSOLUTE);
+      if (!folder.startsWith('/') || CONTROL_CHAR.test(folder)) throw new Error(REMOTE_FOLDER_ABSOLUTE);
       return;
     }
     if (!fs.existsSync(folder) || !fs.statSync(folder).isDirectory()) {
