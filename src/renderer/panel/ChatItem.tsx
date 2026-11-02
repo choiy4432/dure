@@ -8,6 +8,7 @@ import type { ActionLine, ChatLine, ClaudePart } from '../state/transcript'
 import type { ToolIcon } from '../lib/toolSummary'
 import { getStore } from '../state/store'
 import { Markdown } from '../lib/Markdown'
+import { CopyButton } from '../lib/CopyButton'
 import { useFrameValue } from '../lib/useFrameValue'
 import { Clamp } from '../lib/Clamp'
 import { ExpandBox } from '../lib/ExpandBox'
@@ -179,6 +180,7 @@ function ChatItemView({ line, index, agentId }: Props) {
         <div className="me" data-line={index}>
           {line.images.length > 0 && <MeImages agentId={agentId} files={line.images} />}
           {line.text && <p>{line.text}</p>}
+          {line.text && <CopyButton className="msg-copy" text={line.text} label="내 말 복사" />}
         </div>
       )
     case 'relay': {
@@ -196,6 +198,8 @@ function ChatItemView({ line, index, agentId }: Props) {
               )}
             </span>
           </div>
+          {/* 머리 줄 밖에 — 그 줄은 칸 하나(이름과 조사 사이를 나누지 않게). 자리는 CSS 로 오른쪽 위 */}
+          <CopyButton className="msg-copy" text={line.text} label="메시지 복사" />
           <Clamp className="clamp-md">
             <Markdown text={line.text} />
           </Clamp>
@@ -205,7 +209,11 @@ function ChatItemView({ line, index, agentId }: Props) {
     case 'claude':
       return (
         <div className="ci-claude" data-line={index}>
-          <div className="who">Claude</div>
+          <div className="who">
+            Claude
+            {/* 답의 글만(하는 일 줄은 빼고) — 마크다운 원문 그대로 */}
+            {line.text && <CopyButton className="msg-copy" text={line.text} label="답 복사" />}
+          </div>
           {/* 글과 하는 일 상자를 일어난 차례대로 — 흐르는 동안 보던 차례가 차례가 끝나도 그대로 */}
           {line.parts.map((p, i) =>
             p.type === 'text' ? (

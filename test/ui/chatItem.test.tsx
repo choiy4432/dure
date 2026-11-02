@@ -77,7 +77,7 @@ describe('ChatItem — 서브에이전트 요약 줄', () => {
 
   it('하나인데 설명이 없으면 "서브에이전트에게 맡김"만', () => {
     render(<ChatItem line={answer(subs({ ids: ['A'], description: null, counts: { running: 0, done: 1, bad: 0 } }))} index={0} agentId="w" />)
-    expect(screen.getByRole('button')).toHaveAccessibleName('서브에이전트에게 맡김 끝 1')
+    expect(screen.getByRole('button', { name: /서브에이전트에게 맡김/ })).toHaveAccessibleName('서브에이전트에게 맡김 끝 1')
   })
 
   it('개수가 바뀌면 다시 그린다(같은 줄 번호 · 새 줄 객체)', () => {
@@ -91,7 +91,7 @@ describe('ChatItem — 서브에이전트 요약 줄', () => {
     const one = subs({ ids: ['A'], description: '조사', counts: { running: 1, done: 0, bad: 0 } })
     const { rerender } = render(<ChatItem line={answer(one)} index={0} agentId="w" />)
     rerender(<ChatItem line={answer({ ...one, description: 'A사 랜딩 문구 조사' })} index={0} agentId="w" />)
-    expect(screen.getByRole('button')).toHaveAccessibleName('A사 랜딩 문구 조사 서브에이전트에게 맡김 도는 중 1')
+    expect(screen.getByRole('button', { name: /서브에이전트에게 맡김/ })).toHaveAccessibleName('A사 랜딩 문구 조사 서브에이전트에게 맡김 도는 중 1')
   })
 
   it('어느 에이전트의 대화인지 모르면 누를 수 없다', () => {
@@ -245,5 +245,46 @@ describe('ChatItem — 내 말의 그림은 썸네일', () => {
     expect(th).toHaveAttribute('title', '저장하기 전에 보낸 그림이라 볼 수 없어요')
     fireEvent.click(th)
     expect(screen.getByRole('dialog')).toHaveTextContent('저장하기 전에 보낸 그림이라 볼 수 없어요')
+  })
+})
+
+describe('ChatItem — 복사(답 · 내 말 · 받은 메시지)', () => {
+  let writeText: ReturnType<typeof vi.fn>
+  beforeEach(() => {
+    writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  })
+  afterEach(cleanup)
+
+  it('Claude 답 — 글 전체(마크다운 원문)를 복사, 하는 일 줄은 빼고', async () => {
+    const line: ChatLine = {
+      kind: 'claude', text: '첫 단락\n\n**둘째**', at: 1, actions: [act('a')],
+      parts: [{ type: 'text', text: '첫 단락' }, { type: 'acts', actions: [act('a')] }, { type: 'text', text: '**둘째**' }],
+    }
+    render(<ChatItem line={line} index={0} />)
+    await settle(async () => { fireEvent.click(screen.getByRole('button', { name: '답 복사' })) })
+    expect(writeText).toHaveBeenCalledWith('첫 단락\n\n**둘째**')
+    expect(screen.getByRole('button', { name: '복사했어요' })).toBeTruthy()
+  })
+
+  it('글 없이 하는 일만 한 차례엔 복사 단추가 없다', () => {
+    const line: ChatLine = { kind: 'claude', text: '', at: 1, actions: [act('a')], parts: [{ type: 'acts', actions: [act('a')] }] }
+    render(<ChatItem line={line} index={0} />)
+    expect(screen.queryByRole('button', { name: '답 복사' })).toBeNull()
+  })
+
+  it('내 말 — 글을 복사, 그림만 보낸 말엔 단추가 없다', async () => {
+    const { unmount } = render(<ChatItem line={{ kind: 'me', text: '이거 고쳐 줘', images: [], at: 1 }} index={0} />)
+    await settle(async () => { fireEvent.click(screen.getByRole('button', { name: '내 말 복사' })) })
+    expect(writeText).toHaveBeenCalledWith('이거 고쳐 줘')
+    unmount()
+    render(<ChatItem line={{ kind: 'me', text: '', images: [null], at: 1 }} index={0} agentId="w" />)
+    expect(screen.queryByRole('button', { name: '내 말 복사' })).toBeNull()
+  })
+
+  it('받은 메시지 — 본문을 복사', async () => {
+    render(<ChatItem line={{ kind: 'relay', from: '기획', text: '시안 두 개 봐 줘', at: 1 }} index={0} />)
+    await settle(async () => { fireEvent.click(screen.getByRole('button', { name: '메시지 복사' })) })
+    expect(writeText).toHaveBeenCalledWith('시안 두 개 봐 줘')
   })
 })

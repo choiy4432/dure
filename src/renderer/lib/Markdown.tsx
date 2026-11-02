@@ -1,7 +1,7 @@
-import { memo, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { memo, useRef, type MouseEvent, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
-import { Check, Copy } from 'lucide-react'
 import remarkGfm from 'remark-gfm'
+import { CopyButton } from './CopyButton'
 
 const WEB = /^https?:\/\//i
 const PLUGINS = [remarkGfm]
@@ -64,32 +64,16 @@ function langOf(node: HNode | undefined): string | null {
 /** 코드 상자 — 오른쪽 위 복사 단추(누르면 1.5초 동안 체크). 글 상자는 줄바꿈, 코드는 옆으로 밀기 */
 function CodeBlock({ node, children }: { node?: HNode; children?: ReactNode }) {
   const pre = useRef<HTMLPreElement>(null)
-  const [copied, setCopied] = useState(false)
-  useEffect(() => {
-    if (!copied) return
-    const t = setTimeout(() => setCopied(false), 1500)
-    return () => clearTimeout(t)
-  }, [copied])
   const lang = langOf(node)
   const wrap = !lang || PROSE.has(lang)
-  const copy = async () => {
-    // 코드 글은 끝 줄바꿈으로 끝난다 — 붙여 넣을 때 빈 줄이 하나 더 생기지 않게 뺀다
-    const text = (pre.current?.textContent ?? '').replace(/\n$/, '')
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-    } catch {
-      // 클립보드를 못 쓰면(창이 포커스를 잃었을 때 등) 아무 일도 없다 — 다시 누르면 된다
-    }
-  }
+  // 코드 글은 끝 줄바꿈으로 끝난다 — 붙여 넣을 때 빈 줄이 하나 더 생기지 않게 뺀다
+  const code = () => (pre.current?.textContent ?? '').replace(/\n$/, '')
   return (
     <div className="md-code">
       <pre ref={pre} className={wrap ? 'wrap' : undefined}>
         {children}
       </pre>
-      <button type="button" className="ib md-copy" title={copied ? '복사했어요' : '복사'} aria-label={copied ? '복사했어요' : '복사'} onClick={copy}>
-        {copied ? <Check className="i" size={14} aria-hidden="true" /> : <Copy className="i" size={14} aria-hidden="true" />}
-      </button>
+      <CopyButton className="md-copy" text={code} />
     </div>
   )
 }

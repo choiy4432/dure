@@ -2849,6 +2849,54 @@ code {
   font-weight: 700;
 }
 
+/* 줄 복사 단추(답 · 받은 메시지 · 내 말) — 그 줄에 마우스를 올리거나 단추에 초점이 있을 때만 보인다.
+   자리를 차지하지 않게 띄워 둔다 — 대화 길이·줄 모양은 그대로 */
+.ci-claude,
+.ci-relay,
+.me {
+  position: relative;
+}
+
+.msg-copy.ib {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  opacity: 0;
+  transition: opacity 150ms;
+}
+
+/* Claude 답 — 'Claude' 머리 줄(16px) 오른쪽 끝, 줄 가운데에 */
+.ci-claude .msg-copy {
+  top: -6px;
+  right: 0;
+}
+
+/* 받은 메시지 — 카드 안 오른쪽 위 */
+.ci-relay > .msg-copy {
+  top: 4px;
+  right: 4px;
+}
+
+/* 내 말 — 말풍선 왼쪽 바로 바깥, 위 끝에(틈 없이 붙여 말풍선에서 단추로 옮겨 가도 사라지지 않게) */
+.me > .msg-copy {
+  top: 4px;
+  right: 100%;
+}
+
+.ci-claude:hover .msg-copy,
+.ci-relay:hover > .msg-copy,
+.me:hover > .msg-copy,
+.msg-copy:focus-visible,
+.msg-copy[aria-label='복사했어요'] {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-copy.ib {
+    transition: none;
+  }
+}
+
 /* 하는 일 목록 — 접힌 한 줄씩 */
 .acts {
   list-style: none;
