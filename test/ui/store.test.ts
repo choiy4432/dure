@@ -5,7 +5,7 @@ import type { AgentView, DureApi, Snapshot } from '../../src/shared/ipcContract'
 
 const agent = (id: string, roomId = 'r1', over: Partial<AgentView> = {}): AgentView => ({
   id, roomId, name: id, role: '', folder: '/x', sessionId: '', started: true, auto: false, model: null,
-  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [], pastCount: 0, ...over,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [], pastCount: 0, remoteIssue: null, ...over,
 })
 const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
   claudeMissing: false,
@@ -49,6 +49,26 @@ describe('store init', () => {
     await s.init()
     expect(s.getState().requests).toEqual([])
     expect(s.getState().messages.map(m => m.state)).toEqual(['pending', 'held'])
+  })
+
+  it('status 사건의 remoteIssue 가 에이전트에 들어가고 null 로 지워진다 · 칸이 없으면 그대로', async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    const get = () => s.getState().agents.find(a => a.id === 'a')!
+    emit('status', { agentId: 'a', status: 'error', errorText: null, remoteIssue: { kind: 'unreachable', detail: 'x' } })
+    expect(get().remoteIssue).toEqual({ kind: 'unreachable', detail: 'x' })
+    emit('status', { agentId: 'a', status: 'idle', errorText: null }) // 이 PC 방 꼴 — 칸 없음
+    expect(get().remoteIssue).toEqual({ kind: 'unreachable', detail: 'x' })
+    emit('status', { agentId: 'a', status: 'idle', errorText: null, remoteIssue: null })
+    expect(get().remoteIssue).toBeNull()
+  })
+
+  it('snapshot 의 rooms[].remote 가 그대로 들어온다', async () => {
+    const { api } = fake({ snapshot: async () => snap({ rooms: [{ id: 'r1', name: '서버', createdAt: 1, remote: { host: 'dev' } }] }) })
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().rooms[0].remote).toEqual({ host: 'dev' })
   })
 
   it('snapshot 을 기다리는 동안 온 이벤트는 snapshot 뒤에 적용된다', async () => {

@@ -187,7 +187,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       case 'status': {
         const p = ev.payload
         const old = state.agents.find(a => a.id === p.agentId)
-        const agents = state.agents.map(a => (a.id === p.agentId ? { ...a, status: p.status, errorText: p.errorText } : a))
+        const agents = state.agents.map(a => (a.id === p.agentId ? { ...a, status: p.status, errorText: p.errorText, ...(p.remoteIssue !== undefined ? { remoteIssue: p.remoteIssue } : {}) } : a))
         const next = agents.find(a => a.id === p.agentId)
         const changed = !!old && !!next && displayStatus(old, state.requests) !== displayStatus(next, state.requests)
         state = {

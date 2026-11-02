@@ -1,5 +1,5 @@
 import type {
-  Agent, AgentDescription, AgentId, ConversationSummary, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, SleepBlock, ThemePref, UserPart,
+  Agent, AgentDescription, RemoteIssue, RemoteIssueKind, SshHostEntry, AgentId, ConversationSummary, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, SleepBlock, ThemePref, UserPart,
 } from '../engine/types'
 
 export interface AgentView extends Agent {
@@ -28,6 +28,8 @@ export interface AgentView extends Agent {
   subagentsRunning: string[]
   /** 지난 대화 수 — 지금 대화는 빼고 */
   pastCount: number
+  /** 서버 방 에이전트의 지금 서버 문제 — 없으면 null('status' 사건이 바꾼다) */
+  remoteIssue: RemoteIssue | null
 }
 
 export interface Snapshot {
@@ -51,7 +53,16 @@ export interface Snapshot {
 
 export interface DureApi {
   snapshot(): Promise<Snapshot>
-  addRoom(name: string): Promise<Room>
+  /** remote 가 있으면 서버(SSH) 방 */
+  addRoom(name: string, remote?: { host: string } | null): Promise<Room>
+  /** 이 PC 에 ssh 가 있는가 */
+  sshAvailable(): Promise<boolean>
+  /** ~/.ssh/config 의 서버 목록(읽기만) */
+  sshHosts(): Promise<SshHostEntry[]>
+  /** 그 서버에 접속되고 claude 가 있는지 */
+  checkRemote(host: string): Promise<{ ok: true; claudeVersion: string } | { ok: false; kind: RemoteIssueKind; detail: string | null }>
+  /** 서버 방의 그 폴더가 서버에 있는지 */
+  checkRemoteFolder(roomId: RoomId, folder: string): Promise<{ ok: true; folder: string; claudeVersion: string } | { ok: false; kind: RemoteIssueKind; detail: string | null }>
   renameRoom(id: RoomId, name: string): Promise<Room>
   removeRoom(id: RoomId): Promise<void>
   addAgent(i: { roomId: RoomId; name: string; role: string; folder: string }): Promise<Agent>
@@ -127,7 +138,7 @@ export const CHANNEL = { invoke: 'dure:invoke', event: 'dure:event' } as const
 
 /** invoke 로 부를 수 있는 이름 — DureApi 의 메서드 중 on 만 빠진다(on 은 preload 안에서 처리) */
 export const METHODS = [
-  'snapshot', 'addRoom', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
+  'snapshot', 'addRoom', 'sshAvailable', 'sshHosts', 'checkRemote', 'checkRemoteFolder', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
   'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'conversations', 'conversation', 'resumeConversation', 'forkAgent', 'image',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
   'setAllowBypass', 'setNotify', 'setTheme', 'setBypass',

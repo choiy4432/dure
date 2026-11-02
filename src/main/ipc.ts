@@ -30,6 +30,7 @@ export interface IpcDeps {
 const NOT_ALLOWED = '허용되지 않은 요청이에요'
 const FOLDER_NOT_ALLOWED = '등록된 에이전트의 폴더만 열 수 있어요'
 const VSCODE_MISSING = 'VS Code 를 찾지 못했어요'
+const REMOTE_BAD = '서버 방 인자가 올바르지 않아요'
 const SAVE_BAD = '저장할 이름과 글이 필요해요'
 
 /**
@@ -62,6 +63,7 @@ function agentViews(engine: Engine): AgentView[] {
       modelNow: engine.modelNow(a.id),
       subagentsRunning: engine.subagentsRunning(a.id),
       pastCount: engine.pastCount(a.id),
+      remoteIssue: engine.remoteIssue(a.id),
     }
   })
 }
@@ -88,7 +90,24 @@ function snapshot(engine: Engine | null): Snapshot {
 type Handler = (e: Engine, deps: IpcDeps, ...a: any[]) => unknown
 const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   snapshot: (e) => snapshot(e),
-  addRoom: (e, _d, name) => e.addRoom(name),
+  addRoom: (e, _d, name, remote) => {
+    if (typeof name !== 'string') throw new Error(REMOTE_BAD)
+    // remote 는 없음·null 또는 { host: 글 } 뿐 — 그 밖의 칸은 거절
+    if (remote == null) return e.addRoom(name)
+    const r = remote as Record<string, unknown>
+    if (typeof remote !== 'object' || Array.isArray(remote) || typeof r.host !== 'string' || Object.keys(r).length !== 1) throw new Error(REMOTE_BAD)
+    return e.addRoom(name, { host: r.host })
+  },
+  sshAvailable: (e) => e.sshAvailable(),
+  sshHosts: (e) => e.sshHosts(),
+  checkRemote: (e, _d, host) => {
+    if (typeof host !== 'string') throw new Error(REMOTE_BAD)
+    return e.checkRemote(host)
+  },
+  checkRemoteFolder: (e, _d, roomId, folder) => {
+    if (typeof roomId !== 'string' || typeof folder !== 'string') throw new Error(REMOTE_BAD)
+    return e.checkRemoteFolder(roomId, folder)
+  },
   renameRoom: (e, _d, id, name) => e.renameRoom(id, name),
   removeRoom: (e, _d, id) => e.removeRoom(id),
   addAgent: (e, _d, i) => e.addAgent(i),

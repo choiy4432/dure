@@ -60,6 +60,11 @@ function fakeEngine() {
     conversations: rec('conversations', []),
     conversation: rec('conversation', []),
     pastCount: () => 4,
+    remoteIssue: (id: string) => (id === 'a1' ? { kind: 'denied', detail: null } : null),
+    sshAvailable: () => true,
+    sshHosts: () => [{ host: 'dev', user: null, hostName: null, port: null }],
+    checkRemote: rec('checkRemote', Promise.resolve({ ok: true, claudeVersion: '2.1' })),
+    checkRemoteFolder: rec('checkRemoteFolder', Promise.resolve({ ok: true, folder: '/h', claudeVersion: '2.1' })),
     resumeConversation: rec('resumeConversation', Promise.resolve()),
     forkAgent: rec('forkAgent', agent),
     image: rec('image', Promise.resolve(null)),
@@ -123,6 +128,37 @@ describe('registerIpc', () => {
     const r = await call('snapshot')
     expect(r.value.agents[0].pastCount).toBe(4)
   })
+  it('snapshot 의 에이전트에 remoteIssue 가 실린다', async () => {
+    const { call } = setup()
+    expect((await call('snapshot')).value.agents[0].remoteIssue).toEqual({ kind: 'denied', detail: null })
+  })
+
+  it('addRoom — 이름만 · remote {host} · null 은 엔진으로, 모양이 틀리면 거절', async () => {
+    const { call, calls } = setup()
+    expect((await call('addRoom', '방')).ok).toBe(true)
+    expect((await call('addRoom', '방', null)).ok).toBe(true)
+    expect((await call('addRoom', '서버', { host: 'dev' })).ok).toBe(true)
+    expect(calls).toEqual([['addRoom', ['방']], ['addRoom', ['방']], ['addRoom', ['서버', { host: 'dev' }]]])
+    for (const bad of [{ host: 5 }, {}, 'dev', { host: 'dev', extra: 1 }, [], 7]) {
+      expect(await call('addRoom', '서버', bad), JSON.stringify(bad)).toMatchObject({ ok: false })
+    }
+    expect(await call('addRoom', 5)).toMatchObject({ ok: false })
+    expect(calls).toHaveLength(3)
+  })
+
+  it('sshAvailable · sshHosts · checkRemote · checkRemoteFolder — 엔진으로, 글이 아닌 인자는 거절', async () => {
+    const { call, calls } = setup()
+    expect(await call('sshAvailable')).toEqual({ ok: true, value: true })
+    expect(await call('sshHosts')).toEqual({ ok: true, value: [{ host: 'dev', user: null, hostName: null, port: null }] })
+    expect((await call('checkRemote', 'dev')).ok).toBe(true)
+    expect((await call('checkRemoteFolder', 'r1', '/home/a')).ok).toBe(true)
+    expect(calls).toEqual([['checkRemote', ['dev']], ['checkRemoteFolder', ['r1', '/home/a']]])
+    for (const [m, a] of [['checkRemote', [1]], ['checkRemoteFolder', [1, '/a']], ['checkRemoteFolder', ['r1', null]]] as [string, unknown[]][]) {
+      expect(await call(m, ...a), m).toMatchObject({ ok: false })
+    }
+    expect(calls).toHaveLength(2)
+  })
+
   it('rejects methods outside the whitelist', async () => {
     const { call } = setup()
     for (const m of ['shutdown', 'on', 'constructor', '__proto__', 'start']) {

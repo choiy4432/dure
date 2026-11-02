@@ -9,6 +9,14 @@ export interface RemoteIssue {
   detail: string | null;
 }
 
+/** ~/.ssh/config 의 서버 한 줄 */
+export interface SshHostEntry {
+  host: string;
+  user: string | null;
+  hostName: string | null;
+  port: number | null;
+}
+
 export interface Room {
   id: RoomId;
   name: string;

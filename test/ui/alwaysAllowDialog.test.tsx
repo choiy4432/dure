@@ -6,7 +6,7 @@ import { allowMotion, fastMotion } from './motion'
 
 const agent = (over: Partial<AgentView> = {}): AgentView => ({
   id: 'w', roomId: 'r1', name: '웹 화면', role: '역할', folder: 'C:\w', sessionId: 's', started: true, auto: false, model: null,
-  alwaysAllow: ['Bash', 'Edit'], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [], pastCount: 0, ...over,
+  alwaysAllow: ['Bash', 'Edit'], pos: { x: 64, y: 64 }, color: null, effort: null, lastContext: null, bypassOn: false, effortNow: null, modelNow: null, status: 'idle', errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null, subagentsRunning: [], pastCount: 0, remoteIssue: null, ...over,
 })
 
 let snapshot: Snapshot

@@ -4,12 +4,8 @@ import path from 'node:path';
 
 // ~/.ssh/config 의 서버 목록 — 읽기만 한다(쓰거나 만들지 않는다). 리터럴 Host 별칭만.
 
-export interface SshHostEntry {
-  host: string;
-  user: string | null;
-  hostName: string | null;
-  port: number | null;
-}
+import type { SshHostEntry } from './types'; // 화면(web 빌드)도 타입을 쓰니 정의는 types.ts
+export type { SshHostEntry };
 
 const MAX_DEPTH = 8; // Include 순환 방지
 
