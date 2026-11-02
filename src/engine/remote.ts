@@ -8,14 +8,15 @@ import type { RemoteIssue } from './types';
 /** ssh 대상 그대로 — 별칭 또는 `사용자@주소`(`:포트` 허용) */
 export type RemoteHost = string;
 
+// 모든 ssh 호출에 — ~/.ssh/config 의 RemoteCommand(VS Code 원격 설정 등)가 우리 명령과 부딪히지 않게 none
 export const SSH_OPTIONS: readonly string[] = [
   '-T',
   '-o', 'BatchMode=yes',
-  '-o', 'ExitOnForwardFailure=yes',
   '-o', 'ServerAliveInterval=15',
   '-o', 'ServerAliveCountMax=3',
   '-o', 'ConnectTimeout=10',
   '-o', 'StrictHostKeyChecking=accept-new',
+  '-o', 'RemoteCommand=none',
 ];
 
 export function hostArgs(host: RemoteHost): string[] {
@@ -57,8 +58,21 @@ const marker = (agentId: string, launchId: string) => `${safeId(agentId)}.${safe
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
- * 서버에서 claude 띄우기 — 폴더로 먼저 간다(없으면 3: run 폴더도 토큰이 든 머리말 파일도 만들지 않는다 — 읽지 않은 머리말은 셸과 함께 버려진다).
- * 그다음 run 폴더에 머리말 두 줄을 풀고, pid 를 알리고, 표식과 이 PC 의 claude 와 같은 환경(SPAWN_ENV_EXTRA — ssh 는 환경을 넘기지 않는다)을 둔 뒤 exec
+ * 서버의 claude 찾기 — PATH → ~/.local/bin → ~/.claude/local → nvm(nvm.sh 를 읽은 뒤 PATH). bash -lc 의 PATH 에 없는 흔한 설치 자리(VS Code
+ * 터미널에선 되는데 두레에선 안 되는 경우). 찾은 실행 파일은 $c(별칭·함수 이름은 버린다), 없으면 127
+ */
+const FIND_CLAUDE = [
+  'c=$(command -v claude)',
+  '[ -x "$c" ] || c=',
+  '[ -n "$c" ] || for x in "$HOME/.local/bin/claude" "$HOME/.claude/local/claude"; do [ -x "$x" ] && { c=$x; break; }; done',
+  'if [ -z "$c" ]; then n="${NVM_DIR:-$HOME/.nvm}/nvm.sh"; [ -s "$n" ] && . "$n" >/dev/null 2>&1; c=$(command -v claude); [ -x "$c" ] || c=; fi',
+  '[ -n "$c" ] || exit 127',
+].join('; ');
+
+/**
+ * 서버에서 claude 띄우기 — 폴더로 먼저 간다(없으면 3), claude 를 찾는다(없으면 127) — 둘 다 run 폴더도 토큰이 든 머리말 파일도 만들기 전이다
+ * (읽지 않은 머리말은 셸과 함께 버려진다). 그다음 umask 077 로 run 폴더에 머리말 두 줄을 풀고 umask 를 되돌린 뒤(claude 와 그 명령이 만드는
+ * 파일은 서버 기본 권한 그대로), pid 를 알리고, 표식과 이 PC 의 claude 와 같은 환경(SPAWN_ENV_EXTRA — ssh 는 환경을 넘기지 않는다)을 둔 뒤 exec
  */
 export function remoteLaunchScript(a: { agentId: string; launchId: string; folder: string; claudeArgs: string[] }): string {
   const files = remoteRunFiles(a.agentId, a.launchId);
@@ -68,29 +82,51 @@ export function remoteLaunchScript(a: { agentId: string; launchId: string; folde
     return `export ${k}=${shq(v)}`;
   });
   return [
-    'umask 077',
     `cd ${shq(a.folder)} || exit 3`,
+    FIND_CLAUDE,
+    'o=$(umask)',
+    'umask 077',
     `d="${remoteRunDir(a.agentId, a.launchId)}"`,
     'mkdir -p "$d"',
     'IFS= read -r a',
     'IFS= read -r b',
     'printf %s "$a" | base64 -d > "$d/mcp.json"',
     'printf %s "$b" | base64 -d > "$d/prompt.md"',
+    'umask "$o"',
     'echo "DURE_PID=$$" >&2',
     // claude·그 Bash 명령·손자가 물려받는 표식 — 정리가 고아가 된 것도 찾는다. setsid 는 쓰지 않는다(이미 세션 리더, 쓰면 깨짐)
     `export DURE_RUN=${marker(a.agentId, a.launchId)}`,
     ...env,
-    `exec claude ${quoted.join(' ')}`,
+    `exec "$c" ${quoted.join(' ')}`,
   ].join('; ');
 }
 
+/**
+ * 띄우기 ssh — ExitOnForwardFailure=no: ~/.ssh/config 의 다른 전달(LocalForward 등)이 실패해도 끝나지 않게. 우리 -R 이 실패하면 ssh 는 경고만
+ * 내고 계속 돈다 — 엔진이 stderr 에서 그 포트의 줄(forwardFailed)을 보고 내린 뒤 다른 포트로. ClearAllForwardings 는 명령줄 -R 까지 지워 못 쓴다
+ */
 export function launchArgs(a: { host: RemoteHost; remotePort: number; localPort: number; script: string }): string[] {
   return [
     ...SSH_OPTIONS,
-    '-R', `${a.remotePort}:127.0.0.1:${a.localPort}`,
+    '-o', 'ExitOnForwardFailure=no',
+    '-R', `127.0.0.1:${a.remotePort}:127.0.0.1:${a.localPort}`,
     ...hostArgs(a.host),
     'bash -lc ' + shq(a.script),
   ];
+}
+
+/**
+ * 확인·정리·기록 확인 ssh — 전달은 하나도 열지 않는다(ClearAllForwardings: ~/.ssh/config 의 전달이 VS Code 등과 겹쳐 실패하지 않게).
+ * login = 로그인 셸(bash -lc — 확인은 사용자 PATH 로 claude 를 찾는다), false 면 bash -c(정리 — 프로필을 읽지 않는다). connectTimeout = 초
+ */
+export function runArgs(a: { host: RemoteHost; script: string; login?: boolean; connectTimeout?: number }): string[] {
+  const opts = a.connectTimeout === undefined ? SSH_OPTIONS : SSH_OPTIONS.map((o) => (o === 'ConnectTimeout=10' ? `ConnectTimeout=${a.connectTimeout}` : o));
+  return [...opts, '-o', 'ClearAllForwardings=yes', ...hostArgs(a.host), `bash ${a.login === false ? '-c' : '-lc'} ` + shq(a.script)];
+}
+
+/** 띄운 ssh 의 stderr 에 우리 원격 포트를 서버가 못 열었다는 줄이 있나 — 설정 파일의 다른 전달 실패는 포트 번호로 거른다 */
+export function forwardFailed(stderr: string, port: number): boolean {
+  return new RegExp(`remote port forwarding failed for listen port ${port}(?!\\d)`, 'i').test(stderr);
 }
 
 /** ssh stdin 맨 앞 두 줄 — 토큰이 든 MCP 설정과 방 안내문(명령 인자에 안 싣는다) */
@@ -102,17 +138,17 @@ export function launchPreamble(mcpJson: string, prompt: string): string {
 /**
  * 끄기 — 표식(DURE_RUN)을 가진 프로세스 ∪ claude 나무 → 그 pid 와 세션(SID) 전부 TERM → 2초 → KILL → run 폴더 지움.
  * Bash 명령은 각자 새 세션이라 `pkill -s` 만으로는 안 꺼진다(probe25). /proc 이 없으면 나무 + SID 까지만.
- * pgrep -f 는 쓰지 않는다(자기 셸을 잡는다).
+ * pgrep -f 는 쓰지 않는다(자기 셸을 잡는다). 정리 셸은 표식을 export 하지 않아 grep 이 저를 잡지 않는다. bash -c 로 돈다(runArgs login false)
  */
 export function cleanupScript(a: { pid: number; agentId: string; launchId: string }): string {
   if (!Number.isInteger(a.pid) || a.pid <= 0) throw new Error('올바르지 않은 pid');
   const dir = remoteRunDir(a.agentId, a.launchId);
   return [
-    `mk() { for e in /proc/[0-9]*/environ; do tr '\\0' '\\n' 2>/dev/null < "$e" | grep -qxF "DURE_RUN=$1" && { p=\${e#/proc/}; echo "\${p%/environ}"; }; done; }`,
     'desc() { for c in $(pgrep -P "$1"); do echo "$c"; desc "$c"; done; }',
-    // 저장해 둔 pid 는 다른 프로세스가 물려받았을 수 있다 — /proc 이 있으면 표식이 맞을 때만 그 pid 와 나무를 넣는다
     `m=${marker(a.agentId, a.launchId)}`,
-    `if [ -r /proc/self/environ ]; then l="$(mk $m)"; tr '\\0' '\\n' 2>/dev/null < /proc/${a.pid}/environ | grep -qxF "DURE_RUN=$m" && l="${a.pid} $(desc ${a.pid}) $l"; else l="${a.pid} $(desc ${a.pid})"; fi`,
+    // 표식을 가진 프로세스 — grep 한 번(-z: environ 은 NUL 로 나뉜다). 저장해 둔 pid 는 다른 프로세스가 물려받았을 수 있다 —
+    // /proc 이 있으면 표식이 맞을 때만 그 pid 와 나무를 넣는다
+    `if [ -r /proc/self/environ ]; then l=$(grep -lzxF "DURE_RUN=$m" /proc/[0-9]*/environ 2>/dev/null | sed 's#^/proc/##; s#/environ$##'); grep -qzxF "DURE_RUN=$m" /proc/${a.pid}/environ 2>/dev/null && l="${a.pid} $(desc ${a.pid}) $l"; else l="${a.pid} $(desc ${a.pid})"; fi`,
     `ss=$(ps -o sid= -p "$(echo $l | tr ' ' ,)" 2>/dev/null | sort -u)`,
     'kill -TERM $l 2>/dev/null; for x in $ss; do pkill -TERM -s $x; done',
     'sleep 2',
@@ -123,23 +159,26 @@ export function cleanupScript(a: { pid: number; agentId: string; launchId: strin
 
 /**
  * 폴더가 있으면 새 줄에 DURE_DIR=<펼친 폴더>, 마지막 줄 = claude 버전(parseCheckOutput 이 읽는다). 종료 3 = 폴더 없음 · 127 = claude 없음.
- * 표식 앞에서 줄을 바꾼다 — 로그인 셸 프로필이 줄바꿈 없이 찍은 글이 경로에 붙지 않게
+ * claude 는 띄우기와 같은 자리에서 찾는다(FIND_CLAUDE). 표식 앞에서 줄을 바꾼다 — 로그인 셸 프로필이 줄바꿈 없이 찍은 글이 경로에 붙지 않게
  */
 export function checkScript(folder?: string): string {
-  const tail = 'command -v claude >/dev/null || exit 127; claude --version';
+  const tail = `${FIND_CLAUDE}; "$c" --version`;
   if (!folder) return tail;
   // 작은따옴표 안에서는 ~ 가 펼쳐지지 않는다 — ~ 와 ~/하위 는 $HOME 으로
   const cd = folder === '~' ? 'cd "$HOME"' : folder.startsWith('~/') ? `cd "$HOME"/${shq(folder.slice(2))}` : `cd ${shq(folder)}`;
   return `${cd} || exit 3; printf '\\nDURE_DIR='; pwd -P; ${tail}`;
 }
 
-/** checkScript 의 출력 — folder = 마지막 DURE_DIR= 줄(/ 로 시작할 때만), claudeVersion = 그 밖의 마지막 줄의 번호(앞의 프로필 잡음은 버린다) */
+/**
+ * checkScript 의 출력 — folder = 마지막 DURE_DIR= 줄(/ 로 시작할 때만), claudeVersion = 그 밖의 마지막 줄이 버전 번호(x.y.z)로 시작할 때만
+ * 그 번호(앞의 프로필 잡음은 버린다 — 마지막 줄이 번호가 아니면 claude 를 못 찾은 것으로)
+ */
 export function parseCheckOutput(stdout: string): { folder: string | null; claudeVersion: string | null } {
   const lines = stdout.split('\n').map((l) => l.replace(/\r$/, '')).filter((l) => l.trim() !== '');
   const dir = lines.filter((l) => l.startsWith('DURE_DIR=')).at(-1)?.slice('DURE_DIR='.length) ?? null;
   const last = lines.filter((l) => !l.startsWith('DURE_DIR=')).at(-1)?.trim();
   // `claude --version` 은 번호 뒤에 이름이 붙는다 — 번호만
-  const claudeVersion = last ? (/\d+(?:\.\d+)+\S*/.exec(last)?.[0] ?? last) : null;
+  const claudeVersion = last ? (/^\d+\.\d+\.\d+\S*/.exec(last)?.[0] ?? null) : null;
   return { folder: dir?.startsWith('/') ? dir : null, claudeVersion };
 }
 
@@ -163,16 +202,20 @@ export function sshErrorLines(stderr: string): string[] {
     .filter((l) => l && !/^Warning: Permanently added/i.test(l) && !/^DURE_PID=\d+$/.test(l));
 }
 
+/** ssh 자신이 낸 종료 — 255, 또는 윈도우 OpenSSH 가 연결 도중 끊길 때 내는 -1(부모에겐 4294967295, 실측) */
+const sshLevel = (code: number | null) => code === 255 || code === -1 || code === 4294967295;
+
 /**
  * ssh 가 끝난 까닭 — started = stdout 을 한 줄이라도 받았다 · pidSeen = 띄운 셸이 DURE_PID 를 알렸다(서버에서 명령이 돌기 시작했다 —
- * claude 가 없어도 셸은 먼저 알리니 started 와 따로). 어느 쪽이든 그 뒤의 255 는 끊김이다(stderr 의 프로필 잡음으로 가르지 않는다)
+ * claude 가 없어도 셸은 먼저 알리니 started 와 따로). 어느 쪽이든 그 뒤의 ssh 쪽 종료는 끊김이다(stderr 의 프로필 잡음으로 가르지 않는다).
+ * port = 이 띄우기의 원격 포트 — 그 포트의 전달 실패 줄이 있을 때만 'port'(확인 ssh 는 전달이 없어 안 준다)
  */
-export function classifyExit(a: { code: number | null; stderr: string; started: boolean; pidSeen?: boolean }): RemoteIssue | null {
+export function classifyExit(a: { code: number | null; stderr: string; started: boolean; pidSeen?: boolean; port?: number }): RemoteIssue | null {
   const { code, stderr } = a;
   // 시작한 뒤의 stderr 에는 로그인 프로필 잡음이 섞인다 — 끊김만 분류하고 나머지는 지금의 '예기치 않게 종료' 길로
-  if (a.started) return code === 255 ? { kind: 'disconnected', detail: null } : null;
-  if (code === 255) {
-    if (/remote port forwarding failed/i.test(stderr)) return { kind: 'port', detail: null };
+  if (a.started) return sshLevel(code) ? { kind: 'disconnected', detail: null } : null;
+  if (sshLevel(code)) {
+    if (a.port !== undefined && forwardFailed(stderr, a.port)) return { kind: 'port', detail: null };
     if (a.pidSeen) return { kind: 'disconnected', detail: null };
     if (/Permission denied/i.test(stderr)) return { kind: 'denied', detail: null };
     if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(stderr)) return { kind: 'hostkey', detail: null };

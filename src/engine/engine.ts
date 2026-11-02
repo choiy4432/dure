@@ -5,10 +5,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CONTROL_CHAR, openStore, renameRetrying, REMOTE_FOLDER_ABSOLUTE, type Store } from './store';
 import {
-  checkScript, classifyExit, cleanupScript, hostArgs, isLoginFailure, launchArgs, launchPreamble, parseCheckOutput, parsePid, posixJoin,
-  remoteLaunchScript, remoteRunFiles, shq, sshErrorLines, SSH_OPTIONS, transcriptCheckScript, type RemoteIssueKind,
+  checkScript, classifyExit, cleanupScript, forwardFailed, hostArgs, isLoginFailure, launchArgs, launchPreamble, parseCheckOutput, parsePid, posixJoin,
+  remoteLaunchScript, remoteRunFiles, runArgs, sshErrorLines, transcriptCheckScript, type RemoteIssueKind,
 } from './remote';
-import { REMOTE_CLEANUP_FAILED, remoteIssueText } from '../shared/remoteTexts';
+import { REMOTE_CLEANUP_FAILED, remoteIssueText, remotePortBlockedText } from '../shared/remoteTexts';
 import { readSshHosts, type SshHostEntry } from './sshConfig';
 import { openMessageLog, type MessageLog } from './messageLog';
 import { capPatch, lastN, openHistory, patchFromInput, trimToolInput, type History } from './history';
@@ -387,8 +387,10 @@ interface SshRun {
 /** 서버 방 원격 포트(-R) 범위 — 띄울 때마다 이 PC 의 다른 서버 세션이 쓰지 않는 것 하나 */
 const REMOTE_PORT_FROM = 40000;
 const REMOTE_PORT_TO = 49999;
-/** 원격 포트가 겹쳐(ExitOnForwardFailure) 시작 전에 끝나면 다른 포트로 다시 — 그 횟수, 넘으면 오류 */
+/** 원격 포트를 서버가 못 열면(stderr 의 전달 실패 줄 — forwardFailed) 내리고 다른 포트로 다시 — 그 횟수, 넘으면 오류(전용 안내) */
 const PORT_RETRIES = 5;
+/** 전달 실패 줄을 찾을 stderr 꼬리 — 조각으로 와도 줄 하나는 담는다 */
+const FWD_TAIL = 512;
 /** 띄우기 id — 서버의 표식(DURE_RUN)·run 폴더 이름. 띄우기마다 새로(옛 띄우기의 정리가 새 것을 건드리지 않게) */
 const LAUNCH_ID_LEN = 8;
 const LAUNCH_ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -398,7 +400,8 @@ const LAUNCH_ERR_KEEP = 8192;
  * 서버 방 세션 하나(ssh 하나) — 그 띄우기의 원격 포트·서버 pid.
  * started = stdout 줄을 하나라도 받았다(DURE_PID 는 치지 않는다 — claude 가 없어도 셸이 먼저 알린다) ·
  * ended = 두레가 내렸다(endSession — 그 뒤 온 pid 는 저장하지 않고 정리) · cleanQueued = 이 띄우기의 정리를 세웠다 ·
- * stopJob = 내린 뒤 pid 를 보고 정리할 일이 아직 줄에서 기다린다
+ * stopJob = 내린 뒤 pid 를 보고 정리할 일이 아직 줄에서 기다린다 · fwd = 전달 실패 줄을 찾는 stderr 꼬리 ·
+ * portFailed = 서버가 이 원격 포트를 못 열었다(그 줄을 보고 내렸다 — 끝나면 '포트')
  */
 interface RemoteRun {
   host: string;
@@ -410,6 +413,8 @@ interface RemoteRun {
   ended: boolean;
   cleanQueued: boolean;
   stopJob: boolean;
+  fwd: string;
+  portFailed: boolean;
 }
 /** /effort 의 답(로컬 명령 — 모델을 부르지 않는다): "Set effort level to max (this session only): …" (probe9) */
 const EFFORT_SET = /Set effort level to (low|medium|high|xhigh|max)\b/;
@@ -889,12 +894,18 @@ class EngineImpl extends EventEmitter implements Engine {
     return { ok: true, folder: folder === undefined ? null : out.folder, claudeVersion: out.claudeVersion };
   }
 
-  /** 확인 ssh — 셸 없이(execFile), 상한 REMOTE_CHECK_MS, -R 없음. ssh 가 없으면 NO_SSH 로 던진다 */
-  private sshRun(host: string, script: string, quick = false): Promise<SshRun> {
+  /**
+   * 확인·정리·기록 확인 ssh — 셸 없이(execFile), 상한 REMOTE_CHECK_MS(quick 이면 REMOTE_QUICK_MS), 전달 없음(runArgs). login false = bash -c(정리).
+   * ssh 가 없으면 NO_SSH 로 던진다
+   */
+  private sshRun(host: string, script: string, o: { quick?: boolean; login?: boolean } = {}): Promise<SshRun> {
     const ssh = this.o.ssh;
     if (!ssh || !this.sshAvailable()) return Promise.reject(new Error(NO_SSH));
-    const opts = quick ? SSH_OPTIONS.map((o) => (o === 'ConnectTimeout=10' ? `ConnectTimeout=${REMOTE_QUICK_MS / 1000}` : o)) : SSH_OPTIONS;
-    const args = [...(ssh.argsPrefix ?? []), ...opts, ...hostArgs(host), 'bash -lc ' + shq(script)];
+    const quick = o.quick === true;
+    const args = [
+      ...(ssh.argsPrefix ?? []),
+      ...runArgs({ host, script, login: o.login, connectTimeout: quick ? REMOTE_QUICK_MS / 1000 : undefined }),
+    ];
     return new Promise((resolve, reject) => {
       const child = execFile(
         ssh.command,
@@ -938,7 +949,9 @@ class EngineImpl extends EventEmitter implements Engine {
     const mcpJson = JSON.stringify(buildMcpConfig({ port, token: this.mcp.token, agentId: id }));
     if (agent.remoteLaunch) void this.queueClean(id, host, agent.remoteLaunch); // 끊김·비정상 종료 뒤 남았을 수 있다
     const gate = this.remoteChain.get(id);
-    const run: RemoteRun = { host, port, launchId, pid: null, err: '', started: false, ended: false, cleanQueued: false, stopJob: false };
+    const run: RemoteRun = {
+      host, port, launchId, pid: null, err: '', started: false, ended: false, cleanQueued: false, stopJob: false, fwd: '', portFailed: false,
+    };
     const s = new ClaudeSession({
       command: ssh.command,
       args: [...(ssh.argsPrefix ?? []), ...launchArgs({ host, remotePort: port, localPort: this.mcp.port, script })],
@@ -946,7 +959,7 @@ class EngineImpl extends EventEmitter implements Engine {
       // ssh 는 환경을 서버로 넘기지 않는다 — claude 의 환경(SPAWN_ENV_EXTRA)은 스크립트가 export 한다
       env: { ...process.env, ...this.o.env },
       stdinPreamble: launchPreamble(mcpJson, prompt),
-      onStderr: (chunk) => this.guard(id, () => this.noteRemotePid(id, run, chunk)),
+      onStderr: (chunk) => this.guard(id, () => this.noteRemoteErr(id, s, run, chunk)),
       ...(gate ? { startAfter: gate } : {}),
     });
     this.remoteRuns.set(s, run);
@@ -970,6 +983,19 @@ class EngineImpl extends EventEmitter implements Engine {
       return null;
     };
     return scan((p) => !this.livePorts.has(p) && !failed?.has(p)) ?? scan((p) => !this.livePorts.has(p)) ?? from + start;
+  }
+
+  /**
+   * 띄운 ssh 의 stderr 조각 — DURE_PID(noteRemotePid)와 우리 원격 포트의 전달 실패 줄. ExitOnForwardFailure=no 라 ssh 는 그 줄을 내고도 돈다 —
+   * 그 claude 의 MCP 주소(서버의 그 포트)는 남의 것이라 곧바로 내린다(끝은 remoteExited 가 '포트' 로 가른다 — 다른 포트로 다시)
+   */
+  private noteRemoteErr(id: AgentId, s: ClaudeSession, run: RemoteRun, chunk: string): void {
+    this.noteRemotePid(id, run, chunk);
+    if (run.portFailed) return;
+    run.fwd = (run.fwd + chunk).slice(-FWD_TAIL);
+    if (!forwardFailed(run.fwd.slice(0, run.fwd.lastIndexOf('\n') + 1), run.port)) return; // 다 온 줄만
+    run.portFailed = true;
+    if (!run.ended) void s.forceKill(FORCE_KILL_WAIT_MS); // 두레가 내린 것이 아니다 — exit 가 remoteExited 로
   }
 
   /**
@@ -1017,13 +1043,16 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * 두레가 내리지 않았는데 서버 방 ssh 가 끝났다(부른 쪽이 세션을 맵에서 뺐다) — classifyExit 로 가른다(시작됨 = stdout 한 줄이라도).
-   * 포트 겹침은 다른 포트로 다시(PORT_RETRIES 번까지 — 기다린 입력은 새 세션으로). 가른 문제는 오류 대신 remoteIssue + 안내 한 줄(바뀔 때만),
-   * 보낸 줄은 기다리는 줄로. 못 가르면 지금의 '예기치 않게 종료' 길 — 오류 글은 ssh 잡음(known_hosts 경고·DURE_PID)을 뺀 stderr.
-   * 상태는 부른 쪽(exit)이 알린다
+   * 전달 실패 줄을 보고 내린 것(portFailed)은 '포트'. 포트는 다른 포트로 다시(PORT_RETRIES 번까지 — 기다린 입력은 새 세션으로), 다 안 되면
+   * 전용 안내(서버가 전달을 막았다). 가른 문제는 오류 대신 remoteIssue + 안내 한 줄(바뀔 때만), 보낸 줄은 기다리는 줄로.
+   * 못 가르면 지금의 '예기치 않게 종료' 길 — 오류 글은 ssh 잡음(known_hosts 경고·DURE_PID)을 뺀 stderr. 상태는 부른 쪽(exit)이 알린다
    */
   private remoteExited(id: AgentId, s: ClaudeSession, run: RemoteRun, code: number | null, stderr: string): void {
-    // DURE_PID 를 받았으면 그 뒤의 255 는 끊김 — 서버에서 명령이 돈 뒤다(claude 가 아직 한 줄도 안 낸 미리 띄운 세션 등)
-    let issue = classifyExit({ code, stderr, started: run.started, pidSeen: run.pid !== null });
+    // DURE_PID 를 받았으면 그 뒤의 ssh 쪽 종료(255·-1)는 끊김 — 서버에서 명령이 돈 뒤다(claude 가 아직 한 줄도 안 낸 미리 띄운 세션 등)
+    let issue: RemoteIssue | null = run.portFailed
+      ? { kind: 'port', detail: null }
+      : classifyExit({ code, stderr, started: run.started, pidSeen: run.pid !== null, port: run.port });
+    let blocked = false; // 포트를 다 바꿔 봐도 서버가 전달을 열지 않았다
     // 끊김이면 서버 claude 가 남았을 수 있다 — 다음에 띄울 때(저장된 pid 로) 정리한다. 그 밖은 지금(claude 는 없어도 토큰이 든 run 폴더가 남는다)
     if (issue?.kind !== 'disconnected') this.cleanExited(id, run);
     this.guard(id, () => this.restoreInFlight(id, s));
@@ -1047,6 +1076,7 @@ class EngineImpl extends EventEmitter implements Engine {
       }
       this.portTries.delete(id);
       issue = null; // 다시 해도 겹친다 — 오류로
+      blocked = true;
     }
     if (issue) {
       const cur = this.remoteIssues.get(id);
@@ -1055,7 +1085,7 @@ class EngineImpl extends EventEmitter implements Engine {
       if (cur?.kind !== issue.kind || cur.detail !== issue.detail) this.guard(id, () => this.record(id, { kind: 'notice', text: remoteIssueText(run.host, issue) }));
       return;
     }
-    const why = sshErrorLines(stderr).join('\n') || `Claude 가 예기치 않게 종료됨(code ${code})`;
+    const why = blocked ? remotePortBlockedText(run.host) : sshErrorLines(stderr).join('\n') || `Claude 가 예기치 않게 종료됨(code ${code})`;
     this.guard(id, () => this.record(id, { kind: 'notice', text: why }));
     this.errors.set(id, why);
     // 지금 문제는 이 오류다 — 지난 접속 문제는 내린다(로그인 만료는 정상 답까지 남긴다)
@@ -1134,7 +1164,7 @@ class EngineImpl extends EventEmitter implements Engine {
     for (let i = 0; i < 2; i++) {
       let r: SshRun | null = null;
       try {
-        r = await this.sshRun(host, script);
+        r = await this.sshRun(host, script, { login: false });
       } catch {
         /* ssh 없음·서버 이름 — 실패로 친다 */
       }
@@ -1823,7 +1853,7 @@ class EngineImpl extends EventEmitter implements Engine {
     if (!remote) return existingSessions(claudeDirOf(this.o.env), ids);
     if (ids.length === 0) return new Set();
     try {
-      const run = await this.sshRun(remote.host, transcriptCheckScript(ids), true);
+      const run = await this.sshRun(remote.host, transcriptCheckScript(ids), { quick: true });
       if (run.code !== 0) return null;
       return new Set(run.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
     } catch {

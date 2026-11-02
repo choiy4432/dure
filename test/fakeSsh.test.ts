@@ -7,8 +7,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildArgs } from '../src/engine/claudeArgs';
 import {
-  checkScript, classifyExit, cleanupScript, hostArgs, launchArgs, launchPreamble, parseCheckOutput, parsePid, remoteLaunchScript,
-  remoteRunFiles, shq, SSH_OPTIONS, transcriptCheckScript,
+  checkScript, classifyExit, cleanupScript, forwardFailed, launchArgs, launchPreamble, parseCheckOutput, parsePid, remoteLaunchScript,
+  remoteRunFiles, runArgs, shq, transcriptCheckScript,
 } from '../src/engine/remote';
 
 // 가짜 ssh(test/fakeSsh.mjs) — 서버 방 시험이 진짜 ssh·서버 없이 돌게 한다. 명령 모양은 src/engine/remote.ts 그대로 만든다
@@ -85,8 +85,10 @@ async function sshDone(args: string[], extra: Record<string, string> = {}, input
   const code = await r.exit;
   return { code, stdout: r.out(), stderr: r.err() };
 }
-/** 서버 명령 하나(확인·정리·기록 확인) — 엔진이 보낼 모양 그대로 */
-const remote = (script: string, host = 'dev') => [...SSH_OPTIONS, ...hostArgs(host), 'bash -lc ' + shq(script)];
+/** 서버 명령 하나(확인·정리·기록 확인) — 엔진이 보낼 모양 그대로(정리만 bash -c) */
+const remote = (script: string, host = 'dev') => runArgs({ host, script, login: !script.includes('DURE_RUN=$m') });
+/** 윈도우 OpenSSH 가 연결 도중 끊길 때의 종료 코드(-1) — 윈도우 부모에겐 4294967295 */
+const DROP_CODE = process.platform === 'win32' ? 4294967295 : 255;
 
 async function until(pred: () => boolean, ms = 8000, what = '조건'): Promise<void> {
   const end = Date.now() + ms;
@@ -177,6 +179,18 @@ describe('확인 명령', () => {
     expect(r.stderr).toContain('No such file or directory');
     expect(classifyExit({ code: r.code, stderr: r.stderr, started: false })?.kind).toBe('no-folder');
   });
+  it('설정 파일의 RemoteForward·RemoteCommand 가 있어도 — 확인은 전달을 지우고(ClearAllForwardings) RemoteCommand=none 이라 된다', async () => {
+    const cfg = { FAKE_SSH_CONFIG_RFWD: String(await freePort()), FAKE_SSH_CONFIG_REMOTECOMMAND: '1' };
+    const r = await sshDone(remote(checkScript('/home/a/web')), cfg);
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toContain('forwarding failed');
+    // 흉내가 진짜처럼 깨진다 — 옛 확인 모양(ExitOnForwardFailure=yes·설정 파일 전달 그대로·RemoteCommand 그대로)
+    const old = ['-T', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', 'dev', 'bash -lc ' + shq(checkScript())];
+    expect((await sshDone(old, { FAKE_SSH_CONFIG_RFWD: cfg.FAKE_SSH_CONFIG_RFWD })).code).toBe(255);
+    const rc = await sshDone(old, { FAKE_SSH_CONFIG_REMOTECOMMAND: '1' });
+    expect(rc.code).toBe(255);
+    expect(rc.stderr).toContain('Cannot execute command-line and remote command.');
+  });
   it('noclaude → 127', async () => {
     const r = await sshDone(remote(checkScript('/home/a/web')), { FAKE_SSH_MODE: 'noclaude' });
     expect(r.code).toBe(127);
@@ -261,35 +275,64 @@ describe('띄우기', () => {
     expect(classifyExit({ code: 3, stderr: l.run.err(), started: false })?.kind).toBe('no-folder');
   }, 20000);
 
-  it('noclaude → 127 claude: command not found', async () => {
+  it('noclaude → 127 — claude 찾기가 run 폴더보다 먼저라 DURE_PID·run 폴더(토큰 파일) 없음', async () => {
     const l = await launch({ env: { FAKE_SSH_MODE: 'noclaude' } });
     l.run.child.stdin!.end(launchPreamble(l.mcp, l.prompt));
     expect(await l.run.exit).toBe(127);
-    expect(l.run.err()).toContain('bash: line 1: claude: command not found');
+    expect(parsePid(l.run.err())).toBeNull();
+    expect(fs.existsSync(path.join(home, '.dure'))).toBe(false);
     expect(classifyExit({ code: 127, stderr: l.run.err(), started: false })?.kind).toBe('no-claude');
   }, 20000);
 
-  it('portclash-once → 첫 번째만 255 remote port forwarding failed, 둘째는 뜬다', async () => {
+  it('-R 은 서버 쪽 주소 127.0.0.1 을 받아 그 주소에 묶는다', async () => {
+    const l = await launch();
+    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
+    await pidOf(l.run);
+    expect(logLines().find((x) => x.event === 'start').forwards).toEqual([`127.0.0.1:${l.remotePort}:127.0.0.1:${l.localPort}`]);
+  }, 20000);
+
+  it('portclash-once → 첫 번째만 전달 실패 — ExitOnForwardFailure=no 라 경고 한 줄 뒤 계속 돈다 · 둘째는 정상', async () => {
     const first = await launch({ env: { FAKE_SSH_MODE: 'portclash-once' } });
-    first.run.child.stdin!.end(launchPreamble(first.mcp, first.prompt));
-    expect(await first.run.exit).toBe(255);
-    expect(first.run.err()).toContain(`Error: remote port forwarding failed for listen port ${first.remotePort}`);
-    expect(classifyExit({ code: 255, stderr: first.run.err(), started: false })?.kind).toBe('port');
-    expect(fs.existsSync(first.runDir)).toBe(false); // 명령까지 가지 않았다
+    first.run.child.stdin!.write(launchPreamble(first.mcp, first.prompt));
+    await until(() => forwardFailed(first.run.err(), first.remotePort), 8000, '전달 실패 줄');
+    expect(first.run.err()).toContain(`Warning: remote port forwarding failed for listen port ${first.remotePort}`);
+    await pidOf(first.run); // 끝나지 않고 명령까지 갔다 — 엔진이 이 줄을 보고 내린다
+    expect(first.run.child.exitCode).toBeNull();
 
     const second = await launch({ env: { FAKE_SSH_MODE: 'portclash-once' } });
     second.run.child.stdin!.write(launchPreamble(second.mcp, second.prompt) + userLine('echo 둘'));
     await until(() => results(second.run.out()).includes('받음: echo 둘'), 10000, '받음');
+    expect(forwardFailed(second.run.err(), second.remotePort)).toBe(false);
   }, 20000);
 
-  it('원격 포트가 정말 쓰이는 중이면 255 remote port forwarding failed', async () => {
+  it('ExitOnForwardFailure=yes 면 전달 실패에 명령 전 255(옵션대로)', async () => {
     const busy = net.createServer();
     const remotePort = await listen(busy);
-    const l = await launch({ remotePort });
-    l.run.child.stdin!.end(launchPreamble(l.mcp, l.prompt));
-    expect(await l.run.exit).toBe(255);
-    expect(l.run.err()).toContain(`remote port forwarding failed for listen port ${remotePort}`);
+    const localPort = await freePort();
+    const args = launchArgs({ host: 'dev', remotePort, localPort, script: remoteLaunchScript({ agentId: AGENT, launchId: LAUNCH, folder: '/home/a/web', claudeArgs: [] }) })
+      .map((x) => (x === 'ExitOnForwardFailure=no' ? 'ExitOnForwardFailure=yes' : x));
+    const r = await sshDone(args, {}, launchPreamble('{}', 'p'));
+    expect(r.code).toBe(255);
+    expect(r.stderr).toContain(`Error: remote port forwarding failed for listen port ${remotePort}`);
+    expect(classifyExit({ code: 255, stderr: r.stderr, started: false, port: remotePort })?.kind).toBe('port');
+    expect(fs.existsSync(path.join(home, '.dure'))).toBe(false); // 명령까지 가지 않았다
   }, 20000);
+
+  it('원격 포트가 정말 쓰이는 중이면 경고 줄(그 포트) · 설정 파일의 다른 전달 실패는 다른 포트 줄', async () => {
+    const busy = net.createServer();
+    const remotePort = await listen(busy);
+    const cfgPort = await freePort();
+    const l = await launch({ remotePort, env: { FAKE_SSH_CONFIG_RFWD: String(cfgPort) } });
+    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
+    await pidOf(l.run);
+    expect(forwardFailed(l.run.err(), remotePort)).toBe(true);
+    expect(l.run.err()).toContain(`Warning: remote port forwarding failed for listen port ${cfgPort}`);
+    const ok = await launch({ env: { FAKE_SSH_CONFIG_RFWD: String(cfgPort) } });
+    ok.run.child.stdin!.write(launchPreamble(ok.mcp, ok.prompt) + userLine('echo 하나'));
+    await until(() => results(ok.run.out()).includes('받음: echo 하나'), 10000, '받음');
+    expect(forwardFailed(ok.run.err(), ok.remotePort)).toBe(false);
+    expect(forwardFailed(ok.run.err(), cfgPort)).toBe(true);
+  }, 30000);
 
   it('기록 확인 — 가짜 claude 가 남긴 대화 파일(CLAUDE_CONFIG_DIR) 의 id 만', async () => {
     const cfg = path.join(root, '.claude');
@@ -308,13 +351,14 @@ describe('띄우기', () => {
 });
 
 describe('끊김·정리', () => {
-  it('drop:<ms> → 255 Connection closed, 가짜 claude 는 남는다 · 정리 명령이 끈다', async () => {
+  it('drop:<ms> → -1(윈도우 4294967295) Connection closed, 가짜 claude 는 남는다 · 정리 명령이 끈다', async () => {
     const l = await launch({ env: { FAKE_SSH_MODE: 'drop:300' } });
     l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
     const pid = await pidOf(l.run);
-    expect(await l.run.exit).toBe(255);
+    const code = await l.run.exit;
+    expect(code).toBe(DROP_CODE);
     expect(l.run.err()).toContain('Connection to dev closed by remote host.');
-    expect(classifyExit({ code: 255, stderr: l.run.err(), started: true })?.kind).toBe('disconnected');
+    expect(classifyExit({ code, stderr: l.run.err(), started: true })?.kind).toBe('disconnected');
     await new Promise((r) => setTimeout(r, 300));
     expect(alive(pid)).toBe(true); // 진짜처럼 서버에 남았다
 
@@ -371,7 +415,7 @@ describe('끊김·정리', () => {
     const l = await launch({ env: { FAKE_SSH_MODE: 'drop:200' } });
     l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
     const pid = await pidOf(l.run);
-    expect(await l.run.exit).toBe(255);
+    expect(await l.run.exit).toBe(DROP_CODE);
     expect(alive(pid)).toBe(true);
     expect((await reap()).trim()).toBe(String(pid));
     await until(() => !alive(pid), 5000, '가짜 claude 꺼짐');

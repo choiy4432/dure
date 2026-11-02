@@ -5852,13 +5852,13 @@ async function startSsh(env: Record<string, string> = {}, extra: Partial<EngineO
   return { e, root, home, mode, calls, events, sshLog };
 }
 
-test('ssh: checkRemote — 접속됨 · claude 버전 · 확인 ssh 는 BatchMode·bash -lc 이고 -R 없음 · 포트는 -p', async () => {
+test('ssh: checkRemote — 접속됨 · claude 버전 · 확인 ssh 는 BatchMode·bash -lc 이고 -R 없음·전달 모두 지움·RemoteCommand=none · 포트는 -p', async () => {
   const { e, calls } = await startSsh();
   expect(await e.checkRemote('dev')).toEqual({ ok: true, claudeVersion: VERSION });
   expect(await e.checkRemote(' me@10.0.0.12:2222 ')).toEqual({ ok: true, claudeVersion: VERSION });
   const [a, b] = calls();
   expect(a).toMatchObject({ host: 'dev', kind: 'check', forwards: [] });
-  expect(a.argv).toEqual(expect.arrayContaining(['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']));
+  expect(a.argv).toEqual(expect.arrayContaining(['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', 'ClearAllForwardings=yes', 'RemoteCommand=none']));
   expect(a.argv).not.toContain('-R');
   expect(a.command).toMatch(/^bash -lc '/);
   expect(b).toMatchObject({ host: 'me@10.0.0.12', user: 'me', port: 2222, kind: 'check' });
@@ -6057,6 +6057,15 @@ describe('서버 방 띄우기', () => {
     return { ...t, room, web, statuses, notices };
   }
   const runOf = (marker: string) => marker.slice(marker.indexOf('.') + 1);
+  /** 띄우기 호출의 원격 포트 — -R 127.0.0.1:<원격>:127.0.0.1:<로컬> */
+  const remotePortOf = (c: any) => Number(String(c.forwards[0]).split(':')[1]);
+  const freePort = async () => {
+    const s = net.createServer();
+    await new Promise<void>((r) => s.listen(0, '127.0.0.1', r));
+    const port = (s.address() as net.AddressInfo).port;
+    await new Promise<void>((r) => s.close(() => r()));
+    return port;
+  };
 
   test('서버 방 — ssh 로 띄워 대화 · -R·BatchMode·bash -lc · 토큰은 서버 파일에만 · 띄운 pid 저장', async () => {
     const { e, web, calls, events, sshLog } = await remoteRoom();
@@ -6066,9 +6075,10 @@ describe('서버 방 띄우기', () => {
 
     const start = calls().find((c) => c.kind === 'launch');
     expect(start.host).toBe('dev');
-    expect(start.argv).toEqual(expect.arrayContaining(['-T', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', '-R']));
+    expect(start.argv).toEqual(expect.arrayContaining(['-T', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=no', 'RemoteCommand=none', '-R']));
+    expect(start.argv).not.toContain('ClearAllForwardings=yes');
     expect(start.command).toMatch(/^bash -lc '/);
-    const fwd = /^(\d+):127\.0\.0\.1:(\d+)$/.exec(start.forwards[0])!;
+    const fwd = /^127\.0\.0\.1:(\d+):127\.0\.0\.1:(\d+)$/.exec(start.forwards[0])!;
     const remotePort = Number(fwd[1]);
     expect(remotePort).toBeGreaterThanOrEqual(40000);
     expect(remotePort).toBeLessThanOrEqual(49999);
@@ -6195,11 +6205,11 @@ describe('서버 방 띄우기', () => {
     const b = resultOf(e, api.id);
     await Promise.all([e.sendUser(web.id, text('echo 하나')), e.sendUser(api.id, text('echo 둘'))]);
     expect([await resultText(a), await resultText(b)]).toEqual(['받음: echo 하나', '받음: echo 둘']);
-    const ports = calls().filter((c) => c.kind === 'launch').map((c) => Number(String(c.forwards[0]).split(':')[0]));
+    const ports = calls().filter((c) => c.kind === 'launch').map(remotePortOf);
     expect(ports.sort()).toEqual([base, base + 1]);
   }, 30_000);
 
-  test('포트 겹침 — 다른 포트로 다시 띄운다(기다린 입력은 그대로 간다)', async () => {
+  test('포트 겹침 — ssh 는 경고만 내고 돌지만(ExitOnForwardFailure=no) 그 줄을 보고 내린 뒤 다른 포트로 다시 띄운다(기다린 입력은 그대로 간다)', async () => {
     const { e, web, calls, mode, notices } = await remoteRoom();
     mode('portclash-once');
     const done = resultOf(e, web.id);
@@ -6207,7 +6217,7 @@ describe('서버 방 띄우기', () => {
     expect(await resultText(done)).toBe('받음: echo 하나');
     const tries = calls().filter((c) => c.kind === 'launch');
     expect(tries).toHaveLength(2);
-    expect(tries[0].forwards[0].split(':')[0]).not.toBe(tries[1].forwards[0].split(':')[0]);
+    expect(remotePortOf(tries[0])).not.toBe(remotePortOf(tries[1]));
     expect(e.remoteIssue(web.id)).toBeNull();
     expect(e.errorText(web.id)).toBeNull();
     expect(notices(web.id)).toEqual([]);
@@ -6218,11 +6228,14 @@ describe('서버 방 띄우기', () => {
     await new Promise<void>((r) => busy.listen(0, '127.0.0.1', r));
     const port = (busy.address() as net.AddressInfo).port;
     try {
-      const { e, web, calls } = await remoteRoom({}, { remotePorts: { from: port, to: port } });
+      const { e, web, calls, notices } = await remoteRoom({}, { remotePorts: { from: port, to: port } });
       await e.sendUser(web.id, text('echo 하나'));
       await until('오류', () => e.status(web.id) === 'error', 20_000);
       expect(calls().filter((c) => c.kind === 'launch')).toHaveLength(6);
-      expect(e.errorText(web.id)).toContain(`remote port forwarding failed for listen port ${port}`);
+      // ssh 날글 대신 전용 안내 — 서버가 원격 포트 전달을 막았을 때도 이렇게 보인다
+      const blocked = 'dev 에서 포트 전달이 막혀 있어요 — 서버의 sshd 설정(AllowTcpForwarding)을 확인해 주세요';
+      expect(e.errorText(web.id)).toBe(blocked);
+      expect(notices(web.id).at(-1)).toBe(blocked);
       expect(e.heldInput(web.id)).toBe(1);
       expect(e.remoteIssue(web.id)).toBeNull();
     } finally {
@@ -6263,6 +6276,41 @@ describe('서버 방 띄우기', () => {
     expect(second.args).toContain('--resume');
     expect(e.remoteIssue(web.id)).toBeNull();
     expect(agentOf(e, web.id).remoteLaunch).toEqual({ pid: second.pid, run: runOf(second.marker) });
+  }, 40_000);
+
+  test('끊김(윈도우 ssh 는 -1 로 끝난다) — 끊김으로 가르고 곧바로 정리하지 않는다 · 서버가 내려가 있어도 정리 실패 알림이 없다', async () => {
+    const { e, web, mode, calls, notices } = await remoteRoom();
+    mode('drop:1500');
+    const done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 하나'));
+    await done;
+    mode('refused'); // 서버가 내려갔다 — 이제 맺는 ssh 는 모두 안 된다
+    await until('끊김', () => e.remoteIssue(web.id) !== null, 8000);
+    expect(e.remoteIssue(web.id)).toEqual({ kind: 'disconnected', detail: null });
+    await sleep(1500);
+    expect(calls().filter((c) => c.kind === 'cleanup')).toEqual([]);
+    expect(notices(web.id)).toEqual(['dev 연결이 끊겼어요 — 다시 보내면 이어서 해요']);
+    expect(e.status(web.id)).toBe('idle');
+    expect(e.errorText(web.id)).toBeNull();
+  }, 30_000);
+
+  test('~/.ssh/config 에 RemoteForward·RemoteCommand 가 있어도 — 확인·띄우기·정리·기록 확인이 된다(다른 포트의 전달 실패로 다시 띄우지 않는다)', async () => {
+    const cfgPort = await freePort();
+    const { e, web, calls, events, notices } = await remoteRoom({ FAKE_SSH_CONFIG_RFWD: String(cfgPort), FAKE_SSH_CONFIG_REMOTECOMMAND: '1' });
+    expect(await e.checkRemote('dev')).toEqual({ ok: true, claudeVersion: VERSION });
+    const done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 하나'));
+    expect(await resultText(done)).toBe('받음: echo 하나');
+    expect(calls().filter((c) => c.kind === 'launch')).toHaveLength(1);
+    expect(e.remoteIssue(web.id)).toBeNull();
+    expect(notices(web.id)).toEqual([]);
+    const [launch] = launchesIn(events());
+    expect(await e.sleep(web.id)).toBe(true);
+    await until('정리', () => cleanupsIn(events()).some((c) => c.marker === launch.marker), 10_000);
+    const cl = calls().find((c) => c.kind === 'cleanup');
+    expect(cl.argv).toEqual(expect.arrayContaining(['ClearAllForwardings=yes', 'RemoteCommand=none']));
+    expect(cl.command).toMatch(/^bash -c '/); // 정리는 로그인 프로필을 읽지 않는다
+    expect(isAlive(launch.pid)).toBe(false);
   }, 40_000);
 
   test('지우기 — 끊겨 세션은 없어도 서버에 남은 claude 를 정리한다 · 방 지우기도', async () => {
@@ -6426,8 +6474,10 @@ describe('서버 방 띄우기', () => {
     expect(e.remoteIssue(web.id)).toEqual({ kind: 'unreachable', detail: 'ssh: connect to host dev port 22: Connection refused' });
     expect(await issue('hostkey', 'hostkey')).toBe('dev 의 서버 키가 바뀌었어요 — 서버가 바뀐 게 맞는지 확인한 뒤 known_hosts 를 고쳐 주세요');
     expect(await issue('noclaude', 'no-claude')).toBe('dev 에 claude 가 없어요');
-    // claude 없음은 셸이 DURE_PID 를 알린 뒤라 그 띄우기(토큰이 든 run 폴더)를 곧바로 정리한다
-    await until('claude 없음 정리', () => agentOf(e, web.id).remoteLaunch === null && cleanupsIn(events()).length === 1, 10_000);
+    // claude 를 run 폴더보다 먼저 찾는다 — 없으면 서버에 토큰이 든 파일도, 정리할 띄우기도 없다
+    expect(agentOf(e, web.id).remoteLaunch).toBeNull();
+    expect(fs.existsSync(path.join(root, 'home', 'a', '.dure', 'run', web.id))).toBe(false);
+    expect(cleanupsIn(events())).toEqual([]);
     expect(notices(web.id)).toHaveLength(4);
 
     mode('');

@@ -1,5 +1,7 @@
 // 테스트용 가짜 ssh — 윈도 ssh.exe 대신 띄운다(엔진 ssh 손잡이 { command: node, argsPrefix: [이 파일] }, 가짜 claude 와 같은 방식).
-// 받는 인자는 진짜 ssh 그대로: SSH_OPTIONS(-T·-o …) · -R <원격>:127.0.0.1:<로컬> · -p <포트> · <호스트> · 'bash -lc <스크립트>'(src/engine/remote.ts).
+// 받는 인자는 진짜 ssh 그대로: SSH_OPTIONS(-T·-o …) · -R [127.0.0.1:]<원격>:127.0.0.1:<로컬> · -p <포트> · <호스트> · 'bash -lc|-c <스크립트>'(src/engine/remote.ts).
+// -o 중 흉내 내는 것: ExitOnForwardFailure(yes 면 전달 실패에 255, 아니면 경고 한 줄 뒤 계속) · ClearAllForwardings=yes(전달을 하나도 열지 않음 —
+// 명령줄 -R 까지) · RemoteCommand(설정 파일 흉내 FAKE_SSH_CONFIG_REMOTECOMMAND 가 있을 때 none 이 아니면 진짜처럼 255).
 // 셸을 흉내 내지 않는다 — remote.ts 가 만드는 스크립트 네 모양만 알아보고 그 결과를 낸다(모르는 모양은 code 2):
 //   띄우기(remoteLaunchScript) · 확인(checkScript) · 기록 확인(transcriptCheckScript) · 정리(cleanupScript). 빈 스크립트는 code 0.
 // 실제 모양은 실측: docs/findings/2026-11-02-ssh-remote-probe.md (probe24·probe25).
@@ -18,13 +20,17 @@
 //                        · {event:'launch', pid, marker, folder(서버 경로), cwd(이 PC 경로), args, runDir} · {event:'cleanup', pid, marker, killed, removed}
 //                        · {event:'drop'} · {event:'exit', code}
 //   FAKE_SSH_MODE        refused | denied | hostkey   → 접속 전에 code 255(진짜 ssh 의 stderr 글 그대로)
-//                        noclaude                     → claude 없음: 띄우기는 DURE_PID 뒤 'bash: line 1: claude: command not found' 127, 확인은 127(글 없음)
-//                        portclash-once               → 이 root 에서 -R 이 붙은 첫 호출만 255 'Error: remote port forwarding failed for listen port <N>'
-//                        drop:<ms>                    → 띄운 claude 가 뜬 뒤 <ms> 에 255 'Connection to <host> closed by remote host.' —
+//                        noclaude                     → claude 없음: 찾기(FIND_CLAUDE)가 run 폴더보다 먼저인 띄우기·확인은 127(글 없음, DURE_PID·run 폴더 없음)
+//                        portclash-once               → 이 root 에서 -R 이 붙은 첫 호출만 전달 실패 — ExitOnForwardFailure=yes 면 255
+//                                                        'Error: remote port forwarding failed for listen port <N>', 아니면 'Warning: …' 한 줄 뒤 계속
+//                        drop:<ms>                    → 띄운 claude 가 뜬 뒤 <ms> 에 -1(윈도우 부모에겐 4294967295 — 진짜 윈도우 OpenSSH 실측)
+//                                                        'Connection to <host> closed by remote host.' —
 //                                                        가짜 claude 는 죽이지 않고 남긴다: 지킴이가 claude 의 입력을 열어 둔 채(EOF 를 넘기지 않음)
 //                                                        출력은 버리며 정리 명령·뒷정리가 끌 때까지 둔다(안전 상한 10 분). 띄우기에만 걸린다
 //   FAKE_SSH_MODE_FILE   그 파일이 있으면 FAKE_SSH_MODE 대신 그 내용(빈 파일 = 보통) — 엔진 환경을 못 바꾸는 시험이 도중에 모드를 바꾸게
 //   FAKE_SSH_CLEANUP_MS  정리 명령이 끝나기 전에 더 기다린다(진짜는 sleep 2 — 기본 0, 정리 상한 시험용)
+//   FAKE_SSH_CONFIG_RFWD ~/.ssh/config 의 RemoteForward 흉내 — 그 원격 포트는 늘 실패(서버에서 다른 것이 쓰는 중). ClearAllForwardings=yes 면 없다
+//   FAKE_SSH_CONFIG_REMOTECOMMAND  ~/.ssh/config 의 RemoteCommand 흉내 — -o RemoteCommand=none 이 없으면 명령과 부딪혀 255
 // 서버 환경 = 이 프로세스의 환경 + 띄우기 스크립트의 export — CLAUDE_CONFIG_DIR·FAKE_TRANSCRIPTS·FAKE_CLAUDE_LOG 등이 가짜 claude 에 그대로 간다.
 // 띄우기는 스크립트의 차례를 따른다: cd 가 run 폴더보다 먼저면 폴더가 없을 때 run 폴더·머리말 파일을 만들지 않고 3.
 //   CLAUDE_CONFIG_DIR 은 이 PC 경로로 읽는다(가짜 claude 가 거기에 대화 파일을 만든다). 없으면 $HOME/.claude.
@@ -234,9 +240,9 @@ function classify(script) {
   if (script === null) return { kind: 'unknown' };
   if (!script.trim()) return { kind: 'empty' };
   // 정리(cleanupScript) — 셸 함수·/proc 를 쓰는 글이라 풀지 않고 글자에서 뽑는다:
-  //   표식 `m=<에이전트>.<띄우기>;` · pid 는 `desc <pid>)`(/proc 있을 때·없을 때 두 번)와 `/proc/<pid>/environ` — 모두 같아야 한다
-  //   · run 폴더 `rm -rf "$HOME/.dure/run/<에이전트>/<띄우기>"` — 표식과 같아야 한다
-  if (script.includes('DURE_RUN=$1') && script.includes('rm -rf "$HOME/.dure/run/')) {
+  //   표식 grep `grep -lzxF "DURE_RUN=$m"` · 표식 `m=<에이전트>.<띄우기>;` · pid 는 `desc <pid>)`(/proc 있을 때·없을 때 두 번)와
+  //   `/proc/<pid>/environ` — 모두 같아야 한다 · run 폴더 `rm -rf "$HOME/.dure/run/<에이전트>/<띄우기>"` — 표식과 같아야 한다
+  if (script.includes('grep -lzxF "DURE_RUN=$m"') && script.includes('rm -rf "$HOME/.dure/run/')) {
     const marker = new RegExp(`(?:^|; )m=(${SAFE});`).exec(script)?.[1];
     const pids = [...script.matchAll(/\bdesc (\d+)\)/g), ...script.matchAll(/\/proc\/(\d+)\/environ/g)].map((m) => Number(m[1]));
     const dir = new RegExp(`rm -rf "\\$HOME/\\.dure/run/(${SAFE})/(${SAFE})"`).exec(script);
@@ -249,14 +255,16 @@ function classify(script) {
   } catch {
     return { kind: 'unknown' };
   }
-  // 띄우기(remoteLaunchScript) — cd <폴더> || exit 3 · d="…" · mkdir -p "$d" · export DURE_RUN=<표식> · export <이름>=<값>… · exec claude <인자…>
-  const exec = cmds.find((c) => c[0]?.value === 'exec' && c[1]?.value === 'claude');
+  // claude 찾기(FIND_CLAUDE)의 끝 — `[ -n "$c" ] || exit 127`. 가짜는 늘 찾는다(noclaude 모드만 못 찾음)
+  const found = cmds.findIndex((c) => same(c, ['[', '-n', '$c', ']', '||', 'exit', '127']));
+  // 띄우기(remoteLaunchScript) — cd <폴더> || exit 3 · claude 찾기 · d="…" · mkdir -p "$d" · export DURE_RUN=<표식> · export <이름>=<값>… · exec "$c" <인자…>
+  const exec = cmds.find((c) => c[0]?.value === 'exec' && c[1]?.value === '$c');
   if (exec) {
     const d = cmds.find((c) => c.length === 1 && c[0].value.startsWith('d='));
     const cd = cmds.find((c) => same(c, ['cd', null, '||', 'exit', '3']));
     const mkdir = cmds.find((c) => same(c, ['mkdir', '-p', null]));
     const run = cmds.find((c) => c.length === 2 && c[0].value === 'export' && c[1].value.startsWith('DURE_RUN='));
-    if (!d || !cd || !mkdir || !run) return { kind: 'unknown' };
+    if (!d || !cd || !mkdir || !run || found < 0) return { kind: 'unknown' };
     // 그 밖의 export — 서버 셸이 claude 에 넘기는 환경(ssh 는 이 PC 의 환경을 넘기지 않는다)
     const env = {};
     for (const c of cmds) {
@@ -268,23 +276,23 @@ function classify(script) {
       kind: 'launch',
       runDir: d[0].value.slice(2),
       folder: cd[1].value,
-      // 스크립트 차례 그대로 — cd 가 run 폴더보다 먼저면 폴더가 없을 때 아무것도 쓰지 않고 끝난다
+      // 스크립트 차례 그대로 — cd·claude 찾기가 run 폴더보다 먼저면 폴더·claude 가 없을 때 아무것도 쓰지 않고 끝난다
       cdFirst: cmds.indexOf(cd) < cmds.indexOf(mkdir),
+      findFirst: found < cmds.indexOf(mkdir),
       env,
       marker: run[1].value.slice('DURE_RUN='.length),
       // 셸이 $HOME 을 펼친 인자(run 폴더의 mcp.json·prompt.md)는 가짜 claude 가 읽게 이 PC 경로로
       args: exec.slice(2).map((w) => (w.home ? toLocal(w.value) : w.value)),
     };
   }
-  // 확인(checkScript) — [cd <폴더> || exit 3; printf '\nDURE_DIR='; pwd -P;] command -v claude >/dev/null || exit 127; claude --version
+  // 확인(checkScript) — [cd <폴더> || exit 3; printf '\nDURE_DIR='; pwd -P;] claude 찾기 …; "$c" --version
   const last = cmds.at(-1);
-  if (last && same(last, ['claude', '--version'])) {
-    const probe = cmds.at(-2);
-    if (!probe || !same(probe, ['command', '-v', 'claude', '>/dev/null', '||', 'exit', '127'])) return { kind: 'unknown' };
-    if (cmds.length === 2) return { kind: 'check', folder: null };
-    if (
-      cmds.length === 5 && same(cmds[0], ['cd', null, '||', 'exit', '3']) && same(cmds[1], ['printf', '\\nDURE_DIR=']) && same(cmds[2], ['pwd', '-P'])
-    ) return { kind: 'check', folder: cmds[0][1].value };
+  if (last && same(last, ['$c', '--version'])) {
+    if (found !== cmds.length - 2) return { kind: 'unknown' };
+    if (cmds[0][0]?.value !== 'cd') return { kind: 'check', folder: null };
+    if (same(cmds[0], ['cd', null, '||', 'exit', '3']) && same(cmds[1], ['printf', '\\nDURE_DIR=']) && same(cmds[2], ['pwd', '-P'])) {
+      return { kind: 'check', folder: cmds[0][1].value };
+    }
     return { kind: 'unknown' };
   }
   // 기록 확인(transcriptCheckScript) — d="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; for i in '<id>' …; do … done
@@ -314,7 +322,8 @@ function parseArgs(argv) {
       } else if (a[j] === 'R') {
         const p = (v ?? '').split(':');
         const [rport, host, lport] = p.length === 4 ? p.slice(1) : p;
-        o.forwards.push({ spec: v, remotePort: Number(rport), host, localPort: Number(lport) });
+        // 서버 쪽 묶을 주소 — 없으면 진짜 sshd 기본(GatewayPorts no)대로 루프백
+        o.forwards.push({ spec: v, bind: p.length === 4 ? p[0] : '127.0.0.1', remotePort: Number(rport), host, localPort: Number(lport) });
       } else if (a[j] === 'p') o.port = Number(v);
       else if (a[j] === 'l') o.login = v;
       break;
@@ -350,7 +359,7 @@ function forward(f) {
       up.pipe(sock);
     });
     server.once('error', () => resolve(false));
-    server.listen(f.remotePort, '127.0.0.1', () => {
+    server.listen(f.remotePort, f.bind ?? '127.0.0.1', () => {
       relays.push(server);
       resolve(true);
     });
@@ -487,6 +496,7 @@ async function runLaunch(spec, mode, host) {
     return true;
   };
   if (spec.cdFirst && cdFails()) return;
+  if (spec.findFirst && mode === 'noclaude') return finish(127); // 찾기가 말없이 실패 — run 폴더·머리말 파일 전
   const runDir = toLocal(spec.runDir);
   fs.mkdirSync(runDir, { recursive: true });
   const input = stdinReader();
@@ -544,8 +554,9 @@ async function runLaunch(spec, mode, host) {
       keeper.stdout.unpipe(process.stdout);
       keeper.stderr.unpipe(process.stderr);
       log({ event: 'drop', pid });
-      // 지킴이가 '끊김'을 받은 뒤에 끝낸다 — 그래야 이 프로세스가 끝나며 생기는 EOF 를 claude 에게 넘기지 않는다
-      const go = () => fail(255, `Connection to ${host} closed by remote host.`);
+      // 지킴이가 '끊김'을 받은 뒤에 끝낸다 — 그래야 이 프로세스가 끝나며 생기는 EOF 를 claude 에게 넘기지 않는다.
+      // 종료 코드는 진짜 윈도우 OpenSSH 처럼 -1(부모에겐 4294967295)
+      const go = () => fail(-1, `Connection to ${host} closed by remote host.`);
       const late = setTimeout(go, 1000);
       keeper.on('message', (m) => {
         if (m?.dropped) {
@@ -704,10 +715,17 @@ async function main() {
   if (mode === 'refused') return fail(255, `ssh: connect to host ${hostname} port ${port}: Connection refused`);
   if (mode === 'denied') return fail(255, `${user}@${hostname}: Permission denied (publickey).`);
   if (mode === 'hostkey') return fail(255, hostKeyChanged(hostname));
-  // 역방향 터널 — ExitOnForwardFailure=yes 면 못 열 때 명령 전에 255
+  // ~/.ssh/config 의 RemoteCommand 흉내 — 명령줄 명령과 함께면 진짜 ssh 는 시작도 않고 255
+  if (process.env.FAKE_SSH_CONFIG_REMOTECOMMAND && (o.options.remotecommand ?? '').toLowerCase() !== 'none' && o.command) {
+    return fail(255, 'Cannot execute command-line and remote command.');
+  }
+  // 역방향 터널 — ExitOnForwardFailure=yes 면 못 열 때 명령 전에 255. ClearAllForwardings=yes 면 명령줄 -R·설정 파일 전달 모두 없다
   const strict = (o.options.exitonforwardfailure ?? '').toLowerCase() === 'yes';
-  for (const f of o.forwards) {
-    const ok = !(mode === 'portclash-once' && firstClash()) && (await forward(f));
+  const cleared = (o.options.clearallforwardings ?? '').toLowerCase() === 'yes';
+  const cfgPort = Number(process.env.FAKE_SSH_CONFIG_RFWD);
+  const forwards = cleared ? [] : [...o.forwards, ...(cfgPort ? [{ spec: `config:${cfgPort}`, remotePort: cfgPort, config: true }] : [])];
+  for (const f of forwards) {
+    const ok = !f.config && !(mode === 'portclash-once' && firstClash()) && (await forward(f));
     if (ok) continue;
     if (strict) return fail(255, `Error: remote port forwarding failed for listen port ${f.remotePort}`);
     process.stderr.write(`Warning: remote port forwarding failed for listen port ${f.remotePort}\n`);

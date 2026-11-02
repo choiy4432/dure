@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   hostArgs, SSH_OPTIONS, shq, remoteRunDir, remoteRunFiles, remoteLaunchScript, launchArgs, launchPreamble,
   cleanupScript, checkScript, transcriptCheckScript, classifyExit, parsePid, isLoginFailure, posixJoin, parseCheckOutput, sshErrorLines, isSafeId,
+  runArgs, forwardFailed,
 } from '../src/engine/remote';
 import { SPAWN_ENV_EXTRA } from '../src/engine/claudeArgs';
 
@@ -16,6 +17,14 @@ const hasBash = (() => {
 const posix = (p: string) => {
   try { return execFileSync('cygpath', ['-u', p], { encoding: 'utf8' }).trim(); } catch { return p; }
 };
+/** 진짜 claude 가 없는 PATH — 이 PC 에 깔린 claude(Git Bash 는 윈도우 PATH 를 물려받는다)를 찾지 않게 */
+const BARE_PATH = '/usr/bin:/bin';
+/** 실행 파일 하나를 만든다(Git Bash 는 #! 로 실행 여부를 본다) */
+function exe(file: string, body: string) {
+  execFileSync('bash', ['-c', `mkdir -p "$(dirname ${shq(posix(file))})"`]);
+  writeFileSync(file, `#!/bin/bash\n${body}`);
+  execFileSync('bash', ['-c', `chmod +x ${shq(posix(file))}`]);
+}
 
 describe('hostArgs', () => {
   it('별칭은 그대로', () => expect(hostArgs('dev')).toEqual(['dev']));
@@ -27,13 +36,31 @@ describe('hostArgs', () => {
 });
 
 describe('SSH_OPTIONS', () => {
-  it('필수 옵션', () => {
+  it('필수 옵션 — 모든 호출에 RemoteCommand=none · 전달 실패로 끝내기는 공통에 없다', () => {
     const s = SSH_OPTIONS.join(' ');
-    for (const o of ['-T', 'BatchMode=yes', 'ExitOnForwardFailure=yes', 'ServerAliveInterval=15', 'ServerAliveCountMax=3', 'ConnectTimeout=10', 'StrictHostKeyChecking=accept-new']) {
+    for (const o of ['-T', 'BatchMode=yes', 'ServerAliveInterval=15', 'ServerAliveCountMax=3', 'ConnectTimeout=10', 'StrictHostKeyChecking=accept-new', 'RemoteCommand=none']) {
       expect(s).toContain(o);
     }
+    expect(s).not.toContain('ExitOnForwardFailure');
   });
 });
+
+describe('runArgs — 확인·정리·기록 확인 ssh', () => {
+  it('전달을 모두 지운다(ClearAllForwardings) · RemoteCommand=none · -R 없음 · 확인은 bash -lc', () => {
+    const a = runArgs({ host: 'me@h:2222', script: `echo 'x'` });
+    expect(a).toEqual(expect.arrayContaining(['-o', 'ClearAllForwardings=yes', 'RemoteCommand=none', 'BatchMode=yes', 'ConnectTimeout=10']));
+    expect(a).not.toContain('-R');
+    expect(a.join(' ')).not.toContain('ExitOnForwardFailure');
+    expect(a.slice(-4)).toEqual(['-p', '2222', 'me@h', `bash -lc 'echo '\\''x'\\'''`]);
+  });
+  it('정리는 bash -c(로그인 프로필을 읽지 않는다) · 접속 한도', () => {
+    const a = runArgs({ host: 'dev', script: 'true', login: false, connectTimeout: 5 });
+    expect(a.at(-1)).toBe(`bash -c 'true'`);
+    expect(a).toContain('ConnectTimeout=5');
+    expect(a).not.toContain('ConnectTimeout=10');
+  });
+});
+
 
 describe('shq — 공백·따옴표·$ 경로', () => {
   it('작은따옴표를 이스케이프', () => expect(shq(`/srv/my app/it's $HOME`)).toBe(`'/srv/my app/it'\\''s $HOME'`));
@@ -79,9 +106,9 @@ describe('remoteLaunchScript', () => {
     // 이 PC 의 claude 와 같은 환경(SPAWN_ENV_EXTRA) — 표식 바로 뒤, exec 바로 앞. ssh 는 환경을 넘기지 않는다
     const extra = Object.entries(SPAWN_ENV_EXTRA).map(([k, v]) => `export ${k}=${shq(v)}; `).join('');
     expect(extra).toContain("export MCP_TOOL_TIMEOUT='86400000'; ");
-    expect(s).toContain(`export DURE_RUN=ag1.ab12cd34; ${extra}exec claude `);
+    expect(s).toContain(`export DURE_RUN=ag1.ab12cd34; ${extra}exec "$c" `);
   });
-  it('cd 가 먼저 — 폴더가 없으면 run 폴더·머리말 파일을 만들기 전에 끝난다 · pid·표식·exec 는 파일을 쓴 뒤', () => {
+  it('cd·claude 찾기가 먼저 — 폴더나 claude 가 없으면 run 폴더·머리말 파일을 만들기 전에 끝난다 · umask 077 은 파일 쓰기에만 · pid·표식·exec 는 그 뒤', () => {
     const s = make('/home/a/web');
     const at = (x: string) => {
       const i = s.indexOf(x);
@@ -89,8 +116,8 @@ describe('remoteLaunchScript', () => {
       return i;
     };
     const order = [
-      'umask 077', "cd '/home/a/web' || exit 3", 'mkdir -p "$d"', 'IFS= read -r a', 'IFS= read -r b',
-      'base64 -d > "$d/mcp.json"', 'base64 -d > "$d/prompt.md"', 'echo "DURE_PID=$$" >&2', 'export DURE_RUN=', 'export MCP_TOOL_TIMEOUT=', 'exec claude ',
+      "cd '/home/a/web' || exit 3", 'c=$(command -v claude)', '|| exit 127', 'o=$(umask)', 'umask 077', 'mkdir -p "$d"', 'IFS= read -r a', 'IFS= read -r b',
+      'base64 -d > "$d/mcp.json"', 'base64 -d > "$d/prompt.md"', 'umask "$o"', 'echo "DURE_PID=$$" >&2', 'export DURE_RUN=', 'export MCP_TOOL_TIMEOUT=', 'exec "$c" ',
     ].map(at);
     expect(order).toEqual([...order].sort((x, y) => x - y));
   });
@@ -108,7 +135,7 @@ describe('remoteLaunchScript', () => {
       const home = join(tmp, 'home');
       const folder = `${posix(join(tmp, 'my app'))}/it's $HOME`;
       execFileSync('bash', ['-c', `mkdir -p ${shq(posix(fake))} ${shq(posix(home))} ${shq(folder)}`]);
-      writeFileSync(join(fake, 'claude'), '#!/bin/bash\nprintf "[%s]\\n" "$@"\npwd\necho "RUN=$DURE_RUN"\necho "TIMEOUT=$MCP_TOOL_TIMEOUT"\ncat\n');
+      writeFileSync(join(fake, 'claude'), '#!/bin/bash\nprintf "[%s]\\n" "$@"\npwd\necho "RUN=$DURE_RUN"\necho "TIMEOUT=$MCP_TOOL_TIMEOUT"\necho "UMASK=$(umask)"\ncat\n');
       execFileSync('bash', ['-c', `chmod +x ${shq(posix(fake))}/claude`]);
       const script = remoteLaunchScript({
         agentId: 'ag1', launchId: 'ab12cd34', folder,
@@ -129,6 +156,10 @@ describe('remoteLaunchScript', () => {
       expect(out).toContain(folder);
       expect(out).toContain('RUN=ag1.ab12cd34');
       expect(out).toContain(`TIMEOUT=${SPAWN_ENV_EXTRA.MCP_TOOL_TIMEOUT}`);
+      // umask 077 은 머리말 파일에만 — claude 와 그 명령은 셸의 원래 umask 로(서버에 만든 파일을 같은 그룹이 못 읽게 되지 않게)
+      const shellMask = spawnSync('bash', ['-c', 'umask'], { encoding: 'utf8' }).stdout.trim();
+      expect(shellMask).not.toBe('0077');
+      expect(out).toContain(`UMASK=${shellMask}`);
       expect(out).toContain('REST');
       const dir = join(home, '.dure', 'run', 'ag1', 'ab12cd34');
       expect(readFileSync(join(dir, 'mcp.json'), 'utf8')).toBe(mcp);
@@ -136,6 +167,76 @@ describe('remoteLaunchScript', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe('remoteLaunchScript·checkScript — claude 찾기(PATH → ~/.local/bin → ~/.claude/local → nvm)', () => {
+  const files = remoteRunFiles('ag1', 'ab12cd34');
+  /** 임시 $HOME 과 서버 폴더 — 진짜 claude 가 없는 PATH 로 */
+  function server() {
+    const tmp = mkdtempSync(join(tmpdir(), 'dure-find-'));
+    const home = join(tmp, 'home');
+    const work = join(tmp, 'work');
+    execFileSync('bash', ['-c', `mkdir -p ${shq(posix(home))} ${shq(posix(work))}`]);
+    // PATH 는 셸 안에서 바꾼다 — 바깥 env 의 PATH 는 윈도우가 bash 를 찾는 데 쓴다
+    const { NVM_DIR: _n, ...rest } = process.env;
+    const env = { ...rest, HOME: posix(home) };
+    const launch = (path = BARE_PATH) =>
+      spawnSync('bash', ['-c', `PATH=${shq(path)}; ` + remoteLaunchScript({ agentId: 'ag1', launchId: 'ab12cd34', folder: posix(work), claudeArgs: ['--mcp-config', files.mcp, '-p'] })], {
+        input: launchPreamble('{"t":"secret"}', 'p'), encoding: 'utf8', env,
+      });
+    const check = () => spawnSync('bash', ['-c', `PATH=${shq(BARE_PATH)}; ` + checkScript(posix(work))], { encoding: 'utf8', env });
+    return { tmp, home, work, launch, check, done: () => rmSync(tmp, { recursive: true, force: true }) };
+  }
+  const CLAUDE = (who: string) => `if [ "$1" = --version ]; then echo "2.1.304 (Claude Code)"; exit 0; fi\necho "FOUND=${who}"; printf "[%s]\\n" "$@"\n`;
+
+  it.skipIf(!hasBash)('PATH 에 없고 ~/.local/bin 에만 있으면 그것으로 띄우고 확인한다', () => {
+    const t = server();
+    try {
+      exe(join(t.home, '.local', 'bin', 'claude'), CLAUDE('local-bin'));
+      const r = t.launch();
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('FOUND=local-bin');
+      expect(r.stdout).toContain(`[${posix(t.home)}/.dure/run/ag1/ab12cd34/mcp.json]`);
+      expect(parseCheckOutput(t.check().stdout)).toEqual({ folder: expect.any(String), claudeVersion: '2.1.304' });
+    } finally { t.done(); }
+  });
+  it.skipIf(!hasBash)('~/.claude/local 에만 있어도', () => {
+    const t = server();
+    try {
+      exe(join(t.home, '.claude', 'local', 'claude'), CLAUDE('claude-local'));
+      expect(t.launch().stdout).toContain('FOUND=claude-local');
+      expect(parseCheckOutput(t.check().stdout).claudeVersion).toBe('2.1.304');
+    } finally { t.done(); }
+  });
+  it.skipIf(!hasBash)('nvm — nvm.sh 를 읽은 뒤 PATH 에서(NVM_DIR 이 없으면 ~/.nvm)', () => {
+    const t = server();
+    try {
+      exe(join(t.home, '.nvm', 'versions', 'node', 'v22', 'bin', 'claude'), CLAUDE('nvm'));
+      writeFileSync(join(t.home, '.nvm', 'nvm.sh'), 'export PATH="$HOME/.nvm/versions/node/v22/bin:$PATH"\necho nvm-noise\n');
+      const r = t.launch();
+      expect(r.stdout).toContain('FOUND=nvm');
+      expect(r.stdout).not.toContain('nvm-noise');
+      expect(parseCheckOutput(t.check().stdout).claudeVersion).toBe('2.1.304');
+    } finally { t.done(); }
+  });
+  it.skipIf(!hasBash)('PATH 에 있으면 그것이 먼저', () => {
+    const t = server();
+    try {
+      exe(join(t.tmp, 'bin', 'claude'), CLAUDE('path'));
+      exe(join(t.home, '.local', 'bin', 'claude'), CLAUDE('local-bin'));
+      expect(t.launch(`${posix(join(t.tmp, 'bin'))}:${BARE_PATH}`).stdout).toContain('FOUND=path');
+    } finally { t.done(); }
+  });
+  it.skipIf(!hasBash)('어디에도 없으면 127 — 띄우기는 DURE_PID 도 run 폴더(토큰 파일)도 남기지 않는다', () => {
+    const t = server();
+    try {
+      const r = t.launch();
+      expect(r.status).toBe(127);
+      expect(r.stderr).not.toMatch(/DURE_PID=/);
+      expect(existsSync(join(t.home, '.dure'))).toBe(false);
+      expect(t.check().status).toBe(127);
+    } finally { t.done(); }
   });
 });
 
@@ -158,13 +259,24 @@ describe('remoteLaunchScript — 없는 폴더', () => {
 });
 
 describe('launchArgs', () => {
-  it('옵션·역터널·호스트·명령', () => {
+  it('옵션·역터널(서버 쪽도 127.0.0.1)·호스트·명령 · 전달 실패로 끝내지 않는다(설정 파일의 다른 전달) · RemoteCommand=none', () => {
     const a = launchArgs({ host: 'me@h:2222', remotePort: 41000, localPort: 5123, script: `echo 'x'` });
     expect(a).toContain('-T');
     expect(a).toContain('BatchMode=yes');
+    expect(a).toEqual(expect.arrayContaining(['-o', 'ExitOnForwardFailure=no', 'RemoteCommand=none']));
+    expect(a).not.toContain('ClearAllForwardings=yes'); // 명령줄 -R 까지 지운다
     const i = a.indexOf('-R');
-    expect(a[i + 1]).toBe('41000:127.0.0.1:5123');
+    expect(a[i + 1]).toBe('127.0.0.1:41000:127.0.0.1:5123');
     expect(a.slice(-4)).toEqual(['-p', '2222', 'me@h', `bash -lc 'echo '\\''x'\\'''`]);
+  });
+});
+
+describe('forwardFailed — 우리 원격 포트의 전달 실패 줄만', () => {
+  it('그 포트면 true · 다른 포트·앞자리만 같은 포트는 false', () => {
+    expect(forwardFailed('Warning: remote port forwarding failed for listen port 41000\n', 41000)).toBe(true);
+    expect(forwardFailed('Error: remote port forwarding failed for listen port 41000', 41000)).toBe(true);
+    expect(forwardFailed('Warning: remote port forwarding failed for listen port 5555\n', 41000)).toBe(false);
+    expect(forwardFailed('Warning: remote port forwarding failed for listen port 410001\n', 41000)).toBe(false);
   });
 });
 
@@ -181,13 +293,14 @@ describe('launchPreamble', () => {
 
 describe('cleanupScript', () => {
   const s = cleanupScript({ pid: 4242, agentId: 'ag1', launchId: 'ab12cd34' });
-  it('표식·나무·SID·TERM→KILL→run 폴더', () => {
-    expect(s).toContain('DURE_RUN=$1');
+  it('표식(grep 한 번)·나무·SID·TERM→KILL→run 폴더', () => {
     expect(s).toContain('m=ag1.ab12cd34');
-    expect(s).toContain('grep -qxF "DURE_RUN=$m"');
+    expect(s).toContain('grep -lzxF "DURE_RUN=$m" /proc/[0-9]*/environ 2>/dev/null');
+    expect(s).toContain('grep -qzxF "DURE_RUN=$m" /proc/4242/environ');
     expect(s).toContain('[ -r /proc/self/environ ]');
     expect(s).toContain('desc 4242');
-    expect(s).toContain(`tr '\\0' '\\n' 2>/dev/null < "$e"`);
+    expect(s).not.toContain(`tr '\\0'`);
+    expect(s).not.toContain('for e in /proc');
     expect(s.indexOf('-TERM')).toBeLessThan(s.indexOf('sleep 2'));
     expect(s.indexOf('sleep 2')).toBeLessThan(s.indexOf('-KILL'));
     expect(s).toContain('rm -rf "$HOME/.dure/run/ag1/ab12cd34"');
@@ -202,6 +315,34 @@ describe('cleanupScript', () => {
     expect(spawnSync('bash', ['-n', '-c', s]).status).toBe(0);
     expect(spawnSync('bash', ['-n', '-c', remoteLaunchScript({ agentId: 'a', launchId: 'b', folder: '/x', claudeArgs: [] })]).status).toBe(0);
   });
+  it.skipIf(!hasBash)('표식을 가진 프로세스는 다른 세션·고아여도 끄고, 표식 없는 것은 남긴다', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'dure-mark-'));
+    const pids: string[] = [];
+    try {
+      // 표식 둘(하나는 setsid 없이 새 프로세스 그룹·하나는 부모가 끝난 고아) + 표식 없는 하나 — 모두 sleep
+      const r = spawnSync('bash', ['-c', [
+        'DURE_RUN=ag1.ab12cd34 sleep 61 >/dev/null 2>&1 & echo $!',
+        "bash -c 'DURE_RUN=ag1.ab12cd34 sleep 62 >/dev/null 2>&1 & echo $!' ",
+        'sleep 63 >/dev/null 2>&1 & echo $!',
+      ].join('; ')], { encoding: 'utf8' });
+      pids.push(...r.stdout.trim().split(/\s+/));
+      const marked = () => spawnSync('bash', ['-c', 'grep -lzxF "DURE_RUN=ag1.ab12cd34" /proc/[0-9]*/environ 2>/dev/null | wc -l'], { encoding: 'utf8' }).stdout.trim();
+      const plainAlive = () => spawnSync('bash', ['-c', `kill -0 ${pids[2]}`]).status === 0;
+      // 뒤로 띄운 프로세스가 /proc 에 보일 때까지(Git Bash 는 조금 늦다)
+      const wait = (ok: () => boolean) => { for (let i = 0; i < 30 && !ok(); i++) spawnSync('bash', ['-c', 'sleep 0.1']); };
+      wait(() => Number(marked()) >= 2);
+      expect(Number(marked())).toBeGreaterThanOrEqual(2);
+      expect(plainAlive()).toBe(true);
+      const c = spawnSync('bash', ['-c', cleanupScript({ pid: 2147483646, agentId: 'ag1', launchId: 'ab12cd34' })], { encoding: 'utf8', env: { ...process.env, HOME: posix(tmp) } });
+      expect(c.status).toBe(0);
+      wait(() => marked() === '0');
+      expect(marked()).toBe('0');
+      expect(plainAlive()).toBe(true);
+    } finally {
+      spawnSync('bash', ['-c', `kill -9 ${pids.join(' ')} 2>/dev/null; true`]);
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 30000);
   it.skipIf(!hasBash)('실행하면 run 폴더를 지우고 없는 pid 에도 끝까지 간다', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'dure-clean-'));
     try {
@@ -240,11 +381,14 @@ describe('cleanupScript — 표식이 안 맞는 pid 는 건드리지 않는다'
 });
 
 describe('checkScript', () => {
-  it('폴더 없이', () => expect(checkScript()).toBe('command -v claude >/dev/null || exit 127; claude --version'));
+  it('폴더 없이 — 띄우기와 같은 claude 찾기 뒤 버전', () => {
+    const s = checkScript();
+    expect(s.startsWith('c=$(command -v claude); ')).toBe(true);
+    expect(s).toContain('[ -n "$c" ] || exit 127');
+    expect(s.endsWith('; "$c" --version')).toBe(true);
+  });
   it('폴더 있으면 cd 뒤 새 줄에 표식 DURE_DIR= + pwd -P — 로그인 셸 프로필이 줄바꿈 없이 찍어도 붙지 않게', () => {
-    expect(checkScript(`/a b/it's`)).toBe(
-      `cd '/a b/it'\\''s' || exit 3; printf '\\nDURE_DIR='; pwd -P; command -v claude >/dev/null || exit 127; claude --version`,
-    );
+    expect(checkScript(`/a b/it's`).startsWith(`cd '/a b/it'\\''s' || exit 3; printf '\\nDURE_DIR='; pwd -P; c=$(command -v claude); `)).toBe(true);
   });
 });
 
@@ -257,7 +401,7 @@ describe('checkScript — ~', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'dure-tilde-'));
     try {
       execFileSync('bash', ['-c', `mkdir -p ${shq(posix(tmp))}/"my dir"`]);
-      const run = (f: string) => spawnSync('bash', ['-c', checkScript(f).split('; command')[0]], { encoding: 'utf8', env: { ...process.env, HOME: posix(tmp) } });
+      const run = (f: string) => spawnSync('bash', ['-c', checkScript(f).split('; c=$(command')[0]], { encoding: 'utf8', env: { ...process.env, HOME: posix(tmp) } });
       const r = run('~/my dir');
       expect(r.status).toBe(0);
       expect(r.stdout).toMatch(/^\nDURE_DIR=.*my dir\n$/);
@@ -292,7 +436,20 @@ describe('transcriptCheckScript', () => {
 
 describe('classifyExit', () => {
   const c = (code: number | null, stderr = '', started = false) => classifyExit({ code, stderr, started });
-  it('포트', () => expect(c(255, 'Error: remote port forwarding failed for listen port 41000')?.kind).toBe('port'));
+  it('포트 — 이 띄우기의 원격 포트 줄일 때만(설정 파일의 다른 전달 실패는 접속 실패 쪽으로)', () => {
+    const p = (stderr: string) => classifyExit({ code: 255, stderr, started: false, port: 41000 });
+    expect(p('Error: remote port forwarding failed for listen port 41000')?.kind).toBe('port');
+    expect(p('Warning: remote port forwarding failed for listen port 5555\nssh: connect to host h port 22: Connection refused')?.kind).toBe('unreachable');
+    expect(c(255, 'Error: remote port forwarding failed for listen port 41000')?.kind).toBe('unreachable'); // 확인 ssh — 전달이 없다
+  });
+  it('윈도우 OpenSSH 의 -1(4294967295) 은 255 와 같다 — 연결 도중 끊김(실측)', () => {
+    for (const code of [4294967295, -1]) {
+      expect(c(code, 'Connection to h closed by remote host.', true)).toEqual({ kind: 'disconnected', detail: null });
+      expect(classifyExit({ code, stderr: 'DURE_PID=12\nConnection to h closed by remote host.', started: false, pidSeen: true })).toEqual({ kind: 'disconnected', detail: null });
+      expect(c(code, 'me@h: Permission denied (publickey).')?.kind).toBe('denied');
+      expect(c(code, 'ssh: connect to host h port 22: Connection timed out')).toEqual({ kind: 'unreachable', detail: 'ssh: connect to host h port 22: Connection timed out' });
+    }
+  });
   it('키 거절', () => expect(c(255, 'me@h: Permission denied (publickey).')?.kind).toBe('denied'));
   it('키 바뀜', () => {
     expect(c(255, '@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @')?.kind).toBe('hostkey');
@@ -365,6 +522,12 @@ describe('parseCheckOutput — 확인 출력 읽기', () => {
   it('표식이 / 로 시작하지 않으면 폴더 없음 · 빈 출력은 버전 없음', () => {
     expect(parseCheckOutput('DURE_DIR=\n2.1.304\n').folder).toBeNull();
     expect(parseCheckOutput('')).toEqual({ folder: null, claudeVersion: null });
+  });
+  it('마지막 줄이 버전 번호(x.y.z)가 아니면 버전 없음 — 프로필·motd 줄을 버전으로 읽지 않는다', () => {
+    expect(parseCheckOutput('Welcome to Ubuntu 24.04 LTS\n')).toEqual({ folder: null, claudeVersion: null });
+    expect(parseCheckOutput('\nDURE_DIR=/home/a\nLast login: Mon Nov  2 10:00:00 2026\n')).toEqual({ folder: '/home/a', claudeVersion: null });
+    expect(parseCheckOutput('motd 1.2.3\n').claudeVersion).toBeNull();
+    expect(parseCheckOutput('2.1\n').claudeVersion).toBeNull();
   });
 });
 

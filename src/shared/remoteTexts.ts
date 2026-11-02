@@ -25,5 +25,10 @@ export function remoteIssueText(host: string, issue: RemoteIssue): string {
 /** 로그인 만료 안내 띠의 설명 줄 */
 export const REMOTE_LOGIN_HELP = '서버 터미널에서 claude 를 실행해 /login 해 주세요 — 다시 보내면 이어서 해요'
 
+/** 원격 포트를 바꿔 가며 다시 해도 서버가 전달을 열지 않았다 — 그 에이전트의 오류 글(ssh 날글 대신) */
+export function remotePortBlockedText(host: string): string {
+  return `${host} 에서 포트 전달이 막혀 있어요 — 서버의 sshd 설정(AllowTcpForwarding)을 확인해 주세요`
+}
+
 /** 두레가 서버의 claude 를 정리하지 못했다(두 번 해 봄) — 그 에이전트 기록에 한 줄 */
 export const REMOTE_CLEANUP_FAILED = '서버의 claude 를 끄지 못했어요 — 서버에서 직접 확인해 주세요'
