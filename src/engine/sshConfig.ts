@@ -46,7 +46,10 @@ export function parseSshConfig(text: string, readInclude?: (pattern: string) => 
         }
       } else if (key === 'host') {
         block = [];
-        for (const p of value.split(/\s+/).map(unquote)) {
+        // `#` 로 시작하는 토큰부터는 주석(`Host dev # note`)
+        const words = value.split(/\s+/);
+        const cut = words.findIndex((w) => w.startsWith('#'));
+        for (const p of (cut < 0 ? words : words.slice(0, cut)).map(unquote)) {
           if (!isLiteral(p) || seen.has(p)) continue;
           seen.add(p);
           const e: SshHostEntry = { host: p, user: null, hostName: null, port: null };
@@ -74,8 +77,18 @@ const readText = (f: string): string | null => {
   try { return fs.statSync(f).isFile() ? fs.readFileSync(f, 'utf8') : null; } catch { return null; }
 };
 
-/** Include 패턴 → 글들. 상대 경로는 <home>/.ssh 기준, `~/` 는 <home>, 마지막 조각의 `*` 만 */
-function includeTexts(home: string, pattern: string): string[] {
+/** 같은 파일인지 — 링크를 풀고, 윈도우는 대소문자 무시 */
+function fileKey(f: string): string {
+  let r: string;
+  try { r = fs.realpathSync.native(f); } catch { r = path.resolve(f); }
+  return process.platform === 'win32' ? r.toLowerCase() : r;
+}
+
+/**
+ * Include 패턴 → 글들. 상대 경로는 <home>/.ssh 기준, `~/` 는 <home>, 마지막 조각의 `*` 만.
+ * read = 이미 읽은 파일 — 자기 자신·`Include *` 가 config 를 다시 가리켜도 한 번만(동기 읽기라 늘어나면 앱이 멈춘다)
+ */
+function includeTexts(home: string, pattern: string, read: Set<string>): string[] {
   const sshDir = path.join(home, '.ssh');
   const full = pattern.startsWith('~/') || pattern.startsWith('~' + path.sep)
     ? path.join(home, pattern.slice(2))
@@ -91,15 +104,25 @@ function includeTexts(home: string, pattern: string): string[] {
   } else {
     files.push(full);
   }
-  return files.map(readText).filter((t): t is string => t !== null);
+  const texts: string[] = [];
+  for (const f of files) {
+    const k = fileKey(f);
+    if (read.has(k)) continue;
+    read.add(k);
+    const t = readText(f);
+    if (t !== null) texts.push(t);
+  }
+  return texts;
 }
 
 /** `<home>/.ssh/config` 의 서버 목록 — 없거나 못 읽으면 [] (던지지 않음) */
 export function readSshHosts(home: string = os.homedir()): SshHostEntry[] {
   try {
-    const text = readText(path.join(home, '.ssh', 'config'));
+    const config = path.join(home, '.ssh', 'config');
+    const text = readText(config);
     if (text === null) return [];
-    return parseSshConfig(text, (p) => includeTexts(home, p));
+    const read = new Set([fileKey(config)]);
+    return parseSshConfig(text, (p) => includeTexts(home, p, read));
   } catch {
     return [];
   }

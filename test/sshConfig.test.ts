@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { describe, it, expect, vi } from 'vitest';
+import fs, { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseSshConfig, readSshHosts } from '../src/engine/sshConfig';
@@ -57,6 +57,11 @@ describe('parseSshConfig', () => {
   it('readInclude 없으면 Include 는 무시', () => {
     expect(parseSshConfig('Include x\nHost a\n').map((h) => h.host)).toEqual(['a']);
   });
+  it('Host 줄의 # 로 시작하는 토큰부터는 주석 — 별칭이 아니다', () => {
+    expect(parseSshConfig('Host dev # note\n User me\n').map((h) => h.host)).toEqual(['dev']);
+    expect(parseSshConfig('Host a b #c d\n').map((h) => h.host)).toEqual(['a', 'b']);
+    expect(parseSshConfig('Host x#y\n').map((h) => h.host)).toEqual(['x#y']); // 토큰 가운데 # 는 그대로
+  });
 });
 
 describe('readSshHosts', () => {
@@ -78,6 +83,27 @@ describe('readSshHosts', () => {
       expect(r.map((h) => h.host)).toEqual(['top', 'gpu-box', 'ex']);
       expect(r[1].hostName).toBe('10.0.0.12');
     } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+  it('Include 는 파일마다 한 번만 읽는다 — 자기 자신·`Include *` 가 config 를 다시 가리켜도 늘어나지 않는다', () => {
+    const home = mk();
+    const read = vi.spyOn(fs, 'readFileSync');
+    try {
+      const ssh = join(home, '.ssh');
+      mkdirSync(ssh, { recursive: true });
+      writeFileSync(join(ssh, 'config'), 'Host top\nInclude *\nInclude config\n');
+      writeFileSync(join(ssh, 'a'), 'Host ha\nInclude a\nInclude *\n');
+      writeFileSync(join(ssh, 'b'), 'Host hb\nInclude ~/.ssh/a\n');
+      writeFileSync(join(ssh, 'known_hosts'), 'gpu ssh-ed25519 AAAA\n');
+      read.mockClear();
+      expect(readSshHosts(home).map((h) => h.host)).toEqual(['top', 'ha', 'hb']);
+      const perFile = new Map<string, number>();
+      for (const [f] of read.mock.calls) perFile.set(String(f), (perFile.get(String(f)) ?? 0) + 1);
+      expect([...perFile.values()].every((n) => n === 1)).toBe(true);
+      expect(read.mock.calls.length).toBe(4); // config·a·b·known_hosts 한 번씩
+    } finally {
+      read.mockRestore();
+      rmSync(home, { recursive: true, force: true });
+    }
   });
   it('config 가 디렉터리여도 던지지 않는다', () => {
     const home = mk();
