@@ -76,6 +76,8 @@ const log = (s) => {
   if (logFile) fs.appendFileSync(logFile, s + '\n');
 };
 log(JSON.stringify({ argv, pid: process.pid, mcpToolTimeout: process.env.MCP_TOOL_TIMEOUT ?? null }));
+// FAKE_STDERR_START=<글> — 뜨자마자 stderr 에 한 줄(서버 로그인 셸 프로필 잡음 흉내)
+if (process.env.FAKE_STDERR_START) process.stderr.write(`${process.env.FAKE_STDERR_START}\n`);
 
 // FAKE_DIE_FLAG_FILE 로 이 프로세스(-n 이름)를 고장 낸다(파일을 지우면 다음 실행부터 정상):
 //   "<이름>"       stdin 을 읽기 전에 바로 죽는다(exit 1)

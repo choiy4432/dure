@@ -73,8 +73,11 @@ export interface EngineOptions {
   sleepMinuteMs?: number;
   /** 살아 있는 세션을 훑어 재우는 간격(ms) — 없으면 sleepMinuteMs(1분마다) */
   sleepSweepMs?: number;
-  /** 서버 방 원격 포트(-R)를 고르는 범위 — 없으면 REMOTE_PORT_FROM~REMOTE_PORT_TO. 시험용(좁혀서 겹침 피하기를 본다) */
-  remotePorts?: { from: number; to: number };
+  /**
+   * 서버 방 원격 포트(-R)를 고르는 범위 — 없으면 REMOTE_PORT_FROM~REMOTE_PORT_TO. random = 훑기 시작 자리(0 이상 1 미만, 없으면 crypto).
+   * 시험용(좁히고 시작 자리를 고정해 겹침 피하기를 본다)
+   */
+  remotePorts?: { from: number; to: number; random?: () => number };
 }
 
 // 이벤트:
@@ -345,7 +348,7 @@ function fromGitBashPath(p: string): string {
 
 /**
  * create_agent 의 폴더 — 만든 쪽 폴더 기준. 서버 방은 POSIX 로 잇는다(Git Bash 꼴로 바꾸지 않음).
- * 서버 방의 `~`·`~/…` 는 이을 수 없어 그대로 둔다 — 저장 검사가 '/ 로 시작하는 전체 경로' 로 거절한다
+ * 서버 방의 `~`·`~/…` 는 이을 수 없어 그대로 둔다 — create_agent 가 서버 확인(checkRemoteFolder)으로 펼친다
  */
 export function newAgentFolder(remote: boolean, base: string, rel: string): string {
   if (!remote) return path.resolve(base, fromGitBashPath(rel));
@@ -942,18 +945,23 @@ class EngineImpl extends EventEmitter implements Engine {
     return s;
   }
 
-  /** 원격 포트 하나 — 끝나지 않은 서버 세션이 쓰는 것은 피하고, 이번에 겹쳤던 포트도 되도록 피한다(남은 것이 없으면 그래도 고른다) */
+  /**
+   * 원격 포트 하나 — 범위의 아무 자리에서 시작해 차례로 훑어, 끝나지 않은 서버 세션이 쓰는 것은 피하고 이번에 겹쳤던 포트도 되도록 피한다
+   * (남은 것이 없으면 시작 자리 그대로 — 겹치면 다시 시도가 받는다)
+   */
   private pickRemotePort(id: AgentId): number {
-    const { from, to } = this.o.remotePorts ?? { from: REMOTE_PORT_FROM, to: REMOTE_PORT_TO };
+    const { from, to, random } = this.o.remotePorts ?? { from: REMOTE_PORT_FROM, to: REMOTE_PORT_TO };
+    const size = to - from + 1;
+    const start = random ? Math.min(size - 1, Math.floor(random() * size)) : crypto.randomInt(size);
     const failed = this.portTries.get(id)?.failed;
-    const pick = (ok: (p: number) => boolean): number | null => {
-      for (let i = 0; i < 200; i++) {
-        const p = crypto.randomInt(from, to + 1);
+    const scan = (ok: (p: number) => boolean): number | null => {
+      for (let i = 0; i < size; i++) {
+        const p = from + ((start + i) % size);
         if (ok(p)) return p;
       }
       return null;
     };
-    return pick((p) => !this.livePorts.has(p) && !failed?.has(p)) ?? pick((p) => !this.livePorts.has(p)) ?? crypto.randomInt(from, to + 1);
+    return scan((p) => !this.livePorts.has(p) && !failed?.has(p)) ?? scan((p) => !this.livePorts.has(p)) ?? from + start;
   }
 
   /**
@@ -1006,13 +1014,13 @@ class EngineImpl extends EventEmitter implements Engine {
    * 상태는 부른 쪽(exit)이 알린다
    */
   private remoteExited(id: AgentId, s: ClaudeSession, run: RemoteRun, code: number | null, stderr: string): void {
-    let issue = classifyExit({ code, stderr, started: run.started });
-    // DURE_PID 뒤의 255 — 서버에서 명령이 돈 뒤에 끊겼다(접속 실패가 아니다). claude 가 아직 한 줄도 안 낸 미리 띄운 세션 등
-    if (issue?.kind === 'unreachable' && run.pid !== null) issue = { kind: 'disconnected', detail: null };
+    // DURE_PID 를 받았으면 그 뒤의 255 는 끊김 — 서버에서 명령이 돈 뒤다(claude 가 아직 한 줄도 안 낸 미리 띄운 세션 등)
+    let issue = classifyExit({ code, stderr, started: run.started, pidSeen: run.pid !== null });
     // 끊김이면 서버 claude 가 남았을 수 있다 — 다음에 띄울 때(저장된 pid 로) 정리한다. 그 밖은 지금(claude 는 없어도 토큰이 든 run 폴더가 남는다)
     if (issue?.kind !== 'disconnected') this.cleanExited(id, run);
     this.guard(id, () => this.restoreInFlight(id, s));
     this.perms.cancelForAgent(id, EXITED);
+    if (issue?.kind !== 'port') this.portTries.delete(id); // 첫 줄 전에 다른 까닭으로 끝났다 — 다음 띄우기는 다시 처음부터
     if (issue?.kind === 'port') {
       const tries = this.portTries.get(id) ?? { n: 0, failed: new Set<number>() };
       tries.failed.add(run.port);
@@ -1174,6 +1182,11 @@ class EngineImpl extends EventEmitter implements Engine {
     const hadHold = this.holds.delete(id);
     try {
       await this.endSession(id);
+      // 세션 없이 서버에 남은 claude(끊긴 뒤·정리 실패 뒤) — 저장이 지워지면 다시는 못 찾는다. 지우기 전에 정리를 세운다
+      // (방금 내린 세션의 것과 같으면 한 번만 — 실패는 engine-error)
+      const gone = this.store.agent(id);
+      const remote = gone && this.remoteOf(gone);
+      if (remote && gone.remoteLaunch) void this.queueClean(id, remote.host, gone.remoteLaunch);
       for (const m of this.log.list({ states: ['pending', 'held', 'queued'] })) {
         if (m.to === id || m.from === id) this.router.dismiss(m.id);
       }
@@ -1897,15 +1910,17 @@ class EngineImpl extends EventEmitter implements Engine {
       folder: newAgentFolder(!!remote, me.folder, args.folder ?? '.'),
       task: args.task?.trim() ? args.task : null,
     };
-    this.checkNewAgent(me.roomId, plan); // 미리 보기 — 카드 없이 던진다
     if (remote) {
-      // 서버 방 — 그 폴더가 서버에 있는지 카드를 띄우기 전에 확인한다(ssh). 없거나 접속이 안 되면 그 글로 던진다. 저장은 서버가 펼친 경로로
+      // 서버 방 — 이름·역할·겹침을 먼저 보고(폴더는 아래 ssh 확인이 본다 — '/' 는 그 자리만 채운다), 그 폴더가 서버에 있는지 카드를 띄우기 전에
+      // 확인한다. ~·~/x 도 직접 더하기처럼 서버가 펼친 경로로. 없거나 접속이 안 되면 그 글로 던진다
+      this.checkNewAgent(me.roomId, { ...plan, folder: '/' });
       const r = await this.checkRemoteFolder(me.roomId, plan.folder);
       if (!r.ok) throw new Error(remoteIssueText(remote.host, r));
       plan.folder = r.folder;
       // 확인하는 사이 세션이 끝났거나 지워졌다 — 카드를 띄우지 않는다
       if (this.closed || this.removing.has(agentId) || this.sessions.get(agentId) !== s) throw new Error(EXITED);
     }
+    this.checkNewAgent(me.roomId, plan); // 미리 보기 — 카드 없이 던진다(서버 방은 펼친 폴더로 다시)
     const res = await this.perms.request(agentId, { tool_name: CREATE_AGENT_TOOL, input: plan, tool_use_id: toolUseId }, signal, { kind: 'create-agent' });
     if (res.behavior === 'deny') throw new Error(res.message); // 거절·멈춤·세션 끝·끊김 — 그 글 그대로
     // [만들기] — 그사이 세션이 끝났거나 만든 쪽이 지워졌으면 만들지 않는다(세션 끝 정리가 카드를 먼저 거절하지만 겹쳐 지킨다)
@@ -3255,7 +3270,10 @@ class EngineImpl extends EventEmitter implements Engine {
     this.perms.cancelForAgent(id, EXITED);
     if (!s) return;
     const run = this.remoteRuns.get(s);
-    if (run) run.ended = true; // 이제 온 pid 는 저장하지 않고 정리한다
+    if (run) {
+      run.ended = true; // 이제 온 pid 는 저장하지 않고 정리한다
+      this.portTries.delete(id); // 첫 줄 전에 내렸어도 포트 다시 시도는 여기서 접는다 — 다음 띄우기는 다시 처음부터
+    }
     let timer: NodeJS.Timeout | undefined;
     const limit = new Promise<void>((r) => {
       timer = setTimeout(r, this.o.stopLimitMs ?? STOP_LIMIT_MS);

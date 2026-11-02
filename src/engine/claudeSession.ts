@@ -28,7 +28,8 @@ const STOP_TIMEOUT_MS = 3000;
 interface Pending {
   resolve: (v: any) => void;
   reject: (e: Error) => void;
-  timer: NodeJS.Timeout;
+  /** 시간 재기 — 띄우기 전(startAfter)에 쓴 요청은 그 줄을 실제로 쓸 때 건다 */
+  timer?: NodeJS.Timeout;
 }
 
 export class ClaudeSession extends EventEmitter {
@@ -43,6 +44,7 @@ export class ClaudeSession extends EventEmitter {
   private pending = new Map<string, Pending>();
   private exited: Promise<void> = Promise.resolve();
   private queued: string[] | null = null; // 띄우기 전(startAfter)에 쓴 줄 — 띄운 뒤 머리말 다음에
+  private armQueued: (() => void)[] = []; // 띄우기 전에 쓴 제어 요청의 시간 재기 — 그 줄을 쓸 때 건다
   private dropGate: (() => void) | null = null; // 띄우기 전에 접는다(stop) — 띄우지 않고 끝낸다
 
   constructor(private opts: SessionOptions) {
@@ -86,6 +88,7 @@ export class ClaudeSession extends EventEmitter {
       this.dropGate = () => {
         this.dropGate = null;
         this.queued = null;
+        this.armQueued = []; // 기다리던 요청은 onExit 가 거절한다
         this.onExit(null);
         resolve();
       };
@@ -97,6 +100,7 @@ export class ClaudeSession extends EventEmitter {
         } catch (e) {
           // 띄우지 못함 — 띄운 뒤 곧 죽은 것과 같게(예기치 않은 종료)
           this.queued = null;
+          this.armQueued = [];
           this.stderrTail += String(e instanceof Error ? e.message : e);
           this.onExit(null);
           resolve();
@@ -132,6 +136,9 @@ export class ClaudeSession extends EventEmitter {
     const queued = this.queued;
     this.queued = null;
     for (const line of queued ?? []) child.stdin!.write(line);
+    const arms = this.armQueued;
+    this.armQueued = [];
+    for (const arm of arms) arm();
     this.exited = new Promise<void>((resolve) => {
       let done = false;
       const finish = (code: number | null) => {
@@ -211,11 +218,18 @@ export class ClaudeSession extends EventEmitter {
     if (!this.running) return Promise.reject(new Error('세션이 실행 중이 아닙니다'));
     const id = randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error('요청 시간이 초과되었습니다'));
-      }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      const p: Pending = { resolve, reject };
+      const arm = () => {
+        if (this.pending.get(id) !== p) return; // 이미 끝난 요청(띄우지 않고 접음)
+        p.timer = setTimeout(() => {
+          this.pending.delete(id);
+          reject(new Error('요청 시간이 초과되었습니다'));
+        }, timeoutMs);
+      };
+      this.pending.set(id, p);
+      // 띄우기 전(startAfter) — 정리를 기다리는 동안은 재지 않는다. 띄워서 그 줄을 쓸 때부터
+      if (this.queued) this.armQueued.push(arm);
+      else arm();
       this.write(encodeControl(id, req));
     });
   }

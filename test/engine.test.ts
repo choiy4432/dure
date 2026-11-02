@@ -6139,7 +6139,8 @@ describe('서버 방 띄우기', () => {
 
   test('두 에이전트 동시 — 원격 포트가 겹치지 않는다(Review Focus 2)', async () => {
     const base = 40000 + Math.floor(Math.random() * 9000);
-    const { e, root, room, web, calls } = await remoteRoom({}, { remotePorts: { from: base, to: base + 1 } });
+    // 고르기를 늘 범위 맨 앞에서 시작하게 — 피하기가 없으면 둘이 언제나 같은 포트를 고른다(겹침 → 다시 띄움 → 띄우기 셋)
+    const { e, root, room, web, calls } = await remoteRoom({}, { remotePorts: { from: base, to: base + 1, random: () => 0 } });
     fs.mkdirSync(path.join(root, 'home', 'a', 'api'), { recursive: true });
     const api = e.addAgent({ roomId: room.id, name: 'api', role: '서버', folder: '/home/a/api' });
     const a = resultOf(e, web.id);
@@ -6215,6 +6216,95 @@ describe('서버 방 띄우기', () => {
     expect(e.remoteIssue(web.id)).toBeNull();
     expect(agentOf(e, web.id).remoteLaunch).toEqual({ pid: second.pid, run: runOf(second.marker) });
   }, 40_000);
+
+  test('지우기 — 끊겨 세션은 없어도 서버에 남은 claude 를 정리한다 · 방 지우기도', async () => {
+    const { e, root, room, web, mode, events } = await remoteRoom();
+    const cleaned = (marker: string) => cleanupsIn(events()).some((c) => c.marker === marker);
+    mode('drop:1500');
+    let done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('echo 하나'));
+    await done;
+    const [first] = launchesIn(events());
+    await until('끊김', () => e.remoteIssue(web.id)?.kind === 'disconnected', 8000);
+    expect(isAlive(first.pid)).toBe(true); // 세션은 없고 서버 claude 만 남았다
+    await e.removeAgent(web.id);
+    await until('지우기 정리', () => cleaned(first.marker), 10_000);
+    await until('서버 claude 꺼짐', () => !isAlive(first.pid), 5000);
+
+    fs.mkdirSync(path.join(root, 'home', 'a', 'api'), { recursive: true });
+    const api = e.addAgent({ roomId: room.id, name: 'api', role: '서버', folder: '/home/a/api' });
+    done = resultOf(e, api.id);
+    await e.sendUser(api.id, text('echo 둘'));
+    await done;
+    const second = launchesIn(events()).find((l) => l.marker.startsWith(`${api.id}.`));
+    await until('끊김', () => e.remoteIssue(api.id)?.kind === 'disconnected', 8000);
+    await e.removeRoom(room.id);
+    await until('방 지우기 정리', () => cleaned(second.marker), 10_000);
+    await until('서버 claude 꺼짐', () => !isAlive(second.pid), 5000);
+  }, 60_000);
+
+  test('DURE_PID 뒤의 255 는 stderr 잡음이 무엇이든 끊김 — 아무 줄도 받기 전에 끊긴 미리 띄운 세션', async () => {
+    const { e, web, mode, notices } = await remoteRoom({ FAKE_NO_CONTROL_REPLY: '1', FAKE_STDERR_START: 'me@dev: Permission denied (profile noise)' });
+    mode('drop:800');
+    e.setSelected(web.id); // 미리 띄움 — 제어 답이 없어 stdout 이 한 줄도 없다
+    await until('끊김', () => e.remoteIssue(web.id) !== null, 10_000);
+    expect(e.remoteIssue(web.id)).toEqual({ kind: 'disconnected', detail: null });
+    expect(notices(web.id)).toEqual(['dev 연결이 끊겼어요 — 다시 보내면 이어서 해요']);
+    e.setSelected(null);
+  }, 30_000);
+
+  test('포트 다시 시도 횟수는 첫 줄 전에 끝난 세션과 함께 접는다 — 다음 띄우기는 다시 5번을 다 쓴다', async () => {
+    const probe = net.createServer();
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+    const port = (probe.address() as net.AddressInfo).port;
+    await new Promise<void>((r) => probe.close(() => r()));
+    const { e, web, mode, calls, events } = await remoteRoom(
+      { FAKE_NO_CONTROL_REPLY: '1' },
+      { remotePorts: { from: port, to: port }, prewarmIdleMs: 200 },
+    );
+    const launchCalls = () => calls().filter((c) => c.kind === 'launch').length;
+    // 첫 번은 겹치고(다시 1번) 둘째는 뜨지만 한 줄도 내지 않는다 → 고르지 않게 하면 곧 끈다(첫 줄 전에 끝남)
+    mode('portclash-once');
+    e.setSelected(web.id);
+    await until('둘째가 뜸', () => launchesIn(events()).length === 1, 10_000);
+    expect(launchCalls()).toBe(2);
+    e.setSelected(null);
+    await until('끄고 정리', () => cleanupsIn(events()).length === 1, 10_000);
+    // 이제 그 포트를 막는다 — 다음 띄우기는 처음부터 다시 5번
+    let busy: net.Server | null = null;
+    for (let i = 0; i < 100 && !busy; i++) {
+      const s = net.createServer();
+      const ok = await new Promise<boolean>((r) => {
+        s.once('error', () => r(false));
+        s.listen(port, '127.0.0.1', () => r(true));
+      });
+      if (ok) busy = s;
+      else await sleep(50); // 끈 ssh 의 중계가 아직 포트를 쥐고 있다
+    }
+    expect(busy).not.toBeNull();
+    try {
+      const before = launchCalls();
+      e.setSelected(web.id);
+      await until('오류', () => e.status(web.id) === 'error', 20_000);
+      expect(launchCalls() - before).toBe(1 + 5);
+    } finally {
+      busy!.close();
+      e.setSelected(null);
+    }
+  }, 60_000);
+
+  test('create_agent — 서버 방의 ~/x 폴더는 서버가 펼친 경로로(직접 더하기와 같게)', async () => {
+    const { e, root, web } = await remoteRoom();
+    fs.mkdirSync(path.join(root, 'home', 'a', 'api'), { recursive: true });
+    const req = waitFor<PendingRequest>(e, 'request', (r) => r.agentId === web.id, 15_000);
+    const done = resultOf(e, web.id);
+    await e.sendUser(web.id, text('MAKE api|백엔드|~/api|'));
+    const r = await req;
+    expect(r.input).toEqual({ name: 'api', role: '백엔드', folder: '/home/a/api', task: null });
+    e.answerRequest(r.id, { type: 'allow' });
+    expect(await resultText(done)).toContain('만들었어요');
+    expect(e.agents().find((x) => x.name === 'api')?.folder).toBe('/home/a/api');
+  }, 30_000);
 
   test('정리가 끝나야 같은 에이전트를 다시 띄운다 — 도는 옛 정리가 새 띄우기와 겹치지 않고 새 pid 를 지우지 않는다', async () => {
     const { e, web, events } = await remoteRoom({ FAKE_SSH_CLEANUP_MS: '1500' });

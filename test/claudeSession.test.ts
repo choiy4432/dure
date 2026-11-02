@@ -376,3 +376,15 @@ test('startAfter: 끝나기 전에 stop — 띄우지 않고 바로 멈춤(exit 
   expect(fs.existsSync(out)).toBe(false);
   await s.forceKill(10); // 띄우지 않은 세션 — 아무 일도 없다
 });
+
+test('startAfter: 제어 요청의 시간은 그 줄을 실제로 쓸 때부터 잰다 — 정리를 기다리는 동안은 재지 않는다', async () => {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  const s = new ClaudeSession({ ...(make() as any).opts, startAfter: gate });
+  sessions.push(s);
+  s.start();
+  const req = s.request({ subtype: 'initialize' }, 2000);
+  await new Promise((r) => setTimeout(r, 2500)); // 요청 한도보다 오래 기다린 정리
+  open();
+  await expect(req).resolves.toBeTruthy();
+}, 15000);

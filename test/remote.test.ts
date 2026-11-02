@@ -313,6 +313,13 @@ describe('classifyExit', () => {
     expect(c(255, 'Permission denied noise', true)).toEqual({ kind: 'disconnected', detail: null });
   });
   it('시작 전: 프로필 잡음(nvm)은 no-claude 가 아니다', () => expect(c(1, 'bash: nvm: command not found')).toBeNull());
+  it('DURE_PID 뒤(pidSeen)의 255 는 stderr 에 무엇이 섞여도 끊김 · 127 은 그대로 claude 없음', () => {
+    const p = (code: number, stderr: string) => classifyExit({ code, stderr, started: false, pidSeen: true });
+    expect(p(255, 'DURE_PID=12\nme@h: Permission denied (publickey).\nConnection to h closed by remote host.')).toEqual({ kind: 'disconnected', detail: null });
+    expect(p(255, 'DURE_PID=12\nHost key verification failed.')).toEqual({ kind: 'disconnected', detail: null });
+    expect(p(255, 'DURE_PID=12\nConnection to h closed by remote host.')).toEqual({ kind: 'disconnected', detail: null });
+    expect(p(127, 'DURE_PID=12\nbash: line 1: claude: command not found')?.kind).toBe('no-claude');
+  });
   it('unreachable detail 은 known_hosts 경고를 건너뛴다', () => {
     expect(c(255, "Warning: Permanently added 'h' (ED25519) to the list of known hosts.\nssh: connect to host h port 22: Connection refused")?.detail)
       .toBe('ssh: connect to host h port 22: Connection refused');

@@ -163,12 +163,17 @@ export function sshErrorLines(stderr: string): string[] {
     .filter((l) => l && !/^Warning: Permanently added/i.test(l) && !/^DURE_PID=\d+$/.test(l));
 }
 
-export function classifyExit(a: { code: number | null; stderr: string; started: boolean }): RemoteIssue | null {
+/**
+ * ssh 가 끝난 까닭 — started = stdout 을 한 줄이라도 받았다 · pidSeen = 띄운 셸이 DURE_PID 를 알렸다(서버에서 명령이 돌기 시작했다 —
+ * claude 가 없어도 셸은 먼저 알리니 started 와 따로). 어느 쪽이든 그 뒤의 255 는 끊김이다(stderr 의 프로필 잡음으로 가르지 않는다)
+ */
+export function classifyExit(a: { code: number | null; stderr: string; started: boolean; pidSeen?: boolean }): RemoteIssue | null {
   const { code, stderr } = a;
   // 시작한 뒤의 stderr 에는 로그인 프로필 잡음이 섞인다 — 끊김만 분류하고 나머지는 지금의 '예기치 않게 종료' 길로
   if (a.started) return code === 255 ? { kind: 'disconnected', detail: null } : null;
   if (code === 255) {
     if (/remote port forwarding failed/i.test(stderr)) return { kind: 'port', detail: null };
+    if (a.pidSeen) return { kind: 'disconnected', detail: null };
     if (/Permission denied/i.test(stderr)) return { kind: 'denied', detail: null };
     if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(stderr)) return { kind: 'hostkey', detail: null };
     return { kind: 'unreachable', detail: sshErrorLines(stderr)[0] ?? null };
