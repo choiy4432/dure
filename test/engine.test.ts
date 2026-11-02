@@ -950,6 +950,22 @@ test('newConversation → 세션 stop, 새 sessionId·started false, 다음은 -
   expect(lastSpawnOf('A').argv).not.toContain('--resume');
 });
 
+test('newConversation 의 경계에 끝난 대화의 세션 id — 나중에 그 대화로 돌아갈 수 있게. 시작 안 한 대화는 없음', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 하나'));
+  await done;
+  await e.newConversation(a.id);
+  const second = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id); // 한 마디도 안 한 대화 — 돌아갈 대화가 없다
+  const bounds = e.history(a.id, { all: true }).filter((x) => x.kind === 'boundary');
+  expect(bounds).toHaveLength(2);
+  expect(bounds[0]).toMatchObject({ kind: 'boundary', ended: a.sessionId });
+  expect(bounds[1]).not.toHaveProperty('ended');
+  expect(second).not.toBe(a.sessionId);
+});
+
 test('removeAgent → 세션 정리, 그 에이전트가 받고 보낸 대기 메시지는 dismissed', async () => {
   const e = await start();
   const { room, a, b } = setup(e);

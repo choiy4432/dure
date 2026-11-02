@@ -1099,12 +1099,13 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   async newConversation(id: AgentId) {
-    this.need(id);
+    const agent = this.need(id);
     // 새 대화는 계획 모드를 끈 채로 — 끝내는 세션의 모드는 세션과 함께 사라진다(세션 끝 정리가 알린다)
     this.wantPlan(id, false);
     this.handSlept.delete(id); // 사람이 새 대화를 골랐다 — 손으로 재운 표를 풀어 고른 에이전트면 새 대화로 미리 띄운다
+    const ended = agent.started ? agent.sessionId : null; // 한 마디라도 한 대화만 — 돌아갈 대화가 있다
     const ending = this.endSession(id);
-    this.guard(id, () => this.record(id, { kind: 'boundary' }));
+    this.guard(id, () => this.record(id, ended ? { kind: 'boundary', ended } : { kind: 'boundary' }));
     this.store.updateAgent(id, { sessionId: crypto.randomUUID(), started: false });
     this.guard(id, () => this.setContext(id, null));
     this.emitStatus(id);
