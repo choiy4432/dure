@@ -117,6 +117,11 @@ function cutFor(items: HistoryItem[], limit: number): number {
   return 0;
 }
 
+/** 마지막 limit 개 — 서브에이전트 줄은 세지 않는다(read 의 자르기와 같다) */
+export function lastN(items: HistoryItem[], limit: number): HistoryItem[] {
+  return items.slice(cutFor(items, limit));
+}
+
 export interface History {
   append(agentId: AgentId, item: HistoryItem): void;
   /**
@@ -160,7 +165,7 @@ export function openHistory(dataDir: string): History {
         const i = items.map((x) => x.kind).lastIndexOf('boundary');
         if (i >= 0) items = items.slice(i + 1);
       }
-      return items.slice(cutFor(items, limit));
+      return lastN(items, limit);
     },
     remove(agentId) {
       closed.delete(agentId);

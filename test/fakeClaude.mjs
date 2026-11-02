@@ -86,7 +86,7 @@ if (knob === myName) process.exit(1);
 const hang = knob === `${myName}:hang`;
 const mute = knob === `${myName}:mute`;
 
-const sessionId = flag('--resume') ?? flag('--session-id') ?? 'fake-session';
+const sessionId = process.env.FAKE_INIT_SESSION || (flag('--resume') ?? flag('--session-id') ?? 'fake-session'); // FAKE_INIT_SESSION: init 이 다른 session_id 를 알린다
 let model = flag('--model') ?? 'claude-opus-5-5'; // --model 이 없으면 기본 모델이 풀린 id 를 알린다
 // 내 Claude 설정의 기본 모드(get_settings 의 effective.permissions.defaultMode) — 세션은 이 모드로 시작한다.
 // 진짜(probe12)처럼 세션 모드를 바꿔도 get_settings 의 이 값은 그대로다

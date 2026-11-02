@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { openStore, renameRetrying, type Store } from './store';
 import { openMessageLog, type MessageLog } from './messageLog';
-import { capPatch, openHistory, patchFromInput, trimToolInput, type History } from './history';
+import { capPatch, lastN, openHistory, patchFromInput, trimToolInput, type History } from './history';
+import { splitConversations } from './conversations';
 import { openImageStore, type ImageStore } from './imageStore';
 import { buildArgs, buildMcpConfig, buildUsageArgs, CREATE_AGENT_TOOL, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
@@ -1219,7 +1220,12 @@ class EngineImpl extends EventEmitter implements Engine {
   // ── 메시지·승인 ──
   history(id: AgentId, o: { all?: boolean; limit?: number } = {}): HistoryItem[] {
     this.need(id);
-    return this.hist.read(id, { sinceBoundary: !o.all, limit: o.limit ?? (o.all ? Infinity : 500) });
+    if (o.all) return this.hist.read(id, { sinceBoundary: false, limit: o.limit ?? Infinity });
+    // 지금 대화 = 지금 세션의 모든 구간(돌아간 대화는 경계 앞에도 이어진다)
+    const sid = this.store.agent(id)?.sessionId ?? '';
+    const all = this.hist.read(id, { sinceBoundary: false, limit: Infinity });
+    const cur = splitConversations(all, sid).find((c) => c.key === sid);
+    return cur ? lastN(cur.items, o.limit ?? 500) : [];
   }
   async image(id: AgentId, file: string): Promise<string | null> {
     this.need(id);
@@ -2359,6 +2365,10 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /** 차례의 init — 시작됨 · 권한 모드 · 풀린 모델 id(엔진이 보낸 /effort 차례에서도) */
   private noteInit(id: AgentId, ev: Extract<StreamEvent, { kind: 'init' }>): void {
+    // 이어 받은 세션이 다른 id 로 시작하면 저장값을 그것으로 — 다음 --resume 이 맞는 세션을 가리키게
+    this.guard(id, () => {
+      if (ev.sessionId && this.store.agent(id)?.sessionId !== ev.sessionId) this.store.updateAgent(id, { sessionId: ev.sessionId });
+    });
     // 저장이 실패해도 init 은 알린다 — started 는 다음 차례의 init 때 다시 쓴다
     this.guard(id, () => {
       if (this.store.agent(id)?.started === false) this.store.updateAgent(id, { started: true });

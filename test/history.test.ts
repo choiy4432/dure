@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { capPatch, openHistory, patchFromInput, trimToolInput } from '../src/engine/history';
+import { capPatch, lastN, openHistory, patchFromInput, trimToolInput } from '../src/engine/history';
 import { toolSummary } from '../src/renderer/lib/toolSummary';
 import { buildTranscript } from '../src/renderer/state/transcript';
 import type { HistoryItem } from '../src/engine/types';
@@ -207,4 +207,14 @@ test('patchFromInput: Edit 은 옛 줄 전부 - · 새 줄 전부 + 한 묶음, 
   expect(patchFromInput('Edit', null)).toBeNull();
   expect(patchFromInput('MultiEdit', { edits: 'x' })).toBeNull();
   expect(patchFromInput('MultiEdit', { edits: [{ old_string: 1 }] })).toBeNull();
+});
+
+test('lastN: read({ limit }) 의 자르기와 같다 — 서브에이전트 줄은 세지 않는다', () => {
+  const h = openHistory(dir);
+  const sub = (n: number): HistoryItem => ({ t: n, kind: 'assistant', text: 's', parent: 'p' } as unknown as HistoryItem);
+  const seq = [note('1', 1), sub(2), note('2', 3), sub(4), sub(5), note('3', 6)];
+  for (const x of seq) h.append('a', x);
+  for (const limit of [1, 2, 3, 10])
+    expect(lastN(seq, limit)).toEqual(h.read('a', { limit }));
+  expect(lastN(seq, 2).map((x) => x.t)).toEqual([3, 4, 5, 6]);
 });

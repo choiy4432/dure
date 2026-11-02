@@ -1242,6 +1242,43 @@ test('engine: newConversation 뒤 history() 는 boundary 이후만, all:true 는
   expect(e.history(a.id, { limit: 1 }).map((x) => x.kind)).toEqual(['result']); // 마지막 N 개
 });
 
+test('지금 대화는 세션으로 고른다 — resumed 경계 앞의 같은 세션 구간까지', async () => {
+  const e1 = await start();
+  const { a } = setup(e1);
+  await e1.shutdown();
+  const S1 = 's1-session';
+  const S2 = 's2-session';
+  const stateFile = path.join(dataDir, 'state.json');
+  const st = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+  const ag = st.agents.find((x: any) => x.id === a.id);
+  ag.sessionId = S1;
+  ag.started = true;
+  fs.writeFileSync(stateFile, JSON.stringify(st));
+  const u = (t: string, n: number) => ({ t: n, kind: 'user', source: 'human', parts: [{ type: 'text', text: t }] });
+  const lines = [
+    u('하나', 1),
+    { t: 2, kind: 'boundary', ended: S1 },
+    u('둘', 3),
+    { t: 4, kind: 'boundary', ended: S2, resumed: S1 },
+    { t: 5, kind: 'notice', text: '이 대화로 돌아왔어요' },
+  ];
+  fs.mkdirSync(path.join(dataDir, 'history'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const e2 = await start();
+  const h = e2.history(a.id);
+  expect(h.filter((x) => x.kind === 'user').map((x: any) => x.parts[0].text)).toEqual(['하나']);
+  expect(h[h.length - 1]).toMatchObject({ kind: 'notice', text: '이 대화로 돌아왔어요' });
+});
+
+test('init 의 session_id 가 다르면 저장값을 그것으로', async () => {
+  const other = crypto.randomUUID();
+  const e = await start({ FAKE_INIT_SESSION: other });
+  const { a } = setup(e);
+  expect(agentOf(e, a.id).sessionId).not.toBe(other);
+  await talk(e, a.id);
+  expect(agentOf(e, a.id).sessionId).toBe(other);
+});
+
 test('engine: history 이벤트가 append 마다', async () => {
   const e = await start();
   const { a } = setup(e);
