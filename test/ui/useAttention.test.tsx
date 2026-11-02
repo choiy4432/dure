@@ -135,4 +135,62 @@ describe('useAttention', () => {
     await emit('request', req('q1'))
     expect(notify).not.toHaveBeenCalled()
   })
+
+  describe('서버 방 문제 — 오류처럼 알린다(엔진 상태는 쉬는 중 그대로)', () => {
+    const serverRoom = () => {
+      snapshot.rooms = [{ id: 'r1', name: '서버 실험', createdAt: 1, remote: { host: 'dev' } }]
+    }
+    const drop = { kind: 'disconnected' as const, detail: null }
+
+    it('초점 없음 + 새 끊김 → 깜박임 · 알림(이름 · 문제 한 줄) · 읽어 줄 글', async () => {
+      serverRoom()
+      const { notify, announced } = await setup()
+      await emit('status', { agentId: 'a', status: 'idle', errorText: null, remoteIssue: drop })
+      expect(dure.flashWindow).toHaveBeenCalledTimes(1)
+      expect(notify).toHaveBeenCalledWith('디자인', expect.objectContaining({ body: 'dev 연결이 끊겼어요 — 다시 보내면 이어서 해요', tag: 'dure-a' }))
+      expect(announced().text).toBe('디자인: dev 연결이 끊겼어요 — 다시 보내면 이어서 해요')
+      // 같은 문제가 이어지면(상태 사건이 또 와도) 다시 알리지 않는다
+      await emit('status', { agentId: 'a', status: 'idle', errorText: null, remoteIssue: drop })
+      expect(dure.flashWindow).toHaveBeenCalledTimes(1)
+      expect(notify).toHaveBeenCalledTimes(1)
+      // 로그인 만료로 바뀌면 다시
+      await emit('status', { agentId: 'a', status: 'idle', errorText: null, remoteIssue: { kind: 'login', detail: null } })
+      expect(notify).toHaveBeenLastCalledWith('디자인', expect.objectContaining({ body: 'dev 의 claude 로그인이 만료됐어요' }))
+    })
+
+    it('처음 스냅샷에 있던 문제엔 깜박임·알림이 없다 · 초점 있으면 읽어 줄 글만 · notify.asks 꺼짐이면 알림 없이 깜박임', async () => {
+      serverRoom()
+      snapshot.agents = [agent('a', { remoteIssue: drop }), agent('b')]
+      const first = await setup()
+      expect(dure.flashWindow).not.toHaveBeenCalled()
+      expect(first.notify).not.toHaveBeenCalled()
+      cleanup()
+
+      vi.resetModules()
+      snapshot.agents = [agent('a'), agent('b')]
+      const focused = await setup({ focus: true })
+      await emit('status', { agentId: 'a', status: 'idle', errorText: null, remoteIssue: drop })
+      expect(dure.flashWindow).not.toHaveBeenCalled()
+      expect(focused.notify).not.toHaveBeenCalled()
+      expect(focused.announced().text).toBe('디자인: dev 연결이 끊겼어요 — 다시 보내면 이어서 해요')
+      cleanup()
+
+      vi.resetModules()
+      snapshot.notify = { asks: false, finished: false }
+      const quiet = await setup()
+      await emit('status', { agentId: 'b', status: 'idle', errorText: null, remoteIssue: drop })
+      expect(dure.flashWindow).toHaveBeenCalledTimes(1)
+      expect(quiet.notify).not.toHaveBeenCalled()
+    })
+
+    it('로그인 만료 답(새 결과)은 "일을 끝냈어요" 대신 문제 알림 하나', async () => {
+      serverRoom()
+      snapshot.notify = { asks: true, finished: true }
+      const { notify } = await setup()
+      await emit('status', { agentId: 'a', status: 'idle', errorText: null, remoteIssue: { kind: 'login', detail: null } })
+      await emit('history', { agentId: 'a', item: { t: 6, kind: 'result', ok: false, subtype: 'success' } })
+      const bodies = notify.mock.calls.map(c => c[0])
+      expect(bodies).toEqual(['디자인'])
+    })
+  })
 })

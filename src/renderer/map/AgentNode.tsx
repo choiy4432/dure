@@ -4,7 +4,7 @@ import { Moon, ShieldAlert } from 'lucide-react'
 import type { AgentId, Decision, PendingRequest } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
-import { displayStatus, sleepLook, unreadFor, type DisplayStatus } from '../state/selectors'
+import { displayStatus, issueLine, sleepLook, unreadFor, type DisplayStatus } from '../state/selectors'
 import { createAgentPlan, requestTarget, requestTitle } from '../lib/toolSummary'
 import { ago, FRESH_WORD, initial, josa, lasting, nodeModelLabel, PHASE_WORD, QUESTION_LINK, SLEEP_HINT, SLEEP_WORD, STATUS_LINE, STATUS_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
@@ -52,10 +52,14 @@ function useCardView(agentId: AgentId) {
         firstUnreadFrom = m.from
       }
     }
+    const status = displayStatus(agent, s.requests)
+    // 서버 문제(끊김·로그인 만료 …) — 쉬는 중이 아니라 오류처럼(엔진 오류가 이미 있으면 그것)
+    const issue = issueLine(agent, s.requests, s.rooms)
     return {
       agent,
       request,
-      status: displayStatus(agent, s.requests),
+      status: issue && status !== 'error' ? ('error' as const) : status,
+      issue,
       unread: unreadFor(agentId, s.messages),
       sender: firstUnreadFrom ? (s.agents.find(a => a.id === firstUnreadFrom)?.name ?? '') : '',
       selected: s.selectedAgentId === agentId,
@@ -198,7 +202,8 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
   const sleep = sleepLook(agent, status)
   const footSleep = isFresh ? null : sleep
   const time = timeText(v, now)
-  const errorText = status === 'error' && agent.errorText ? agent.errorText : null
+  // 오류 글 — 엔진 오류면 그 글, 서버 문제로 오류처럼 보이면 그 한 줄
+  const errorText = status !== 'error' ? null : agent.status === 'error' ? agent.errorText || null : v.issue
 
   return (
     <div

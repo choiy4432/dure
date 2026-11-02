@@ -4473,6 +4473,13 @@ code {
   height: 6px;
 }
 
+/* 서버 문제(끊김·로그인 만료 …) — 오류처럼 빨간 경고 아이콘 + 수 */
+.rs-todo.e .i {
+  width: 12px;
+  height: 12px;
+  color: var(--danger);
+}
+
 .rs-pick[aria-current="true"] .rs-n {
   font-weight: 500;
 }

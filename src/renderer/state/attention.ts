@@ -1,5 +1,6 @@
-import type { PendingRequest, RelayMessage, RoomId } from '../../engine/types'
+import type { PendingRequest, RelayMessage, Room, RoomId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
+import { issueLine } from './selectors'
 
 // 순수 모듈 — 화면·스토어를 import 하지 않는다(여러 화면이 같은 수를 쓰도록)
 
@@ -34,4 +35,17 @@ export function todoCounts(s: { agents: AgentView[]; requests: PendingRequest[];
     asksTotal += t.asks
   }
   return { total, asksTotal, rooms }
+}
+
+/**
+ * 방마다 서버 문제(끊김·로그인 만료 …)가 보이는 에이전트 — '<이름>: <문제 한 줄>'. 할 일 수(todoCounts)와 따로 센다(창 제목·배지의 수는 그대로):
+ * 방 목록 줄에 오류처럼 표시
+ */
+export function roomIssues(s: { agents: AgentView[]; requests: PendingRequest[]; rooms: Room[] }): Record<RoomId, string[]> {
+  const out: Record<RoomId, string[]> = {}
+  for (const a of s.agents) {
+    const line = issueLine(a, s.requests, s.rooms)
+    if (line) (out[a.roomId] ??= []).push(`${a.name}: ${line}`)
+  }
+  return out
 }

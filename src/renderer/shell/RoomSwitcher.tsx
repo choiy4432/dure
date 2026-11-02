@@ -4,7 +4,7 @@ import {
 import { Check, ChevronDown, Ellipsis, Monitor, Moon, Pencil, Plus, Server, Trash2, TriangleAlert } from 'lucide-react'
 import type { Room, RoomId, SshHostEntry } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
-import { roomTotal, todoCounts } from '../state/attention'
+import { roomIssues, roomTotal, todoCounts } from '../state/attention'
 import { errorMessage, josa, REMOTE, serverLine, SLEEP_ROOM, sshAddress } from '../lib/words'
 import { moveMenuFocus, OPTION, useDismiss } from '../lib/popover'
 import { MotionDiv, Presence } from '../lib/presence'
@@ -66,6 +66,8 @@ export function RoomSwitcher() {
   }))
   // 방마다 처리할 일 — 목록 줄의 수와, 다른 방에 있다는 방 단추의 점이 같은 셈을 쓴다
   const todo = useMemo(() => todoCounts(v).rooms, [v.agents, v.requests, v.messages]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 방마다 서버 문제가 보이는 에이전트 — 목록 줄에 오류처럼
+  const issues = useMemo(() => roomIssues(v), [v.agents, v.requests, v.rooms]) // eslint-disable-line react-hooks/exhaustive-deps
   const elsewhere = v.rooms.some(r => r.id !== v.roomId && roomTotal(todo[r.id]) > 0)
   const current = v.rooms.find(r => r.id === v.roomId)
   const [open, setOpen] = useState(false)
@@ -318,7 +320,7 @@ export function RoomSwitcher() {
                         ) : (
                           <span className="rs-n">{r.name}</span>
                         )}
-                        <RoomTodo t={todo[r.id]} />
+                        <RoomTodo t={todo[r.id]} issues={issues[r.id]} />
                         {r.id === v.roomId && <Check className="i mi-ck" aria-hidden="true" />}
                       </button>
                       <button
@@ -393,13 +395,23 @@ export function RoomSwitcher() {
   )
 }
 
-/** 목록 줄 오른쪽의 할 일 수 — 승인·질문은 앰버, 메시지·묶음은 빨강, 0 인 쪽은 안 쓴다. 색만으로는 못 읽으니 숫자 앞에 보이지 않는 이름을 둔다 */
-function RoomTodo({ t }: { t: { asks: number; messages: number; held: number } | undefined }) {
-  if (!t) return null
-  const unread = t.messages + t.held
+/**
+ * 목록 줄 오른쪽의 할 일 수 — 승인·질문은 앰버, 메시지·묶음은 빨강, 0 인 쪽은 안 쓴다. 색만으로는 못 읽으니 숫자 앞에 보이지 않는 이름을 둔다.
+ * 서버 문제(issues — '<이름>: <문제 한 줄>')는 오류처럼 경고 아이콘 + 수, 무엇인지는 title
+ */
+function RoomTodo({ t, issues }: { t: { asks: number; messages: number; held: number } | undefined; issues?: string[] }) {
+  if (!t && !issues?.length) return null
+  const unread = t ? t.messages + t.held : 0
   return (
     <>
-      {t.asks > 0 && (
+      {issues && issues.length > 0 && (
+        <span className="rs-todo e" title={issues.join('\n')}>
+          <TriangleAlert className="i" aria-hidden="true" />
+          <span className="sr-only">서버 문제 </span>
+          {issues.length}
+        </span>
+      )}
+      {t && t.asks > 0 && (
         <span className="rs-todo a">
           <span className="dot a" aria-hidden="true" />
           <span className="sr-only">내 승인 필요 </span>
@@ -518,6 +530,9 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
   const typedInput = useRef<HTMLInputElement>(null)
   // 다시 그린 뒤 옮길 포커스 — 서버 칸이 처음 보일 때 · 직접 입력칸이 생길 때
   const focusNext = useRef<'server' | 'typed' | null>(null)
+  // 입력 멈춤 타이머 · Enter·고르기로 막 물은 글 — 그 확인이 바로 실패해도 타이머가 같은 글을 또 묻지 않게(글을 고치면 다시 잰다)
+  const typeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const asked = useRef<string | null>(null)
   const { check, start, reset, settled } = useRemoteCheck(
     target => target,
     async target => {
@@ -555,16 +570,29 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
     else serverArea.current?.querySelector<HTMLElement>('button, input')?.focus()
   })
 
-  // 직접 입력 — 입력을 멈추면 잠시 뒤 확인(Enter 로 이미 묻고 있으면 또 묻지 않는다)
+  // 직접 입력 — 입력을 멈추면 잠시 뒤 확인(Enter·고르기로 이미 물었으면 또 묻지 않는다)
   useEffect(() => {
     if (where !== 'server' || !inputMode) return
     const host = typed.trim()
-    if (!host) return
+    if (!host || asked.current === host) return
     const t = setTimeout(() => {
+      typeTimer.current = null
       if (!settled(host)) start(host)
     }, TYPE_PAUSE_MS)
-    return () => clearTimeout(t)
+    typeTimer.current = t
+    return () => {
+      clearTimeout(t)
+      if (typeTimer.current === t) typeTimer.current = null
+    }
   }, [where, inputMode, typed, settled, start])
+
+  /** 지금 묻는다 — 걸려 있던 입력 멈춤 타이머는 지운다 */
+  const askNow = (host: string) => {
+    if (typeTimer.current) clearTimeout(typeTimer.current)
+    typeTimer.current = null
+    asked.current = host
+    if (!settled(host)) start(host)
+  }
 
   const toServer = () => {
     if (where === 'server' || ssh !== true) return
@@ -575,7 +603,7 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
   const pickHost = (host: string) => {
     setTyping(false)
     setListHost(host)
-    if (!settled(host)) start(host)
+    askNow(host)
   }
 
   const pickTyped = () => {
@@ -583,11 +611,12 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
     focusNext.current = 'typed'
     const host = typed.trim()
     if (!host) reset()
-    else if (!settled(host)) start(host)
+    else askNow(host)
   }
 
   const onTyped = (text: string) => {
     setTyped(text)
+    asked.current = null
     if (!settled(text.trim())) reset()
   }
 
@@ -597,7 +626,7 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
     if (serverReady) return
     e.preventDefault()
     const host = typed.trim()
-    if (host && !settled(host)) start(host)
+    if (host) askNow(host)
   }
 
   const submit = async () => {

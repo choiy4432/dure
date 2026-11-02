@@ -610,6 +610,20 @@ describe('PanelHeader — 서버 안내 띠', () => {
     expect(b.querySelector('.band-h')).toBeNull()
   })
 
+  it('띠는 role=status — 일하는 도중 끊기거나 로그인이 만료되면 화면 읽기 프로그램이 읽는다', async () => {
+    serverRoom()
+    let emit!: (p: unknown) => void
+    ;(window as any).dure.on = (k: string, fn: (p: unknown) => void) => {
+      if (k === 'status') emit = fn
+      return () => {}
+    }
+    await renderPanel()
+    expect(band()).toBeNull()
+    await act(async () => { emit({ agentId: 'w', status: 'idle', errorText: null, remoteIssue: { kind: 'login', detail: null } }) })
+    expect(band()!.getAttribute('role')).toBe('status')
+    expect(screen.getAllByRole('status').some(x => x === band())).toBe(true)
+  })
+
   it('접속 실패는 ssh 오류 첫 줄까지 · 문제가 풀리면(status 사건) 띠가 사라진다', async () => {
     serverRoom()
     snapshot.agents = [agent('w', { name: '웹 화면', remoteIssue: { kind: 'unreachable', detail: 'Connection refused' } })]

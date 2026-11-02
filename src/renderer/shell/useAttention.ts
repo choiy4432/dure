@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AgentId } from '../../engine/types'
 import { todoCounts } from '../state/attention'
+import { issueLine } from '../state/selectors'
 import { getStore, type UiState } from '../state/store'
 import { announceAsk, announceMessage, askNotice, badgeText, finishedNotice, windowTitle } from './attentionText'
 import appIcon from '../../../resources/icon.png'
@@ -69,6 +70,8 @@ function call(fn: () => unknown) {
 /**
  * 흘끗 보기 신호 — 창 제목 (N) · 작업표시줄 배지 · 깜박임 · Windows 알림 · 읽어 줄 글.
  * 스토어를 구독해 바뀐 것만 본다(그릴 때마다 돌지 않는다). 마지막 읽어 줄 글을 돌려준다.
+ * 서버 방 문제(끊김·로그인 만료 …)는 오류처럼 — 새로 생기거나 바뀌면 읽어 주고, 초점이 없으면 깜박임 + 알림(제목 = 이름, 본문 = 문제 한 줄).
+ * 문제가 있는 에이전트의 '일을 끝냈어요' 는 보내지 않는다(같은 tag 의 문제 알림이 대신)
  */
 export function useAttention(opts: AttentionOpts = {}): Announcement {
   // n 은 알릴 때마다 오른다 — 같은 글이 연달아 와도 Announcer 가 노드를 갈아 끼워 다시 읽게
@@ -85,6 +88,7 @@ export function useAttention(opts: AttentionOpts = {}): Announcement {
     let seenRequests = new Set<string>()
     let seenMessages = new Set<string>()
     let seenFresh: Record<AgentId, number> = {}
+    let seenIssues = new Map<AgentId, string>() // 에이전트마다 지금 보이는 서버 문제 한 줄
     let lastTotal = -1
     let lastTitle = ''
 
@@ -107,10 +111,20 @@ export function useAttention(opts: AttentionOpts = {}): Announcement {
       store.focusAgent(id)
     }
 
-    const remember = (s: UiState) => {
+    const issuesOf = (s: UiState) => {
+      const m = new Map<AgentId, string>()
+      for (const a of s.agents) {
+        const line = issueLine(a, s.requests, s.rooms)
+        if (line) m.set(a.id, line)
+      }
+      return m
+    }
+
+    const remember = (s: UiState, issues = issuesOf(s)) => {
       seenRequests = new Set(s.requests.map(r => r.id))
       seenMessages = new Set(s.messages.filter(m => m.state === 'pending').map(m => m.id))
       seenFresh = s.fresh
+      seenIssues = issues
     }
 
     const run = () => {
@@ -144,15 +158,23 @@ export function useAttention(opts: AttentionOpts = {}): Announcement {
       for (const m of s.messages) {
         if (m.state === 'pending' && !seenMessages.has(m.id)) said.push(announceMessage(nameOf(m.to)))
       }
+      const issues = issuesOf(s)
+      for (const [id, line] of issues) {
+        if (seenIssues.get(id) === line) continue // 같은 문제가 이어진다 — 안내 띠·카드가 계속 보여 준다
+        said.push(`${nameOf(id)}: ${line}`)
+        if (focused) continue
+        call(() => window.dure.flashWindow())
+        if (s.notify.asks) notify(nameOf(id), { body: line, tag: `dure-${id}`, onClick: () => open(id) })
+      }
       if (said.length > 0) setAnnounced(a => ({ text: said.join('. '), n: a.n + 1 }))
       if (!focused && s.notify.asks && s.notify.finished) {
         for (const [id, t] of Object.entries(s.fresh)) {
-          if (seenFresh[id] === t) continue
+          if (seenFresh[id] === t || issues.has(id)) continue
           const n = finishedNotice(nameOf(id), s.lastText[id]?.text ?? null)
           notify(n.title, { body: n.body, tag: `dure-${id}`, onClick: () => open(id) })
         }
       }
-      remember(s)
+      remember(s, issues)
     }
 
     run() // 이미 스냅샷이 온 뒤에 붙은 경우

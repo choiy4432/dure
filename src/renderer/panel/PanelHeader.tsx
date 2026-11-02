@@ -206,9 +206,9 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
           </p>
         )}
       </div>
-      {/* 서버 방 문제(로그인 만료·끊김·접속 실패 …) — 로그인은 제목 + 할 일 두 줄, 나머지는 한 줄 */}
+      {/* 서버 방 문제(로그인 만료·끊김·접속 실패 …) — 로그인은 제목 + 할 일 두 줄, 나머지는 한 줄. 일하는 도중 생겨도 읽히게 status */}
       {issue && host && (
-        <div className="band warn rmt">
+        <div className="band warn rmt" role="status">
           <TriangleAlert className="i" aria-hidden="true" />
           <div className="band-tx">
             <span className="band-t">{remoteIssueText(host, issue)}</span>

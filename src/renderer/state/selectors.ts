@@ -1,5 +1,6 @@
-import type { AgentId, MessageState, PendingRequest, RelayMessage, RoomId } from '../../engine/types'
+import type { AgentId, MessageState, PendingRequest, RelayMessage, RemoteIssue, Room, RoomId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
+import { remoteIssueText } from '../../shared/remoteTexts'
 import { MESSAGE_WORD } from '../lib/words'
 
 export type DisplayStatus = 'working' | 'awaiting' | 'idle' | 'error' | 'stopped'
@@ -41,6 +42,23 @@ const isUnread = (m: RelayMessage) => m.state === 'pending' || m.state === 'held
 export function displayStatus(agent: AgentView, requests: PendingRequest[]): DisplayStatus {
   if (agent.status === 'awaiting' || requests.some(r => r.agentId === agent.id)) return 'awaiting'
   return agent.status
+}
+
+/**
+ * 패널 밖(관계도 카드·방 목록·창 주의)에서 '오류'처럼 보일 서버 문제(끊김·로그인 만료 …) — 엔진 상태는 쉬는 중 그대로라 화면이 정한다.
+ * 일하는 중·승인 기다림이면 그 모습이 먼저(로그인 만료는 다음 정상 답까지 남는다)
+ */
+export function shownIssue(agent: AgentView, requests: PendingRequest[]): RemoteIssue | null {
+  if (!agent.remoteIssue) return null
+  const s = displayStatus(agent, requests)
+  return s === 'working' || s === 'awaiting' ? null : agent.remoteIssue
+}
+
+/** 그 문제의 한 줄(패널 안내 띠·엔진 알림 줄과 같은 글) — 보일 문제가 없거나 서버 방이 아니면 null */
+export function issueLine(agent: AgentView, requests: PendingRequest[], rooms: Room[]): string | null {
+  const issue = shownIssue(agent, requests)
+  const host = issue && rooms.find(r => r.id === agent.roomId)?.remote?.host
+  return issue && host ? remoteIssueText(host, issue) : null
 }
 
 /** 잠듦 모습 — 엔진 상태는 쉬는 중 그대로라 화면이 정한다. 깨우는 중은 작업 중일 때만, 잠듦은 쉬는·멈춤일 때만 */

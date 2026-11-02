@@ -332,6 +332,44 @@ describe('새 방 — 서버(SSH)', () => {
     expect(api.addRoom).toHaveBeenCalledWith('직접', { host: 'me@10.1.1.2' })
   })
 
+  it('직접 입력 — Enter·직접 입력 고르기로 물은 것이 바로 실패해도 걸려 있던 입력 멈춤 타이머가 다시 묻지 않는다', async () => {
+    await renderApp()
+    const dlg = await openNewRoom()
+    toServer(dlg)
+    fireEvent.click(within(openHosts(dlg)).getByRole('option', { name: '직접 입력…' }))
+    const typed = within(dlg).getByRole('textbox', { name: '서버 주소' }) as HTMLInputElement
+    api.checkRemote.mockResolvedValue({ ok: false, kind: 'unreachable', detail: 'Connection refused' })
+    vi.useFakeTimers()
+    try {
+      const tick = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+      fireEvent.change(typed, { target: { value: 'me@10.9.9.9' } }) // 입력 멈춤 타이머가 걸린다
+      await tick(100)
+      await act(async () => { fireEvent.keyDown(typed, { key: 'Enter' }) })
+      await tick(0) // 실패 답이 곧바로 온다
+      expect(api.checkRemote).toHaveBeenCalledTimes(1)
+      expect(within(dlg).getByRole('alert').textContent).toBe('me@10.9.9.9 에 접속하지 못했어요 — Connection refused')
+      await tick(1000)
+      expect(api.checkRemote).toHaveBeenCalledTimes(1)
+
+      // 목록에서 다른 서버를 골랐다가 다시 직접 입력 — 고르는 즉시 묻고, 그 뒤 타이머로 또 묻지 않는다
+      fireEvent.change(typed, { target: { value: 'me@10.9.9.8' } })
+      fireEvent.click(within(openHosts(dlg)).getByRole('option', { name: /^dev/ }))
+      await tick(0)
+      expect(api.checkRemote).toHaveBeenCalledTimes(2)
+      expect(api.checkRemote).toHaveBeenLastCalledWith('dev')
+      await tick(1000)
+      expect(api.checkRemote).toHaveBeenCalledTimes(2)
+      fireEvent.click(within(openHosts(dlg)).getByRole('option', { name: '직접 입력…' }))
+      await tick(0)
+      expect(api.checkRemote).toHaveBeenCalledTimes(3)
+      expect(api.checkRemote).toHaveBeenLastCalledWith('me@10.9.9.8')
+      await tick(1000)
+      expect(api.checkRemote).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('서버 목록 키보드 — ↑↓ 로 옮기고 Esc 는 목록만 닫고 서버 버튼으로', async () => {
     await renderApp()
     const dlg = await openNewRoom()
@@ -554,6 +592,27 @@ describe('RoomSwitcher — 할 일 수', () => {
     expect(row.querySelector('.rs-todo.r')?.textContent).toBe('받은 메시지 2')
     const quiet = list.querySelector<HTMLElement>('[data-nav="r3"]')!
     expect(quiet.querySelector('.rs-todo')).toBeNull()
+  })
+
+  it('서버 방 문제(끊김·로그인 만료 …)가 있는 에이전트 수 — 오류처럼 빨간 표시, 무엇인지는 title · 일하는 중이면 세지 않는다', async () => {
+    const drop = { kind: 'disconnected' as const, detail: null }
+    snapshot = {
+      ...snapshot,
+      rooms: [room('r1', '여름 캠페인'), { ...room('r2', '가을 행사'), remote: { host: 'dev' } }, room('r3', '빈 방')],
+      agents: [
+        agent('a1', 'r1', '기획'),
+        { ...agent('b1', 'r2', '서버'), remoteIssue: drop },
+        { ...agent('b2', 'r2', '화면'), remoteIssue: { kind: 'login', detail: null } },
+        { ...agent('b3', 'r2', '일꾼'), status: 'working', remoteIssue: drop },
+      ],
+    }
+    await renderApp()
+    const list = openList()
+    const mark = list.querySelector<HTMLElement>('[data-nav="r2"] .rs-todo.e')!
+    expect(mark.textContent).toBe('서버 문제 2')
+    expect(mark.title).toBe('서버: dev 연결이 끊겼어요 — 다시 보내면 이어서 해요\n화면: dev 의 claude 로그인이 만료됐어요')
+    expect(mark.querySelector('svg')).not.toBeNull()
+    expect(list.querySelector('[data-nav="r1"] .rs-todo')).toBeNull()
   })
 
   it('다른 방에 할 일이 있으면 방 단추에 점', async () => {

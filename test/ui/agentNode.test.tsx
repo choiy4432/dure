@@ -640,3 +640,40 @@ describe('AgentNode — 계획 요청', () => {
     expect(store.getState().selectedAgentId).toBe('p')
   })
 })
+
+describe('AgentNode — 서버 방 문제는 오류처럼', () => {
+  const server = () => {
+    snapshot.rooms = [{ id: 'r1', name: '서버 실험', createdAt: 1, remote: { host: 'dev' } }]
+  }
+  it('끊김 — 쉬는 중·잠듦이 아니라 오류 모양(멈춤 · 빨간 점) · 문제 한 줄은 오류 글 자리에(전체는 title)', async () => {
+    server()
+    snapshot.agents = [agent('d', { name: '웹', asleep: true, remoteIssue: { kind: 'disconnected', detail: null } })]
+    const { card } = await renderCard()
+    expect(card.dataset.status).toBe('error')
+    expect(card.querySelector('.st-l')!.textContent).toBe('멈춤')
+    expect(card.querySelector('.st .dot.r')).not.toBeNull()
+    expect(card.querySelector('.av-moon')).toBeNull()
+    const err = card.querySelector<HTMLElement>('.nf-err')!
+    expect(err.title).toBe('dev 연결이 끊겼어요 — 다시 보내면 이어서 해요')
+    expect(err.textContent!.startsWith('dev 연결이 끊겼어요')).toBe(true)
+  })
+  it('로그인 만료 — 띠 제목 한 줄 · 다시 일하는 중이면 작업 중 그대로 · 문제가 지워지면 쉬는 중', async () => {
+    server()
+    snapshot.agents = [agent('d', { name: '웹', remoteIssue: { kind: 'login', detail: null } })]
+    const { card } = await renderCard()
+    expect(card.dataset.status).toBe('error')
+    expect(card.querySelector<HTMLElement>('.nf-err')!.title).toBe('dev 의 claude 로그인이 만료됐어요')
+    await emit('status', { agentId: 'd', status: 'working', errorText: null, remoteIssue: { kind: 'login', detail: null } })
+    expect(card.dataset.status).toBe('working')
+    expect(card.querySelector('.nf-err')).toBeNull()
+    await emit('status', { agentId: 'd', status: 'idle', errorText: null, remoteIssue: null })
+    expect(card.dataset.status).toBe('idle')
+    expect(card.querySelector('.st-l')!.textContent).toBe('쉬는 중')
+  })
+  it('엔진 오류가 있으면 그 글이 먼저', async () => {
+    server()
+    snapshot.agents = [agent('d', { name: '웹', status: 'error', errorText: '포트 전달이 막혀 있어요', remoteIssue: { kind: 'login', detail: null } })]
+    const { card } = await renderCard()
+    expect(card.querySelector<HTMLElement>('.nf-err')!.title).toBe('포트 전달이 막혀 있어요')
+  })
+})
