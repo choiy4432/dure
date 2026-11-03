@@ -4532,12 +4532,31 @@ code {
 }
 
 /* ── 입력 대화상자(방 만들기 · 에이전트 추가 · 설정) ── */
+/* 창이 낮으면(최소 1100×700) 대화상자 안이 스크롤되고 버튼 줄은 아래에 붙어 남는다 */
 .dlg-form {
   width: 440px;
+  max-height: 100%;
+  padding-bottom: 0;
+  overflow-y: auto;
+}
+
+/* 스크롤 줄 — 목록들과 같은 가는 막대 */
+.dlg-form::-webkit-scrollbar {
+  width: 10px;
+}
+
+.dlg-form::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-box);
+  border: 3px solid var(--raised);
 }
 
 .dlg-form .dlg-ab {
-  margin-top: 24px;
+  position: sticky;
+  bottom: 0;
+  margin-top: 12px;
+  padding: 12px 0 16px;
+  background: var(--raised);
 }
 
 .fld {
@@ -5165,6 +5184,35 @@ code {
   font-size: 12px;
   line-height: 18px;
   color: var(--muted);
+}
+
+/* 설정의 업데이트 칸 — 버전 + 확인 단추 한 줄, 아래에 결과 줄(+ 바로 할 일 단추) */
+.upd-v {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text);
+}
+
+.upd-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.upd-t {
+  min-width: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.upd-t.bad {
+  color: var(--danger-text);
 }
 
 /* 설정의 스위치 줄 — 이름 뒤 작은 영문 · 한 줄 설명은 .fld-d */

@@ -8,6 +8,12 @@ let setAllowBypass: ReturnType<typeof vi.fn>
 let setNotify: ReturnType<typeof vi.fn>
 let setTheme: ReturnType<typeof vi.fn>
 let setSleepAfter: ReturnType<typeof vi.fn>
+let setPrefsApi: ReturnType<typeof vi.fn>
+let checkUpdate: ReturnType<typeof vi.fn>
+let downloadUpdate: ReturnType<typeof vi.fn>
+let installUpdate: ReturnType<typeof vi.fn>
+let updateNow: any
+let handlers: Record<string, (p: any) => void>
 
 beforeEach(() => {
   vi.resetModules()
@@ -31,7 +37,14 @@ beforeEach(() => {
   setSleepAfter = vi.fn(async (m: number) => {
     snapshot = { ...snapshot, sleepAfterMin: m }
   })
-  ;(window as any).dure = { setSleepAfter, setAutoChainLimit, setAllowBypass, setNotify, setTheme, snapshot: async () => snapshot, setupState: async () => ({ phase: 'ready' }), history: async () => [], on: () => () => {} }
+  updateNow = { kind: 'idle' }
+  handlers = {}
+  let prefsNow = { tourDone: true, approvalTipSeen: true, claudeAutoUpdate: true }
+  setPrefsApi = vi.fn(async (p: any) => (prefsNow = { ...prefsNow, ...p }))
+  checkUpdate = vi.fn(async () => ({ kind: 'none' }))
+  downloadUpdate = vi.fn(async () => {})
+  installUpdate = vi.fn(async () => {})
+  ;(window as any).dure = { appInfo: async () => ({ version: '0.1.0', packaged: true }), prefs: async () => prefsNow, setPrefs: setPrefsApi, updateState: async () => updateNow, claudeUpdateState: async () => 'idle', checkUpdate, downloadUpdate, installUpdate, setSleepAfter, setAutoChainLimit, setAllowBypass, setNotify, setTheme, snapshot: async () => snapshot, setupState: async () => ({ phase: 'ready' }), history: async () => [], on: (n: string, h: (p: any) => void) => { handlers[n] = h; return () => {} } }
 })
 afterEach(() => cleanup())
 
@@ -311,5 +324,91 @@ describe('SettingsDialog — 화면 테마', () => {
     expect(within(dlg).getByText('설정 파일을 쓰지 못했어요')).toBeTruthy()
     expect(r.system.getAttribute('aria-checked')).toBe('true')
     expect(r.dark.getAttribute('aria-checked')).toBe('false')
+  })
+})
+
+describe('SettingsDialog — 업데이트 · 안내 · claude 최신으로', () => {
+  const push = (p: any) => act(async () => { handlers['update']?.(p) })
+  const AV = { kind: 'available', version: '0.2.0', current: '0.1.0', highlights: [], url: 'u' }
+
+  it('맨 위에 업데이트 칸 — 두레 0.1.0 · [업데이트 확인] 누르면 checkUpdate · 결과 줄', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    expect(within(dlg).getByText('업데이트')).toBeTruthy()
+    expect(within(dlg).getByText('두레 0.1.0')).toBeTruthy()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '업데이트 확인' })) })
+    expect(checkUpdate).toHaveBeenCalledTimes(1)
+    await push({ kind: 'checking' })
+    expect(within(dlg).getByText('확인하는 중…')).toBeTruthy()
+    await push({ kind: 'none' })
+    expect(within(dlg).getByText('최신이에요')).toBeTruthy()
+  })
+
+  it('available — 새 버전 줄 + [업데이트] → downloadUpdate', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    await push(AV)
+    expect(within(dlg).getByText('새 버전 0.2.0 이 있어요')).toBeTruthy()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '업데이트' })) })
+    expect(downloadUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it('downloading · ready — 받는 중 % · [다시 켜기] → installUpdate', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    await push({ kind: 'downloading', version: '0.2.0', percent: 42 })
+    expect(within(dlg).getByText('받고 있어요 · 42%')).toBeTruthy()
+    await push({ kind: 'ready', version: '0.2.0' })
+    expect(within(dlg).getByText('준비됐어요')).toBeTruthy()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '다시 켜기' })) })
+    expect(installUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it('error — 첫 줄만 · 80자까지 · 설치 실패 글은 그대로 + [다시 켜기]', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    await push({ kind: 'error', message: '  net::ERR_FAILED  \nstack line two', version: null })
+    expect(within(dlg).getByText('확인하지 못했어요 — net::ERR_FAILED')).toBeTruthy()
+    expect(within(dlg).queryByText(/stack line two/)).toBeNull()
+    await push({ kind: 'error', message: 'x'.repeat(100), version: null })
+    expect(within(dlg).getByText(`확인하지 못했어요 — ${'x'.repeat(80)}…`)).toBeTruthy()
+    await push({ kind: 'error', message: '업데이트를 설치하지 못했어요', version: '0.2.0' })
+    expect(within(dlg).getByText('업데이트를 설치하지 못했어요')).toBeTruthy()
+    expect(dlg.textContent).not.toContain('확인하지 못했어요 —')
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '다시 켜기' })) })
+    expect(installUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it('dev — 단추 없이 개발 실행 안내', async () => {
+    updateNow = { kind: 'dev' }
+    await renderApp()
+    const { dlg } = openSettings()
+    expect(within(dlg).getByText('개발 실행이라 확인하지 않아요')).toBeTruthy()
+    expect(within(dlg).queryByRole('button', { name: '업데이트 확인' })).toBeNull()
+  })
+
+  it('[안내 다시 보기] → onReplayTour (창 닫고 투어)', async () => {
+    const store = await renderApp()
+    const spy = vi.spyOn(store, 'startTour')
+    const { dlg } = openSettings()
+    expect(dlg.textContent).toContain('처음 켰을 때의 둘러보기를 다시 해요')
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '안내 다시 보기' })) })
+    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
+    expect(spy).toHaveBeenCalledWith(true)
+  })
+
+  it('켤 때 claude 최신으로 — 안 바꾸면 저장 꺼짐 · 끄고 저장하면 setPrefs({claudeAutoUpdate:false})', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    const sw = within(dlg).getByRole('switch', { name: /켤 때 claude 최신으로/ })
+    expect(dlg.textContent).toContain('두레를 켤 때 이 PC 와 서버의 claude 를 최신 버전으로 바꿔요')
+    expect(sw.getAttribute('aria-checked')).toBe('true')
+    const save = within(dlg).getByRole('button', { name: '저장' }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.click(sw)
+    expect(save.disabled).toBe(false)
+    await act(async () => { fireEvent.click(save) })
+    await settle()
+    expect(setPrefsApi).toHaveBeenCalledWith({ claudeAutoUpdate: false })
   })
 })

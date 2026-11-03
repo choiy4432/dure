@@ -430,3 +430,30 @@ export const UPDATE_TOAST = {
   installFailed: '업데이트를 설치하지 못했어요',
   retry: '다시 시도',
 } as const
+
+/** 설정 — 업데이트 · 안내 · 켤 때 claude 최신으로 */
+export const SETTINGS_UPDATE = {
+  label: '업데이트',
+  version: (v: string) => `두레 ${v}`,
+  check: '업데이트 확인',
+  checking: '확인하는 중…',
+  none: '최신이에요',
+  available: (v: string) => `새 버전 ${v} 이 있어요`,
+  update: '업데이트',
+  downloading: (p: number) => `받고 있어요 · ${p}%`,
+  ready: '준비됐어요',
+  restart: '다시 켜기',
+  failed: (why: string) => `확인하지 못했어요 — ${why}`,
+  dev: '개발 실행이라 확인하지 않아요',
+  tourLabel: '안내',
+  tour: '안내 다시 보기',
+  tourDesc: '처음 켰을 때의 둘러보기를 다시 해요',
+  claudeAuto: '켤 때 claude 최신으로',
+  claudeAutoDesc: '두레를 켤 때 이 PC 와 서버의 claude 를 최신 버전으로 바꿔요',
+} as const
+
+/** 업데이트 오류 글의 첫 줄만, 앞뒤 공백 없이 80자까지(넘으면 …) */
+export function updateErrorWhy(message: string): string {
+  const first = message.split(/\r?\n/)[0].trim()
+  return first.length > 80 ? `${first.slice(0, 80)}…` : first
+}

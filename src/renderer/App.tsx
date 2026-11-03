@@ -99,7 +99,14 @@ export function App() {
           {fork && <AddAgentDialog roomId={fork.roomId} fork={fork} onClose={() => getStore().closeFork()} />}
         </Presence>
         <Presence show={dialog === 'settings'}>
-          <SettingsDialog onClose={close} onAskAllow={() => setAskAllow(true)} />
+          <SettingsDialog
+            onClose={close}
+            onAskAllow={() => setAskAllow(true)}
+            onReplayTour={() => {
+              close()
+              getStore().startTour(getStore().getState().rooms.length > 0)
+            }}
+          />
         </Presence>
         <ConfirmDialog
           open={askAllow}

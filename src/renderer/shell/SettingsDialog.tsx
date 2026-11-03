@@ -1,7 +1,7 @@
 import { useId, useRef, useState } from 'react'
 import { SLEEP_CHOICES, type ThemePref } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
-import { errorMessage, SLEEP_CHOICE_WORD, SLEEP_SETTING } from '../lib/words'
+import { errorMessage, SETTINGS_UPDATE as W, SLEEP_CHOICE_WORD, SLEEP_SETTING, UPDATE_TOAST, updateErrorWhy } from '../lib/words'
 import { FormDialog } from './FormDialog'
 
 /** 자동 전달 상한으로 적을 수 있는 수 */
@@ -28,17 +28,22 @@ function parseLimit(text: string): number | null {
  * 화면 테마는 누르는 즉시 바꿔 뒤 화면으로 비교하게 한다 — 저장 없이 닫으면(취소·Esc·바깥) 열 때의 테마로 되돌린다.
  * 허용을 켜고 저장하면 설정 창을 닫은 뒤 onAskAllow 로 확인 창을 부른다(두 창을 겹쳐 띄우지 않는다).
  */
-export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; onAskAllow: () => void }) {
+export function SettingsDialog({ onClose, onAskAllow, onReplayTour }: { onClose: () => void; onAskAllow: () => void; onReplayTour: () => void }) {
   const limit = useDure(s => s.autoChainLimit)
   const allowed = useDure(s => s.allowBypass)
   const notified = useDure(s => s.notify)
   const sleepSaved = useDure(s => s.sleepAfterMin)
+  const info = useDure(s => s.app.info)
+  const update = useDure(s => s.app.update)
+  const prefs = useDure(s => s.app.prefs)
+  const autoSaved = prefs?.claudeAutoUpdate ?? true
   const savedTheme = useDure(s => s.theme ?? 'system')
   /** 열 때의 테마 — 저장 없이 닫으면 여기로 */
   const startTheme = useRef(savedTheme)
   const [theme, setTheme] = useState(savedTheme)
   const [themeError, setThemeError] = useState<string | null>(null)
   const [sleepMin, setSleepMin] = useState(sleepSaved)
+  const [claudeAuto, setClaudeAuto] = useState(autoSaved)
   const [allow, setAllow] = useState(allowed)
   const [asks, setAsks] = useState(notified.asks)
   const [finished, setFinished] = useState(notified.finished)
@@ -64,6 +69,7 @@ export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; o
       if (asks !== notified.asks) np.asks = asks
       if (finished !== notified.finished) np.finished = finished
       if (Object.keys(np).length > 0) await window.dure.setNotify(np)
+      if (claudeAuto !== autoSaved) await getStore().setPrefs({ claudeAutoUpdate: claudeAuto })
       await getStore().refresh()
       onClose()
       if (allow && !allowed) onAskAllow() // 켜기는 확인 창을 거쳐서
@@ -98,6 +104,10 @@ export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; o
     onClose()
   }
 
+  /** 업데이트 단추는 저장과 따로 바로 — 못 해도 결과 줄(사건)이 말해 준다 */
+  const act = (call: () => Promise<unknown>) => () => void call().catch(() => {})
+  const installFailed = update.kind === 'error' && update.message === UPDATE_TOAST.installFailed
+
   const described = [`${id}-d`, outOfRange && `${id}-r`, error && `${id}-e`].filter(Boolean).join(' ')
 
   return (
@@ -105,13 +115,52 @@ export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; o
       title="설정"
       submitLabel="저장"
       canSubmit={
-        n !== null && (n !== limit || sleepMin !== sleepSaved || allow !== allowed || asks !== notified.asks || finished !== notified.finished || theme !== startTheme.current)
+        n !== null && (n !== limit || sleepMin !== sleepSaved || allow !== allowed || asks !== notified.asks || finished !== notified.finished || theme !== startTheme.current || claudeAuto !== autoSaved)
       }
       busy={busy}
       onSubmit={() => void submit()}
       onClose={cancel}
       tourId="settings-dialog"
     >
+      <div className="fld upd">
+        <span className="fld-l">{W.label}</span>
+        <div className="fld-row">
+          {info && <span className="upd-v">{W.version(info.version)}</span>}
+          {update.kind !== 'dev' && (
+            <button
+              type="button"
+              className="btn sec sm"
+              disabled={update.kind === 'checking' || update.kind === 'downloading'}
+              onClick={act(() => window.dure.checkUpdate())}
+            >
+              {W.check}
+            </button>
+          )}
+        </div>
+        {update.kind !== 'idle' && (
+          <div className="upd-line" role="status">
+            <span className={update.kind === 'error' ? 'upd-t bad' : 'upd-t'}>
+              {update.kind === 'dev' && W.dev}
+              {update.kind === 'checking' && W.checking}
+              {update.kind === 'none' && W.none}
+              {update.kind === 'available' && W.available(update.version)}
+              {update.kind === 'downloading' && W.downloading(update.percent)}
+              {update.kind === 'ready' && W.ready}
+              {update.kind === 'error' && (installFailed ? update.message : W.failed(updateErrorWhy(update.message)))}
+            </span>
+            {update.kind === 'available' && (
+              <button type="button" className="btn pri sm" onClick={act(() => window.dure.downloadUpdate())}>
+                {W.update}
+              </button>
+            )}
+            {(update.kind === 'ready' || installFailed) && (
+              <button type="button" className="btn pri sm" onClick={act(() => window.dure.installUpdate())}>
+                {W.restart}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
       <div className="fld">
         <span className="fld-l" id={`${id}-t`}>
           화면 테마
@@ -233,6 +282,31 @@ export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; o
         </button>
         <p className="fld-d" id={`${id}-nf`}>
           창이 가려져 있을 때 일을 끝내면 알려 줘요
+        </p>
+      </div>
+      <div className="fld">
+        <span className="fld-l">{W.tourLabel}</span>
+        <div className="fld-row">
+          <button type="button" className="btn sec sm" onClick={onReplayTour}>
+            {W.tour}
+          </button>
+        </div>
+        <p className="fld-d">{W.tourDesc}</p>
+      </div>
+      <div className="fld">
+        <button
+          type="button"
+          className="sw"
+          role="switch"
+          aria-checked={claudeAuto}
+          aria-describedby={`${id}-ca`}
+          onClick={() => setClaudeAuto(a => !a)}
+        >
+          <span>{W.claudeAuto}</span>
+          <span className="tg" aria-hidden="true" />
+        </button>
+        <p className="fld-d" id={`${id}-ca`}>
+          {W.claudeAutoDesc}
         </p>
       </div>
     </FormDialog>
