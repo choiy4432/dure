@@ -1,0 +1,22 @@
+appId: io.github.choiy4432.dure
+productName: Dure
+directories:
+  output: dist
+files:
+  - out/**
+  - resources/icon.ico
+  - package.json
+win:
+  target: nsis
+  icon: resources/icon.ico
+nsis:
+  oneClick: true
+  perMachine: false
+  artifactName: Dure-Setup-${version}.${ext}
+  shortcutName: 두레
+  deleteAppDataOnUninstall: false
+publish:
+  provider: github
+  owner: choiy4432
+  repo: dure
+  releaseType: release
