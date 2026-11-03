@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   hostArgs, SSH_OPTIONS, shq, remoteRunDir, remoteRunFiles, remoteLaunchScript, launchArgs, launchPreamble,
-  cleanupScript, checkScript, transcriptCheckScript, classifyExit, parsePid, isLoginFailure, posixJoin, parseCheckOutput, sshErrorLines, isSafeId,
+  cleanupScript, checkScript, updateScript, transcriptCheckScript, classifyExit, parsePid, isLoginFailure, posixJoin, parseCheckOutput, sshErrorLines, isSafeId,
   runArgs, forwardFailed,
 } from '../src/engine/remote';
 import { SPAWN_ENV_EXTRA } from '../src/engine/claudeArgs';
@@ -379,6 +379,16 @@ describe('cleanupScript — 표식이 안 맞는 pid 는 건드리지 않는다'
       spawnSync('bash', ['-c', `kill -9 ${pid} 2>/dev/null; true`]);
     }
   }, 30000);
+});
+
+describe('updateScript', () => {
+  it('updateScript — claude 찾기 뒤 update', () => {
+    const s = updateScript();
+    expect(s.startsWith('c=$(command -v claude); ')).toBe(true);
+    expect(s).toContain('[ -n "$c" ] || exit 127');
+    expect(s.endsWith('; "$c" update')).toBe(true);
+    expect(s).not.toContain('--version');
+  });
 });
 
 describe('checkScript', () => {

@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { buildArgs } from '../src/engine/claudeArgs';
 import {
-  checkScript, classifyExit, cleanupScript, forwardFailed, launchArgs, launchPreamble, parseCheckOutput, parsePid, remoteLaunchScript,
+  checkScript, updateScript, classifyExit, cleanupScript, forwardFailed, launchArgs, launchPreamble, parseCheckOutput, parsePid, remoteLaunchScript,
   remoteRunFiles, runArgs, shq, transcriptCheckScript,
 } from '../src/engine/remote';
 
@@ -203,6 +203,18 @@ describe('확인 명령', () => {
     expect(line.host).toBe('dev');
     expect(line.kind).toBe('check');
     expect(line.script).toBe(checkScript('/home/a/web'));
+  });
+});
+
+describe('update 갈래', () => {
+  it('update 갈래 — 기록 kind update · 종료 0 · FAKE_SSH_UPDATE_CODE 면 그 코드 · noclaude 면 127', async () => {
+    const r = await sshDone(remote(updateScript()));
+    expect(r.code).toBe(0);
+    const [line] = logLines();
+    expect(line.kind).toBe('update');
+    expect(line.script).toBe(updateScript());
+    expect((await sshDone(remote(updateScript()), { FAKE_SSH_UPDATE_CODE: '1' })).code).toBe(1);
+    expect((await sshDone(remote(updateScript()), { FAKE_SSH_MODE: 'noclaude' })).code).toBe(127);
   });
 });
 

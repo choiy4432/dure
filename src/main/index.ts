@@ -231,6 +231,8 @@ if (!app.requestSingleInstanceLock()) {
           // 서버(SSH) 방 — 기본은 윈도우 OpenSSH, 시험·개발은 DURE_SSH_COMMAND/ARGS
           ssh: resolveSshCommand(env),
           autoStart: false,
+          // 켤 때 claude 최신으로 — 서버 방도. 설정을 나중에 바꿔도 따라가게 그때그때 현재 prefs 를 본다
+          claudeAutoUpdate: () => prefs.claudeAutoUpdate,
           ...sleepKnob,
         })
         logEngineErrors(engine)

@@ -160,6 +160,11 @@ export function cleanupScript(a: { pid: number; agentId: string; launchId: strin
   ].join('; ');
 }
 
+/** 서버의 claude 를 최신으로 — 확인·띄우기와 같은 자리에서 찾는다(FIND_CLAUDE, 없으면 127) 뒤 `claude update` */
+export function updateScript(): string {
+  return `${FIND_CLAUDE}; "$c" update`;
+}
+
 /**
  * 폴더가 있으면 새 줄에 DURE_DIR=<펼친 폴더>, 마지막 줄 = claude 버전(parseCheckOutput 이 읽는다). 종료 3 = 폴더 없음 · 127 = claude 없음.
  * claude 는 띄우기와 같은 자리에서 찾는다(FIND_CLAUDE). 표식 앞에서 줄을 바꾼다 — 로그인 셸 프로필이 줄바꿈 없이 찍은 글이 경로에 붙지 않게

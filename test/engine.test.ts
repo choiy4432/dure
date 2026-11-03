@@ -5864,6 +5864,30 @@ test('ssh: checkRemote — 접속됨 · claude 버전 · 확인 ssh 는 BatchMod
   expect(b).toMatchObject({ host: 'me@10.0.0.12', user: 'me', port: 2222, kind: 'check' });
 }, 20_000);
 
+test('ssh: 켜져 있으면 확인 전에 서버마다 한 번 update', async () => {
+  const { e, calls } = await startSsh({}, { claudeAutoUpdate: () => true });
+  expect(await e.checkRemote('dev')).toEqual({ ok: true, claudeVersion: VERSION });
+  expect(await e.checkRemote('dev')).toEqual({ ok: true, claudeVersion: VERSION });
+  expect(await e.checkRemote('other')).toEqual({ ok: true, claudeVersion: VERSION });
+  expect(calls().map((c) => `${c.host}:${c.kind}`)).toEqual(['dev:update', 'dev:check', 'dev:check', 'other:update', 'other:check']);
+}, 20_000);
+
+test('ssh: 꺼져 있으면 update 없음 — 켜고 끄는 것은 그때그때 본다', async () => {
+  let on = false;
+  const { e, calls } = await startSsh({}, { claudeAutoUpdate: () => on });
+  await e.checkRemote('dev');
+  expect(calls().map((c) => c.kind)).toEqual(['check']);
+  on = true;
+  await e.checkRemote('dev');
+  expect(calls().map((c) => c.kind)).toEqual(['check', 'update', 'check']);
+}, 20_000);
+
+test('ssh: update 실패해도 확인은 됨', async () => {
+  const { e, calls } = await startSsh({ FAKE_SSH_UPDATE_CODE: '1' }, { claudeAutoUpdate: () => true });
+  expect(await e.checkRemote('dev')).toEqual({ ok: true, claudeVersion: VERSION });
+  expect(calls().map((c) => c.kind)).toEqual(['update', 'check']);
+}, 20_000);
+
 test('ssh: checkRemote 문제 — 키 거절·접속 안 됨(ssh 오류 첫 줄)·서버 키 바뀜·claude 없음', async () => {
   const { e, mode } = await startSsh();
   mode('denied');
@@ -6066,6 +6090,19 @@ describe('서버 방 띄우기', () => {
     await new Promise<void>((r) => s.close(() => r()));
     return port;
   };
+
+  test('띄우기는 update 를 기다리지 않는다 — update 가 느려도 곧바로 띄운다', async () => {
+    const { e, web, calls } = await remoteRoom({ FAKE_SSH_UPDATE_MS: '3000' }, { claudeAutoUpdate: () => true });
+    const done = resultOf(e, web.id);
+    const t0 = Date.now();
+    await e.sendUser(web.id, text('안녕'));
+    expect(await resultText(done)).toBe('받음: 안녕');
+    expect(Date.now() - t0).toBeLessThan(2500);
+    const kinds = calls().map((c) => c.kind);
+    expect(kinds).toContain('update');
+    expect(kinds.filter((k) => k === 'update')).toHaveLength(1);
+    expect(kinds.indexOf('update')).toBeLessThan(kinds.indexOf('launch'));
+  }, 30_000);
 
   test('서버 방 — ssh 로 띄워 대화 · -R·BatchMode·bash -lc · 토큰은 서버 파일에만 · 띄운 pid 저장', async () => {
     const { e, web, calls, events, sshLog } = await remoteRoom();

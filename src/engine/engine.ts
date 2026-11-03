@@ -6,7 +6,7 @@ import path from 'node:path';
 import { CONTROL_CHAR, openStore, renameRetrying, REMOTE_FOLDER_ABSOLUTE, type Store } from './store';
 import {
   checkScript, classifyExit, cleanupScript, hostArgs, isLoginFailure, launchArgs, launchPreamble, parseCheckOutput, parsePid, posixJoin,
-  remoteLaunchScript, remoteRunFiles, runArgs, sshErrorLines, transcriptCheckScript, type RemoteIssueKind,
+  remoteLaunchScript, remoteRunFiles, runArgs, sshErrorLines, transcriptCheckScript, updateScript, type RemoteIssueKind,
 } from './remote';
 import { REMOTE_CLEANUP_FAILED, remoteIssueText, remotePortBlockedText } from '../shared/remoteTexts';
 import { readSshHosts, type SshHostEntry } from './sshConfig';
@@ -39,6 +39,8 @@ export interface EngineOptions {
   /** ~/.ssh/config 를 찾는 홈 — 없으면 os.homedir(). 시험용(진짜 ~/.ssh 를 읽지 않게) */
   sshHome?: string;
   autoChainLimit?: number;
+  /** 서버(SSH) 방의 claude 를 최신으로(`claude update`) 바꿀지 — 서버마다 엔진이 산 동안 한 번, 처음 닿을 때. 호출 때마다 본다. 기본 () => false */
+  claudeAutoUpdate?: () => boolean;
   env?: NodeJS.ProcessEnv;
   /** 기본 true — false 면 대기 메시지 전달(flushAll)을 미루고 engine.start() 가 한다(리스너를 붙인 뒤 부르기 위함) */
   autoStart?: boolean;
@@ -378,6 +380,8 @@ export type FolderTarget = { kind: 'local'; path: string } | { kind: 'remote'; h
 const REMOTE_CHECK_MS = 15_000;
 /** 지난 대화 기록 확인 ssh 의 상한(ConnectTimeout 도 같이) — 화면이 오래 기다리지 않게 */
 const REMOTE_QUICK_MS = 5_000;
+/** 서버의 claude update 한 번의 상한 */
+const REMOTE_UPDATE_MS = 90_000;
 /** ssh 확인 결과 — code = 종료 코드(못 띄웠거나 시간 초과면 null) */
 interface SshRun {
   code: number | null;
@@ -881,6 +885,7 @@ class EngineImpl extends EventEmitter implements Engine {
     host: string,
     folder: string | undefined,
   ): Promise<{ ok: true; folder: string | null; claudeVersion: string } | { ok: false; kind: RemoteIssueKind; detail: string | null }> {
+    await this.remoteUpdated(host); // 보이는 버전이 업데이트 뒤 값이 되게
     const run = await this.sshRun(host, checkScript(folder));
     if (run.code !== 0) {
       const issue = classifyExit({ code: run.code, stderr: run.stderr, started: false });
@@ -892,11 +897,30 @@ class EngineImpl extends EventEmitter implements Engine {
     return { ok: true, folder: folder === undefined ? null : out.folder, claudeVersion: out.claudeVersion };
   }
 
+  private remoteUpdates = new Map<string, Promise<void>>();
+
+  /**
+   * 서버의 claude 를 최신으로 — 켜져 있을 때 서버마다 엔진이 산 동안 한 번(그 약속을 메모). 결과·실패는 버린다(조용히).
+   * 꺼져 있으면 아무것도 안 하고 메모도 하지 않는다 — 나중에 켜면 그때 처음 닿는 것으로 친다
+   */
+  private remoteUpdated(host: string): Promise<void> {
+    if (!(this.o.claudeAutoUpdate?.() ?? false)) return Promise.resolve();
+    let p = this.remoteUpdates.get(host);
+    if (!p) {
+      p = this.sshRun(host, updateScript(), { timeoutMs: REMOTE_UPDATE_MS }).then(
+        () => undefined,
+        () => undefined,
+      );
+      this.remoteUpdates.set(host, p);
+    }
+    return p;
+  }
+
   /**
    * 확인·정리·기록 확인 ssh — 셸 없이(execFile), 상한 REMOTE_CHECK_MS(quick 이면 REMOTE_QUICK_MS), 전달 없음(runArgs). login false = bash -c(정리).
    * ssh 가 없으면 NO_SSH 로 던진다
    */
-  private sshRun(host: string, script: string, o: { quick?: boolean; login?: boolean } = {}): Promise<SshRun> {
+  private sshRun(host: string, script: string, o: { quick?: boolean; login?: boolean; timeoutMs?: number } = {}): Promise<SshRun> {
     const ssh = this.o.ssh;
     if (!ssh || !this.sshAvailable()) return Promise.reject(new Error(NO_SSH));
     const quick = o.quick === true;
@@ -908,7 +932,7 @@ class EngineImpl extends EventEmitter implements Engine {
       const child = execFile(
         ssh.command,
         args,
-        { windowsHide: true, timeout: quick ? REMOTE_QUICK_MS : REMOTE_CHECK_MS, env: { ...process.env, ...this.o.env }, encoding: 'utf8' },
+        { windowsHide: true, timeout: o.timeoutMs ?? (quick ? REMOTE_QUICK_MS : REMOTE_CHECK_MS), env: { ...process.env, ...this.o.env }, encoding: 'utf8' },
         (err, stdout, stderr) => {
           if (!err) return resolve({ code: 0, stdout, stderr });
           const code: unknown = err.code;
@@ -943,6 +967,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const launchId = Array.from(crypto.randomBytes(LAUNCH_ID_LEN), (b) => LAUNCH_ID_CHARS[b % LAUNCH_ID_CHARS.length]).join('');
     const port = this.pickRemotePort(id);
     const files = remoteRunFiles(id, launchId);
+    void this.remoteUpdated(host); // 띄우기는 기다리지 않는다 — 시작만
     const script = remoteLaunchScript({ agentId: id, launchId, folder: agent.folder, claudeArgs: argsWith(files.mcp, files.prompt) });
     const mcpJson = JSON.stringify(buildMcpConfig({ port, token: this.mcp.token, agentId: id }));
     if (agent.remoteLaunch) void this.queueClean(id, host, agent.remoteLaunch); // 끊김·비정상 종료 뒤 남았을 수 있다

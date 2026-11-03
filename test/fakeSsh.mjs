@@ -28,6 +28,7 @@
 //                                                        가짜 claude 는 죽이지 않고 남긴다: 지킴이가 claude 의 입력을 열어 둔 채(EOF 를 넘기지 않음)
 //                                                        출력은 버리며 정리 명령·뒷정리가 끌 때까지 둔다(안전 상한 10 분). 띄우기에만 걸린다
 //   FAKE_SSH_MODE_FILE   그 파일이 있으면 FAKE_SSH_MODE 대신 그 내용(빈 파일 = 보통) — 엔진 환경을 못 바꾸는 시험이 도중에 모드를 바꾸게
+//   FAKE_SSH_UPDATE_CODE 업데이트(claude update) 명령의 종료 코드(기본 0) · FAKE_SSH_UPDATE_MS 그 명령이 끝나기 전에 더 기다린다(기본 0)
 //   FAKE_SSH_CLEANUP_MS  정리 명령이 끝나기 전에 더 기다린다(진짜는 sleep 2 — 기본 0, 정리 상한 시험용)
 //   FAKE_SSH_CONFIG_RFWD ~/.ssh/config 의 RemoteForward 흉내 — 그 원격 포트는 늘 실패(서버에서 다른 것이 쓰는 중). ClearAllForwardings=yes 면 없다
 //   FAKE_SSH_CONFIG_REMOTECOMMAND  ~/.ssh/config 의 RemoteCommand 흉내 — -o RemoteCommand=none 이 없으면 명령과 부딪혀 255
@@ -295,6 +296,10 @@ function classify(script) {
     }
     return { kind: 'unknown' };
   }
+  // 업데이트(updateScript) — claude 찾기 …; "$c" update
+  if (last && same(last, ['$c', 'update'])) {
+    return found === cmds.length - 2 ? { kind: 'update' } : { kind: 'unknown' };
+  }
   // 기록 확인(transcriptCheckScript) — d="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; for i in '<id>' …; do … done
   const loop = cmds.find((c) => same(c.slice(0, 3), ['for', 'i', 'in']));
   if (loop && script.includes('${CLAUDE_CONFIG_DIR:-$HOME/.claude}')) return { kind: 'transcripts', ids: values(loop.slice(3)) };
@@ -399,6 +404,13 @@ function runCheck(spec, mode) {
   if (mode === 'noclaude') return finish(127); // command -v 는 말없이 실패
   process.stdout.write(VERSION + '\n');
   finish(0);
+}
+
+async function runUpdate(mode) {
+  if (mode === 'noclaude') return finish(127);
+  const ms = Number(process.env.FAKE_SSH_UPDATE_MS ?? 0);
+  if (ms > 0) await new Promise((r) => setTimeout(r, ms));
+  finish(Number(process.env.FAKE_SSH_UPDATE_CODE ?? 0));
 }
 
 function runTranscripts(spec) {
@@ -733,6 +745,7 @@ async function main() {
   // 명령
   if (spec.kind === 'empty') return finish(0);
   if (spec.kind === 'check') return runCheck(spec, mode);
+  if (spec.kind === 'update') return runUpdate(mode);
   if (spec.kind === 'transcripts') return runTranscripts(spec);
   if (spec.kind === 'cleanup') return runCleanup(spec);
   if (spec.kind === 'launch') return runLaunch(spec, mode, hostname);
