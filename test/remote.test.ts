@@ -10,12 +10,28 @@ import {
 } from '../src/engine/remote';
 import { SPAWN_ENV_EXTRA } from '../src/engine/claudeArgs';
 
+/** 윈도 경로 → Git Bash 경로(cygpath). 윈도우가 아니면 그대로, cygpath 가 없으면 null */
+function toPosix(p: string): string | null {
+  if (process.platform !== 'win32') return p;
+  try { return execFileSync('cygpath', ['-u', p], { encoding: 'utf8', windowsHide: true }).trim() || null; } catch { return null; }
+}
+/**
+ * bash 로 돌리는 시험은 bash 와 cygpath 가 둘 다 있고, cygpath 로 바꾼 임시 폴더를 그 bash 가 볼 때만 돈다.
+ * PowerShell 에서 돌리면 cygpath 가 없고 bash 는 WSL 의 것이라, 윈도 경로가 그대로 넘어가 작업 폴더에
+ * 'CUsers…Temp…dure-*' 쓰레기 폴더가 생겼다 — 그럴 땐 건너뛴다(Git Bash 에서 돌리면 돈다).
+ */
 const hasBash = (() => {
-  try { return spawnSync('bash', ['--version']).status === 0; } catch { return false; }
+  try {
+    if (spawnSync('bash', ['--version']).status !== 0) return false;
+    const tmp = toPosix(tmpdir());
+    return tmp !== null && spawnSync('bash', ['-c', 'test -d "$1"', 'bash', tmp]).status === 0;
+  } catch { return false; }
 })();
-/** 윈도 경로 → bash 가 아는 경로(Git Bash 면 cygpath, 아니면 그대로) */
+/** 윈도 경로 → bash 가 아는 경로 — hasBash 일 때만 쓴다. 못 바꾸면 던진다(윈도 경로를 그대로 넘겨 쓰레기 폴더를 만들지 않게) */
 const posix = (p: string) => {
-  try { return execFileSync('cygpath', ['-u', p], { encoding: 'utf8' }).trim(); } catch { return p; }
+  const r = toPosix(p);
+  if (r === null) throw new Error(`cygpath 없이는 bash 경로로 바꿀 수 없어요: ${p}`);
+  return r;
 };
 /** 진짜 claude 가 없는 PATH — 이 PC 에 깔린 claude(Git Bash 는 윈도우 PATH 를 물려받는다)를 찾지 않게 */
 const BARE_PATH = '/usr/bin:/bin';
