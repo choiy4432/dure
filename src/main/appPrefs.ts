@@ -54,3 +54,17 @@ export function initAppPrefs(dir: string, hasRooms: boolean): AppPrefs {
   if (hasRooms && !Object.hasOwn(readRaw(dir), 'tourDone')) return writeAppPrefs(dir, { tourDone: true, approvalTipSeen: true })
   return readAppPrefs(dir)
 }
+
+/** 켤 때 쓰는 initAppPrefs — 쓰기가 실패해도(잠김·권한) 던지지 않고 지금 파일을 읽은 값. 투어 칸 하나로 두레가 못 켜지면 안 된다 */
+export function initAppPrefsSafe(
+  dir: string,
+  hasRooms: boolean,
+  log: (...args: unknown[]) => void = console.error,
+): AppPrefs {
+  try {
+    return initAppPrefs(dir, hasRooms)
+  } catch (e) {
+    log('[두레] 앱 설정을 쓰지 못했어요:', e instanceof Error ? e.message : String(e))
+    return readAppPrefs(dir)
+  }
+}

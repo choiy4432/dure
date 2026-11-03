@@ -5,11 +5,13 @@ import { writeFile } from 'node:fs/promises'
 import { killTree } from '../engine/killTree'
 import { authStatus, claudeVersion, createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
-import type { AppEventMap } from '../shared/appTypes'
+import type { AppEventMap, ClaudeUpdateState } from '../shared/appTypes'
 import { appEnv, appUserModelId } from './appEnv'
-import { initAppPrefs, writeAppPrefs } from './appPrefs'
+import { initAppPrefsSafe, writeAppPrefs } from './appPrefs'
 import { resolveClaudeCommand, resolveSshCommand } from './claudeCommand'
+import { updateClaude, type ClaudeUpdateRun } from './claudeUpdate'
 import { createSetupFlow, type SetupFlow } from './setupFlow'
+import { runStartup } from './startup'
 import { logEngineErrors, registerIpc, type AppHost } from './ipc'
 import { appPageMatcher, focusExisting, guardNavigation } from './window'
 import { TITLE_BAR_HEIGHT, windowColors } from './windowTheme'
@@ -18,6 +20,13 @@ let mainWindow: BrowserWindow | null = null
 let engine: Engine | null = null
 let exitCode = 0
 let setup: SetupFlow | null = null
+/** 켤 때 도는 `claude update` — 끄면 나무째 끈다(Windows 는 자식이 부모보다 오래 산다) */
+let claudeUpdateRun: ClaudeUpdateRun | null = null
+
+/** 끄는 길의 기다림 상한 — 이만큼 지나면 기다리지 않고 끈다 */
+const QUIT_KILL_WAIT_MS = 3000
+const bounded = (p: Promise<void> | undefined): Promise<void> =>
+  Promise.race([p, new Promise<void>((r) => setTimeout(r, QUIT_KILL_WAIT_MS))])
 
 /** 공식 설치 안내 */
 const SETUP_GUIDE_URL = 'https://code.claude.com/docs/en/setup'
@@ -193,9 +202,8 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault()
     void (async () => {
       try {
-        // 설치 나무 끄기는 길어야 3초만 기다린다 — 엔진 끄기와 같이
-        const killSetup = Promise.race([setup?.dispose(), new Promise<void>((r) => setTimeout(r, 3000))])
-        await Promise.all([killSetup, engine?.shutdown()])
+        // 설치 나무·claude update 나무 끄기는 길어야 3초만 기다린다 — 엔진 끄기와 같이
+        await Promise.all([bounded(setup?.dispose()), bounded(claudeUpdateRun?.kill()), engine?.shutdown()])
       } finally {
         app.exit(exitCode)
       }
@@ -242,9 +250,15 @@ if (!app.requestSingleInstanceLock()) {
         emit: (s) => emitApp('setup', s),
       })
       setup = setupFlow
-      // 앱 설정 — 엔진과 같은 settings.json. 방이 있는데 tourDone 칸이 없으면 업데이트로 받은 사람(투어·승인 안내를 본 것으로 써 둔다)
-      let prefs = initAppPrefs(userData, (engine?.rooms().length ?? 0) > 0)
-      // 엔진 없이 도는 앱 쪽 일 — appInfo·prefs·setPrefs·준비 흐름이 진짜. claude 최신으로(Task 8)·두레 업데이트(Task 11)는 아직 흉내
+      // 앱 설정 — 엔진과 같은 settings.json. 방이 있는데 tourDone 칸이 없으면 업데이트로 받은 사람(투어·승인 안내를 본 것으로 써 둔다).
+      // 쓰기가 실패해도 시작은 계속한다(읽은 값으로)
+      let prefs = initAppPrefsSafe(userData, (engine?.rooms().length ?? 0) > 0)
+      // 켤 때 claude 최신으로 — 지금 상태(창이 늦게 떠도 처음 상태를 이걸로 받는다)
+      let claudeUpdateState: ClaudeUpdateState = 'idle'
+      // 엔진 시작(갱신 뒤)이 끝나면 풀린다 — 그 전엔 claude 를 띄우는 엔진 메서드가 기다린다
+      let markEngineReady!: () => void
+      const engineReady = new Promise<void>((r) => (markEngineReady = r))
+      // 엔진 없이 도는 앱 쪽 일 — appInfo·prefs·setPrefs·준비 흐름·claude 최신으로가 진짜. 두레 업데이트(Task 11)는 아직 흉내
       const appHost: AppHost = {
         async appInfo() {
           return { version: app.getVersion(), packaged: app.isPackaged }
@@ -269,7 +283,7 @@ if (!app.requestSingleInstanceLock()) {
           await shell.openExternal(SETUP_GUIDE_URL)
         },
         async claudeUpdateState() {
-          return 'idle'
+          return claudeUpdateState
         },
         async updateState() {
           return { kind: 'dev' }
@@ -281,7 +295,13 @@ if (!app.requestSingleInstanceLock()) {
         async installUpdate() {},
         async openReleasePage() {},
       }
-      // 순서: 엔진 만들기 → registerIpc(리스너 붙이기) → engine.start() → 창. claude 가 없으면 engine 은 null 이고 snapshot 이 claudeMissing 을 알린다.
+      // 저장한 화면 테마를 Windows 에 알린다 — 화면의 prefers-color-scheme·제목 표시줄 단추·스크롤바가 따른다(claude 가 없으면 Windows 따라감)
+      nativeTheme.themeSource = engine?.theme() ?? 'system'
+      nativeTheme.on('updated', () => {
+        if (mainWindow) paintWindow(mainWindow)
+      })
+      // 순서: 엔진 만들기 → 앱 설정 → 테마 → registerIpc(리스너 붙이기) → 창 → 준비 확인 → claude 최신으로 → engine.start() → engineReady.
+      // claude 가 없으면 engine 은 null 이고 snapshot 이 claudeMissing 을 알린다.
       registerIpc(
         ipcMain,
         engine,
@@ -344,24 +364,36 @@ if (!app.requestSingleInstanceLock()) {
           },
           isAppPage,
           app: appHost,
-          // 엔진 시작 전에 기다릴 일(켤 때 claude 최신으로)이 아직 없다 — Task 8 이 그 뒤에 풀리게 바꾼다
-          engineReady: Promise.resolve(),
+          // 켤 때 claude 최신으로가 끝나고 엔진이 시작하면 풀린다(runStartup)
+          engineReady,
           onAppEvent(fn) {
             appEventSinks.push(fn)
           },
         },
       )
-      engine?.start()
-      // 저장한 화면 테마를 Windows 에 알린다 — 화면의 prefers-color-scheme·제목 표시줄 단추·스크롤바가 따른다(claude 가 없으면 Windows 따라감)
-      nativeTheme.themeSource = engine?.theme() ?? 'system'
-      nativeTheme.on('updated', () => {
-        if (mainWindow) paintWindow(mainWindow)
-      })
       mainWindow = createWindow()
-      void setupFlow.check() // 창을 막지 않는다 — 결과는 'setup' 사건으로
 
       const smokeMs = Number(env.DURE_SMOKE_EXIT_MS)
       if (smokeMs > 0) setTimeout(() => app.quit(), smokeMs)
+
+      // 창을 막지 않는다 — 결과는 'setup'·'claude-update' 사건으로. 차례대로(claude 가 둘 겹치지 않게): 준비 확인 → claude 최신으로 → 엔진 시작
+      const updateWith = engine && prefs.claudeAutoUpdate ? claude : null
+      void runStartup({
+        check: () => setupFlow.check(),
+        autoUpdate: updateWith !== null,
+        update: async () => {
+          // 확인하는 사이 끄기 시작했으면 띄우지 않는다 — 띄운 뒤라면 before-quit 이 나무째 끈다
+          if (!updateWith || quitting) return
+          claudeUpdateRun = updateClaude(updateWith)
+          return claudeUpdateRun.done
+        },
+        start: () => engine?.start(),
+        emit: (s) => {
+          claudeUpdateState = s
+          emitApp('claude-update', s)
+        },
+        ready: () => markEngineReady(),
+      })
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err)

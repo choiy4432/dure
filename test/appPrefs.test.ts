@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { initAppPrefs, readAppPrefs, writeAppPrefs } from '../src/main/appPrefs';
+import { initAppPrefs, initAppPrefsSafe, readAppPrefs, writeAppPrefs } from '../src/main/appPrefs';
 
 let dir: string;
 beforeEach(() => {
@@ -74,4 +74,20 @@ test('initAppPrefs — 이미 tourDone:false 칸이 있으면 그대로(투어�
 test('initAppPrefs(dir, false) — 방이 없으면(새 사용자) 쓰지 않고 기본값', () => {
   expect(initAppPrefs(dir, false)).toEqual({ tourDone: false, approvalTipSeen: false, claudeAutoUpdate: true });
   expect(fs.existsSync(file())).toBe(false);
+});
+
+test('initAppPrefsSafe — 쓰기가 실패하면 던지지 않고 지금 파일을 읽은 값(투어 칸 하나로 시작을 막지 않는다)', () => {
+  seed({ autoChainLimit: 5, claudeAutoUpdate: false });
+  fs.mkdirSync(`${file()}.tmp`); // 임시 파일 자리를 폴더가 막는다 — 쓰기가 실패한다
+  expect(() => initAppPrefs(dir, true)).toThrow();
+  const log: unknown[][] = [];
+  expect(initAppPrefsSafe(dir, true, (...a) => log.push(a))).toEqual({ tourDone: false, approvalTipSeen: false, claudeAutoUpdate: false });
+  expect(saved()).toEqual({ autoChainLimit: 5, claudeAutoUpdate: false });
+  expect(log).toHaveLength(1);
+});
+
+test('initAppPrefsSafe — 쓸 수 있으면 initAppPrefs 그대로', () => {
+  seed({ autoChainLimit: 5 });
+  expect(initAppPrefsSafe(dir, true, () => {})).toEqual({ tourDone: true, approvalTipSeen: true, claudeAutoUpdate: true });
+  expect(saved()).toEqual({ autoChainLimit: 5, tourDone: true, approvalTipSeen: true });
 });

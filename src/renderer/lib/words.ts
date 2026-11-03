@@ -136,6 +136,9 @@ export const SETUP = {
   relaunching: '두레를 다시 켜요…',
 } as const
 
+/** 상태 띠 오른쪽 — 켤 때 claude 최신으로 바꾸는 동안만 */
+export const CLAUDE_UPDATING = 'claude 최신으로 바꾸는 중…'
+
 /** ~/.ssh/config 한 줄의 흐린 주소 — user@hostName(없는 칸은 뺀다). 덧붙일 게 없으면 null */
 export function sshAddress(e: SshHostEntry): string | null {
   const name = e.hostName ?? e.host
