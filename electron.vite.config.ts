@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import { woff2Only } from './scripts/build/woff2Only'
 
 export default defineConfig({
   main: {
@@ -22,6 +23,6 @@ export default defineConfig({
       // 글꼴은 파일로만 — 작은 글꼴 조각을 data: 로 넣으면 CSP font-src 'self' 에 막힌다
       assetsInlineLimit: (file: string) => (/\.woff2?$/.test(file) ? false : undefined),
     },
-    plugins: [react()],
+    plugins: [woff2Only(), react()],
   },
 })

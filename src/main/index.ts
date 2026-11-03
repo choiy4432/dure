@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
+import { appEnv, appUserModelId } from './appEnv'
 import { resolveClaudeCommand, resolveSshCommand } from './claudeCommand'
 import { logEngineErrors, registerIpc } from './ipc'
 import { appPageMatcher, focusExisting, guardNavigation } from './window'
@@ -13,7 +14,9 @@ let engine: Engine | null = null
 let exitCode = 0
 
 // Test-only hook: DURE_USER_DATA isolates the data folder (and the single-instance lock, which lives there) — set before anything reads it.
-if (process.env.DURE_USER_DATA) app.setPath('userData', process.env.DURE_USER_DATA)
+// 설치본(app.isPackaged)에선 시험용 환경 변수를 모두 무시한다 — 아래 env 만 읽는다.
+const env = appEnv(process.env, app.isPackaged)
+if (env.DURE_USER_DATA) app.setPath('userData', env.DURE_USER_DATA)
 
 /** Test-only hook: DURE_E2E_FOLDERS (JSON array) — pickFolder hands these out in order instead of opening the dialog, then null. */
 function e2eFolders(raw: string | undefined): (() => string | null) | null {
@@ -30,14 +33,14 @@ function e2eFolders(raw: string | undefined): (() => string | null) | null {
   return () => (next < list.length ? list[next++] : null)
 }
 
-// Windows 알림·작업표시줄 묶음이 앱을 알아보게 — 개발 실행용 임시 ID(설치 패키지의 고정 ID 는 계획 3)
-if (process.platform === 'win32') app.setAppUserModelId(process.execPath)
+// Windows 알림·작업표시줄 묶음이 앱을 알아보게 — 설치본은 고정 ID, 개발 실행은 execPath
+if (process.platform === 'win32') app.setAppUserModelId(appUserModelId(app.isPackaged, process.execPath))
 
 const indexFile = join(__dirname, '../renderer/index.html')
 /** 앱 아이콘(D 넘김) — 창·작업표시줄. 굽는 법은 scripts/icon/build.mjs */
 const appIcon = join(__dirname, '../../resources/icon.ico')
 /** 두레 화면 자신의 주소인가 — IPC 요청·창 안 이동을 이걸로 가린다 */
-const isAppPage = appPageMatcher({ devUrl: process.env.ELECTRON_RENDERER_URL, indexFile })
+const isAppPage = appPageMatcher({ devUrl: env.ELECTRON_RENDERER_URL, indexFile })
 
 /** 창 바탕·창 단추를 지금 테마로 — 테마를 바꾸거나 Windows 가 바꾸면(Windows 따라감) 다시 칠한다 */
 function paintWindow(win: BrowserWindow): void {
@@ -72,7 +75,7 @@ function createWindow(): BrowserWindow {
   // 작업표시줄 단추의 아이콘·이름 — 고정(pin)할 때도 이 아이콘으로(개발 실행은 electron.exe 라 이게 없으면 Electron 아이콘)
   if (process.platform === 'win32') {
     win.setAppDetails({
-      appId: process.execPath,
+      appId: appUserModelId(app.isPackaged, process.execPath),
       appIconPath: appIcon,
       relaunchCommand: process.argv.map(a => `"${a}"`).join(' '),
       relaunchDisplayName: '두레',
@@ -90,8 +93,8 @@ function createWindow(): BrowserWindow {
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
   })
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  if (env.ELECTRON_RENDERER_URL) {
+    void win.loadURL(env.ELECTRON_RENDERER_URL)
   } else {
     void win.loadFile(indexFile)
   }
@@ -125,17 +128,17 @@ if (!app.requestSingleInstanceLock()) {
   void app
     .whenReady()
     .then(async () => {
-      const nextE2eFolder = e2eFolders(process.env.DURE_E2E_FOLDERS)
-      const claude = resolveClaudeCommand(process.env, () => locateClaude())
+      const nextE2eFolder = e2eFolders(env.DURE_E2E_FOLDERS)
+      const claude = resolveClaudeCommand(env, () => locateClaude())
       // Test-only: DURE_SLEEP_MINUTE_MS shortens the sleep timer ('1 minute' and the sweep interval) so the E2E sees an agent fall asleep in seconds.
-      const sleepMs = Number(process.env.DURE_SLEEP_MINUTE_MS)
+      const sleepMs = Number(env.DURE_SLEEP_MINUTE_MS)
       const sleepKnob = Number.isFinite(sleepMs) && sleepMs > 0 ? { sleepMinuteMs: sleepMs, sleepSweepMs: sleepMs } : {}
       if (claude) {
         engine = await createEngine({
           dataDir: app.getPath('userData'),
           claude,
           // 서버(SSH) 방 — 기본은 윈도우 OpenSSH, 시험·개발은 DURE_SSH_COMMAND/ARGS
-          ssh: resolveSshCommand(process.env),
+          ssh: resolveSshCommand(env),
           autoStart: false,
           ...sleepKnob,
         })
@@ -166,7 +169,7 @@ if (!app.requestSingleInstanceLock()) {
             await shell.openExternal(url)
           },
           async saveText(fileName, text) {
-            const testDir = process.env.DURE_E2E_SAVE_DIR
+            const testDir = env.DURE_E2E_SAVE_DIR
             if (testDir) {
               const file = join(testDir, fileName)
               await writeFile(file, text, 'utf8')
@@ -213,12 +216,12 @@ if (!app.requestSingleInstanceLock()) {
       })
       mainWindow = createWindow()
 
-      const smokeMs = Number(process.env.DURE_SMOKE_EXIT_MS)
+      const smokeMs = Number(env.DURE_SMOKE_EXIT_MS)
       if (smokeMs > 0) setTimeout(() => app.quit(), smokeMs)
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err)
-      if (process.env.DURE_NO_DIALOG !== '1') dialog.showErrorBox('두레를 시작하지 못했어요', message)
+      if (env.DURE_NO_DIALOG !== '1') dialog.showErrorBox('두레를 시작하지 못했어요', message)
       // Go through the normal quit path (before-quit -> shutdown -> exit) so Chromium's helper processes are torn down.
       exitCode = 1
       // Brief grace: quitting before Chromium's network service finishes starting orphans that helper process.
