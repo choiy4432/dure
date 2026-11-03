@@ -5967,7 +5967,9 @@ code {
   background: var(--primary);
 }
 
-.ut-warn {
+/* 다시 켜면 멈출 에이전트 — 토스트와 설정의 업데이트 칸이 같은 노란 줄 */
+.ut-warn,
+.upd-warn {
   margin-top: 8px;
   padding: 6px 8px;
   font-size: 12px;

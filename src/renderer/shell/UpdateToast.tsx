@@ -1,5 +1,6 @@
 import { ArrowUp, X } from 'lucide-react'
 import { getStore, useDure } from '../state/store'
+import { workingCount } from '../state/selectors'
 import { UPDATE_TOAST as W } from '../lib/words'
 
 /**
@@ -9,7 +10,7 @@ import { UPDATE_TOAST as W } from '../lib/words'
 export function UpdateToast() {
   const update = useDure(s => s.app.update)
   const hidden = useDure(s => s.app.toastHidden)
-  const working = useDure(s => s.agents.filter(a => a.status === 'working' || a.status === 'awaiting').length)
+  const working = useDure(s => workingCount(s.agents))
   if (hidden) return null
   const hide = () => getStore().hideUpdateToast()
   const run = (fn: () => Promise<void>) => () => void fn().catch(() => {}) // 실패는 updater 가 'update' 사건으로 알린다

@@ -443,7 +443,14 @@ export const SETTINGS_UPDATE = {
   downloading: (p: number) => `받고 있어요 · ${p}%`,
   ready: '준비됐어요',
   restart: '다시 켜기',
+  /** 다시 켜면 멈출 에이전트 — 토스트와 같은 노란 줄 */
+  working: UPDATE_TOAST.working,
+  /** 확인 실패(version 없음) — 오류 글은 첫 줄만(updateErrorWhy) */
   failed: (why: string) => `확인하지 못했어요 — ${why}`,
+  /** 받기 실패(version 있음) — 토스트와 같은 글 + [다시 시도] */
+  downloadFailed: UPDATE_TOAST.failed,
+  retry: UPDATE_TOAST.retry,
+  installFailed: UPDATE_TOAST.installFailed,
   dev: '개발 실행이라 확인하지 않아요',
   tourLabel: '안내',
   tour: '안내 다시 보기',

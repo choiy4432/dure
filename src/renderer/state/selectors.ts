@@ -45,6 +45,11 @@ export function displayStatus(agent: AgentView, requests: PendingRequest[]): Dis
   return agent.status
 }
 
+/** 다시 켜면 멈출 에이전트 수 — 모든 방에서 작업 중·승인 기다림(업데이트 토스트·설정의 노란 줄) */
+export function workingCount(agents: Pick<AgentView, 'status'>[]): number {
+  return agents.filter(a => a.status === 'working' || a.status === 'awaiting').length
+}
+
 /**
  * 패널 밖(관계도 카드·방 목록·창 주의)에서 '오류'처럼 보일 서버 문제(끊김·로그인 만료 …) — 엔진 상태는 쉬는 중 그대로라 화면이 정한다.
  * 일하는 중·승인 기다림이면 그 모습이 먼저(로그인 만료는 다음 정상 답까지 남는다)

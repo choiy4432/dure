@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { displayStatus, edges, sleepLook, label, nextAgent, pairMessages, summary, unreadFor, type EdgeView } from '../../src/renderer/state/selectors'
+import { displayStatus, edges, sleepLook, label, nextAgent, pairMessages, summary, unreadFor, workingCount, type EdgeView } from '../../src/renderer/state/selectors'
 import type { PendingRequest, RelayMessage, MessageState } from '../../src/engine/types'
 import type { AgentView } from '../../src/shared/ipcContract'
 
@@ -21,6 +21,17 @@ describe('displayStatus', () => {
     expect(displayStatus(agent('a', { status: 'error' }), [])).toBe('error')
     expect(displayStatus(agent('a', { status: 'stopped' }), [])).toBe('stopped')
     expect(displayStatus(agent('a'), [])).toBe('idle')
+  })
+})
+
+describe('workingCount', () => {
+  it('모든 방의 작업 중·승인 기다림만 센다', () => {
+    const list = [
+      agent('a', { status: 'working' }), agent('b', { status: 'awaiting', roomId: 'r2' }),
+      agent('c', { status: 'idle' }), agent('d', { status: 'error' }), agent('e', { status: 'stopped' }),
+    ]
+    expect(workingCount(list)).toBe(2)
+    expect(workingCount([])).toBe(0)
   })
 })
 

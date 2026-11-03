@@ -1,7 +1,8 @@
 import { useId, useRef, useState } from 'react'
 import { SLEEP_CHOICES, type ThemePref } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
-import { errorMessage, SETTINGS_UPDATE as W, SLEEP_CHOICE_WORD, SLEEP_SETTING, UPDATE_TOAST, updateErrorWhy } from '../lib/words'
+import { workingCount } from '../state/selectors'
+import { errorMessage, SETTINGS_UPDATE as W, SLEEP_CHOICE_WORD, SLEEP_SETTING, updateErrorWhy } from '../lib/words'
 import { FormDialog } from './FormDialog'
 
 /** 자동 전달 상한으로 적을 수 있는 수 */
@@ -35,6 +36,7 @@ export function SettingsDialog({ onClose, onAskAllow, onReplayTour }: { onClose:
   const sleepSaved = useDure(s => s.sleepAfterMin)
   const info = useDure(s => s.app.info)
   const update = useDure(s => s.app.update)
+  const working = useDure(s => workingCount(s.agents))
   const prefs = useDure(s => s.app.prefs)
   const autoSaved = prefs?.claudeAutoUpdate ?? true
   const savedTheme = useDure(s => s.theme ?? 'system')
@@ -106,7 +108,9 @@ export function SettingsDialog({ onClose, onAskAllow, onReplayTour }: { onClose:
 
   /** 업데이트 단추는 저장과 따로 바로 — 못 해도 결과 줄(사건)이 말해 준다 */
   const act = (call: () => Promise<unknown>) => () => void call().catch(() => {})
-  const installFailed = update.kind === 'error' && update.message === UPDATE_TOAST.installFailed
+  // 오류 셋 — 설치 실패(받아 둔 것을 다시 켜며 설치) · 받기 실패(version 있음, 토스트와 같은 글) · 확인 실패(version 없음)
+  const installFailed = update.kind === 'error' && update.message === W.installFailed
+  const downloadFailed = update.kind === 'error' && !installFailed && update.version !== null
 
   const described = [`${id}-d`, outOfRange && `${id}-r`, error && `${id}-e`].filter(Boolean).join(' ')
 
@@ -127,10 +131,11 @@ export function SettingsDialog({ onClose, onAskAllow, onReplayTour }: { onClose:
         <div className="fld-row">
           {info && <span className="upd-v">{W.version(info.version)}</span>}
           {update.kind !== 'dev' && (
+            // 다 받아 둔 뒤(ready)엔 확인할 게 없다 — 다시 확인해도 준비 상태를 바꾸지 않는다(updater)
             <button
               type="button"
               className="btn sec sm"
-              disabled={update.kind === 'checking' || update.kind === 'downloading'}
+              disabled={update.kind === 'checking' || update.kind === 'downloading' || update.kind === 'ready'}
               onClick={act(() => window.dure.checkUpdate())}
             >
               {W.check}
@@ -138,26 +143,36 @@ export function SettingsDialog({ onClose, onAskAllow, onReplayTour }: { onClose:
           )}
         </div>
         {update.kind !== 'idle' && (
-          <div className="upd-line" role="status">
-            <span className={update.kind === 'error' ? 'upd-t bad' : 'upd-t'}>
-              {update.kind === 'dev' && W.dev}
-              {update.kind === 'checking' && W.checking}
-              {update.kind === 'none' && W.none}
-              {update.kind === 'available' && W.available(update.version)}
-              {update.kind === 'downloading' && W.downloading(update.percent)}
-              {update.kind === 'ready' && W.ready}
-              {update.kind === 'error' && (installFailed ? update.message : W.failed(updateErrorWhy(update.message)))}
-            </span>
-            {update.kind === 'available' && (
-              <button type="button" className="btn pri sm" onClick={act(() => window.dure.downloadUpdate())}>
-                {W.update}
-              </button>
-            )}
-            {(update.kind === 'ready' || installFailed) && (
-              <button type="button" className="btn pri sm" onClick={act(() => window.dure.installUpdate())}>
-                {W.restart}
-              </button>
-            )}
+          <div role="status">
+            <div className="upd-line">
+              <span className={update.kind === 'error' ? 'upd-t bad' : 'upd-t'}>
+                {update.kind === 'dev' && W.dev}
+                {update.kind === 'checking' && W.checking}
+                {update.kind === 'none' && W.none}
+                {update.kind === 'available' && W.available(update.version)}
+                {update.kind === 'downloading' && W.downloading(update.percent)}
+                {update.kind === 'ready' && W.ready}
+                {update.kind === 'error' &&
+                  (installFailed ? W.installFailed : downloadFailed ? W.downloadFailed : W.failed(updateErrorWhy(update.message)))}
+              </span>
+              {update.kind === 'available' && (
+                <button type="button" className="btn pri sm" onClick={act(() => window.dure.downloadUpdate())}>
+                  {W.update}
+                </button>
+              )}
+              {downloadFailed && (
+                <button type="button" className="btn pri sm" onClick={act(() => window.dure.downloadUpdate())}>
+                  {W.retry}
+                </button>
+              )}
+              {(update.kind === 'ready' || installFailed) && (
+                <button type="button" className="btn pri sm" onClick={act(() => window.dure.installUpdate())}>
+                  {W.restart}
+                </button>
+              )}
+            </div>
+            {/* 다시 켜면 일하는 에이전트가 멈춘다 — 토스트와 같은 노란 줄 */}
+            {update.kind === 'ready' && working > 0 && <p className="upd-warn">{W.working(working)}</p>}
           </div>
         )}
       </div>
