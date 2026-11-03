@@ -9,9 +9,10 @@ const STEM = 'M84 188 V68'
 /**
  * 두레를 여는 중 — 처음 상태를 받기 전까지 창 가운데에 움직이는 두레 마크(판 없는 D, 위 띠 shell/BrandMark 와 같은 얼굴).
  * 점이 위 고리에서 둥근 길을 따라 아래로 → 아래가 받고 → 줄기를 타고 위로 → 위가 받고, 지나온 길이 가라앉고 다시.
+ * inline 이면 창 전체 대신 놓인 자리(.cv)만 채운다(앱 안에서 준비 상태를 확인하는 동안).
  * 빨리 열리면 보이지 않게 250ms 뒤에 나타난다(base.css .spl). 움직임 줄이기면 멈춘 아이콘.
  */
-export function Splash() {
+export function Splash({ inline = false }: { inline?: boolean } = {}) {
   const ref = useRef<SVGSVGElement>(null)
   useEffect(() => {
     const el = ref.current
@@ -41,7 +42,7 @@ export function Splash() {
   }, [])
 
   return (
-    <div className="spl" role="status" aria-label="두레를 여는 중">
+    <div className={inline ? 'spl fill' : 'spl'} role="status" aria-label="두레를 여는 중">
       <svg ref={ref} viewBox="28 28 200 200" aria-hidden="true">
         <path className="spl-stem spl-track" d={STEM} />
         <path className="spl-bowl spl-track" d={BOWL} />

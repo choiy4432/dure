@@ -3,10 +3,9 @@ import { Presence } from '../lib/presence'
 import { ExpandBox } from '../lib/ExpandBox'
 import { ChevronDown, Plus, RotateCw } from 'lucide-react'
 
-export type EmptyKind = 'claude' | 'room' | 'agent' | 'load'
+export type EmptyKind = 'room' | 'agent' | 'load'
 
 const COPY: Record<EmptyKind, { title: string; text?: string; action?: string }> = {
-  claude: { title: 'Claude Code 가 필요해요', text: '설치·로그인 안내는 곧 들어갑니다' },
   room: { title: '첫 방을 만들어 보세요', action: '방 만들기' },
   agent: { title: '첫 에이전트를 추가해 보세요', action: '추가' },
   load: { title: '두레를 불러오지 못했어요', text: '잠시 뒤 다시 시도해 주세요. 계속 안 되면 두레를 껐다 켜 주세요.', action: '다시 시도' },

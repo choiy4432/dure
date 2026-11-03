@@ -9,12 +9,14 @@ const agent = (id: string, roomId: string, name: string): AgentView => ({
 })
 
 let snapshot: Snapshot
+let setupState: any = { phase: 'ready' }
 beforeEach(() => {
   vi.resetModules()
   localStorage.clear()
+  setupState = { phase: 'ready' }
   snapshot = { claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null }
   ;(window as any).dure = {
-    snapshot: async () => snapshot, history: async () => [], on: () => () => {}, updateAgent: async () => ({}),
+    snapshot: async () => snapshot, setupState: async () => setupState, history: async () => [], on: () => () => {}, updateAgent: async () => ({}),
   }
 })
 afterEach(() => cleanup())
@@ -28,13 +30,30 @@ async function renderApp() {
 }
 
 describe('App 셸', () => {
-  it('claude 가 없으면 안내만, 에이전트 추가는 없다(관계도가 없다)', async () => {
+  it('준비가 필요하면(setup needs) 관계도 자리에 준비 화면, 방·에이전트 단추 없음, 설정 잠김', async () => {
     snapshot = { ...snapshot, claudeMissing: true, rooms: [room('r1')] }
+    setupState = { phase: 'needs', install: { state: 'todo' }, login: { state: 'locked' } }
     await renderApp()
-    expect(screen.getByText('Claude Code 가 필요해요')).toBeTruthy()
-    expect(screen.getByText('설치·로그인 안내는 곧 들어갑니다')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '준비가 두 가지 필요해요' })).toBeTruthy()
+    expect(screen.queryByText('Claude Code 가 필요해요')).toBeNull()
     expect(screen.queryByRole('separator')).toBeNull()
     expect(screen.queryByRole('button', { name: '에이전트 추가' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '여름 캠페인' })).toBeNull()
+    expect(screen.getByRole('button', { name: '설정' })).toHaveProperty('disabled', true)
+  })
+
+  it('다시 켜는 중에도 준비 화면', async () => {
+    setupState = { phase: 'relaunching' }
+    await renderApp()
+    expect(screen.getByText('두레를 다시 켜요…')).toBeTruthy()
+  })
+
+  it('확인하는 중(checking)엔 여는 중 모습만 — 첫 방 안내도 준비 카드도 비치지 않는다', async () => {
+    setupState = new Promise(() => {})
+    await renderApp()
+    expect(screen.getByRole('status', { name: '두레를 여는 중' })).toBeTruthy()
+    expect(screen.queryByText('첫 방을 만들어 보세요')).toBeNull()
+    expect(screen.queryByRole('heading', { name: /준비가/ })).toBeNull()
   })
 
   it('방이 없으면 첫 방 안내 + 방 만들기, 에이전트 추가는 없다', async () => {
@@ -127,6 +146,7 @@ describe('App 셸', () => {
 
   it('설정은 claude 가 없으면 막힘', async () => {
     snapshot = { ...snapshot, claudeMissing: true }
+    setupState = { phase: 'needs', install: { state: 'todo' }, login: { state: 'locked' } }
     await renderApp()
     expect(screen.getByRole('button', { name: '설정' })).toHaveProperty('disabled', true)
   })

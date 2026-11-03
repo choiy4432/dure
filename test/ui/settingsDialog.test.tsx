@@ -31,7 +31,7 @@ beforeEach(() => {
   setSleepAfter = vi.fn(async (m: number) => {
     snapshot = { ...snapshot, sleepAfterMin: m }
   })
-  ;(window as any).dure = { setSleepAfter, setAutoChainLimit, setAllowBypass, setNotify, setTheme, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
+  ;(window as any).dure = { setSleepAfter, setAutoChainLimit, setAllowBypass, setNotify, setTheme, snapshot: async () => snapshot, setupState: async () => ({ phase: 'ready' }), history: async () => [], on: () => () => {} }
 })
 afterEach(() => cleanup())
 

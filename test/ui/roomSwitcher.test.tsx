@@ -55,7 +55,7 @@ beforeEach(() => {
     sleepableIn: vi.fn(async (_id: string) => 2),
   }
   ;(window as any).dure = {
-    ...api, snapshot: async () => snapshot, history: async () => [], on: () => () => {}, updateAgent: async () => ({}),
+    ...api, snapshot: async () => snapshot, setupState: async () => ({ phase: 'ready' }), history: async () => [], on: () => () => {}, updateAgent: async () => ({}),
   }
 })
 afterEach(() => cleanup())

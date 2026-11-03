@@ -55,7 +55,7 @@ beforeEach(() => {
     // 서버처럼 — ~ 는 펼친 경로로 돌려준다
     checkRemoteFolder: vi.fn(async (_roomId: string, folder: string) => ({ ok: true, folder: folder.replace(/^~/, '/home/a'), claudeVersion: '2.1.304' })),
   }
-  ;(window as any).dure = { ...api, snapshot: async () => snapshot, history: async () => [], on: () => () => {} }
+  ;(window as any).dure = { ...api, snapshot: async () => snapshot, setupState: async () => ({ phase: 'ready' }), history: async () => [], on: () => () => {} }
 })
 afterEach(() => cleanup())
 

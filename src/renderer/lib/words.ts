@@ -111,6 +111,31 @@ export const REMOTE = {
   check: '확인',
 } as const
 
+/** 준비 화면(claude 설치·로그인) 문구 */
+export const SETUP = {
+  kicker: '두레를 쓰기 전에',
+  titleBoth: '준비가 두 가지 필요해요',
+  titleLogin: '준비가 하나 남았어요',
+  installTitle: 'Claude Code 설치',
+  installBody: '두레는 이 PC 의 Claude Code 로 에이전트를 움직여요. 단추를 누르면 Anthropic 공식 설치 스크립트(install.ps1)를 대신 실행해요. 관리자 권한 없이 1~2분.',
+  install: '설치',
+  manual: '직접 설치할게요',
+  showCommand: '실행하는 명령 보기',
+  command: 'irm https://claude.ai/install.ps1 | iex',
+  eta: '1~2분',
+  installFailed: '설치하지 못했어요',
+  retry: '다시 시도',
+  loginTitle: 'Claude 계정 로그인',
+  loginBody: '단추를 누르면 브라우저가 열려요. 쓰고 있는 Claude 구독 계정으로 로그인하고 돌아오면 이어져요.',
+  login: '로그인',
+  waiting: '브라우저에서 마치면 저절로 넘어가요',
+  reopen: '다시 열기',
+  loginFailed: '로그인을 확인하지 못했어요 — 다시 해 주세요',
+  tour: '둘러보기',
+  tourEta: '· 1분',
+  relaunching: '두레를 다시 켜요…',
+} as const
+
 /** ~/.ssh/config 한 줄의 흐린 주소 — user@hostName(없는 칸은 뺀다). 덧붙일 게 없으면 null */
 export function sshAddress(e: SshHostEntry): string | null {
   const name = e.hostName ?? e.host

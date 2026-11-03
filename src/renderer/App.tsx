@@ -5,6 +5,8 @@ import { TopBar } from './shell/TopBar'
 import { StatusBar } from './shell/StatusBar'
 import { SplitView } from './shell/SplitView'
 import { Empty } from './shell/Empty'
+import { Splash } from './shell/Splash'
+import { SetupScreen } from './shell/SetupScreen'
 import { NewRoomDialog } from './shell/RoomSwitcher'
 import { AddAgentDialog } from './shell/AddAgentDialog'
 import { SettingsDialog } from './shell/SettingsDialog'
@@ -22,7 +24,7 @@ export function App() {
     const room = s.rooms.find(r => r.id === s.roomId) ?? null
     return {
       loadError: s.loadError,
-      claudeMissing: s.claudeMissing,
+      setupPhase: s.app.setup.phase,
       roomId: room?.id ?? null,
       agentCount: room ? s.agents.filter(a => a.roomId === room.id).length : 0,
     }
@@ -32,7 +34,8 @@ export function App() {
   const [dialog, setDialog] = useState<Dialog>(null)
   const [askAllow, setAskAllow] = useState(false)
   const close = () => setDialog(null)
-  const blocked = v.loadError !== null || v.claudeMissing
+  const preparing = v.setupPhase === 'needs' || v.setupPhase === 'relaunching'
+  const blocked = v.loadError !== null || preparing || v.setupPhase === 'checking'
 
   let body
   if (v.loadError !== null) {
@@ -41,10 +44,16 @@ export function App() {
         <LoadFailed message={v.loadError} />
       </main>
     )
-  } else if (v.claudeMissing) {
+  } else if (v.setupPhase === 'checking') {
     body = (
       <main className="cv">
-        <Empty kind="claude" />
+        <Splash inline />
+      </main>
+    )
+  } else if (preparing) {
+    body = (
+      <main className="cv">
+        <SetupScreen />
       </main>
     )
   } else if (v.roomId === null) {
