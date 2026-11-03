@@ -243,6 +243,8 @@ export function registerIpc(
   send: (channel: string, payload: unknown) => void,
   deps: IpcDeps,
 ): void {
+  // 기다리다 거절돼도(시작 실패) 문을 연다 — 엔진 메서드가 자기 오류를 말하게
+  const ready = deps.engineReady.catch(() => {})
   ipc.handle(CHANNEL.invoke, async (event, req): Promise<InvokeResult> => {
     try {
       // 두레 화면이 아닌 곳(창 안으로 들어온 다른 페이지·프레임)의 요청은 받지 않는다
@@ -257,7 +259,7 @@ export function registerIpc(
       if (method === 'snapshot') return { ok: true, value: snapshot(engine) }
       if (!engine) throw new Error(CLAUDE_MISSING_ERROR)
       // claude 를 띄우거나 바꾸는 일은 엔진 시작(켤 때 claude 최신으로 뒤)까지 기다린다 — 읽기·창 쪽 일은 바로
-      if (!STARTS_NOW.has(method)) await deps.engineReady
+      if (!STARTS_NOW.has(method)) await ready
       const handler = HANDLERS[method as keyof typeof HANDLERS]
       const value = await handler(engine, deps, ...a)
       return { ok: true, value: value ?? null }

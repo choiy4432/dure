@@ -329,6 +329,12 @@ describe('registerIpc', () => {
     expect(calls[2]).toEqual(['setSelected', ['a1']])
   })
 
+  it('engineReady 가 거절돼도 기다리던 메서드는 엔진에 닿는다', async () => {
+    const { call, calls } = setup(true, { engineReady: Promise.reject(new Error('시작 실패')) })
+    expect(await call('setSelected', 'a1')).toEqual({ ok: true, value: null })
+    expect(calls.map(([n]) => n)).toEqual(['setSelected'])
+  })
+
   it('앱 사건을 event 채널로 — { name, payload } 봉투, 엔진 사건과 같은 길', () => {
     const { emitApp, sent, engine, deps } = setup()
     expect(deps.onAppEvent).toHaveBeenCalledTimes(1)

@@ -288,6 +288,12 @@ code {
   background: var(--bg);
 }
 
+.sbar-note {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
 .sbar .usg-btn {
   height: 26px;
   padding: 0 6px;
