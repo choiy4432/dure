@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createStore } from '../../src/renderer/state/store'
 import type { EngineEventMap, HistoryItem, RelayMessage } from '../../src/engine/types'
-import type { AgentView, DureApi, Snapshot } from '../../src/shared/ipcContract'
+import type { AgentView, DureApi, DureEventMap, Snapshot } from '../../src/shared/ipcContract'
+import { DEFAULT_APP_PREFS, type AppInfo, type AppPrefs, type ClaudeUpdateState, type SetupState, type UpdateState } from '../../src/shared/appTypes'
 
 const agent = (id: string, roomId = 'r1', over: Partial<AgentView> = {}): AgentView => ({
   id, roomId, name: id, role: '', folder: '/x', sessionId: '', started: true, auto: false, model: null,
@@ -15,17 +16,27 @@ const snap = (over: Partial<Snapshot> = {}): Snapshot => ({
 })
 const note = (text: string, t = 1): HistoryItem => ({ t, kind: 'notice', text })
 
-function fake(opts: { snapshot?: () => Promise<Snapshot>; history?: (id: string) => Promise<HistoryItem[]> } = {}) {
+type AppOpts = {
+  appInfo?: () => Promise<AppInfo>; prefs?: () => Promise<AppPrefs>; setPrefs?: (p: Partial<AppPrefs>) => Promise<AppPrefs>
+  setupState?: () => Promise<SetupState>; updateState?: () => Promise<UpdateState>; claudeUpdateState?: () => Promise<ClaudeUpdateState>
+}
+function fake(opts: { snapshot?: () => Promise<Snapshot>; history?: (id: string) => Promise<HistoryItem[]> } & AppOpts = {}) {
   const handlers: Record<string, ((p: any) => void)[]> = {}
   const api = {
     snapshot: vi.fn(opts.snapshot ?? (async () => snap())),
     history: vi.fn(opts.history ?? (async () => [])),
+    appInfo: vi.fn(opts.appInfo ?? (async () => ({ version: '1.0.0', packaged: true }))),
+    prefs: vi.fn(opts.prefs ?? (async () => ({ ...DEFAULT_APP_PREFS }))),
+    setPrefs: vi.fn(opts.setPrefs ?? (async (p: Partial<AppPrefs>) => ({ ...DEFAULT_APP_PREFS, ...p }))),
+    setupState: vi.fn(opts.setupState ?? (async () => ({ phase: 'ready' }) as SetupState)),
+    updateState: vi.fn(opts.updateState ?? (async () => ({ kind: 'idle' }) as UpdateState)),
+    claudeUpdateState: vi.fn(opts.claudeUpdateState ?? (async () => 'idle' as ClaudeUpdateState)),
     on: vi.fn((k: string, fn: (p: any) => void) => {
       ;(handlers[k] ??= []).push(fn)
       return () => {}
     }),
   } as unknown as DureApi & { snapshot: ReturnType<typeof vi.fn>; history: ReturnType<typeof vi.fn> }
-  const emit = <K extends keyof EngineEventMap>(k: K, p: EngineEventMap[K]) => (handlers[k] ?? []).forEach(f => f(p))
+  const emit = <K extends keyof DureEventMap>(k: K, p: DureEventMap[K]) => (handlers[k] ?? []).forEach(f => f(p))
   return { api, emit }
 }
 
@@ -1283,5 +1294,66 @@ describe('store 지난 대화 — resumed 경계·갈래 초안', () => {
     rel[1]([said('앞 구간', 1), note('돌아왔어요', 5)])
     await vi.waitFor(() => expect(s.getState().history.a).toHaveLength(2))
     expect(s.getState().history.a![0].kind).toBe('assistant')
+  })
+})
+
+
+describe('store 앱 상태', () => {
+  it('처음 값은 확인 중·대기 · init 뒤 api 값', async () => {
+    const { api } = fake({ setupState: async () => ({ phase: 'needs', install: { state: 'todo' }, login: { state: 'locked' } }) })
+    const s = createStore(api)
+    expect(s.getState().app).toEqual({ info: null, prefs: null, setup: { phase: 'checking' }, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false })
+    await s.init()
+    expect(s.getState().app.setup.phase).toBe('needs')
+    expect(s.getState().app.info).toEqual({ version: '1.0.0', packaged: true })
+    expect(s.getState().app.prefs).toEqual(DEFAULT_APP_PREFS)
+  })
+
+  it("'setup' 사건이 갈음한다", async () => {
+    const { api, emit } = fake()
+    const s = createStore(api)
+    await s.init()
+    emit('setup', { phase: 'relaunching' })
+    expect(s.getState().app.setup).toEqual({ phase: 'relaunching' })
+    emit('claude-update', 'running')
+    expect(s.getState().app.claudeUpdate).toBe('running')
+  })
+
+  it('init 응답보다 먼저 온 update 사건이 이긴다', async () => {
+    let resolve!: (u: UpdateState) => void
+    const { api, emit } = fake({ updateState: () => new Promise<UpdateState>(r => { resolve = r }) })
+    const s = createStore(api)
+    const p = s.init()
+    await Promise.resolve()
+    emit('update', { kind: 'ready', version: '2.0.0' })
+    resolve({ kind: 'checking' })
+    await p
+    expect(s.getState().app.update).toEqual({ kind: 'ready', version: '2.0.0' })
+  })
+
+  it('앱 호출이 거절돼도 init 은 성공하고 기본값이 남는다', async () => {
+    const { api } = fake({ appInfo: async () => { throw new Error('x') }, setupState: async () => { throw new Error('y') } })
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().app.info).toBeNull()
+    expect(s.getState().app.setup).toEqual({ phase: 'checking' })
+    expect(s.getState().agents).toHaveLength(3)
+  })
+
+  it('setPrefs 는 api 가 돌려준 값으로 prefs 를 갈음한다', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    await s.setPrefs({ tourDone: true })
+    expect(s.getState().app.prefs?.tourDone).toBe(true)
+    expect(s.getState().app.prefs?.claudeAutoUpdate).toBe(true)
+  })
+
+  it('hideUpdateToast 는 toastHidden 만 켠다', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    s.hideUpdateToast()
+    expect(s.getState().app.toastHidden).toBe(true)
   })
 })

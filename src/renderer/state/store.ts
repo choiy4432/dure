@@ -1,10 +1,23 @@
 import { useRef, useSyncExternalStore } from 'react'
 import { SLEEP_DEFAULT_MIN, type AgentId, type AgentStatus, type EngineEventMap, type HistoryItem, type RoomId } from '../../engine/types'
 import type { DureApi, Snapshot } from '../../shared/ipcContract'
+import type { AppEventMap, AppInfo, AppPrefs, ClaudeUpdateState, SetupState, UpdateState } from '../../shared/appTypes'
 import { displayStatus, type EdgeMode, type Phase } from './selectors'
 import { markFresh } from '../map/freshNodes'
 
+/** 엔진 없이 도는 앱 쪽 상태 — 준비 화면·업데이트 토스트·설정·투어가 읽는다 */
+export interface AppState {
+  info: AppInfo | null
+  prefs: AppPrefs | null
+  setup: SetupState
+  update: UpdateState
+  claudeUpdate: ClaudeUpdateState
+  /** 업데이트 토스트를 이번 실행 동안 닫았다 — 저장하지 않는다 */
+  toastHidden: boolean
+}
+
 export type UiState = Snapshot & {
+  app: AppState
   roomId: RoomId | null
   selectedAgentId: AgentId | null
   history: Record<AgentId, HistoryItem[]>
@@ -105,6 +118,10 @@ export interface Store {
   /** 갈래 창을 연다 */
   openFork(d: ForkDraft): void
   closeFork(): void
+  /** 앱 설정을 바꾸고, 저장된 결과로 app.prefs 를 갈음한다 */
+  setPrefs(p: Partial<AppPrefs>): Promise<void>
+  /** 업데이트 토스트를 이번 실행 동안 닫는다 */
+  hideUpdateToast(): void
   /** PC 시계를 바꿨으면 시작 시각(statusSince)을 맞춘다 — 이벤트를 받을 때도 보지만, 이벤트가 없는 동안(긴 명령)을 위해 앱이 1초마다 부른다 */
   followClock(): void
 }
@@ -115,6 +132,8 @@ const EVENTS: (keyof EngineEventMap)[] = [
   'agent-event', 'status', 'message', 'request', 'request-resolved', 'flags', 'history', 'held-input',
   'usage', 'context', 'effort', 'model-now', 'subagents', 'agent-added', 'plan-mode', 'hold', 'always-allow', 'sleep',
 ]
+
+const APP_EVENTS = ['setup', 'update', 'claude-update'] as const
 
 const sameItem = (a: HistoryItem, b: HistoryItem) => JSON.stringify(a) === JSON.stringify(b)
 
@@ -148,6 +167,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   // 창에 초점이 있는가 — 초점이 없으면 고른 에이전트의 결과도 못 본 것이다. document.hasFocus 가 없는 환경에선 본 것으로 친다
   const hasFocus = opts.hasFocus ?? (() => (typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true))
   let state: UiState = {
+    app: { info: null, prefs: null, setup: { phase: 'checking' }, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false },
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
     statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null,
@@ -427,6 +447,39 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     }
   }
 
+  // 앱 사건을 이미 받은 칸 — 늦게 온 첫 응답이 사건 값을 덮지 않게
+  const appSeen = new Set<keyof AppEventMap>()
+  const setApp = (patch: Partial<AppState>) => set({ ...state, app: { ...state.app, ...patch } })
+
+  let appSubscribed = false
+  const subscribeAppEvents = () => {
+    if (appSubscribed) return
+    appSubscribed = true
+    for (const name of APP_EVENTS) {
+      api.on(name, (payload: AppEventMap[typeof name]) => {
+        appSeen.add(name)
+        setApp(name === 'claude-update' ? { claudeUpdate: payload as ClaudeUpdateState } : { [name]: payload })
+      })
+    }
+  }
+
+  /** 앱 쪽 첫 상태를 받는다 — 한 칸이 실패하면(옛 api 등) 그 칸은 처음 값 그대로. 절대 거절하지 않는다 */
+  const loadApp = async () => {
+    const take = async <T,>(call: () => Promise<T>, apply: (v: T) => Partial<AppState>, event?: keyof AppEventMap) => {
+      let v: T
+      try { v = await call() } catch { return }
+      if (event && appSeen.has(event)) return
+      setApp(apply(v))
+    }
+    await Promise.all([
+      take(() => api.appInfo(), info => ({ info })),
+      take(() => api.prefs(), prefs => ({ prefs })),
+      take(() => api.setupState(), setup => ({ setup }), 'setup'),
+      take(() => api.updateState(), update => ({ update }), 'update'),
+      take(() => api.claudeUpdateState(), claudeUpdate => ({ claudeUpdate }), 'claude-update'),
+    ])
+  }
+
   const snapshotCycle = async () => {
     buffer = []
     try {
@@ -545,7 +598,20 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     },
     async init() {
       subscribeEvents()
-      await fetchSnapshot()
+      subscribeAppEvents()
+      const app = loadApp()
+      try {
+        await fetchSnapshot()
+      } finally {
+        await app
+      }
+    },
+    async setPrefs(p) {
+      const prefs = await api.setPrefs(p)
+      setApp({ prefs })
+    },
+    hideUpdateToast() {
+      if (!state.app.toastHidden) setApp({ toastHidden: true })
     },
     async refresh() {
       await fetchSnapshot()
