@@ -10,6 +10,8 @@ export interface AppState {
   info: AppInfo | null
   prefs: AppPrefs | null
   setup: SetupState
+  /** 준비 상태를 못 받았다(setupState 가 거절됨) — 사건이나 다음 성공이 오면 false. 화면은 selectors 의 effectiveSetup 으로 푼다 */
+  setupLoadFailed: boolean
   update: UpdateState
   claudeUpdate: ClaudeUpdateState
   /** 업데이트 토스트를 이번 실행 동안 닫았다 — 저장하지 않는다 */
@@ -167,7 +169,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   // 창에 초점이 있는가 — 초점이 없으면 고른 에이전트의 결과도 못 본 것이다. document.hasFocus 가 없는 환경에선 본 것으로 친다
   const hasFocus = opts.hasFocus ?? (() => (typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true))
   let state: UiState = {
-    app: { info: null, prefs: null, setup: { phase: 'checking' }, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false },
+    app: { info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false },
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
     statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null,
@@ -458,23 +460,23 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     for (const name of APP_EVENTS) {
       api.on(name, (payload: AppEventMap[typeof name]) => {
         appSeen.add(name)
-        setApp(name === 'claude-update' ? { claudeUpdate: payload as ClaudeUpdateState } : { [name]: payload })
+        setApp(name === 'claude-update' ? { claudeUpdate: payload as ClaudeUpdateState } : name === 'setup' ? { setup: payload as SetupState, setupLoadFailed: false } : { update: payload as UpdateState })
       })
     }
   }
 
   /** 앱 쪽 첫 상태를 받는다 — 한 칸이 실패하면(옛 api 등) 그 칸은 처음 값 그대로. 절대 거절하지 않는다 */
   const loadApp = async () => {
-    const take = async <T,>(call: () => Promise<T>, apply: (v: T) => Partial<AppState>, event?: keyof AppEventMap) => {
+    const take = async <T,>(call: () => Promise<T>, apply: (v: T) => Partial<AppState>, event?: keyof AppEventMap, onFail?: () => void) => {
       let v: T
-      try { v = await call() } catch { return }
+      try { v = await call() } catch { if (!(event && appSeen.has(event))) onFail?.(); return }
       if (event && appSeen.has(event)) return
       setApp(apply(v))
     }
     await Promise.all([
       take(() => api.appInfo(), info => ({ info })),
       take(() => api.prefs(), prefs => ({ prefs })),
-      take(() => api.setupState(), setup => ({ setup }), 'setup'),
+      take(() => api.setupState(), setup => ({ setup, setupLoadFailed: false }), 'setup', () => setApp({ setupLoadFailed: true })),
       take(() => api.updateState(), update => ({ update }), 'update'),
       take(() => api.claudeUpdateState(), claudeUpdate => ({ claudeUpdate }), 'claude-update'),
     ])

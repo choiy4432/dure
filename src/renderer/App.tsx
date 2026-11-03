@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { LucideProvider } from 'lucide-react'
 import { getStore, useDure } from './state/store'
+import { effectiveSetup } from './state/selectors'
 import { TopBar } from './shell/TopBar'
 import { StatusBar } from './shell/StatusBar'
 import { SplitView } from './shell/SplitView'
@@ -24,7 +25,9 @@ export function App() {
     const room = s.rooms.find(r => r.id === s.roomId) ?? null
     return {
       loadError: s.loadError,
-      setupPhase: s.app.setup.phase,
+      setup: s.app.setup,
+      setupLoadFailed: s.app.setupLoadFailed,
+      claudeMissing: s.claudeMissing,
       roomId: room?.id ?? null,
       agentCount: room ? s.agents.filter(a => a.roomId === room.id).length : 0,
     }
@@ -34,8 +37,9 @@ export function App() {
   const [dialog, setDialog] = useState<Dialog>(null)
   const [askAllow, setAskAllow] = useState(false)
   const close = () => setDialog(null)
-  const preparing = v.setupPhase === 'needs' || v.setupPhase === 'relaunching'
-  const blocked = v.loadError !== null || preparing || v.setupPhase === 'checking'
+  const setupPhase = effectiveSetup(v.setup, v.claudeMissing, v.setupLoadFailed).phase
+  const preparing = setupPhase === 'needs' || setupPhase === 'relaunching'
+  const blocked = v.loadError !== null || preparing || setupPhase === 'checking' || v.claudeMissing
 
   let body
   if (v.loadError !== null) {
@@ -44,7 +48,7 @@ export function App() {
         <LoadFailed message={v.loadError} />
       </main>
     )
-  } else if (v.setupPhase === 'checking') {
+  } else if (setupPhase === 'checking') {
     body = (
       <main className="cv">
         <Splash inline />

@@ -1,3 +1,4 @@
+import type { SetupState } from '../../shared/appTypes'
 import type { AgentId, MessageState, PendingRequest, RelayMessage, RemoteIssue, Room, RoomId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { remoteIssueText } from '../../shared/remoteTexts'
@@ -166,4 +167,16 @@ export function label(edge: Pick<EdgeView, 'state' | 'at'>, now: number): string
     case 'queued': return MESSAGE_WORD[edge.state]
     default: return ''
   }
+}
+
+const NEED_INSTALL: SetupState = { phase: 'needs', install: { state: 'todo' }, login: { state: 'locked' } }
+
+/**
+ * 화면이 따르는 준비 상태 — 상태를 못 받았으면(loadFailed) claude 가 없을 때만 준비 화면, 아니면 준비됨.
+ * 준비됐다는데 스냅샷은 claude 가 없다고 하면(설치·다시 켠 직후) 준비 화면 — 없는 claude 로 지도를 열지 않는다.
+ */
+export function effectiveSetup(setup: SetupState, claudeMissing: boolean, loadFailed: boolean): SetupState {
+  if (loadFailed && setup.phase === 'checking') return claudeMissing ? NEED_INSTALL : { phase: 'ready' }
+  if (setup.phase === 'ready' && claudeMissing) return NEED_INSTALL
+  return setup
 }

@@ -56,6 +56,29 @@ describe('App 셸', () => {
     expect(screen.queryByRole('heading', { name: /준비가/ })).toBeNull()
   })
 
+  it('준비 상태를 못 받으면: claude 없음 → 설치 칸 (영원히 여는 중이 아니다)', async () => {
+    ;(window as any).dure.setupState = async () => { throw new Error('x') }
+    snapshot = { ...snapshot, claudeMissing: true }
+    await renderApp()
+    expect(screen.getByRole('button', { name: '설치' })).toBeTruthy()
+    expect(screen.queryByRole('status', { name: '두레를 여는 중' })).toBeNull()
+  })
+
+  it('준비 상태를 못 받아도 claude 가 있으면 일반 화면', async () => {
+    ;(window as any).dure.setupState = async () => { throw new Error('x') }
+    await renderApp()
+    expect(screen.queryByRole('status', { name: '두레를 여는 중' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '설치' })).toBeNull()
+  })
+
+  it('준비됨인데 스냅샷이 claude 없음이면 준비 화면, 설정 잠김', async () => {
+    snapshot = { ...snapshot, claudeMissing: true, rooms: [room('r1')] }
+    setupState = { phase: 'ready' }
+    await renderApp()
+    expect(screen.getByRole('heading', { name: '준비가 두 가지 필요해요' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '설정' })).toHaveProperty('disabled', true)
+  })
+
   it('방이 없으면 첫 방 안내 + 방 만들기, 에이전트 추가는 없다', async () => {
     await renderApp()
     expect(screen.getByText('첫 방을 만들어 보세요')).toBeTruthy()

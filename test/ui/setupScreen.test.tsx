@@ -104,4 +104,50 @@ describe('SetupScreen — 준비 화면', () => {
     await show({ phase: 'relaunching' })
     expect(screen.getByText('두레를 다시 켜요…')).toBeInTheDocument()
   })
+
+  describe('초점', () => {
+    const title = (t: string) => screen.getByText(t).closest<HTMLElement>('.setup-t')
+    it('처음 그릴 때는 초점을 가져오지 않는다', async () => {
+      await show(needs({ state: 'todo' }, { state: 'locked' }))
+      expect(document.activeElement).toBe(document.body)
+    })
+
+    it('[설치] → 도는 중이면 단추가 없으니 현재 단계 제목으로', async () => {
+      await show(needs({ state: 'todo' }, { state: 'locked' }))
+      screen.getByRole('button', { name: '설치' }).focus()
+      await act(async () => emit('setup', needs({ state: 'running', lines: [] }, { state: 'locked' })))
+      expect(document.activeElement).toBe(title('Claude Code 설치'))
+    })
+
+    it('설치 끝 → 다음 단계의 [로그인] 으로', async () => {
+      await show(needs({ state: 'running', lines: [] }, { state: 'locked' }))
+      title('Claude Code 설치')!.focus()
+      await act(async () => emit('setup', needs({ state: 'done', version: '1' }, { state: 'todo' })))
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: '로그인' }))
+    })
+
+    it('[로그인] → 기다림이면 [다시 열기] 로', async () => {
+      await show(needs({ state: 'done', version: null }, { state: 'todo' }))
+      screen.getByRole('button', { name: '로그인' }).focus()
+      await act(async () => emit('setup', needs({ state: 'done', version: null }, { state: 'waiting' })))
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: '다시 열기' }))
+    })
+
+    it('다시 켜는 중이면 현재 단계 제목으로', async () => {
+      await show(needs({ state: 'done', version: null }, { state: 'waiting' }))
+      screen.getByRole('button', { name: '다시 열기' }).focus()
+      await act(async () => emit('setup', { phase: 'relaunching' }))
+      expect(document.activeElement).toBe(title('둘러보기'))
+    })
+
+    it('초점이 다른 곳에 있으면 뺏지 않는다', async () => {
+      await show(needs({ state: 'todo' }, { state: 'locked' }))
+      const other = document.createElement('button')
+      document.body.appendChild(other)
+      other.focus()
+      await act(async () => emit('setup', needs({ state: 'running', lines: [] }, { state: 'locked' })))
+      expect(document.activeElement).toBe(other)
+      other.remove()
+    })
+  })
 })

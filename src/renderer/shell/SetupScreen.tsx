@@ -1,6 +1,7 @@
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 import { useDure } from '../state/store'
+import { effectiveSetup } from '../state/selectors'
 import { Presence } from '../lib/presence'
 import { ExpandBox } from '../lib/ExpandBox'
 import { SETUP } from '../lib/words'
@@ -11,9 +12,26 @@ import type { InstallStep, LoginStep } from '../../shared/appTypes'
  * 단추는 api 만 부른다. 진행은 main 이 보내는 'setup' 사건이 바꾼다 — 눌린 단추는 다음 상태가 올 때까지만 막는다.
  */
 export function SetupScreen() {
-  const setup = useDure(s => s.app.setup)
+  const raw = useDure(s => ({ setup: s.app.setup, missing: s.claudeMissing, failed: s.app.setupLoadFailed }))
+  const setup = effectiveSetup(raw.setup, raw.missing, raw.failed)
   const [busy, setBusy] = useState<string | null>(null)
   useEffect(() => setBusy(null), [setup])
+
+  // 단계가 바뀌어 눌렀던 단추가 사라지면 초점이 body 로 떨어진다 — 새 현재 단계의 주 단추(없으면 제목)로 옮긴다. 처음 그릴 때와 다른 곳에 있는 초점은 건드리지 않는다
+  const root = useRef<HTMLDivElement>(null)
+  const prevKey = useRef<string | null>(null)
+  const key = setup.phase === 'needs' ? `needs/${setup.install.state}/${setup.login.state}` : setup.phase
+  useEffect(() => {
+    const was = prevKey.current
+    prevKey.current = key
+    const el = root.current
+    if (was === null || was === key || !el) return
+    const active = document.activeElement
+    if (active && active !== document.body && !el.contains(active)) return
+    const cur = el.querySelector<HTMLElement>('.setup-s.cur')
+    cur?.querySelector<HTMLElement>('[data-primary]')?.focus()
+    if (!el.contains(document.activeElement)) cur?.querySelector<HTMLElement>('.setup-t')?.focus()
+  }, [key])
 
   if (setup.phase !== 'needs' && setup.phase !== 'relaunching') return null
 
@@ -24,7 +42,7 @@ export function SetupScreen() {
 
   if (setup.phase === 'relaunching') {
     return (
-      <div className="empty setup-wrap">
+      <div className="empty setup-wrap" ref={root}>
         <section className="setup" aria-label={SETUP.kicker}>
           <p className="setup-k">{SETUP.kicker}</p>
           <ol className="setup-steps">
@@ -44,7 +62,7 @@ export function SetupScreen() {
   const title = loginOnly ? SETUP.titleLogin : SETUP.titleBoth
 
   return (
-    <div className="empty setup-wrap">
+    <div className="empty setup-wrap" ref={root}>
       <section className="setup" aria-labelledby="setup-h">
         <p className="setup-k">{SETUP.kicker}</p>
         <h2 className="setup-h" id="setup-h">{title}</h2>
@@ -64,7 +82,7 @@ function Step({ n, state, title, tail, children }: { n: number; state: 'cur' | '
   return (
     <li className={`setup-s ${state}`}>
       <span className="setup-n" aria-hidden="true">{state === 'done' ? <Check size={13} strokeWidth={2.5} /> : n}</span>
-      <span className="setup-t">
+      <span className="setup-t" tabIndex={-1}>
         {title}
         {tail && <> {tail}</>}
       </span>
@@ -106,7 +124,7 @@ function InstallRow({ install, busy, call }: { install: InstallStep; busy: strin
         {!running && (
           <>
             <div className="setup-acts">
-              <button type="button" className="btn pri" disabled={busy === 'install'} onClick={() => call('install', () => window.dure.installClaude())}>
+              <button type="button" className="btn pri" data-primary disabled={busy === 'install'} onClick={() => call('install', () => window.dure.installClaude())}>
                 {install.state === 'failed' ? SETUP.retry : SETUP.install}
               </button>
               <button type="button" className="lk" onClick={() => void window.dure.openSetupGuide()}>
@@ -150,12 +168,12 @@ function LoginRow({ login, busy, call }: { login: LoginStep; busy: string | null
           {login.state === 'waiting' ? (
             <>
               <span className="setup-wait"><span className="setup-dot" aria-hidden="true" />{SETUP.waiting}</span>
-              <button type="button" className="lk" disabled={busy === 'login'} onClick={() => call('login', () => window.dure.loginClaude())}>
+              <button type="button" className="lk" data-primary disabled={busy === 'login'} onClick={() => call('login', () => window.dure.loginClaude())}>
                 {SETUP.reopen}
               </button>
             </>
           ) : (
-            <button type="button" className="btn pri" disabled={busy === 'login'} onClick={() => call('login', () => window.dure.loginClaude())}>
+            <button type="button" className="btn pri" data-primary disabled={busy === 'login'} onClick={() => call('login', () => window.dure.loginClaude())}>
               {SETUP.login}
             </button>
           )}

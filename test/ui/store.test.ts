@@ -1302,7 +1302,7 @@ describe('store 앱 상태', () => {
   it('처음 값은 확인 중·대기 · init 뒤 api 값', async () => {
     const { api } = fake({ setupState: async () => ({ phase: 'needs', install: { state: 'todo' }, login: { state: 'locked' } }) })
     const s = createStore(api)
-    expect(s.getState().app).toEqual({ info: null, prefs: null, setup: { phase: 'checking' }, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false })
+    expect(s.getState().app).toEqual({ info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false })
     await s.init()
     expect(s.getState().app.setup.phase).toBe('needs')
     expect(s.getState().app.info).toEqual({ version: '1.0.0', packaged: true })
@@ -1382,5 +1382,16 @@ describe('store 앱 상태', () => {
     await s.init()
     s.hideUpdateToast()
     expect(s.getState().app.toastHidden).toBe(true)
+  })
+
+  it('setupState 가 거절되면 setupLoadFailed, 사건이 오면 풀린다', async () => {
+    const { api, emit } = fake({ setupState: async () => { throw new Error('x') } })
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().app.setupLoadFailed).toBe(true)
+    expect(s.getState().app.setup).toEqual({ phase: 'checking' })
+    emit('setup', { phase: 'ready' })
+    expect(s.getState().app.setupLoadFailed).toBe(false)
+    expect(s.getState().app.setup).toEqual({ phase: 'ready' })
   })
 })
