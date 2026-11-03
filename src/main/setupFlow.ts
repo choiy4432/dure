@@ -7,7 +7,8 @@ export type SetupDeps = {
   loggedIn(c: ClaudeCommand): Promise<boolean>
   version(c: ClaudeCommand): Promise<string | null>
   spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: number | null }>; kill(): Promise<void> }
-  spawnLogin(c: ClaudeCommand): { kill(): void }
+  /** 로그인 창 — kill 은 그 창의 프로세스 나무를 끄고 끝날 때까지 기다린다 */
+  spawnLogin(c: ClaudeCommand): { kill(): Promise<void> }
   relaunch(): void
   /** 엔진이 이미 만들어져 있나 — 없으면 로그인 뒤 두레를 다시 켠다 */
   hasEngine: boolean
@@ -22,7 +23,7 @@ export type SetupFlow = {
   check(): Promise<void>
   install(): Promise<void>
   login(): Promise<void>
-  /** 도는 설치 프로세스 나무를 끄고(끝날 때까지 기다린다) 로그인 확인을 멈춘다 — 이 뒤로는 상태를 내지 않는다 */
+  /** 도는 설치 프로세스 나무와 로그인 창을 끄고(둘 다 끝날 때까지 기다린다) 로그인 확인을 멈춘다 — 이 뒤로는 상태를 내지 않는다 */
   dispose(): Promise<void>
 }
 
@@ -37,7 +38,11 @@ export function createSetupFlow(d: SetupDeps): SetupFlow {
   let state: SetupState = { phase: 'checking' }
   let installStep: InstallStep = { state: 'todo' }
   let installing: { kill(): Promise<void> } | null = null
-  let loginProc: { kill(): void } | null = null
+  let loginProc: { kill(): Promise<void> } | null = null
+  /** 마지막으로 건 로그인 창 끄기 — 다시 열기·dispose 가 끝나길 기다린다. 실패는 삼킨다(끄는 길은 계속) */
+  let loginKill: Promise<void> = Promise.resolve()
+  /** 로그인을 누른 차례 — 앞 창을 끄는 사이 또 누르면 앞 차례는 창을 열지 않는다 */
+  let loginSeq = 0
   let poll: ReturnType<typeof setInterval> | null = null
   let giveUp: ReturnType<typeof setTimeout> | null = null
   let disposed = false
@@ -51,13 +56,24 @@ export function createSetupFlow(d: SetupDeps): SetupFlow {
     set({ phase: 'needs', install: installStep, login })
   }
 
-  function stopLogin(): void {
+  /** 로그인 확인을 멈추고 창을 끈다 — 끄기가 끝나면 풀리는 약속(거부하지 않는다) */
+  function stopLogin(): Promise<void> {
     if (poll) clearInterval(poll)
     if (giveUp) clearTimeout(giveUp)
     poll = null
     giveUp = null
-    loginProc?.kill()
+    const proc = loginProc
     loginProc = null
+    if (proc) {
+      let killing: Promise<void>
+      try {
+        killing = Promise.resolve(proc.kill())
+      } catch (e) {
+        killing = Promise.reject(e)
+      }
+      loginKill = killing.catch(() => {})
+    }
+    return loginKill
   }
 
   /** 로그인 됨 — 엔진이 있으면 ready, 없으면 다시 켠다 */
@@ -129,7 +145,10 @@ export function createSetupFlow(d: SetupDeps): SetupFlow {
     if (disposed) return
     const c = d.claude()
     if (!c) return
-    stopLogin()
+    // 다시 열기 — 앞 창을 다 끈 뒤 새로 연다(창이 둘 남지 않게)
+    const seq = ++loginSeq
+    await stopLogin()
+    if (disposed || seq !== loginSeq) return
     try {
       loginProc = d.spawnLogin(c)
     } catch (e) {
@@ -147,12 +166,12 @@ export function createSetupFlow(d: SetupDeps): SetupFlow {
         .then((ok) => {
           checking = false
           if (!ok || disposed || !poll) return
-          stopLogin()
+          void stopLogin() // 로그인을 마친 창 — 남아 있으면 닫는다
           finish()
         })
     }, pollMs)
     giveUp = setTimeout(() => {
-      stopLogin()
+      void stopLogin()
       needs({ state: 'failed', message: LOGIN_TIMEOUT })
     }, loginTimeoutMs)
   }
@@ -166,12 +185,13 @@ export function createSetupFlow(d: SetupDeps): SetupFlow {
       disposed = true
       const killing = installing?.kill()
       installing = null
-      stopLogin()
+      const loginClosing = stopLogin() // 앞서 건(로그인 성공·상한 뒤) 끄기도 이 약속이다
       try {
         await killing
       } catch {
         /* 못 꺼도 끄는 길은 계속 */
       }
+      await loginClosing
     },
   }
 }

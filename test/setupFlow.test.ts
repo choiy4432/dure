@@ -9,7 +9,7 @@ function setup(over: Partial<SetupDeps> = {}) {
   let found: typeof CLAUDE | null = null
   let loggedIn = false
   const install = { onLine: (_l: string) => {}, finish: (_r: { code: number | null }) => {}, kill: vi.fn(async () => {}) }
-  const login = { kill: vi.fn() }
+  const login = { kill: vi.fn(async () => {}) }
   const deps = {
     claude: vi.fn(() => found),
     loggedIn: vi.fn(async () => loggedIn),
@@ -218,6 +218,81 @@ describe('setupFlow', () => {
     await vi.advanceTimersByTimeAsync(10000)
     expect(t.states.length).toBe(m)
     expect(t.deps.relaunch).not.toHaveBeenCalled()
+  })
+
+  it('dispose — 로그인 창 끄기(나무째)가 끝날 때까지 기다린다', async () => {
+    const s = setup()
+    s.setFound(CLAUDE)
+    await s.flow.check()
+    await s.flow.login()
+    let release!: () => void
+    s.login.kill.mockImplementation(() => new Promise<void>((r) => { release = r }))
+    let done = false
+    const p = s.flow.dispose().then(() => { done = true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(s.login.kill).toHaveBeenCalledTimes(1)
+    expect(done).toBe(false) // 창이 아직 안 꺼졌다 — 기다린다
+    release()
+    await p
+    expect(done).toBe(true)
+  })
+
+  it('dispose — 끄기가 실패해도 끝난다', async () => {
+    const s = setup()
+    s.setFound(CLAUDE)
+    await s.flow.check()
+    await s.flow.login()
+    s.login.kill.mockImplementation(async () => { throw new Error('taskkill 실패') })
+    await expect(s.flow.dispose()).resolves.toBeUndefined()
+  })
+
+  it('dispose — 로그인 상한에서 건 창 끄기가 아직 도는 중이면 그것도 기다린다', async () => {
+    const s = setup()
+    s.setFound(CLAUDE)
+    await s.flow.check()
+    let release!: () => void
+    s.login.kill.mockImplementation(() => new Promise<void>((r) => { release = r }))
+    await s.flow.login()
+    await vi.advanceTimersByTimeAsync(600000) // 상한 — 창 끄기 시작
+    expect(s.login.kill).toHaveBeenCalledTimes(1)
+    let done = false
+    const p = s.flow.dispose().then(() => { done = true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(done).toBe(false)
+    release()
+    await p
+    expect(done).toBe(true)
+    expect(s.login.kill).toHaveBeenCalledTimes(1) // 같은 창을 두 번 끄지 않는다
+  })
+
+  it('로그인이 되면 창을 닫는다', async () => {
+    const s = setup()
+    s.setFound(CLAUDE)
+    await s.flow.check()
+    await s.flow.login()
+    s.setLoggedIn(true)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(s.flow.state()).toEqual({ phase: 'ready' })
+    expect(s.login.kill).toHaveBeenCalledTimes(1)
+  })
+
+  it('다시 열기 — 앞 창을 다 끈 뒤에 새 창을 연다 · 그사이 또 누르면 창은 하나만', async () => {
+    const s = setup()
+    s.setFound(CLAUDE)
+    await s.flow.check()
+    await s.flow.login()
+    expect(s.deps.spawnLogin).toHaveBeenCalledTimes(1)
+    let release!: () => void
+    s.login.kill.mockImplementation(() => new Promise<void>((r) => { release = r }))
+    const again = s.flow.login()
+    const third = s.flow.login()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(s.login.kill).toHaveBeenCalledTimes(1)
+    expect(s.deps.spawnLogin).toHaveBeenCalledTimes(1) // 앞 창이 아직 안 꺼졌다
+    release()
+    await Promise.all([again, third])
+    expect(s.deps.spawnLogin).toHaveBeenCalledTimes(2)
+    expect(s.flow.state()).toMatchObject({ login: { state: 'waiting' } })
   })
 
   it('relaunch 는 claude 를 찾았을 때만', async () => {

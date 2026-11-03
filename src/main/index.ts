@@ -9,7 +9,8 @@ import type { Engine } from '../engine'
 import type { AppEventMap, ClaudeUpdateState } from '../shared/appTypes'
 import { appEnv, appUserModelId } from './appEnv'
 import { initAppPrefsSafe, writeAppPrefs } from './appPrefs'
-import { resolveClaudeCommand, resolveSshCommand } from './claudeCommand'
+import { resolveClaudeCommand, resolveSshCommand, type ClaudeCommand } from './claudeCommand'
+import { cmdArgs, startWaitLine } from './cmdLine'
 import { updateClaude, type ClaudeUpdateRun } from './claudeUpdate'
 import { createQuitControl } from './quit'
 import { createUpdater, RELEASE_URL, type UpdaterLike } from './updater'
@@ -85,17 +86,26 @@ function spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: numb
 
 /**
  * 로그인 — 새 콘솔 창에서 `claude auth login --claudeai` (브라우저가 열린다). 창 없이 되는지(D1)는 아직 실측 전이라 이 선택을 여기 한 곳에 둔다.
- * 콘솔 창은 `start` 가 따로 띄운 것이라 kill() 은 cmd 만 닿는다 — 창 쪽은 최선(끝나면 스스로 닫히고, 안 닫혀도 사용자가 닫는다).
+ * `start /wait` 라 cmd 가 claude 를 기다리며 살아 있고 claude 는 cmd 의 자식 — kill() 은 cmd 를 나무째 꺼 콘솔 창까지 닫고, 끝날 때까지 기다린다.
+ * 줄은 cmdLine 이 직접 만든다(경로에 & ^ % 가 있어도 cmd 가 나누거나 펼치지 않게).
  */
-function spawnLogin(c: { command: string; argsPrefix: string[] }): { kill(): void } {
-  const child = spawn(
-    'cmd.exe',
-    ['/c', 'start', '""', c.command, ...c.argsPrefix, 'auth', 'login', '--claudeai'],
-    { windowsHide: true, detached: true, stdio: 'ignore' },
-  )
-  child.on('error', () => {})
+function spawnLogin(c: ClaudeCommand): { kill(): Promise<void> } {
+  const line = startWaitLine(c.command, [...c.argsPrefix, 'auth', 'login', '--claudeai'])
+  const child = spawn('cmd.exe', cmdArgs(line), {
+    windowsHide: true,
+    windowsVerbatimArguments: true,
+    detached: true,
+    stdio: 'ignore',
+  })
+  let alive = true
+  const gone = (): void => {
+    alive = false
+  }
+  child.on('exit', gone)
+  child.on('error', gone)
   child.unref()
-  return { kill: () => void child.kill() }
+  // 이미 끝난 cmd 는 끄지 않는다 — 그 pid 를 다른 프로세스가 물려받았을 수 있다
+  return { kill: () => (alive && child.pid ? killTree(child.pid) : Promise.resolve()) }
 }
 
 /** 앱 사건을 받는 곳 — registerIpc 가 onAppEvent 로 창 쪽을 단다 */
