@@ -599,12 +599,9 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     async init() {
       subscribeEvents()
       subscribeAppEvents()
-      const app = loadApp()
-      try {
-        await fetchSnapshot()
-      } finally {
-        await app
-      }
+      // 앱 상태는 기다리지 않는다 — 응답이 오는 대로 칸이 채워지고, 안 와도 처음 상태는 스냅샷만으로 끝난다
+      void loadApp().catch(() => {})
+      await fetchSnapshot()
     },
     async setPrefs(p) {
       const prefs = await api.setPrefs(p)

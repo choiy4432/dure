@@ -1340,6 +1340,33 @@ describe('store 앱 상태', () => {
     expect(s.getState().agents).toHaveLength(3)
   })
 
+  it('setupState 가 끝내 안 와도 init 은 스냅샷만으로 끝난다', async () => {
+    const { api } = fake({ setupState: () => new Promise<SetupState>(() => {}) })
+    const s = createStore(api)
+    await s.init()
+    expect(s.getState().app.setup).toEqual({ phase: 'checking' })
+    expect(s.getState().agents).toHaveLength(3)
+  })
+
+  it('init 뒤에 온 setupState 응답도 칸을 채운다 · 사건이 먼저면 사건이 이긴다', async () => {
+    let resolve!: (v: SetupState) => void
+    const a = fake({ setupState: () => new Promise<SetupState>(r => { resolve = r }) })
+    const s = createStore(a.api)
+    await s.init()
+    resolve({ phase: 'ready' })
+    await Promise.resolve(); await Promise.resolve()
+    expect(s.getState().app.setup).toEqual({ phase: 'ready' })
+
+    let resolve2!: (v: SetupState) => void
+    const b = fake({ setupState: () => new Promise<SetupState>(r => { resolve2 = r }) })
+    const s2 = createStore(b.api)
+    await s2.init()
+    b.emit('setup', { phase: 'relaunching' })
+    resolve2({ phase: 'ready' })
+    await Promise.resolve(); await Promise.resolve()
+    expect(s2.getState().app.setup).toEqual({ phase: 'relaunching' })
+  })
+
   it('setPrefs 는 api 가 돌려준 값으로 prefs 를 갈음한다', async () => {
     const { api } = fake()
     const s = createStore(api)
