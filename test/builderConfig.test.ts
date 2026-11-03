@@ -1,0 +1,26 @@
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { join } from 'node:path'
+
+// electron-builder 가 설정을 읽는 그 파서(js-yaml — app-builder-lib 의 의존성)로 읽는다
+const { load } = createRequire(import.meta.url)('js-yaml') as { load(text: string): unknown }
+
+type BuilderConfig = { nsis?: { oneClick?: unknown; perMachine?: unknown; deleteAppDataOnUninstall?: unknown } }
+const config = load(readFileSync(join(__dirname, '..', 'electron-builder.yml'), 'utf8')) as BuilderConfig
+
+/**
+ * 지우기(제거)가 사용자 데이터를 지우지 않게 — 2026-11-03 사고의 되풀이 막기.
+ * electron-builder 제거 프로그램은 앱 데이터를 지울 때 `RMDir /r "$APPDATA\${APP_PACKAGE_NAME}"` 도 하는데,
+ * 패키지 이름이 dure 라 윈도우(대소문자 무시)에선 %APPDATA%\Dure — 방·대화가 든 진짜 데이터 폴더다.
+ */
+describe('electron-builder.yml — 제거가 %APPDATA%\\Dure 를 지우지 않는다', () => {
+  it('nsis.deleteAppDataOnUninstall 은 false', () => {
+    expect(config.nsis?.deleteAppDataOnUninstall).toBe(false)
+  })
+
+  it('내보낸 그대로 — 한 번에 설치(oneClick) · 사용자별(perMachine: false)', () => {
+    expect(config.nsis?.oneClick).toBe(true)
+    expect(config.nsis?.perMachine).toBe(false)
+  })
+})
