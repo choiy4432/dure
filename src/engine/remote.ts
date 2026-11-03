@@ -102,13 +102,16 @@ export function remoteLaunchScript(a: { agentId: string; launchId: string; folde
 }
 
 /**
- * 띄우기 ssh — ExitOnForwardFailure=no: ~/.ssh/config 의 다른 전달(LocalForward 등)이 실패해도 끝나지 않게. 우리 -R 이 실패하면 ssh 는 경고만
- * 내고 계속 돈다 — 엔진이 stderr 에서 그 포트의 줄(forwardFailed)을 보고 내린 뒤 다른 포트로. ClearAllForwardings 는 명령줄 -R 까지 지워 못 쓴다
+ * 띄우기 ssh — ExitOnForwardFailure=yes: 서버가 우리 -R 포트를 못 열면(다른 프로그램이 쥐고 있다) 명령 전에 255 로 끝난다. 끝나지 않게 두면
+ * 서버 claude 가 그 남의 포트로 MCP 토큰을 보낼 수 있다(stderr 를 보고 내리는 것은 LogLevel 에 가려지고 늦다). 대가: ~/.ssh/config 의 그 서버
+ * 전달(LocalForward 등)이 실패해도 띄우기가 실패한다 — 두레용 Host 별칭으로 피한다. ClearAllForwardings 는 명령줄 -R 까지 지워 못 쓴다.
+ * ControlPath=none: 설정 파일의 연결 공유(ControlMaster)를 거치지 않고 이 ssh 가 직접 맺는다 — 전달 실패를 이 ssh 가 받는다
  */
 export function launchArgs(a: { host: RemoteHost; remotePort: number; localPort: number; script: string }): string[] {
   return [
     ...SSH_OPTIONS,
-    '-o', 'ExitOnForwardFailure=no',
+    '-o', 'ExitOnForwardFailure=yes',
+    '-o', 'ControlPath=none',
     '-R', `127.0.0.1:${a.remotePort}:127.0.0.1:${a.localPort}`,
     ...hostArgs(a.host),
     'bash -lc ' + shq(a.script),
@@ -124,7 +127,7 @@ export function runArgs(a: { host: RemoteHost; script: string; login?: boolean; 
   return [...opts, '-o', 'ClearAllForwardings=yes', ...hostArgs(a.host), `bash ${a.login === false ? '-c' : '-lc'} ` + shq(a.script)];
 }
 
-/** 띄운 ssh 의 stderr 에 우리 원격 포트를 서버가 못 열었다는 줄이 있나 — 설정 파일의 다른 전달 실패는 포트 번호로 거른다 */
+/** 끝난 띄우기 ssh 의 stderr 에 우리 원격 포트를 서버가 못 열었다는 줄이 있나 — 설정 파일의 다른 전달 실패는 포트 번호로 거른다 */
 export function forwardFailed(stderr: string, port: number): boolean {
   return new RegExp(`remote port forwarding failed for listen port ${port}(?!\\d)`, 'i').test(stderr);
 }

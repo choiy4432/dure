@@ -259,11 +259,12 @@ describe('remoteLaunchScript — 없는 폴더', () => {
 });
 
 describe('launchArgs', () => {
-  it('옵션·역터널(서버 쪽도 127.0.0.1)·호스트·명령 · 전달 실패로 끝내지 않는다(설정 파일의 다른 전달) · RemoteCommand=none', () => {
+  it('옵션·역터널(서버 쪽도 127.0.0.1)·호스트·명령 · 전달을 못 열면 명령 전에 끝낸다(남이 쥔 포트로 토큰이 가지 않게) · RemoteCommand=none', () => {
     const a = launchArgs({ host: 'me@h:2222', remotePort: 41000, localPort: 5123, script: `echo 'x'` });
     expect(a).toContain('-T');
     expect(a).toContain('BatchMode=yes');
-    expect(a).toEqual(expect.arrayContaining(['-o', 'ExitOnForwardFailure=no', 'RemoteCommand=none']));
+    expect(a).toEqual(expect.arrayContaining(['-o', 'ExitOnForwardFailure=yes', 'RemoteCommand=none']));
+    expect(a).toEqual(expect.arrayContaining(['-o', 'ControlPath=none'])); // 설정 파일의 연결 공유(ControlMaster)를 거치지 않는다 — 전달 실패를 이 ssh 가 직접 받게
     expect(a).not.toContain('ClearAllForwardings=yes'); // 명령줄 -R 까지 지운다
     const i = a.indexOf('-R');
     expect(a[i + 1]).toBe('127.0.0.1:41000:127.0.0.1:5123');

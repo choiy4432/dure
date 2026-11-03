@@ -6075,7 +6075,7 @@ describe('서버 방 띄우기', () => {
 
     const start = calls().find((c) => c.kind === 'launch');
     expect(start.host).toBe('dev');
-    expect(start.argv).toEqual(expect.arrayContaining(['-T', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=no', 'RemoteCommand=none', '-R']));
+    expect(start.argv).toEqual(expect.arrayContaining(['-T', '-o', 'BatchMode=yes', '-o', 'ExitOnForwardFailure=yes', 'RemoteCommand=none', '-R']));
     expect(start.argv).not.toContain('ClearAllForwardings=yes');
     expect(start.command).toMatch(/^bash -lc '/);
     const fwd = /^127\.0\.0\.1:(\d+):127\.0\.0\.1:(\d+)$/.exec(start.forwards[0])!;
@@ -6209,8 +6209,8 @@ describe('서버 방 띄우기', () => {
     expect(ports.sort()).toEqual([base, base + 1]);
   }, 30_000);
 
-  test('포트 겹침 — ssh 는 경고만 내고 돌지만(ExitOnForwardFailure=no) 그 줄을 보고 내린 뒤 다른 포트로 다시 띄운다(기다린 입력은 그대로 간다)', async () => {
-    const { e, web, calls, mode, notices } = await remoteRoom();
+  test('포트 겹침 — ssh 가 명령 전에 끝나고(ExitOnForwardFailure=yes — 서버에서 아무것도 돌지 않는다) 다른 포트로 다시 띄운다(기다린 입력은 그대로 간다)', async () => {
+    const { e, web, calls, events, mode, notices } = await remoteRoom();
     mode('portclash-once');
     const done = resultOf(e, web.id);
     await e.sendUser(web.id, text('echo 하나'));
@@ -6218,6 +6218,7 @@ describe('서버 방 띄우기', () => {
     const tries = calls().filter((c) => c.kind === 'launch');
     expect(tries).toHaveLength(2);
     expect(remotePortOf(tries[0])).not.toBe(remotePortOf(tries[1]));
+    expect(launchesIn(events())).toHaveLength(1); // 겹친 쪽은 서버 명령까지 가지 않았다(머리말·토큰이 서버에 안 닿는다)
     expect(e.remoteIssue(web.id)).toBeNull();
     expect(e.errorText(web.id)).toBeNull();
     expect(notices(web.id)).toEqual([]);
@@ -6294,9 +6295,22 @@ describe('서버 방 띄우기', () => {
     expect(e.errorText(web.id)).toBeNull();
   }, 30_000);
 
-  test('~/.ssh/config 에 RemoteForward·RemoteCommand 가 있어도 — 확인·띄우기·정리·기록 확인이 된다(다른 포트의 전달 실패로 다시 띄우지 않는다)', async () => {
+  test('~/.ssh/config 의 RemoteForward 가 실패하면 — 확인은 되지만(전달을 지운다) 띄우기는 명령 전에 끝나 접속 실패(그 ssh 줄) · 다른 포트로 다시 띄우지 않는다', async () => {
     const cfgPort = await freePort();
-    const { e, web, calls, events, notices } = await remoteRoom({ FAKE_SSH_CONFIG_RFWD: String(cfgPort), FAKE_SSH_CONFIG_REMOTECOMMAND: '1' });
+    const { e, web, calls, events, notices } = await remoteRoom({ FAKE_SSH_CONFIG_RFWD: String(cfgPort) });
+    expect(await e.checkRemote('dev')).toEqual({ ok: true, claudeVersion: VERSION });
+    await e.sendUser(web.id, text('echo 하나'));
+    await until('접속 실패', () => e.remoteIssue(web.id) !== null, 10_000);
+    const issue = { kind: 'unreachable', detail: `Error: remote port forwarding failed for listen port ${cfgPort}` };
+    expect(e.remoteIssue(web.id)).toEqual(issue);
+    expect(notices(web.id)).toEqual([`dev 에 접속하지 못했어요 — ${issue.detail}`]);
+    expect(calls().filter((c) => c.kind === 'launch')).toHaveLength(1);
+    expect(launchesIn(events())).toEqual([]);
+    expect(e.heldInput(web.id)).toBe(1);
+  }, 30_000);
+
+  test('~/.ssh/config 에 RemoteCommand 가 있어도 — 확인·띄우기·정리가 된다(모두 RemoteCommand=none)', async () => {
+    const { e, web, calls, events, notices } = await remoteRoom({ FAKE_SSH_CONFIG_REMOTECOMMAND: '1' });
     expect(await e.checkRemote('dev')).toEqual({ ok: true, claudeVersion: VERSION });
     const done = resultOf(e, web.id);
     await e.sendUser(web.id, text('echo 하나'));

@@ -291,13 +291,14 @@ describe('띄우기', () => {
     expect(logLines().find((x) => x.event === 'start').forwards).toEqual([`127.0.0.1:${l.remotePort}:127.0.0.1:${l.localPort}`]);
   }, 20000);
 
-  it('portclash-once → 첫 번째만 전달 실패 — ExitOnForwardFailure=no 라 경고 한 줄 뒤 계속 돈다 · 둘째는 정상', async () => {
+  it('portclash-once → 첫 번째만 전달 실패 — 띄우기(ExitOnForwardFailure=yes)는 명령 전에 255 · 둘째는 정상', async () => {
     const first = await launch({ env: { FAKE_SSH_MODE: 'portclash-once' } });
-    first.run.child.stdin!.write(launchPreamble(first.mcp, first.prompt));
-    await until(() => forwardFailed(first.run.err(), first.remotePort), 8000, '전달 실패 줄');
-    expect(first.run.err()).toContain(`Warning: remote port forwarding failed for listen port ${first.remotePort}`);
-    await pidOf(first.run); // 끝나지 않고 명령까지 갔다 — 엔진이 이 줄을 보고 내린다
-    expect(first.run.child.exitCode).toBeNull();
+    first.run.child.stdin!.end(launchPreamble(first.mcp, first.prompt));
+    expect(await first.run.exit).toBe(255);
+    expect(first.run.err()).toContain(`Error: remote port forwarding failed for listen port ${first.remotePort}`);
+    expect(parsePid(first.run.err())).toBeNull(); // 서버 셸이 돌지 않았다
+    expect(classifyExit({ code: 255, stderr: first.run.err(), started: false, port: first.remotePort })?.kind).toBe('port');
+    expect(fs.existsSync(path.join(home, '.dure'))).toBe(false); // 머리말(토큰)이 서버 파일로 가지 않았다
 
     const second = await launch({ env: { FAKE_SSH_MODE: 'portclash-once' } });
     second.run.child.stdin!.write(launchPreamble(second.mcp, second.prompt) + userLine('echo 둘'));
@@ -305,34 +306,30 @@ describe('띄우기', () => {
     expect(forwardFailed(second.run.err(), second.remotePort)).toBe(false);
   }, 20000);
 
-  it('ExitOnForwardFailure=yes 면 전달 실패에 명령 전 255(옵션대로)', async () => {
-    const busy = net.createServer();
+  it('원격 포트를 서버에서 남이 쓰는 중이면 — 명령 전에 255(그 포트 줄) · 남의 리스너에는 아무것도 오지 않는다', async () => {
+    const got: string[] = [];
+    const busy = net.createServer((c) => c.on('data', (d) => got.push(String(d))));
     const remotePort = await listen(busy);
-    const localPort = await freePort();
-    const args = launchArgs({ host: 'dev', remotePort, localPort, script: remoteLaunchScript({ agentId: AGENT, launchId: LAUNCH, folder: '/home/a/web', claudeArgs: [] }) })
-      .map((x) => (x === 'ExitOnForwardFailure=no' ? 'ExitOnForwardFailure=yes' : x));
-    const r = await sshDone(args, {}, launchPreamble('{}', 'p'));
-    expect(r.code).toBe(255);
-    expect(r.stderr).toContain(`Error: remote port forwarding failed for listen port ${remotePort}`);
-    expect(classifyExit({ code: 255, stderr: r.stderr, started: false, port: remotePort })?.kind).toBe('port');
-    expect(fs.existsSync(path.join(home, '.dure'))).toBe(false); // 명령까지 가지 않았다
+    const l = await launch({ remotePort });
+    l.run.child.stdin!.end(launchPreamble(l.mcp, l.prompt));
+    expect(await l.run.exit).toBe(255);
+    expect(l.run.err()).toContain(`Error: remote port forwarding failed for listen port ${remotePort}`);
+    expect(classifyExit({ code: 255, stderr: l.run.err(), started: false, port: remotePort })?.kind).toBe('port');
+    expect(fs.existsSync(path.join(home, '.dure'))).toBe(false);
+    expect(got).toEqual([]);
   }, 20000);
 
-  it('원격 포트가 정말 쓰이는 중이면 경고 줄(그 포트) · 설정 파일의 다른 전달 실패는 다른 포트 줄', async () => {
-    const busy = net.createServer();
-    const remotePort = await listen(busy);
+  it('설정 파일의 RemoteForward 가 실패해도 띄우기는 명령 전에 255 — 그 포트 줄이라 port 가 아니라 접속 실패', async () => {
     const cfgPort = await freePort();
-    const l = await launch({ remotePort, env: { FAKE_SSH_CONFIG_RFWD: String(cfgPort) } });
-    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
-    await pidOf(l.run);
-    expect(forwardFailed(l.run.err(), remotePort)).toBe(true);
-    expect(l.run.err()).toContain(`Warning: remote port forwarding failed for listen port ${cfgPort}`);
-    const ok = await launch({ env: { FAKE_SSH_CONFIG_RFWD: String(cfgPort) } });
-    ok.run.child.stdin!.write(launchPreamble(ok.mcp, ok.prompt) + userLine('echo 하나'));
-    await until(() => results(ok.run.out()).includes('받음: echo 하나'), 10000, '받음');
-    expect(forwardFailed(ok.run.err(), ok.remotePort)).toBe(false);
-    expect(forwardFailed(ok.run.err(), cfgPort)).toBe(true);
-  }, 30000);
+    const l = await launch({ env: { FAKE_SSH_CONFIG_RFWD: String(cfgPort) } });
+    l.run.child.stdin!.end(launchPreamble(l.mcp, l.prompt));
+    expect(await l.run.exit).toBe(255);
+    expect(l.run.err()).toContain(`Error: remote port forwarding failed for listen port ${cfgPort}`);
+    expect(classifyExit({ code: 255, stderr: l.run.err(), started: false, port: l.remotePort })).toEqual({
+      kind: 'unreachable', detail: `Error: remote port forwarding failed for listen port ${cfgPort}`,
+    });
+    expect(fs.existsSync(path.join(home, '.dure'))).toBe(false);
+  }, 20000);
 
   it('기록 확인 — 가짜 claude 가 남긴 대화 파일(CLAUDE_CONFIG_DIR) 의 id 만', async () => {
     const cfg = path.join(root, '.claude');
