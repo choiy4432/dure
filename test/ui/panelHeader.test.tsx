@@ -610,6 +610,24 @@ describe('PanelHeader — 서버 안내 띠', () => {
     expect(b.querySelector('.band-h')).toBeNull()
   })
 
+  it('끊겨서 잠든 에이전트 — 알약은 관계도 카드처럼 멈춤(빨강, 달 없음), 빨간 오류 띠는 없다 · 일하는 중이면 작업 중', async () => {
+    serverRoom()
+    snapshot.agents = [
+      agent('w', { name: '웹 화면', status: 'idle', asleep: true, remoteIssue: { kind: 'disconnected', detail: null } }),
+      agent('p', { name: '기획', status: 'working', remoteIssue: { kind: 'login', detail: null } }),
+    ]
+    const { store } = await renderPanel()
+    const pill = () => document.querySelector('.ph .pill')!
+    await act(async () => store.selectAgent('w'))
+    expect(pill().textContent).toBe('멈춤')
+    expect(pill().classList.contains('e')).toBe(true)
+    expect(pill().querySelector('svg.st-moon')).toBeNull()
+    expect(document.querySelector('.band.err')).toBeNull()
+    expect(band()).not.toBeNull()
+    await act(async () => store.selectAgent('p'))
+    expect(pill().textContent).toBe('작업 중')
+  })
+
   it('띠는 role=status — 일하는 도중 끊기거나 로그인이 만료되면 화면 읽기 프로그램이 읽는다', async () => {
     serverRoom()
     let emit!: (p: unknown) => void

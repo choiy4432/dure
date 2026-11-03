@@ -4,7 +4,7 @@ import type { AgentId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { REMOTE_LOGIN_HELP, remoteIssueText } from '../../shared/remoteTexts'
 import { getStore, useDure } from '../state/store'
-import { displayStatus, sleepLook, type DisplayStatus } from '../state/selectors'
+import { displayStatus, shownIssue, sleepLook, type DisplayStatus } from '../state/selectors'
 import { errorMessage, fieldError, initial, SLEEP_HINT, SLEEP_WORD, STATUS_WORD } from '../lib/words'
 import { ModelPicker, type Described } from './ModelPicker'
 import { EffortControl } from './EffortControl'
@@ -42,7 +42,11 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
     const agent = s.agents.find(a => a.id === agentId)
     // 서버 방이면 그 서버 — 안내 띠 글에 쓴다
     const host = agent ? s.rooms.find(r => r.id === agent.roomId)?.remote?.host ?? null : null
-    return agent ? { agent, status: displayStatus(agent, s.requests), host } : null
+    if (!agent) return null
+    const status = displayStatus(agent, s.requests)
+    // 알약은 관계도 카드와 같은 말 — 서버 문제(끊김·로그인 만료 …)면 쉬는·잠듦이 아니라 멈춤(빨간 오류 띠는 엔진 오류만)
+    const look: DisplayStatus = host && shownIssue(agent, s.requests) && status !== 'error' ? 'error' : status
+    return { agent, status, look, host }
   })
   const allowBypass = useDure(s => s.allowBypass)
   const [editing, setEditing] = useState(false)
@@ -68,10 +72,10 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
   }, [editing])
 
   if (!v) return null
-  const { agent, status, host } = v
+  const { agent, status, look, host } = v
   const issue = host ? agent.remoteIssue : null
-  const pill = PILL[status]
-  const sleep = sleepLook(agent, status)
+  const pill = PILL[look]
+  const sleep = sleepLook(agent, look)
   const canStop = (status === 'working' || status === 'awaiting') && !stopping
 
   const stop = async () => {
@@ -157,7 +161,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
             ) : (
               <i className={`dot ${sleep === 'waking' ? 'wake' : pill.dot}`} aria-hidden="true" />
             )}
-            {sleep ? SLEEP_WORD[sleep] : STATUS_WORD[status]}
+            {sleep ? SLEEP_WORD[sleep] : STATUS_WORD[look]}
           </span>
           <ModelPicker
             agentId={agent.id}
