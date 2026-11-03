@@ -122,6 +122,26 @@ describe('createUpdater', () => {
     expect(u.quitAndInstall).toHaveBeenCalledWith(true, true)
   })
 
+  it('install — 정리가 실패하면 quitAndInstall 없이 error 상태(짧은 말 · version 유지)', async () => {
+    const { u, up, states } = setup({}, async () => {
+      throw new Error('mcp.close: socket hang up\n    at Server.close (node:net:1)')
+    })
+    await up.check()
+    await up.download()
+    await up.install()
+    expect(u.quitAndInstall).not.toHaveBeenCalled()
+    expect(up.state()).toEqual({ kind: 'error', message: '업데이트를 설치하지 못했어요', version: '0.2.0' })
+    expect(states.at(-1)).toEqual(up.state())
+  })
+
+  it('install — quitAndInstall 이 던져도 error 상태', async () => {
+    const { up } = setup({ quitAndInstall: vi.fn(() => { throw new Error('spawn EPERM') }) })
+    await up.check()
+    await up.download()
+    await up.install()
+    expect(up.state()).toEqual({ kind: 'error', message: '업데이트를 설치하지 못했어요', version: '0.2.0' })
+  })
+
   it('ready 가 아니면 install 은 아무것도 안 한다', async () => {
     const { u, up } = setup()
     await up.install()

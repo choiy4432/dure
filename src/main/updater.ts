@@ -23,6 +23,7 @@ export interface Updater {
 }
 
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+const INSTALL_FAILED = '업데이트를 설치하지 못했어요'
 
 export function createUpdater(o: {
   updater: UpdaterLike | null
@@ -92,10 +93,14 @@ export function createUpdater(o: {
     },
     async install() {
       if (state.kind !== 'ready' || installing) return
+      const { version } = state
       installing = true
       try {
         await o.beforeInstall()
         u.quitAndInstall(true, true)
+      } catch {
+        // 정리(엔진 끄기)나 설치 띄우기가 실패하면 설치하지 않는다 — 창엔 짧은 말로(스택 말고)
+        set({ kind: 'error', message: INSTALL_FAILED, version })
       } finally {
         installing = false
       }
