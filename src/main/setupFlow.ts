@@ -6,7 +6,7 @@ export type SetupDeps = {
   claude(): ClaudeCommand | null
   loggedIn(c: ClaudeCommand): Promise<boolean>
   version(c: ClaudeCommand): Promise<string | null>
-  spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: number | null }>; kill(): void }
+  spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: number | null }>; kill(): Promise<void> }
   spawnLogin(c: ClaudeCommand): { kill(): void }
   relaunch(): void
   /** 엔진이 이미 만들어져 있나 — 없으면 로그인 뒤 두레를 다시 켠다 */
@@ -22,7 +22,8 @@ export type SetupFlow = {
   check(): Promise<void>
   install(): Promise<void>
   login(): Promise<void>
-  dispose(): void
+  /** 도는 설치 프로세스 나무를 끄고(끝날 때까지 기다린다) 로그인 확인을 멈춘다 — 이 뒤로는 상태를 내지 않는다 */
+  dispose(): Promise<void>
 }
 
 const NOT_FOUND = '설치가 끝났는데 claude 를 찾지 못했어요'
@@ -35,7 +36,7 @@ export function createSetupFlow(d: SetupDeps): SetupFlow {
 
   let state: SetupState = { phase: 'checking' }
   let installStep: InstallStep = { state: 'todo' }
-  let installing: { kill(): void } | null = null
+  let installing: { kill(): Promise<void> } | null = null
   let loginProc: { kill(): void } | null = null
   let poll: ReturnType<typeof setInterval> | null = null
   let giveUp: ReturnType<typeof setTimeout> | null = null
@@ -161,11 +162,16 @@ export function createSetupFlow(d: SetupDeps): SetupFlow {
     check,
     install,
     login,
-    dispose() {
+    async dispose() {
       disposed = true
-      installing?.kill()
+      const killing = installing?.kill()
       installing = null
       stopLogin()
+      try {
+        await killing
+      } catch {
+        /* 못 꺼도 끄는 길은 계속 */
+      }
     },
   }
 }

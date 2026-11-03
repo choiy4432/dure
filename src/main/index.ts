@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } 
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
+import { killTree } from '../engine/killTree'
 import { authStatus, claudeVersion, createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
 import type { AppEventMap } from '../shared/appTypes'
@@ -44,7 +45,7 @@ function installCommand(raw: string | undefined): { command: string; args: strin
 }
 
 /** 설치 스크립트를 돌리고 출력(stdout·stderr)을 줄로 쪼개 넘긴다 */
-function spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: number | null }>; kill(): void } {
+function spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: number | null }>; kill(): Promise<void> } {
   const cmd = installCommand(env.DURE_SETUP_INSTALL)
   const child = spawn(cmd.command, cmd.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
   const feed = (stream: NodeJS.ReadableStream | null): void => {
@@ -66,7 +67,8 @@ function spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: numb
     child.on('error', reject)
     child.on('close', (code) => resolve({ code }))
   })
-  return { done, kill: () => void child.kill() }
+  // PowerShell 이 받아 돌리는 claude.exe install 은 자식이라 child.kill() 로는 안 꺼진다 — 나무째 끈다
+  return { done, kill: () => (child.pid ? killTree(child.pid) : Promise.resolve()) }
 }
 
 /**
@@ -191,8 +193,9 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault()
     void (async () => {
       try {
-        setup?.dispose()
-        await engine?.shutdown()
+        // 설치 나무 끄기는 길어야 3초만 기다린다 — 엔진 끄기와 같이
+        const killSetup = Promise.race([setup?.dispose(), new Promise<void>((r) => setTimeout(r, 3000))])
+        await Promise.all([killSetup, engine?.shutdown()])
       } finally {
         app.exit(exitCode)
       }

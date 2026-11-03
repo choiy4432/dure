@@ -8,7 +8,7 @@ function setup(over: Partial<SetupDeps> = {}) {
   const states: SetupState[] = []
   let found: typeof CLAUDE | null = null
   let loggedIn = false
-  const install = { onLine: (_l: string) => {}, finish: (_r: { code: number | null }) => {}, kill: vi.fn() }
+  const install = { onLine: (_l: string) => {}, finish: (_r: { code: number | null }) => {}, kill: vi.fn(async () => {}) }
   const login = { kill: vi.fn() }
   const deps = {
     claude: vi.fn(() => found),
@@ -189,24 +189,31 @@ describe('setupFlow', () => {
     expect(s.deps.spawnLogin).not.toHaveBeenCalled()
   })
 
-  it('dispose — 도는 설치·로그인을 끈다', async () => {
+  it('dispose — 도는 설치·로그인을 끄고 그 뒤로 상태를 안 낸다', async () => {
     const s = setup()
     await s.flow.check()
     const p = s.flow.install()
-    s.flow.dispose()
-    expect(s.install.kill).toHaveBeenCalled()
+    let killDone = false
+    s.install.kill.mockImplementation(async () => {
+      await Promise.resolve()
+      killDone = true
+    })
+    const n = s.states.length
+    await s.flow.dispose()
+    expect(s.install.kill).toHaveBeenCalledTimes(1)
+    expect(killDone).toBe(true) // dispose 가 kill 이 끝나길 기다렸다
+    s.install.onLine('늦은 줄')
     s.install.finish({ code: null })
     await p
-    const n = s.states.length
     expect(s.states.length).toBe(n)
 
     const t = setup()
     t.setFound(CLAUDE)
     await t.flow.check()
     await t.flow.login()
-    t.flow.dispose()
-    expect(t.login.kill).toHaveBeenCalled()
     const m = t.states.length
+    await t.flow.dispose()
+    expect(t.login.kill).toHaveBeenCalled()
     t.setLoggedIn(true)
     await vi.advanceTimersByTimeAsync(10000)
     expect(t.states.length).toBe(m)
