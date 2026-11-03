@@ -275,7 +275,7 @@ if (!app.requestSingleInstanceLock()) {
         updater: app.isPackaged ? (electronUpdater.autoUpdater as unknown as UpdaterLike) : null,
         current: app.getVersion(),
         // quitAndInstall 은 before-quit 을 거치지 않을 수 있다 — 엔진을 먼저 끄고, 끄는 길이 겹쳐 또 끄지 않게 한다.
-        // 정리가 실패하면 던진다 → 설치하지 않고 error 상태
+        // 정리가 실패하면 던진다 → 설치하지 않고 error 상태(다시 켜기를 또 누르면 정리 없이 설치 — updater.ts prepared)
         beforeInstall: () => quitControl.prepareInstall(),
         emit: (s) => emitApp('update', s),
       })
