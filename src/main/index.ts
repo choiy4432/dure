@@ -3,15 +3,24 @@ import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
 import { createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
+import type { AppEventMap } from '../shared/appTypes'
 import { appEnv, appUserModelId } from './appEnv'
+import { initAppPrefs, writeAppPrefs } from './appPrefs'
 import { resolveClaudeCommand, resolveSshCommand } from './claudeCommand'
-import { logEngineErrors, registerIpc } from './ipc'
+import { logEngineErrors, registerIpc, type AppHost } from './ipc'
 import { appPageMatcher, focusExisting, guardNavigation } from './window'
 import { TITLE_BAR_HEIGHT, windowColors } from './windowTheme'
 
 let mainWindow: BrowserWindow | null = null
 let engine: Engine | null = null
 let exitCode = 0
+
+/** 앱 사건을 받는 곳 — registerIpc 가 onAppEvent 로 창 쪽을 단다 */
+const appEventSinks: ((name: keyof AppEventMap, payload: unknown) => void)[] = []
+/** 앱 사건 내기(준비 흐름·claude 최신으로·두레 업데이트가 이걸로) — 엔진이 없어도 창에 간다 */
+function emitApp<K extends keyof AppEventMap>(name: K, payload: AppEventMap[K]): void {
+  for (const fn of appEventSinks) fn(name, payload)
+}
 
 // Test-only hook: DURE_USER_DATA isolates the data folder (and the single-instance lock, which lives there) — set before anything reads it.
 // 설치본(app.isPackaged)에선 시험용 환경 변수를 모두 무시한다 — 아래 env 만 읽는다.
@@ -133,9 +142,10 @@ if (!app.requestSingleInstanceLock()) {
       // Test-only: DURE_SLEEP_MINUTE_MS shortens the sleep timer ('1 minute' and the sweep interval) so the E2E sees an agent fall asleep in seconds.
       const sleepMs = Number(env.DURE_SLEEP_MINUTE_MS)
       const sleepKnob = Number.isFinite(sleepMs) && sleepMs > 0 ? { sleepMinuteMs: sleepMs, sleepSweepMs: sleepMs } : {}
+      const userData = app.getPath('userData')
       if (claude) {
         engine = await createEngine({
-          dataDir: app.getPath('userData'),
+          dataDir: userData,
           claude,
           // 서버(SSH) 방 — 기본은 윈도우 OpenSSH, 시험·개발은 DURE_SSH_COMMAND/ARGS
           ssh: resolveSshCommand(env),
@@ -143,6 +153,39 @@ if (!app.requestSingleInstanceLock()) {
           ...sleepKnob,
         })
         logEngineErrors(engine)
+      }
+      // 앱 설정 — 엔진과 같은 settings.json. 방이 있는데 tourDone 칸이 없으면 업데이트로 받은 사람(투어·승인 안내를 본 것으로 써 둔다)
+      let prefs = initAppPrefs(userData, (engine?.rooms().length ?? 0) > 0)
+      // 엔진 없이 도는 앱 쪽 일 — appInfo·prefs·setPrefs 만 진짜. 준비 흐름(Task 6)·claude 최신으로(Task 8)·두레 업데이트(Task 11)는 아직 흉내
+      const appHost: AppHost = {
+        async appInfo() {
+          return { version: app.getVersion(), packaged: app.isPackaged }
+        },
+        async prefs() {
+          return prefs
+        },
+        async setPrefs(p) {
+          prefs = writeAppPrefs(userData, p)
+          return prefs
+        },
+        async setupState() {
+          return { phase: 'ready' }
+        },
+        async installClaude() {},
+        async loginClaude() {},
+        async openSetupGuide() {},
+        async claudeUpdateState() {
+          return 'idle'
+        },
+        async updateState() {
+          return { kind: 'dev' }
+        },
+        async checkUpdate() {
+          return { kind: 'dev' }
+        },
+        async downloadUpdate() {},
+        async installUpdate() {},
+        async openReleasePage() {},
       }
       // 순서: 엔진 만들기 → registerIpc(리스너 붙이기) → engine.start() → 창. claude 가 없으면 engine 은 null 이고 snapshot 이 claudeMissing 을 알린다.
       registerIpc(
@@ -206,6 +249,12 @@ if (!app.requestSingleInstanceLock()) {
             nativeTheme.themeSource = t // 'updated' 사건이 창을 다시 칠한다
           },
           isAppPage,
+          app: appHost,
+          // 엔진 시작 전에 기다릴 일(켤 때 claude 최신으로)이 아직 없다 — Task 8 이 그 뒤에 풀리게 바꾼다
+          engineReady: Promise.resolve(),
+          onAppEvent(fn) {
+            appEventSinks.push(fn)
+          },
         },
       )
       engine?.start()

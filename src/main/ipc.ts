@@ -1,14 +1,27 @@
 import type { Engine } from '../engine'
 import {
-  CHANNEL, CLAUDE_MISSING_ERROR, EVENT_NAMES, METHODS,
-  type AgentView, type InvokeRequest, type InvokeResult, type Snapshot,
+  APP_METHODS, BEFORE_START, CHANNEL, CLAUDE_MISSING_ERROR, EVENT_NAMES, METHODS,
+  type AgentView, type DureApi, type InvokeRequest, type InvokeResult, type Snapshot,
 } from '../shared/ipcContract'
+import type { AppEventMap } from '../shared/appTypes'
 import { SLEEP_DEFAULT_MIN, type ThemePref } from '../engine/types'
+import { pickPrefs } from './appPrefs'
 
 export interface IpcLike {
   handle(channel: string, fn: (event: unknown, req: unknown) => unknown): void
 }
+
+type AppMethod = (typeof APP_METHODS)[number]
+/** 엔진 없이 도는 앱 쪽 일 — APP_METHODS 13개(main 이 준비 흐름·claude 최신으로·두레 업데이트로 채운다) */
+export type AppHost = Pick<DureApi, AppMethod>
+
 export interface IpcDeps {
+  /** 앱 쪽 메서드가 가는 곳 — 엔진이 없어도·엔진 시작 전에도 */
+  app: AppHost
+  /** 엔진 시작이 끝나면 풀린다 — BEFORE_START 밖의 엔진 메서드는 이걸 기다린 뒤 엔진에 닿는다 */
+  engineReady: Promise<void>
+  /** 앱 사건을 받을 곳을 건넨다 — registerIpc 가 한 번 불러 창(CHANNEL.event)으로 잇는다. 엔진이 없어도 */
+  onAppEvent(fn: (name: keyof AppEventMap, payload: unknown) => void): void
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
   /** 기본 앱으로 주소 열기(VS Code 원격 창) — 못 열면 던진다 */
@@ -183,6 +196,25 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   },
 }
 
+/** 앱 쪽 메서드 — renderer 가 붙인 인자는 setPrefs 의 (다듬은) 설정만 넘긴다 */
+const APP_HANDLERS: Record<AppMethod, (app: AppHost, ...a: unknown[]) => unknown> = {
+  appInfo: (a) => a.appInfo(),
+  prefs: (a) => a.prefs(),
+  setPrefs: (a, p) => a.setPrefs(pickPrefs(p)), // 아는 칸의 불리언만 — {tourDone:'x'} 는 빈 바꿈
+  setupState: (a) => a.setupState(),
+  installClaude: (a) => a.installClaude(),
+  loginClaude: (a) => a.loginClaude(),
+  openSetupGuide: (a) => a.openSetupGuide(),
+  claudeUpdateState: (a) => a.claudeUpdateState(),
+  updateState: (a) => a.updateState(),
+  checkUpdate: (a) => a.checkUpdate(),
+  downloadUpdate: (a) => a.downloadUpdate(),
+  installUpdate: (a) => a.installUpdate(),
+  openReleasePage: (a) => a.openReleasePage(),
+}
+
+const STARTS_NOW: ReadonlySet<string> = new Set(BEFORE_START)
+
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
@@ -201,7 +233,10 @@ export function logEngineErrors(
   engine.on('engine-error', (p: { message: string }) => log('[두레] engine-error:', p.message))
 }
 
-/** `dure:invoke` 하나로 화이트리스트 메서드를 엔진에 잇고, 엔진 이벤트를 `dure:event` 로 내보낸다. */
+/**
+ * `dure:invoke` 하나로 화이트리스트 메서드를 잇고, 엔진·앱 사건을 `dure:event` 로 내보낸다.
+ * 순서: 앱 메서드 → deps.app(엔진 없어도) · snapshot → 바로 · 엔진 없음 → CLAUDE_MISSING_ERROR · BEFORE_START 밖 → engineReady 뒤
+ */
 export function registerIpc(
   ipc: IpcLike,
   engine: Engine | null,
@@ -213,26 +248,35 @@ export function registerIpc(
       // 두레 화면이 아닌 곳(창 안으로 들어온 다른 페이지·프레임)의 요청은 받지 않는다
       if (!deps.isAppPage(senderUrl(event))) throw new Error(NOT_ALLOWED)
       const { method, args } = (req ?? {}) as Partial<InvokeRequest>
+      const a = Array.isArray(args) ? args : []
+      if (typeof method === 'string' && Object.hasOwn(APP_HANDLERS, method)) {
+        const value = await APP_HANDLERS[method as AppMethod](deps.app, ...a)
+        return { ok: true, value: value ?? null }
+      }
       if (typeof method !== 'string' || !Object.hasOwn(HANDLERS, method)) throw new Error(NOT_ALLOWED)
       if (method === 'snapshot') return { ok: true, value: snapshot(engine) }
       if (!engine) throw new Error(CLAUDE_MISSING_ERROR)
+      // claude 를 띄우거나 바꾸는 일은 엔진 시작(켤 때 claude 최신으로 뒤)까지 기다린다 — 읽기·창 쪽 일은 바로
+      if (!STARTS_NOW.has(method)) await deps.engineReady
       const handler = HANDLERS[method as keyof typeof HANDLERS]
-      const value = await handler(engine, deps, ...(Array.isArray(args) ? args : []))
+      const value = await handler(engine, deps, ...a)
       return { ok: true, value: value ?? null }
     } catch (err) {
       return { ok: false, error: messageOf(err) } // 스택은 넘기지 않는다
     }
   })
 
-  if (!engine) return
-  // 창이 생기기 전에 난 이벤트는 그냥 버려진다 — renderer 가 처음 뜰 때 snapshot() 으로 현재 상태를 받는다.
-  for (const name of EVENT_NAMES) {
-    engine.on(name, (payload: unknown) => {
-      try {
-        send(CHANNEL.event, { name, payload })
-      } catch {
-        // 창이 닫히는 중이면 보낼 곳이 없다 — 엔진을 멈추지 않는다
-      }
-    })
+  // 창이 생기기 전에 난 사건은 그냥 버려진다 — renderer 가 처음 뜰 때 snapshot()·앱 상태 메서드로 현재 상태를 받는다.
+  const forward = (name: string, payload: unknown) => {
+    try {
+      send(CHANNEL.event, { name, payload })
+    } catch {
+      // 창이 닫히는 중이면 보낼 곳이 없다 — 엔진·앱 흐름을 멈추지 않는다
+    }
   }
+  // 앱 사건은 엔진이 없어도(준비 화면) 간다 — 그래서 아래 early return 보다 먼저
+  deps.onAppEvent(forward)
+
+  if (!engine) return
+  for (const name of EVENT_NAMES) engine.on(name, (payload: unknown) => forward(name, payload))
 }

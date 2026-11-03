@@ -1,6 +1,10 @@
 import type {
   Agent, AgentDescription, RemoteIssue, RemoteIssueKind, SshHostEntry, AgentId, ConversationSummary, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, SleepBlock, ThemePref, UserPart,
 } from '../engine/types'
+import type { AppEventMap, AppInfo, AppPrefs, ClaudeUpdateState, SetupState, UpdateState } from './appTypes'
+
+/** 창이 받는 사건 전부 — 엔진 사건 + 앱 사건(이름이 겹치면 아래 NO_CLASH 에서 타입 오류) */
+export type DureEventMap = EngineEventMap & AppEventMap
 
 export interface AgentView extends Agent {
   status: AgentStatus
@@ -130,13 +134,43 @@ export interface DureApi {
   flashWindow(): Promise<void>
   /** 창을 앞으로 */
   focusWindow(): Promise<void>
+
+  // ── 앱 쪽(APP_METHODS) — 엔진 없이도 된다 ──
+  appInfo(): Promise<AppInfo>
+  prefs(): Promise<AppPrefs>
+  /** 아는 칸의 불리언만 저장 — 바뀐 뒤의 앱 설정 */
+  setPrefs(p: Partial<AppPrefs>): Promise<AppPrefs>
+  setupState(): Promise<SetupState>
+  /** 공식 설치 스크립트로 claude 설치 — 진행은 'setup' 사건으로 */
+  installClaude(): Promise<void>
+  /** 브라우저 로그인 — 진행은 'setup' 사건으로 */
+  loginClaude(): Promise<void>
+  /** 직접 설치 안내 페이지 열기 */
+  openSetupGuide(): Promise<void>
+  claudeUpdateState(): Promise<ClaudeUpdateState>
+  updateState(): Promise<UpdateState>
+  checkUpdate(): Promise<UpdateState>
+  /** 진행은 'update' 사건으로 */
+  downloadUpdate(): Promise<void>
+  /** 다시 켜서 새 버전으로 */
+  installUpdate(): Promise<void>
+  openReleasePage(): Promise<void>
+
   /** 해제 함수를 돌려준다 */
-  on<K extends keyof EngineEventMap>(k: K, fn: (p: EngineEventMap[K]) => void): () => void
+  on<K extends keyof DureEventMap>(k: K, fn: (p: DureEventMap[K]) => void): () => void
 }
 
 export const CHANNEL = { invoke: 'dure:invoke', event: 'dure:event' } as const
 
-/** invoke 로 부를 수 있는 이름 — DureApi 의 메서드 중 on 만 빠진다(on 은 preload 안에서 처리) */
+type ApiMethod = Exclude<keyof DureApi, 'on'>
+
+/** 앱 쪽 메서드 — 엔진이 없어도(claude 가 없어도)·엔진 시작 전에도 main 의 AppHost 로 간다 */
+export const APP_METHODS = [
+  'appInfo', 'prefs', 'setPrefs', 'setupState', 'installClaude', 'loginClaude', 'openSetupGuide',
+  'claudeUpdateState', 'updateState', 'checkUpdate', 'downloadUpdate', 'installUpdate', 'openReleasePage',
+] as const satisfies readonly ApiMethod[]
+
+/** invoke 로 부를 수 있는 엔진 쪽 이름 — DureApi 의 메서드 중 on(preload 안에서 처리)과 APP_METHODS 가 빠진다 */
 export const METHODS = [
   'snapshot', 'addRoom', 'sshAvailable', 'sshHosts', 'checkRemote', 'checkRemoteFolder', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
   'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'conversations', 'conversation', 'resumeConversation', 'forkAgent', 'image',
@@ -145,7 +179,20 @@ export const METHODS = [
   'sleep', 'sleepRoom', 'sleepBlock', 'sleepableIn', 'setSleepAfter',
   'setPlanMode', 'resumeHold', 'dropHoldItem', 'dropHold', 'revokeAlwaysAllow',
   'pickFolder', 'openAgentFolder', 'saveConversation', 'setTaskbar', 'flashWindow', 'focusWindow',
-] as const satisfies readonly Exclude<keyof DureApi, 'on'>[]
+] as const satisfies readonly Exclude<ApiMethod, (typeof APP_METHODS)[number]>[]
+
+/** METHODS·APP_METHODS 가 함께 DureApi 의 메서드(on 빼고)를 빠짐없이 덮는다 — 빠지면 여기서 타입 오류(오류에 빠진 이름이 보인다) */
+type Uncovered = Exclude<ApiMethod, (typeof METHODS)[number] | (typeof APP_METHODS)[number]>
+const ALL_COVERED: [Uncovered] extends [never] ? true : Uncovered = true
+
+/**
+ * 엔진 시작(engine.start — 켤 때 claude 최신으로 뒤) 전에도 바로 답하는 엔진 메서드 — 읽기와 창 쪽 일.
+ * 그 밖의 엔진 메서드는 main 의 engineReady 가 풀릴 때까지 기다린다(claude 를 띄우는 일이 업데이트와 겹치지 않게)
+ */
+export const BEFORE_START = [
+  'snapshot', 'history', 'conversations', 'conversation', 'image', 'sshAvailable', 'sshHosts', 'sleepBlock', 'sleepableIn',
+  'pickFolder', 'saveConversation', 'setTaskbar', 'flashWindow', 'focusWindow',
+] as const satisfies readonly (typeof METHODS)[number][]
 
 /** 엔진 이벤트 전부 — 새 이벤트를 EngineEventMap 에 더하면 여기서 타입 오류가 난다 */
 const EVENT_FLAGS: Record<keyof EngineEventMap, true> = {
@@ -156,8 +203,16 @@ const EVENT_FLAGS: Record<keyof EngineEventMap, true> = {
 }
 export const EVENT_NAMES = Object.keys(EVENT_FLAGS) as (keyof EngineEventMap)[]
 
+/** 앱 사건 전부 — 새 사건을 AppEventMap 에 더하면 여기서 타입 오류가 난다 */
+const APP_EVENT_FLAGS: Record<keyof AppEventMap, true> = { setup: true, update: true, 'claude-update': true }
+export const APP_EVENT_NAMES = Object.keys(APP_EVENT_FLAGS) as (keyof AppEventMap)[]
+
+/** 엔진 사건과 앱 사건의 이름이 겹치지 않는다 — 겹치면 여기서 타입 오류(한 봉투 이름으로 둘을 가를 수 없다) */
+type Clash = Extract<keyof EngineEventMap, keyof AppEventMap>
+const NO_CLASH: [Clash] extends [never] ? true : Clash = true
+
 export type InvokeRequest = { method: string; args: unknown[] }
 export type InvokeResult = { ok: true; value: unknown } | { ok: false; error: string }
-export type EventEnvelope = { name: keyof EngineEventMap; payload: unknown }
+export type EventEnvelope = { name: keyof DureEventMap; payload: unknown }
 
 export const CLAUDE_MISSING_ERROR = 'claude 를 찾을 수 없어요'

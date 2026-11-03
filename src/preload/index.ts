@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { CHANNEL, METHODS, type DureApi, type EventEnvelope, type InvokeResult } from '../shared/ipcContract'
+import { APP_METHODS, CHANNEL, METHODS, type DureApi, type EventEnvelope, type InvokeResult } from '../shared/ipcContract'
 
 async function invoke(method: string, args: unknown[]): Promise<unknown> {
   const r = (await ipcRenderer.invoke(CHANNEL.invoke, { method, args })) as InvokeResult
@@ -8,7 +8,8 @@ async function invoke(method: string, args: unknown[]): Promise<unknown> {
 }
 
 const api: Record<string, unknown> = {}
-for (const m of METHODS) api[m] = (...args: unknown[]) => invoke(m, args)
+// 엔진 메서드와 앱 메서드(엔진 없이 됨) — 앱 사건도 엔진 사건과 같은 봉투라 on 은 그대로
+for (const m of [...METHODS, ...APP_METHODS]) api[m] = (...args: unknown[]) => invoke(m, args)
 api.on = (name: string, fn: (p: unknown) => void) => {
   const listener = (_e: unknown, env: EventEnvelope) => {
     if (env && env.name === name) fn(env.payload)

@@ -2,9 +2,10 @@ import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { logEngineErrors, registerIpc } from '../src/main/ipc'
+import { logEngineErrors, registerIpc, type AppHost, type IpcDeps } from '../src/main/ipc'
 import { appPageMatcher } from '../src/main/window'
-import { CHANNEL, EVENT_NAMES, METHODS } from '../src/shared/ipcContract'
+import { APP_EVENT_NAMES, APP_METHODS, BEFORE_START, CHANNEL, EVENT_NAMES, METHODS } from '../src/shared/ipcContract'
+import type { AppEventMap } from '../src/shared/appTypes'
 import type { Engine } from '../src/engine'
 
 type Fn = (event: unknown, req: unknown) => unknown
@@ -94,21 +95,61 @@ const APP_URL = pathToFileURL(INDEX).href
 const fromApp = { senderFrame: { url: APP_URL } }
 const isAppPage = appPageMatcher({ indexFile: INDEX })
 
-function setup(withEngine = true) {
+const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true }
+
+/** 앱 쪽 흉내 — 13 메서드 모두 vi.fn, 돌려주는 값은 서로 다르게(칸이 뒤바뀌면 잡힌다) */
+function fakeApp() {
+  return {
+    appInfo: vi.fn(async () => ({ version: '1.2.3', packaged: false })),
+    prefs: vi.fn(async () => PREFS),
+    setPrefs: vi.fn(async (p: object) => ({ ...PREFS, ...p })),
+    setupState: vi.fn(async () => ({ phase: 'ready' as const })),
+    installClaude: vi.fn(async () => {}),
+    loginClaude: vi.fn(async () => {}),
+    openSetupGuide: vi.fn(async () => {}),
+    claudeUpdateState: vi.fn(async () => 'running' as const),
+    updateState: vi.fn(async () => ({ kind: 'dev' as const })),
+    checkUpdate: vi.fn(async () => ({ kind: 'none' as const })),
+    downloadUpdate: vi.fn(async () => {}),
+    installUpdate: vi.fn(async () => {}),
+    openReleasePage: vi.fn(async () => {}),
+  } satisfies AppHost
+}
+
+/** 아무것도 하지 않는 deps — 각 시험이 필요한 칸만 갈아 낀다 */
+function quietDeps(): IpcDeps {
+  return {
+    pickFolder: async () => null, openFolder: async () => {}, openExternal: async () => {}, isAppPage,
+    setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {}, saveText: async () => null,
+    app: fakeApp(), engineReady: Promise.resolve(), onAppEvent: () => {},
+  }
+}
+
+type AppEventFn = (name: keyof AppEventMap, payload: unknown) => void
+
+function setup(withEngine = true, over: { engineReady?: Promise<void> } = {}) {
   const handlers = new Map<string, Fn>()
   const ipc = { handle: (ch: string, fn: Fn) => void handlers.set(ch, fn) }
   const sent: [string, any][] = []
+  let appEvent: AppEventFn | null = null
   const deps = {
     pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), openExternal: vi.fn(async (_url: string) => {}), isAppPage,
     setTaskbar: vi.fn(async () => {}), flashWindow: vi.fn(async () => {}), focusWindow: vi.fn(async () => {}),
     applyTheme: vi.fn(), saveText: vi.fn(async (name: string, _text: string) => `C:/docs/${name}`),
+    app: fakeApp(),
+    engineReady: over.engineReady ?? Promise.resolve(),
+    onAppEvent: vi.fn((fn: AppEventFn) => {
+      appEvent = fn
+    }),
   }
   const fe = fakeEngine()
   registerIpc(ipc, withEngine ? fe.engine : null, (ch, p) => sent.push([ch, p]), deps)
   const callFrom = (event: unknown, method: string, ...args: unknown[]) =>
     handlers.get(CHANNEL.invoke)!(event, { method, args }) as Promise<any>
   const call = (method: string, ...args: unknown[]) => callFrom(fromApp, method, ...args)
-  return { call, callFrom, sent, deps, ...fe }
+  /** main 이 앱 사건을 낸 것처럼 */
+  const emitApp = (name: keyof AppEventMap, payload: unknown) => appEvent!(name, payload)
+  return { call, callFrom, sent, deps, emitApp, ...fe }
 }
 
 describe('registerIpc', () => {
@@ -168,12 +209,7 @@ describe('registerIpc', () => {
 
   it('rejects a malformed request', async () => {
     const handlers = new Map<string, Fn>()
-    registerIpc({ handle: (c, f) => void handlers.set(c, f) }, fakeEngine().engine, () => {}, {
-      pickFolder: async () => null,
-      openFolder: async () => {}, openExternal: async () => {},
-      isAppPage,
-      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {}, saveText: async () => null,
-    })
+    registerIpc({ handle: (c, f) => void handlers.set(c, f) }, fakeEngine().engine, () => {}, quietDeps())
     expect(await handlers.get(CHANNEL.invoke)!(fromApp, null)).toMatchObject({ ok: false })
     expect(await handlers.get(CHANNEL.invoke)!(fromApp, { method: 5 })).toMatchObject({ ok: false })
   })
@@ -211,10 +247,107 @@ describe('registerIpc', () => {
 
   it('every whitelisted method is covered by a handler', async () => {
     const { call } = setup()
-    for (const m of METHODS) {
+    for (const m of [...METHODS, ...APP_METHODS]) {
       const r = await call(m, 'a1')
-      expect(r.error ?? '').not.toBe('허용되지 않은 요청이에요')
+      expect(r.error ?? '', m).not.toBe('허용되지 않은 요청이에요')
     }
+  })
+
+  it('APP_METHODS 13개 · 엔진 메서드와 겹치지 않는다 · BEFORE_START 는 엔진 메서드 중에서 · 앱 사건 이름 셋', () => {
+    expect([...APP_METHODS].sort()).toEqual([
+      'appInfo', 'checkUpdate', 'claudeUpdateState', 'downloadUpdate', 'installClaude', 'installUpdate', 'loginClaude',
+      'openReleasePage', 'openSetupGuide', 'prefs', 'setPrefs', 'setupState', 'updateState',
+    ])
+    for (const m of APP_METHODS) expect(METHODS as readonly string[], m).not.toContain(m)
+    expect([...BEFORE_START].sort()).toEqual([
+      'conversation', 'conversations', 'flashWindow', 'focusWindow', 'history', 'image', 'pickFolder', 'saveConversation',
+      'setTaskbar', 'sleepBlock', 'sleepableIn', 'snapshot', 'sshAvailable', 'sshHosts',
+    ])
+    for (const m of BEFORE_START) expect(METHODS as readonly string[], m).toContain(m)
+    expect([...APP_EVENT_NAMES].sort()).toEqual(['claude-update', 'setup', 'update'])
+    for (const n of APP_EVENT_NAMES) expect(EVENT_NAMES as readonly string[], n).not.toContain(n)
+  })
+
+  it('엔진 없이도 앱 메서드 — deps.app 으로 가고 결과가 돌아온다', async () => {
+    const { call, deps } = setup(false)
+    expect(await call('prefs')).toEqual({ ok: true, value: PREFS })
+    expect(deps.app.prefs).toHaveBeenCalledTimes(1)
+    expect(await call('appInfo')).toEqual({ ok: true, value: { version: '1.2.3', packaged: false } })
+    expect(await call('setupState')).toEqual({ ok: true, value: { phase: 'ready' } })
+    expect(await call('claudeUpdateState')).toEqual({ ok: true, value: 'running' })
+    expect(await call('updateState')).toEqual({ ok: true, value: { kind: 'dev' } })
+    expect(await call('checkUpdate')).toEqual({ ok: true, value: { kind: 'none' } })
+    for (const m of ['installClaude', 'loginClaude', 'openSetupGuide', 'downloadUpdate', 'installUpdate', 'openReleasePage'] as const) {
+      expect(await call(m, 'x', { y: 1 }), m).toEqual({ ok: true, value: null })
+      expect(deps.app[m], m).toHaveBeenCalledTimes(1)
+      expect(deps.app[m], m).toHaveBeenCalledWith() // renderer 가 붙인 인자는 넘기지 않는다
+    }
+    // 엔진 메서드는 여전히 claude 가 없다고
+    expect(await call('addRoom', 'x')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })
+  })
+
+  it('앱 메서드 오류는 { error: 문구 } 로 — 스택 없이', async () => {
+    const { call, deps } = setup(false)
+    deps.app.installClaude.mockRejectedValueOnce(new Error('설치하지 못했어요'))
+    expect(await call('installClaude')).toEqual({ ok: false, error: '설치하지 못했어요' })
+  })
+
+  it("setPrefs — 아는 칸의 불리언만 deps.app 으로, 그 밖({tourDone:'x'}·모르는 칸·객체 아님)은 무시", async () => {
+    const { call, deps } = setup(false)
+    expect(await call('setPrefs', { tourDone: 'x' })).toEqual({ ok: true, value: PREFS })
+    expect(deps.app.setPrefs).toHaveBeenLastCalledWith({})
+    await call('setPrefs', { tourDone: false, approvalTipSeen: 1, claudeAutoUpdate: false, theme: 'dark' })
+    expect(deps.app.setPrefs).toHaveBeenLastCalledWith({ tourDone: false, claudeAutoUpdate: false })
+    // 물려받은 칸은 보지 않는다
+    await call('setPrefs', Object.create({ tourDone: true }))
+    expect(deps.app.setPrefs).toHaveBeenLastCalledWith({})
+    for (const bad of [null, 'tourDone', [true], 5, undefined]) {
+      expect((await call('setPrefs', bad)).ok, String(bad)).toBe(true)
+      expect(deps.app.setPrefs).toHaveBeenLastCalledWith({})
+    }
+  })
+
+  it('engineReady 전엔 띄우는 메서드가 기다린다 — 시작 전에도 되는 것(BEFORE_START)·앱 메서드는 바로', async () => {
+    let ready!: () => void
+    const { call, calls } = setup(true, { engineReady: new Promise<void>((r) => (ready = r)) })
+    let settled = false
+    const waiting = call('setSelected', 'a1').then((r) => {
+      settled = true
+      return r
+    })
+    expect(await call('history', 'a1')).toEqual({ ok: true, value: [] })
+    expect((await call('snapshot')).ok).toBe(true)
+    expect(await call('sleepBlock', 'a1')).toEqual({ ok: true, value: 'working' })
+    expect(await call('pickFolder')).toEqual({ ok: true, value: 'C:/picked' })
+    expect(await call('prefs')).toEqual({ ok: true, value: PREFS })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(settled).toBe(false)
+    expect(calls.map(([n]) => n)).toEqual(['history', 'sleepBlock']) // setSelected 는 아직 엔진에 닿지 않았다
+    ready()
+    expect(await waiting).toEqual({ ok: true, value: null })
+    expect(calls.map(([n]) => n)).toEqual(['history', 'sleepBlock', 'setSelected'])
+    expect(calls[2]).toEqual(['setSelected', ['a1']])
+  })
+
+  it('앱 사건을 event 채널로 — { name, payload } 봉투, 엔진 사건과 같은 길', () => {
+    const { emitApp, sent, engine, deps } = setup()
+    expect(deps.onAppEvent).toHaveBeenCalledTimes(1)
+    emitApp('setup', { phase: 'checking' })
+    emitApp('update', { kind: 'available', version: '0.2.0', current: '0.1.0', highlights: ['a'], url: 'https://x' })
+    emitApp('claude-update', 'running')
+    engine.emit('held', { roomId: 'r1' })
+    expect(sent).toEqual([
+      [CHANNEL.event, { name: 'setup', payload: { phase: 'checking' } }],
+      [CHANNEL.event, { name: 'update', payload: { kind: 'available', version: '0.2.0', current: '0.1.0', highlights: ['a'], url: 'https://x' } }],
+      [CHANNEL.event, { name: 'claude-update', payload: 'running' }],
+      [CHANNEL.event, { name: 'held', payload: { roomId: 'r1' } }],
+    ])
+  })
+
+  it('앱 사건은 엔진이 없어도 간다', () => {
+    const { emitApp, sent } = setup(false)
+    emitApp('setup', { phase: 'needs', install: { state: 'todo' }, login: { state: 'locked' } })
+    expect(sent).toEqual([[CHANNEL.event, { name: 'setup', payload: { phase: 'needs', install: { state: 'todo' }, login: { state: 'locked' } } }]])
   })
 
   it('snapshot merges engine state into agent views', async () => {
@@ -247,13 +380,12 @@ describe('registerIpc', () => {
 
   it('does not break the engine when sending fails', () => {
     const e = fakeEngine()
+    let appEvent: AppEventFn | null = null
     registerIpc({ handle: () => {} }, e.engine, () => {
       throw new Error('Object has been destroyed')
-    }, {
-      pickFolder: async () => null, openFolder: async () => {}, openExternal: async () => {}, isAppPage,
-      setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {}, saveText: async () => null,
-    })
+    }, { ...quietDeps(), onAppEvent: (fn) => void (appEvent = fn) })
     expect(() => e.engine.emit('held', { roomId: 'r1' })).not.toThrow()
+    expect(() => appEvent!('setup', { phase: 'ready' })).not.toThrow()
   })
 
   it('with no engine: snapshot says claudeMissing, everything else is rejected in Korean', async () => {
