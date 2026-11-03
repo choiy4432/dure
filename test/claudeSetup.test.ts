@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { locateClaude, authStatus } from '../src/engine/claudeSetup';
+import { locateClaude, authStatus, claudeVersion } from '../src/engine/claudeSetup';
 
 describe('locateClaude', () => {
   it('PATH 앞쪽 폴더가 우선', () => {
@@ -26,30 +26,46 @@ describe('locateClaude', () => {
   });
 });
 
+const CL = { command: 'claude.exe', argsPrefix: [] as string[] };
 describe('authStatus', () => {
-  it('정상 JSON — 이메일·조직은 결과에 없다', async () => {
+  it('정상 JSON — authMethod·이메일·조직은 결과에 없다', async () => {
     let seen: { cmd: string; args: string[] } | null = null;
-    const r = await authStatus('claude.exe', async (cmd, args) => {
+    const r = await authStatus({ command: 'node', argsPrefix: ['fake.mjs'] }, async (cmd, args) => {
       seen = { cmd, args };
       return { code: 0, stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai', email: 'a@b.c', orgName: 'o', subscriptionType: 'max' }) };
     });
-    expect(seen).toEqual({ cmd: 'claude.exe', args: ['auth', 'status', '--json'] });
-    expect(r).toEqual({ loggedIn: true, authMethod: 'claude.ai' });
-    expect(Object.keys(r)).toEqual(['loggedIn', 'authMethod']);
+    expect(seen).toEqual({ cmd: 'node', args: ['fake.mjs', 'auth', 'status', '--json'] });
+    expect(r).toEqual({ loggedIn: true });
+    expect(Object.keys(r)).toEqual(['loggedIn']);
   });
   it('exit 1 → 로그인 안 됨', async () => {
-    const r = await authStatus('claude.exe', async () => ({ code: 1, stdout: '{"loggedIn":true,"authMethod":"x"}' }));
-    expect(r).toEqual({ loggedIn: false, authMethod: null });
+    expect(await authStatus(CL, async () => ({ code: 1, stdout: '{"loggedIn":true}' }))).toEqual({ loggedIn: false });
   });
   it('깨진 JSON → 로그인 안 됨', async () => {
-    expect(await authStatus('claude.exe', async () => ({ code: 0, stdout: 'not json' }))).toEqual({ loggedIn: false, authMethod: null });
+    expect(await authStatus(CL, async () => ({ code: 0, stdout: 'not json' }))).toEqual({ loggedIn: false });
   });
   it('실행 오류 → 로그인 안 됨', async () => {
-    expect(await authStatus('claude.exe', async () => { throw new Error('ENOENT'); })).toEqual({ loggedIn: false, authMethod: null });
+    expect(await authStatus(CL, async () => { throw new Error('ENOENT'); })).toEqual({ loggedIn: false });
   });
   it('loggedIn 이 불리언 true 가 아니면 false', async () => {
-    const r = await authStatus('claude.exe', async () => ({ code: 0, stdout: '{"loggedIn":"yes","authMethod":5}' }));
-    expect(r).toEqual({ loggedIn: false, authMethod: null });
+    expect(await authStatus(CL, async () => ({ code: 0, stdout: '{"loggedIn":"yes"}' }))).toEqual({ loggedIn: false });
+  });
+});
+
+describe('claudeVersion', () => {
+  it('맨 앞 x.y.z 만', async () => {
+    let args: string[] = [];
+    const v = await claudeVersion({ command: 'node', argsPrefix: ['f.mjs'] }, async (_c, a) => {
+      args = a;
+      return { code: 0, stdout: '2.1.304 (Claude Code)\n' };
+    });
+    expect(v).toBe('2.1.304');
+    expect(args).toEqual(['f.mjs', '--version']);
+  });
+  it('못 읽으면 null', async () => {
+    expect(await claudeVersion(CL, async () => ({ code: 0, stdout: 'hello' }))).toBeNull();
+    expect(await claudeVersion(CL, async () => ({ code: 1, stdout: '2.1.1' }))).toBeNull();
+    expect(await claudeVersion(CL, async () => { throw new Error('x'); })).toBeNull();
   });
 });
 

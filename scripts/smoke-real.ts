@@ -74,7 +74,7 @@ async function main() {
 
   await step('locate', async () => {
     if (!claudePath) throw new Error('claude.exe 를 찾지 못함');
-    const a = await authStatus(claudePath);
+    const a = await authStatus({ command: claudePath, argsPrefix: [] });
     if (!a.loggedIn) throw new Error('로그인되어 있지 않음');
   });
   if (!claudePath) return;

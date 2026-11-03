@@ -31,18 +31,31 @@ const defaultRun: Run = (cmd, args) =>
     });
   });
 
+/** 로그인 확인 — `claude auth status --json` 의 loggedIn 만 읽는다(authMethod·이메일 등은 버린다) */
 export async function authStatus(
-  claudePath: string,
+  claude: { command: string; argsPrefix: string[] },
   run: Run = defaultRun,
-): Promise<{ loggedIn: boolean; authMethod: string | null }> {
-  const none = { loggedIn: false, authMethod: null };
+): Promise<{ loggedIn: boolean }> {
   try {
-    const { stdout, code } = await run(claudePath, ['auth', 'status', '--json']);
-    if (code !== 0) return none;
-    const j = JSON.parse(stdout) as { loggedIn?: unknown; authMethod?: unknown };
-    if (j.loggedIn !== true) return none;
-    return { loggedIn: true, authMethod: typeof j.authMethod === 'string' ? j.authMethod : null };
+    const { stdout, code } = await run(claude.command, [...claude.argsPrefix, 'auth', 'status', '--json']);
+    if (code !== 0) return { loggedIn: false };
+    const j = JSON.parse(stdout) as { loggedIn?: unknown };
+    return { loggedIn: j.loggedIn === true };
   } catch {
-    return none;
+    return { loggedIn: false };
+  }
+}
+
+/** `claude --version` 의 맨 앞 x.y.z — 못 읽으면 null */
+export async function claudeVersion(
+  claude: { command: string; argsPrefix: string[] },
+  run: Run = defaultRun,
+): Promise<string | null> {
+  try {
+    const { stdout, code } = await run(claude.command, [...claude.argsPrefix, '--version']);
+    if (code !== 0) return null;
+    return /^\s*(\d+\.\d+\.\d+)/.exec(stdout)?.[1] ?? null;
+  } catch {
+    return null;
   }
 }

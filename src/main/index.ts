@@ -1,12 +1,14 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
+import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
-import { createEngine, locateClaude } from '../engine'
+import { authStatus, claudeVersion, createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
 import type { AppEventMap } from '../shared/appTypes'
 import { appEnv, appUserModelId } from './appEnv'
 import { initAppPrefs, writeAppPrefs } from './appPrefs'
 import { resolveClaudeCommand, resolveSshCommand } from './claudeCommand'
+import { createSetupFlow, type SetupFlow } from './setupFlow'
 import { logEngineErrors, registerIpc, type AppHost } from './ipc'
 import { appPageMatcher, focusExisting, guardNavigation } from './window'
 import { TITLE_BAR_HEIGHT, windowColors } from './windowTheme'
@@ -14,6 +16,73 @@ import { TITLE_BAR_HEIGHT, windowColors } from './windowTheme'
 let mainWindow: BrowserWindow | null = null
 let engine: Engine | null = null
 let exitCode = 0
+let setup: SetupFlow | null = null
+
+/** 공식 설치 안내 */
+const SETUP_GUIDE_URL = 'https://code.claude.com/docs/en/setup'
+/** 공식 설치 스크립트 — 이 길만 쓴다 */
+const INSTALL_COMMAND = {
+  command: 'powershell.exe',
+  args: [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+    '[Console]::OutputEncoding=[Text.Encoding]::UTF8; irm https://claude.ai/install.ps1 | iex',
+  ],
+}
+
+/** Test-only: DURE_SETUP_INSTALL (JSON argv 배열) — 설치 명령을 가짜로 바꾼다. env 는 설치본에선 걸러진 사본 */
+function installCommand(raw: string | undefined): { command: string; args: string[] } {
+  if (!raw) return INSTALL_COMMAND
+  const bad = new Error('DURE_SETUP_INSTALL 은 JSON 배열이어야 해요')
+  let list: unknown
+  try {
+    list = JSON.parse(raw)
+  } catch {
+    throw bad
+  }
+  if (!Array.isArray(list) || list.length === 0 || !list.every((x) => typeof x === 'string')) throw bad
+  return { command: list[0] as string, args: (list as string[]).slice(1) }
+}
+
+/** 설치 스크립트를 돌리고 출력(stdout·stderr)을 줄로 쪼개 넘긴다 */
+function spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: number | null }>; kill(): void } {
+  const cmd = installCommand(env.DURE_SETUP_INSTALL)
+  const child = spawn(cmd.command, cmd.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  const feed = (stream: NodeJS.ReadableStream | null): void => {
+    let rest = ''
+    stream?.setEncoding('utf8')
+    stream?.on('data', (chunk: string) => {
+      rest += chunk
+      const parts = rest.split(/\r\n|\n|\r/)
+      rest = parts.pop() ?? ''
+      for (const l of parts) onLine(l)
+    })
+    stream?.on('end', () => {
+      if (rest) onLine(rest)
+    })
+  }
+  feed(child.stdout)
+  feed(child.stderr)
+  const done = new Promise<{ code: number | null }>((resolve, reject) => {
+    child.on('error', reject)
+    child.on('close', (code) => resolve({ code }))
+  })
+  return { done, kill: () => void child.kill() }
+}
+
+/**
+ * 로그인 — 새 콘솔 창에서 `claude auth login --claudeai` (브라우저가 열린다). 창 없이 되는지(D1)는 아직 실측 전이라 이 선택을 여기 한 곳에 둔다.
+ * 콘솔 창은 `start` 가 따로 띄운 것이라 kill() 은 cmd 만 닿는다 — 창 쪽은 최선(끝나면 스스로 닫히고, 안 닫혀도 사용자가 닫는다).
+ */
+function spawnLogin(c: { command: string; argsPrefix: string[] }): { kill(): void } {
+  const child = spawn(
+    'cmd.exe',
+    ['/c', 'start', '""', c.command, ...c.argsPrefix, 'auth', 'login', '--claudeai'],
+    { windowsHide: true, detached: true, stdio: 'ignore' },
+  )
+  child.on('error', () => {})
+  child.unref()
+  return { kill: () => void child.kill() }
+}
 
 /** 앱 사건을 받는 곳 — registerIpc 가 onAppEvent 로 창 쪽을 단다 */
 const appEventSinks: ((name: keyof AppEventMap, payload: unknown) => void)[] = []
@@ -122,6 +191,7 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault()
     void (async () => {
       try {
+        setup?.dispose()
         await engine?.shutdown()
       } finally {
         app.exit(exitCode)
@@ -154,9 +224,24 @@ if (!app.requestSingleInstanceLock()) {
         })
         logEngineErrors(engine)
       }
+      // 준비 흐름 — claude 찾기·설치·로그인. 엔진이 못 만들어졌으면(claude 없음) 로그인 뒤 두레를 다시 켠다
+      const setupFlow = createSetupFlow({
+        claude: () => resolveClaudeCommand(env, () => locateClaude()),
+        loggedIn: async (c) => (await authStatus(c)).loggedIn,
+        version: (c) => claudeVersion(c),
+        spawnInstall,
+        spawnLogin,
+        relaunch: () => {
+          app.relaunch()
+          app.quit() // before-quit 의 끄기를 지난다
+        },
+        hasEngine: engine !== null,
+        emit: (s) => emitApp('setup', s),
+      })
+      setup = setupFlow
       // 앱 설정 — 엔진과 같은 settings.json. 방이 있는데 tourDone 칸이 없으면 업데이트로 받은 사람(투어·승인 안내를 본 것으로 써 둔다)
       let prefs = initAppPrefs(userData, (engine?.rooms().length ?? 0) > 0)
-      // 엔진 없이 도는 앱 쪽 일 — appInfo·prefs·setPrefs 만 진짜. 준비 흐름(Task 6)·claude 최신으로(Task 8)·두레 업데이트(Task 11)는 아직 흉내
+      // 엔진 없이 도는 앱 쪽 일 — appInfo·prefs·setPrefs·준비 흐름이 진짜. claude 최신으로(Task 8)·두레 업데이트(Task 11)는 아직 흉내
       const appHost: AppHost = {
         async appInfo() {
           return { version: app.getVersion(), packaged: app.isPackaged }
@@ -169,11 +254,17 @@ if (!app.requestSingleInstanceLock()) {
           return prefs
         },
         async setupState() {
-          return { phase: 'ready' }
+          return setupFlow.state()
         },
-        async installClaude() {},
-        async loginClaude() {},
-        async openSetupGuide() {},
+        async installClaude() {
+          await setupFlow.install()
+        },
+        async loginClaude() {
+          await setupFlow.login()
+        },
+        async openSetupGuide() {
+          await shell.openExternal(SETUP_GUIDE_URL)
+        },
         async claudeUpdateState() {
           return 'idle'
         },
@@ -264,6 +355,7 @@ if (!app.requestSingleInstanceLock()) {
         if (mainWindow) paintWindow(mainWindow)
       })
       mainWindow = createWindow()
+      void setupFlow.check() // 창을 막지 않는다 — 결과는 'setup' 사건으로
 
       const smokeMs = Number(env.DURE_SMOKE_EXIT_MS)
       if (smokeMs > 0) setTimeout(() => app.quit(), smokeMs)

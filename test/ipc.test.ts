@@ -499,9 +499,13 @@ describe('registerIpc', () => {
       expect(await callFrom(ev, 'addRoom', 'x')).toEqual({ ok: false, error: '허용되지 않은 요청이에요' })
       expect(await callFrom(ev, 'snapshot')).toEqual({ ok: false, error: '허용되지 않은 요청이에요' })
       expect(await callFrom(ev, 'pickFolder')).toEqual({ ok: false, error: '허용되지 않은 요청이에요' })
+      expect(await callFrom(ev, 'installClaude')).toEqual({ ok: false, error: '허용되지 않은 요청이에요' })
+      expect(await callFrom(ev, 'setPrefs', { tourDone: true })).toEqual({ ok: false, error: '허용되지 않은 요청이에요' })
     }
     expect(calls).toEqual([])
     expect(deps.pickFolder).not.toHaveBeenCalled()
+    expect(deps.app.installClaude).not.toHaveBeenCalled()
+    expect(deps.app.setPrefs).not.toHaveBeenCalled()
   })
 
   it('앱 화면에서 온 요청은 통과 — 주소 뒤 #·? 가 붙어도', async () => {
