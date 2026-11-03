@@ -5,7 +5,7 @@
 // install D2 공식 설치 스크립트를 창 없는 powershell 로 — Windows Sandbox 안에서만 돌린다(DURE_PROBE_SANDBOX=1 이 있어야 시작)
 // 약관: 자격 증명 파일·account 를 읽지 않는다 · `auth logout` 안 함 · --bare·API 키 안 씀. 모델 호출 없음(claude -p 는 메시지 없이 띄웠다 끈다)
 // 환경: DURE_PROBE_SSH_HOST(기본 localhost) · DURE_PROBE_SSH_KEY(기본 ~/.ssh/dure_wsl_test) · DURE_PROBE_KNOWN_HOSTS(기본 ~/.ssh/dure_wsl_known_hosts)
-//       DURE_PROBE_WSL_DISTRO(기본 Ubuntu) · DURE_PROBE_SKIP_SERVER=1(서버 건너뜀)
+//       DURE_PROBE_WSL_DISTRO(기본 Ubuntu) · DURE_PROBE_SKIP_SERVER=1(서버 건너뜀) · DURE_PROBE_SKIP_LOCAL=1(이 PC 건너뜀)
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import os from 'node:os'
@@ -87,6 +87,12 @@ const sshRun = (label, script, opts) => run(label, SSH, [...BASE, HOST, `bash -l
 
 async function update() {
   const res = {}
+  if (process.env.DURE_PROBE_SKIP_LOCAL !== '1') await updateLocal(res)
+  if (process.env.DURE_PROBE_SKIP_SERVER !== '1') await updateServer(res)
+  console.log(JSON.stringify(res, null, 1))
+}
+
+async function updateLocal(res) {
   const ver = await run('local --version', 'claude', ['--version']); res.version = ver.first
   res.local1 = await run('local update #1', 'claude', ['update'])
   res.local2 = await run('local update #2', 'claude', ['update'])
@@ -99,7 +105,9 @@ async function update() {
   killTree(idle.pid); idle.stdin.end()
   res.localAfter = await run('local --version (after)', 'claude', ['--version'])
 
-  if (process.env.DURE_PROBE_SKIP_SERVER === '1') return console.log(JSON.stringify(res, null, 1))
+}
+
+async function updateServer(res) {
   // 서버 — WSL 은 쉬면 꺼지니 먼저 붙잡는다
   const hold = spawn('wsl.exe', ['-d', DISTRO, '--', 'sleep', '3600'], { windowsHide: true, stdio: 'ignore' })
   await sleep(4000)
@@ -108,21 +116,34 @@ async function update() {
     res.srv1 = await sshRun('server update #1', `${FIND_CLAUDE}; echo "path=$c"; "$c" update`)
     res.srv2 = await sshRun('server update #2', `${FIND_CLAUDE}; "$c" update`)
     // 서버의 놀고 있는 claude -p — stdin 을 열어 둔 채(메시지 없음)
-    const sidle = spawn(SSH, [...BASE, HOST, `bash -lc '${FIND_CLAUDE}; exec "$c" ${CLAUDE_ARGS.join(' ')}'`], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    // exec 로 셸이 claude 로 바뀌니 $$ 가 곧 claude pid. 확인·정리는 이 pid 만 —
+    // 패턴(pkill -f)은 다른 claude -p(두레 에이전트·사용자 세션)와 자기 셸까지 건드린다
+    const sidle = spawn(SSH, [...BASE, HOST, `bash -lc '${FIND_CLAUDE}; echo DURE_PROBE_PID=$$ >&2; exec "$c" ${CLAUDE_ARGS.join(' ')}'`], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    let sidleErr = ''
+    sidle.stderr.setEncoding('utf8'); sidle.stderr.on('data', (d) => { sidleErr += d })
+    sidle.stdout.resume()
     await sleep(8000)
+    const rpid = sidleErr.match(/DURE_PROBE_PID=(\d+)/)?.[1]
+    res.srvIdlePid = rpid ?? null
     res.srvIdleUp = sidle.exitCode === null
-    log('서버 놀고 있는 claude -p ssh 살아 있음', res.srvIdleUp)
-    res.srvIdleSeen = (await sshRun('server pgrep', `pgrep -af "claude.* -p" | cut -c1-120 || true`)).first
-    res.srvIdle = await sshRun('server update (idle claude -p 있음)', `${FIND_CLAUDE}; "$c" update`)
-    res.srvIdle.idleAliveAfter = sidle.exitCode === null
-    sidle.stdin.end(); killTree(sidle.pid)
-    await sleep(1500)
-    res.srvCleanup = await sshRun('server 남은 claude -p', `pkill -KILL -f "claude.* -p" ; sleep 0.5; pgrep -af "claude.* -p" | cut -c1-100 || echo none`)
+    log('서버 놀고 있는 claude -p ssh 살아 있음', res.srvIdleUp, '서버 pid', rpid)
+    try {
+      if (!rpid) throw new Error('서버 pid 를 못 받음 — 확인 건너뜀')
+      res.srvIdleSeen = (await sshRun('server ps (probe pid)', `ps -p ${rpid} -o pid=,args= | cut -c1-120 || echo gone`)).first
+      res.srvIdle = await sshRun('server update (idle claude -p 있음)', `${FIND_CLAUDE}; "$c" update`)
+      res.srvIdle.idleAliveAfter = sidle.exitCode === null
+    } finally {
+      sidle.stdin.end(); killTree(sidle.pid)
+      await sleep(1500)
+      if (rpid) {
+        // 안 죽었으면 그 pid 만 KILL(pid 재사용 방지로 args 에 claude 가 있을 때만), 그다음 남았는지 pid 로 확인
+        res.srvCleanup = await sshRun('server probe claude 정리·확인', `if ps -p ${rpid} -o args= | grep -q claude; then kill -KILL ${rpid}; sleep 0.5; echo killed-by-pid; fi; if kill -0 ${rpid} 2>/dev/null; then echo STILL-ALIVE ${rpid}; else echo none; fi`)
+      }
+    }
     res.srvAfter = await sshRun('server --version (after)', `${FIND_CLAUDE}; "$c" --version`)
   } finally {
     hold.kill(); killTree(hold.pid)
   }
-  console.log(JSON.stringify(res, null, 1))
 }
 
 // ───────────────────────── install
