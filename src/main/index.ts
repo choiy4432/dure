@@ -11,6 +11,7 @@ import { appEnv, appUserModelId } from './appEnv'
 import { initAppPrefsSafe, writeAppPrefs } from './appPrefs'
 import { resolveClaudeCommand, resolveSshCommand } from './claudeCommand'
 import { updateClaude, type ClaudeUpdateRun } from './claudeUpdate'
+import { quitDecision } from './quit'
 import { createUpdater, RELEASE_URL, type UpdaterLike } from './updater'
 import { createSetupFlow, type SetupFlow } from './setupFlow'
 import { runStartup } from './startup'
@@ -197,21 +198,29 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', () => focusExisting(mainWindow))
 
-  let quitting = false
+  let shutdownDone = false
+  let installing = false
+  let exitScheduled = false
   // 끄기 약속 하나 — before-quit 과 업데이트 설치(beforeInstall)가 같이 쓴다. 두 번 끄지 않는다
   let shutdownPromise: Promise<void> | null = null
   const shutdownOnce = (): Promise<void> => {
     // 설치 나무·claude update 나무 끄기는 길어야 3초만 기다린다 — 엔진 끄기와 같이
-    shutdownPromise ??= Promise.all([bounded(setup?.dispose()), bounded(claudeUpdateRun?.kill()), engine?.shutdown()]).then(() => {})
+    shutdownPromise ??= Promise.all([bounded(setup?.dispose()), bounded(claudeUpdateRun?.kill()), engine?.shutdown()]).then(() => {
+      shutdownDone = true
+    })
     return shutdownPromise
   }
   app.on('before-quit', (event) => {
-    if (quitting) return
-    quitting = true
+    // 정리가 끝난 뒤에만 그냥 나간다(설치의 quitAndInstall → app.quit 도 여기로) — 끄는 중이면 막고 끝나길 기다린다
+    if (quitDecision({ shutdownStarted: shutdownPromise !== null, shutdownDone }) === 'proceed') return
     event.preventDefault()
+    const done = shutdownOnce()
+    // 설치 중이면 정리 뒤 설치 흐름이 스스로 나간다 — 여기서 끝내 버리면 설치가 사라진다
+    if (installing || exitScheduled) return
+    exitScheduled = true
     void (async () => {
       try {
-        await shutdownOnce()
+        await done
       } finally {
         app.exit(exitCode)
       }
@@ -274,7 +283,7 @@ if (!app.requestSingleInstanceLock()) {
         current: app.getVersion(),
         beforeInstall: async () => {
           // quitAndInstall 은 before-quit 을 거치지 않을 수 있다 — 엔진을 먼저 끄고, 끄는 길이 겹쳐 또 끄지 않게 한다
-          quitting = true
+          installing = true
           await shutdownOnce()
         },
         emit: (s) => emitApp('update', s),
@@ -414,7 +423,7 @@ if (!app.requestSingleInstanceLock()) {
         autoUpdate: updateWith !== null,
         update: async () => {
           // 확인하는 사이 끄기 시작했으면 띄우지 않는다 — 띄운 뒤라면 before-quit 이 나무째 끈다
-          if (!updateWith || quitting) return
+          if (!updateWith || shutdownPromise !== null) return
           claudeUpdateRun = updateClaude(updateWith)
           return claudeUpdateRun.done
         },

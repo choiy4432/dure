@@ -8,6 +8,17 @@ describe('releaseHighlights', () => {
   it('마크다운 - 와 * 목록', () => {
     expect(releaseHighlights('# 제목\n- 하나\n\n* 둘\n문단\n  - 셋')).toEqual(['하나', '둘', '셋'])
   })
+  it('느슨한 목록 <li><p>', () => {
+    expect(releaseHighlights('<ul>\n<li>\n<p>항목</p>\n</li>\n<li>\n<p>둘</p>\n</li>\n</ul>')).toEqual(['항목', '둘'])
+  })
+  it('여러 줄 <li>', () => {
+    expect(releaseHighlights('<ul><li>foo\nbar</li></ul>')).toEqual(['foo bar'])
+  })
+  it('중첩 목록은 맨 위 항목만', () => {
+    expect(
+      releaseHighlights('<ul><li>상위 하나<ul><li>자식 a</li><li>자식 b</li></ul></li><li>상위 둘</li></ul>'),
+    ).toEqual(['상위 하나', '상위 둘'])
+  })
   it('배열(note 칸)', () => {
     expect(releaseHighlights([{ note: '- a' }, { note: null }, { note: '<li>b</li>' }])).toEqual(['a', 'b'])
   })
