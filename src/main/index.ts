@@ -252,9 +252,9 @@ if (!app.requestSingleInstanceLock()) {
         emit: (s) => emitApp('setup', s),
       })
       setup = setupFlow
-      // 앱 설정 — 엔진과 같은 settings.json. 방이 있는데 tourDone 칸이 없으면 업데이트로 받은 사람(투어·승인 안내를 본 것으로 써 둔다).
-      // 쓰기가 실패해도 시작은 계속한다(읽은 값으로)
-      let prefs = initAppPrefsSafe(userData, (engine?.rooms().length ?? 0) > 0)
+      // 앱 설정 — 엔진과 같은 settings.json. tourDone 칸이 없으면 방이 있을 때 업데이트로 받은 사람(투어·승인 안내를 본 것으로),
+      // 없을 때 새 사용자(tourDone:false)로 써 둔다. 엔진이 없으면 방 수를 모르니 쓰지 않는다. 쓰기가 실패해도 시작은 계속한다(읽은 값으로)
+      let prefs = initAppPrefsSafe(userData, engine ? engine.rooms().length > 0 : null)
       // 켤 때 claude 최신으로 — 지금 상태(창이 늦게 떠도 처음 상태를 이걸로 받는다)
       let claudeUpdateState: ClaudeUpdateState = 'idle'
       // 엔진 시작(갱신 뒤)이 끝나면 풀린다 — 그 전엔 claude 를 띄우는 엔진 메서드가 기다린다

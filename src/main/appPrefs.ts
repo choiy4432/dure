@@ -47,18 +47,20 @@ export function writeAppPrefs(dir: string, patch: Partial<AppPrefs>): AppPrefs {
 }
 
 /**
- * 켤 때 한 번 — 파일에 tourDone 칸이 아예 없는데 방이 있으면 업데이트로 받은 사람이다:
- * 투어·승인 안내를 이미 본 것으로 써 둔다. 칸이 있으면(false 라도) 그대로
+ * 켤 때 한 번 — 파일에 tourDone 칸이 아예 없을 때만 쓴다. 칸이 있으면(false 라도) 그대로.
+ * 방이 있으면 업데이트로 받은 사람: 투어·승인 안내를 이미 본 것으로 써 둔다.
+ * 방이 없으면 새 사용자: tourDone:false 를 써 둔다 — 투어 도중 방을 만들고 꺼도 다음에 업데이트로 받은 사람으로 치지 않게.
+ * hasRooms 가 null(방 수를 모름 — 엔진 없음·claude 없음)이면 쓰지 않는다. 방은 엔진이 있어야 생기니 그때 켤 때 정한다
  */
-export function initAppPrefs(dir: string, hasRooms: boolean): AppPrefs {
-  if (hasRooms && !Object.hasOwn(readRaw(dir), 'tourDone')) return writeAppPrefs(dir, { tourDone: true, approvalTipSeen: true })
-  return readAppPrefs(dir)
+export function initAppPrefs(dir: string, hasRooms: boolean | null): AppPrefs {
+  if (hasRooms === null || Object.hasOwn(readRaw(dir), 'tourDone')) return readAppPrefs(dir)
+  return writeAppPrefs(dir, hasRooms ? { tourDone: true, approvalTipSeen: true } : { tourDone: false })
 }
 
 /** 켤 때 쓰는 initAppPrefs — 쓰기가 실패해도(잠김·권한) 던지지 않고 지금 파일을 읽은 값. 투어 칸 하나로 두레가 못 켜지면 안 된다 */
 export function initAppPrefsSafe(
   dir: string,
-  hasRooms: boolean,
+  hasRooms: boolean | null,
   log: (...args: unknown[]) => void = console.error,
 ): AppPrefs {
   try {

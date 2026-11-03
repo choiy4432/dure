@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ago, FRESH_WORD, MESSAGE_WORD, PHASE_WORD, QUESTION_LINK, STATUS_LINE, STATUS_WORD, elapsed, fieldError, josa, lasting, localSummary, modelText, modelVersionName, nodeModelLabel, resetText, tokensText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
+import { ago, FRESH_WORD, MESSAGE_WORD, PHASE_WORD, QUESTION_LINK, STATUS_LINE, STATUS_WORD, TOUR, elapsed, fieldError, josa, lasting, localSummary, modelText, modelVersionName, nodeModelLabel, resetText, tokensText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
 
 describe('fieldError — 엔진 오류를 칸 아래 안내로', () => {
   it('이름 겹침은 해요체로, 다음 할 일까지 — 받침 따라 이라는/라는, 모르면 (이)라는', () => {
@@ -169,4 +169,27 @@ it('B1 상태·메시지·단계 말', () => {
   expect(PHASE_WORD.requesting).toBe('Claude 답 받는 중…')
   expect(FRESH_WORD).toBe('끝남 · 새 결과')
   expect(QUESTION_LINK).toBe('내 답 필요 · 패널에서 답하기')
+})
+
+it('투어 문구 — 문구 표 그대로', () => {
+  expect(TOUR.count(3)).toBe('3 / 8')
+  expect([TOUR.end, TOUR.ok, TOUR.start, TOUR.later]).toEqual(['투어 끝내기', '확인했어요', '시작하기', '나중에 볼게요'])
+  expect(TOUR.welcome).toEqual({ title: '두레에 오신 걸 환영해요', body: '여러 Claude 에이전트가 한 방에서 일을 주고받아요. 방 하나와 에이전트 하나를 만들며 1분 동안 둘러봐요.' })
+  expect(TOUR.room).toEqual({ title: '방을 만들어 보세요', body: '방은 프로젝트 하나예요. 그 일을 할 에이전트들이 한 방에 모여요.', wait: '방을 만들면 넘어가요' })
+  expect(TOUR.agent).toEqual({ title: '에이전트를 추가해 보세요', body: '에이전트는 역할을 맡은 Claude 하나예요. 일할 폴더와 역할(예: 랜딩 페이지 구현)을 정해요.', wait: '추가하면 넘어가요' })
+  expect(TOUR.card.body).toBe('지금 무엇을 하는지(작업 중·쉬는 중·내 승인 필요) 보여요. 누르면 오른쪽에 대화가 열리고, 끌어서 옮길 수 있어요. 에이전트끼리 일을 넘기면 카드 사이에 선이 생겨요.')
+  expect(TOUR.composer).toEqual({ title: '일을 시켜 보세요', body: '여기에 하고 싶은 일을 쓰고 Enter. 예: "이 폴더에 뭐가 있는지 알려 줘"', wait: '보내면 넘어가요' })
+  expect(TOUR.controls.body).toBe('멈추기 — 일하는 도중 언제든 멈춰요. 자동 — 다른 에이전트가 넘긴 일을 바로 할지(켬), 내가 보고 시킬지(끔, 기본).')
+  expect(TOUR.todo.body).toBe("내 승인이 필요하거나 다른 에이전트가 보낸 메시지가 오면 '할 일'에 숫자가 붙어요. 창이 뒤에 있어도 Windows 알림으로 알려 줘요.")
+  expect(TOUR.settingsOpen).toEqual({ title: '설정을 열어 보세요', body: '테마·알림·에이전트를 얼마나 맡길지처럼 두레 전체에 걸리는 것들이 여기 있어요.', wait: '열면 넘어가요' })
+  expect(TOUR.settings.list).toEqual([
+    '화면 테마 — 라이트 · 다크 · Windows 따라감',
+    '쉬는 에이전트 재우기 — 오래 쉬면 내려서 메모리를 비워요. 말을 걸면 이어서 깨어나요',
+    '자동 전달 상한 — 자동 켠 에이전트끼리 사람 확인 없이 주고받는 횟수',
+    '묻지 않고 실행 허용 — 켜야 에이전트마다 승인 없이 돌릴 수 있어요. 조심해서',
+    'Windows 알림 — 창이 가려져 있을 때 승인·질문·일 끝남',
+    '업데이트 · 안내 다시 보기 · 켤 때 claude 최신으로',
+  ])
+  expect(TOUR.done).toEqual({ title: '준비됐어요', body: '에이전트를 더 추가해 서로 일을 넘기게 해 보세요. 안내는 설정에서 다시 볼 수 있어요.' })
+  expect(TOUR.approval).toEqual({ badge: '처음 한 번', title: '승인이 필요해요', body: '파일을 만들거나 고치고, 명령을 실행하기 전엔 이렇게 물어요. 허용·거절하거나 패널에서 자세히 보세요.' })
 })

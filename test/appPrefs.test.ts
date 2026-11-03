@@ -71,9 +71,32 @@ test('initAppPrefs — 이미 tourDone:false 칸이 있으면 그대로(투어�
   expect(saved()).toEqual({ tourDone: false, autoChainLimit: 5 });
 });
 
-test('initAppPrefs(dir, false) — 방이 없으면(새 사용자) 쓰지 않고 기본값', () => {
+test('initAppPrefs(dir, false) — 방이 없으면(새 사용자) tourDone:false 를 써 둔다 — 투어 도중 방을 만들고 꺼도 다음에 업데이트로 받은 사람으로 치지 않게', () => {
+  seed({ autoChainLimit: 5 });
   expect(initAppPrefs(dir, false)).toEqual({ tourDone: false, approvalTipSeen: false, claudeAutoUpdate: true });
+  expect(saved()).toEqual({ autoChainLimit: 5, tourDone: false });
+  // 다음에 켤 때 방이 있어도 칸이 있으니 그대로 — 투어를 아직 안 끝낸 새 사용자
+  expect(initAppPrefs(dir, true)).toEqual({ tourDone: false, approvalTipSeen: false, claudeAutoUpdate: true });
+  expect(saved()).toEqual({ autoChainLimit: 5, tourDone: false });
+});
+
+test('initAppPrefs(dir, false) — settings.json 이 아예 없어도 tourDone:false 를 써 둔다', () => {
+  expect(initAppPrefs(dir, false)).toEqual({ tourDone: false, approvalTipSeen: false, claudeAutoUpdate: true });
+  expect(saved()).toEqual({ tourDone: false });
+});
+
+test('initAppPrefs(dir, false) — 이미 tourDone 칸이 있으면 그대로', () => {
+  seed({ tourDone: true, approvalTipSeen: true });
+  expect(initAppPrefs(dir, false)).toEqual({ tourDone: true, approvalTipSeen: true, claudeAutoUpdate: true });
+  expect(saved()).toEqual({ tourDone: true, approvalTipSeen: true });
+});
+
+test('initAppPrefs(dir, null) — 방 수를 모르면(엔진 없음 · claude 없음) 쓰지 않고 지금 값', () => {
+  expect(initAppPrefs(dir, null)).toEqual({ tourDone: false, approvalTipSeen: false, claudeAutoUpdate: true });
   expect(fs.existsSync(file())).toBe(false);
+  seed({ autoChainLimit: 5, claudeAutoUpdate: false });
+  expect(initAppPrefs(dir, null)).toEqual({ tourDone: false, approvalTipSeen: false, claudeAutoUpdate: false });
+  expect(saved()).toEqual({ autoChainLimit: 5, claudeAutoUpdate: false });
 });
 
 test('initAppPrefsSafe — 쓰기가 실패하면 던지지 않고 지금 파일을 읽은 값(투어 칸 하나로 시작을 막지 않는다)', () => {

@@ -2,8 +2,9 @@ import { useRef, useSyncExternalStore } from 'react'
 import { SLEEP_DEFAULT_MIN, type AgentId, type AgentStatus, type EngineEventMap, type HistoryItem, type RoomId } from '../../engine/types'
 import type { DureApi, Snapshot } from '../../shared/ipcContract'
 import type { AppEventMap, AppInfo, AppPrefs, ClaudeUpdateState, SetupState, UpdateState } from '../../shared/appTypes'
-import { displayStatus, type EdgeMode, type Phase } from './selectors'
+import { displayStatus, effectiveSetup, type EdgeMode, type Phase } from './selectors'
 import { markFresh } from '../map/freshNodes'
+import { nextStep, tourAt, type TourState } from '../tour/tourSteps'
 
 /** 엔진 없이 도는 앱 쪽 상태 — 준비 화면·업데이트 토스트·설정·투어가 읽는다 */
 export interface AppState {
@@ -70,6 +71,8 @@ export type UiState = Snapshot & {
   roomMenuRequest: number
   /** 지난 대화에서 새 에이전트로 이어 가는 창의 초안 — 없으면 창이 닫혀 있다 */
   forkDraft: ForkDraft | null
+  /** 안내 투어 — 없으면 null. 처음 켠 새 사용자에겐 저절로 '환영'(tourSteps · TourLayer 가 넘긴다) */
+  tour: TourState
 }
 
 export interface ForkDraft {
@@ -124,6 +127,14 @@ export interface Store {
   setPrefs(p: Partial<AppPrefs>): Promise<void>
   /** 업데이트 토스트를 이번 실행 동안 닫는다 */
   hideUpdateToast(): void
+  /** 투어를 '환영'부터 — 설정의 '안내 다시 보기'는 replay(방이 없으면 다시 보기가 아니다). 끝낼 때까지 아무것도 저장하지 않는다 */
+  startTour(replay: boolean): void
+  /** TourLayer 가 tourAdvance 결과를 넣는다 — 같은 값이면 알리지 않는다 */
+  setTour(t: TourState): void
+  /** ok·환영 단계의 단추 — 다음 단계(고른 에이전트가 없으면 카드 단계를 건너뜀). 끝 다음이면 endTour */
+  tourNext(): void
+  /** 투어를 닫고 끝낸 것으로 저장한다 — 저장이 실패해도 던지지 않고, 이번 실행엔 다시 저절로 뜨지 않는다 */
+  endTour(): Promise<void>
   /** PC 시계를 바꿨으면 시작 시각(statusSince)을 맞춘다 — 이벤트를 받을 때도 보지만, 이벤트가 없는 동안(긴 명령)을 위해 앱이 1초마다 부른다 */
   followClock(): void
 }
@@ -173,6 +184,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
     statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null,
+    tour: null,
   }
   const listeners = new Set<() => void>()
   let buffer: { ev: Ev; at: number }[] | null = null // 스냅샷을 기다리는 동안 온 이벤트(받은 시각과 함께)
@@ -181,7 +193,25 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   let loaded = false // 스냅샷을 한 번이라도 받았는가
   let clockOffset = Date.now() - performance.now() // 벽시계 − 흐른 시간 — 이것이 뛰면 PC 시계를 바꾼 것
 
-  const notify = () => listeners.forEach(fn => fn())
+  // 이번 실행에 투어가 한 번이라도 떴다 — 끝낸 뒤 조건이 그대로여도(저장 실패 등) 다시 저절로 띄우지 않는다
+  let tourShown = false
+  /**
+   * 저절로 시작 — 앱 설정을 받았고 · 투어를 끝낸 적 없고 · 준비됐고(준비 화면이 아니고) · 방이 하나도 없으면 '환영'.
+   * 방 수는 처음 스냅샷을 받은 뒤에만 안다(그 전의 빈 목록은 모르는 것)
+   */
+  const autoTour = () => {
+    if (state.tour !== null) { tourShown = true; return }
+    if (tourShown || !loaded) return
+    const { prefs, setup, setupLoadFailed } = state.app
+    if (!prefs || prefs.tourDone || state.rooms.length > 0) return
+    if (effectiveSetup(setup, state.claudeMissing, setupLoadFailed).phase !== 'ready') return
+    tourShown = true
+    state = { ...state, tour: tourAt('welcome', false, state) }
+  }
+  const notify = () => {
+    autoTour()
+    listeners.forEach(fn => fn())
+  }
   const set = (next: UiState) => {
     state = next
     notify()
@@ -589,6 +619,17 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     })
   }
 
+  const endTour = async () => {
+    tourShown = true
+    if (state.tour !== null) set({ ...state, tour: null })
+    try {
+      const prefs = await api.setPrefs({ tourDone: true })
+      setApp({ prefs })
+    } catch {
+      // 저장하지 못했다 — 이번 실행엔 다시 뜨지 않고, 다음에 켜면 다시 뜬다
+    }
+  }
+
   return {
     getState: () => state,
     followClock() {
@@ -612,6 +653,25 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     hideUpdateToast() {
       if (!state.app.toastHidden) setApp({ toastHidden: true })
     },
+    startTour(replay) {
+      set({ ...state, tour: tourAt('welcome', replay && state.rooms.length > 0, state) })
+    },
+    setTour(t) {
+      if (sameTour(state.tour, t)) return
+      set({ ...state, tour: t })
+    },
+    tourNext() {
+      const t = state.tour
+      if (!t) return
+      const hasAgent = state.agents.some(a => a.id === state.selectedAgentId && a.roomId === state.roomId)
+      const next = nextStep(t.step, { hasAgent })
+      if (next === null) {
+        void endTour()
+        return
+      }
+      set({ ...state, tour: tourAt(next, t.replay, state) })
+    },
+    endTour,
     async refresh() {
       await fetchSnapshot()
     },
@@ -687,6 +747,14 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       }
     },
   }
+}
+
+/** 같은 투어인가 — 단계·다시 보기·base 가 모두 같으면 */
+function sameTour(a: TourState, b: TourState): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.step === b.step && a.replay === b.replay
+    && a.base.rooms === b.base.rooms && a.base.agents === b.base.agents && a.base.sent === b.base.sent
 }
 
 let shared: Store | null = null

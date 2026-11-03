@@ -1395,3 +1395,153 @@ describe('store 앱 상태', () => {
     expect(s.getState().app.setup).toEqual({ phase: 'ready' })
   })
 })
+
+describe('store 투어', () => {
+  /** 앱 상태 응답(기다리지 않는 loadApp)까지 다 받는다 */
+  const settle = () => new Promise(r => setTimeout(r, 0))
+  const noRooms = () => snap({ rooms: [], agents: [] })
+  const WELCOME = { step: 'welcome', replay: false, base: { rooms: 0, agents: 0, sent: 0 } }
+
+  it('처음엔 투어가 없다', () => {
+    const { api } = fake()
+    expect(createStore(api).getState().tour).toBeNull()
+  })
+
+  it('조건이 맞으면 저절로 welcome — 설정을 받았고 · 투어를 안 끝냈고 · 준비됐고 · 방이 0', async () => {
+    const { api } = fake({ snapshot: async () => noRooms() })
+    const s = createStore(api)
+    await s.init()
+    await settle()
+    expect(s.getState().tour).toEqual(WELCOME)
+  })
+
+  it('조건이 늦게 맞아도(준비가 끝남) 그때 welcome', async () => {
+    const { api, emit } = fake({ snapshot: async () => noRooms(), setupState: async () => ({ phase: 'needs', install: { state: 'done', version: '2' }, login: { state: 'todo' } }) })
+    const s = createStore(api)
+    await s.init()
+    await settle()
+    expect(s.getState().tour).toBeNull()
+    emit('setup', { phase: 'ready' })
+    expect(s.getState().tour).toEqual(WELCOME)
+  })
+
+  it('tourDone 이면 안 시작', async () => {
+    const { api } = fake({ snapshot: async () => noRooms(), prefs: async () => ({ ...DEFAULT_APP_PREFS, tourDone: true }) })
+    const s = createStore(api)
+    await s.init()
+    await settle()
+    expect(s.getState().tour).toBeNull()
+  })
+
+  it('방이 있거나 · 설정을 못 받았거나 · 준비가 안 됐거나 · claude 가 없으면 안 시작', async () => {
+    const cases = [
+      fake(), // 방 둘
+      fake({ snapshot: async () => noRooms(), prefs: async () => { throw new Error('x') } }),
+      fake({ snapshot: async () => noRooms(), setupState: async () => ({ phase: 'needs', install: { state: 'todo' }, login: { state: 'locked' } }) }),
+      fake({ snapshot: async () => noRooms(), setupState: () => new Promise<SetupState>(() => {}) }), // 확인 중
+      fake({ snapshot: async () => ({ ...noRooms(), claudeMissing: true }) }), // 준비됐다는데 claude 가 없다 → 준비 화면
+    ]
+    for (const { api } of cases) {
+      const s = createStore(api)
+      await s.init()
+      await settle()
+      expect(s.getState().tour).toBeNull()
+    }
+  })
+
+  it('처음 스냅샷을 받기 전엔 방 수를 모른다 — 안 시작', async () => {
+    let resolve!: (v: Snapshot) => void
+    const { api } = fake({ snapshot: () => new Promise<Snapshot>(r => { resolve = r }) })
+    const s = createStore(api)
+    const p = s.init()
+    await settle() // 설정·준비는 받았다
+    expect(s.getState().app.prefs).not.toBeNull()
+    expect(s.getState().tour).toBeNull()
+    resolve(snap()) // 방이 있었다
+    await p
+    expect(s.getState().tour).toBeNull()
+  })
+
+  it('endTour 가 tourDone 저장 — 투어를 닫고, 조건이 그대로여도 이번 실행엔 다시 안 뜬다', async () => {
+    const { api, emit } = fake({ snapshot: async () => noRooms() })
+    const s = createStore(api)
+    await s.init()
+    await settle()
+    expect(s.getState().tour).not.toBeNull()
+    await s.endTour()
+    expect(s.getState().tour).toBeNull()
+    expect(api.setPrefs).toHaveBeenCalledWith({ tourDone: true })
+    expect(s.getState().app.prefs?.tourDone).toBe(true)
+    emit('setup', { phase: 'ready' })
+    expect(s.getState().tour).toBeNull()
+  })
+
+  it('endTour — 저장이 실패해도 던지지 않고, 이번 실행엔 다시 안 뜬다', async () => {
+    const { api, emit } = fake({ snapshot: async () => noRooms(), setPrefs: async () => { throw new Error('잠김') } })
+    const s = createStore(api)
+    await s.init()
+    await settle()
+    await expect(s.endTour()).resolves.toBeUndefined()
+    expect(s.getState().tour).toBeNull()
+    expect(s.getState().app.prefs?.tourDone).toBe(false)
+    emit('setup', { phase: 'ready' })
+    expect(s.getState().tour).toBeNull()
+  })
+
+  it('startTour(replay) — 환영부터, 방이 없으면 다시 보기가 아니다', async () => {
+    const a = fake()
+    const s = createStore(a.api)
+    await s.init()
+    s.startTour(true)
+    expect(s.getState().tour).toEqual({ step: 'welcome', replay: true, base: { rooms: 2, agents: 2, sent: 0 } })
+    expect(a.api.setPrefs).not.toHaveBeenCalled()
+
+    const b = fake({ snapshot: async () => noRooms(), prefs: async () => ({ ...DEFAULT_APP_PREFS, tourDone: true }) })
+    const s2 = createStore(b.api)
+    await s2.init()
+    s2.startTour(true)
+    expect(s2.getState().tour).toEqual(WELCOME)
+  })
+
+  it('tourNext — 다음 단계로 base 를 새로 잰다 · 고른 에이전트가 없으면 카드 단계를 건너뛴다 · 끝 다음은 endTour', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    s.tourNext() // 투어가 없으면 아무것도 안 한다
+    expect(s.getState().tour).toBeNull()
+    s.startTour(true)
+    s.tourNext()
+    expect(s.getState().tour).toEqual({ step: 'room', replay: true, base: { rooms: 2, agents: 2, sent: 0 } })
+    s.tourNext()
+    expect(s.getState().tour?.step).toBe('agent')
+    s.tourNext() // 고른 에이전트 없음
+    expect(s.getState().tour?.step).toBe('todo')
+    s.setTour({ step: 'agent', replay: true, base: { rooms: 2, agents: 2, sent: 0 } })
+    s.selectAgent('a')
+    s.tourNext()
+    expect(s.getState().tour?.step).toBe('card')
+    s.setTour({ step: 'done', replay: true, base: { rooms: 2, agents: 2, sent: 0 } })
+    s.tourNext()
+    expect(s.getState().tour).toBeNull()
+    await settle()
+    expect(api.setPrefs).toHaveBeenCalledWith({ tourDone: true })
+  })
+
+  it('setTour — 같은 값이면 알리지 않는다', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    const fn = vi.fn()
+    s.subscribe(fn)
+    s.setTour({ step: 'todo', replay: false, base: { rooms: 2, agents: 2, sent: 0 } })
+    expect(fn).toHaveBeenCalledTimes(1)
+    s.setTour({ step: 'todo', replay: false, base: { rooms: 2, agents: 2, sent: 0 } })
+    expect(fn).toHaveBeenCalledTimes(1)
+    s.setTour({ step: 'todo', replay: false, base: { rooms: 2, agents: 2, sent: 1 } })
+    expect(fn).toHaveBeenCalledTimes(2)
+    s.setTour(null)
+    s.setTour(null)
+    expect(fn).toHaveBeenCalledTimes(3)
+    expect(s.getState().tour).toBeNull()
+  })
+})
