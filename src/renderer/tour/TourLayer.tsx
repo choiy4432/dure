@@ -80,16 +80,29 @@ function viewOf(el: Element): Rect {
   return flow ? rectOf(flow) : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
 }
 
+/** 실제로 초점이 갈 수 있는 것 — 숨김(hidden · display:none · visibility:hidden · aria-hidden)과 tabindex<0 은 뺀다 */
+function focusable(el: HTMLElement): boolean {
+  if (el.tabIndex < 0 || el.closest('[hidden],[aria-hidden="true"],[inert]')) return false
+  for (let n: HTMLElement | null = el; n; n = n.parentElement) {
+    const cs = getComputedStyle(n)
+    if (cs.display === 'none' || (n === el && cs.visibility === 'hidden')) return false
+  }
+  return true
+}
+
 const byTour = (id: string) => Array.from(document.querySelectorAll(`[data-tour="${id}"]`)).filter(drawn)
 
 /**
- * 짚을 요소 — 단계의 targets 를 모두. 승인 한 번은 그 에이전트 관계도 카드의 승인 칸, 그게 다 보이지 않으면 고른 에이전트의 카드
+ * 짚을 요소 — 단계의 targets 를 모두. 승인 한 번은 그 에이전트 관계도 카드의 승인 칸, 그게 다 보이지 않으면 그 에이전트의 카드
  */
 function targetsOf(mode: Mode, step: TourStep | null, tipAgent: AgentId | null): Element[] {
   if (mode === 'tip') {
     const ap = byTour('approval').filter(el => el.closest('[data-id]')?.getAttribute('data-id') === tipAgent)
     if (ap.length > 0 && inside(rectOf(ap[0]), viewOf(ap[0]))) return ap.slice(0, 1)
-    return byTour('agent-card')
+    // 묻는 에이전트 자신의 카드(고른 에이전트가 아니어도) — 관계도 노드 data-id
+    return tipAgent
+      ? Array.from(document.querySelectorAll('.react-flow__node[data-id]')).filter(el => el.getAttribute('data-id') === tipAgent && drawn(el)).slice(0, 1)
+      : []
   }
   return step ? step.targets.flatMap(byTour) : []
 }
@@ -230,7 +243,8 @@ export function TourLayer({ dialog }: { dialog: Dialog }) {
         checked = true
         const el = els.find(drawn)!
         if (!inside(target, viewOf(el))) {
-          if (el.closest('.react-flow') && selected) getStore().focusAgent(selected)
+          const who = mode === 'tip' ? tipAgent : selected
+          if (el.closest('.react-flow') && who) getStore().focusAgent(who)
           else el.scrollIntoView?.({ block: 'nearest' })
         }
       }
@@ -326,7 +340,7 @@ export function TourLayer({ dialog }: { dialog: Dialog }) {
       const items = [
         ...el.querySelectorAll<HTMLElement>(FOCUSABLE),
         ...hole.flatMap(t => [...(t.matches(FOCUSABLE) ? [t as HTMLElement] : []), ...t.querySelectorAll<HTMLElement>(FOCUSABLE)]),
-      ]
+      ].filter(focusable)
       e.preventDefault()
       e.stopPropagation()
       if (items.length === 0) {

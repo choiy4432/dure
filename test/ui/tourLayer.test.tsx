@@ -130,6 +130,41 @@ describe('TourLayer — 환영', () => {
   })
 })
 
+describe('TourLayer — 직접 해 보기의 Tab', () => {
+  it('구멍 안의 숨은 입력은 건너뛰고, 보이는 다음 것으로 가서 카드로 돌아온다', async () => {
+    withAgent()
+    const hole = place('composer', { left: 100, top: 500, width: 500, height: 80 }, { tag: 'div' })
+    const plan = document.createElement('button')
+    plan.textContent = '계획 먼저'
+    const file = document.createElement('input')
+    file.type = 'file'
+    file.hidden = true
+    const send = document.createElement('button')
+    send.textContent = '보내기'
+    hole.append(plan, file, send)
+    const { store } = await mount()
+    act(() => store.setTour(at('composer', { rooms: 1, agents: 1 })))
+    const dlg = card()!
+    const primary = dlg.querySelector<HTMLElement>('[data-primary]') ?? dlg
+    const tab = (shiftKey = false) => fireEvent.keyDown(document.activeElement!, { key: 'Tab', shiftKey })
+    primary.focus()
+    const seen: Element[] = []
+    for (let i = 0; i < 8; i++) {
+      tab()
+      seen.push(document.activeElement!)
+    }
+    expect(seen).not.toContain(file)
+    expect(seen).toContain(plan)
+    expect(seen).toContain(send)
+    expect(dlg.contains(seen[seen.length - 1]) || seen.slice(-4).some(e => dlg.contains(e))).toBe(true)
+    plan.focus()
+    tab()
+    expect(document.activeElement).toBe(send)
+    tab()
+    expect(dlg.contains(document.activeElement)).toBe(true)
+  })
+})
+
 describe('TourLayer — 짚기', () => {
   it('room 단계 — 구멍은 new-room 사각형 + 6px, 막 네 칸이 둘레를 덮고 카드는 아래', async () => {
     place('new-room', { left: 100, top: 200, width: 80, height: 32 })
@@ -342,6 +377,15 @@ describe('TourLayer — Esc', () => {
 })
 
 describe('TourLayer — 승인 한 번', () => {
+  /** 관계도 노드(React Flow 가 data-id 를 단다) */
+  function node(agentId: string, b: Box, parent?: HTMLElement) {
+    const el = parent ? document.createElement('div') : plain('div')
+    el.className = 'react-flow__node'
+    el.dataset.id = agentId
+    rect(el, b)
+    parent?.appendChild(el)
+    return el
+  }
   /** 관계도 카드(React Flow 노드 data-id) 안의 승인 칸 */
   function approvalIn(agentId: string, b: Box) {
     const node = plain('div')
@@ -380,12 +424,43 @@ describe('TourLayer — 승인 한 번', () => {
     withAgent()
     prefs = { ...prefs, approvalTipSeen: false }
     snapshot.requests = [ask('a')]
-    place('agent-card', { left: 300, top: 260, width: 256, height: 136 }, { tag: 'div' })
+    node('a', { left: 300, top: 260, width: 256, height: 136 })
     const { store } = await mount()
     act(() => store.selectAgent('a'))
     expect(store.getState().tour).toBeNull()
     expect(screen.getByRole('dialog', { name: '승인이 필요해요' })).toBeTruthy()
     expect(box(spot()!)).toEqual({ left: 294, top: 254, width: 268, height: 148 })
+  })
+
+  it('묻는 에이전트가 고른 에이전트가 아니면 그 에이전트 카드를 짚고 관계도를 그리로 옮긴다', async () => {
+    withAgent()
+    snapshot.agents = [agent('a'), agent('b')]
+    prefs = { ...prefs, approvalTipSeen: false }
+    snapshot.requests = [ask('b')]
+    const flow = plain('div')
+    flow.className = 'react-flow'
+    rect(flow, { left: 0, top: 48, width: 600, height: 700 })
+    node('a', { left: 20, top: 100, width: 256, height: 136 }, flow)
+    node('b', { left: 700, top: 300, width: 256, height: 136 }, flow) // 관계도 밖
+    const { store } = await mount()
+    act(() => store.selectAgent('a'))
+    await wait(250)
+    expect(box(spot()!)).toEqual({ left: 694, top: 294, width: 268, height: 148 })
+    expect(store.getState().mapFocus).toEqual({ agentId: 'b', n: 1 })
+  })
+
+  it('아무도 고르지 않았어도 묻는 에이전트 카드를 짚고 옮긴다', async () => {
+    withAgent()
+    prefs = { ...prefs, approvalTipSeen: false }
+    snapshot.requests = [ask('a')]
+    const flow = plain('div')
+    flow.className = 'react-flow'
+    rect(flow, { left: 0, top: 48, width: 600, height: 700 })
+    node('a', { left: 700, top: 300, width: 256, height: 136 }, flow)
+    const { store } = await mount()
+    await wait(250)
+    expect(box(spot()!)).toEqual({ left: 694, top: 294, width: 268, height: 148 })
+    expect(store.getState().mapFocus).toEqual({ agentId: 'a', n: 1 })
   })
 
   it('이미 봤거나 · 묻는 게 승인이 아니거나 · 대화상자가 열려 있으면 뜨지 않는다', async () => {
