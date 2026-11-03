@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } 
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
+import electronUpdater from 'electron-updater'
 import { killTree } from '../engine/killTree'
 import { authStatus, claudeVersion, createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
@@ -10,6 +11,7 @@ import { appEnv, appUserModelId } from './appEnv'
 import { initAppPrefsSafe, writeAppPrefs } from './appPrefs'
 import { resolveClaudeCommand, resolveSshCommand } from './claudeCommand'
 import { updateClaude, type ClaudeUpdateRun } from './claudeUpdate'
+import { createUpdater, RELEASE_URL, type UpdaterLike } from './updater'
 import { createSetupFlow, type SetupFlow } from './setupFlow'
 import { runStartup } from './startup'
 import { logEngineErrors, registerIpc, type AppHost } from './ipc'
@@ -196,14 +198,20 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', () => focusExisting(mainWindow))
 
   let quitting = false
+  // 끄기 약속 하나 — before-quit 과 업데이트 설치(beforeInstall)가 같이 쓴다. 두 번 끄지 않는다
+  let shutdownPromise: Promise<void> | null = null
+  const shutdownOnce = (): Promise<void> => {
+    // 설치 나무·claude update 나무 끄기는 길어야 3초만 기다린다 — 엔진 끄기와 같이
+    shutdownPromise ??= Promise.all([bounded(setup?.dispose()), bounded(claudeUpdateRun?.kill()), engine?.shutdown()]).then(() => {})
+    return shutdownPromise
+  }
   app.on('before-quit', (event) => {
     if (quitting) return
     quitting = true
     event.preventDefault()
     void (async () => {
       try {
-        // 설치 나무·claude update 나무 끄기는 길어야 3초만 기다린다 — 엔진 끄기와 같이
-        await Promise.all([bounded(setup?.dispose()), bounded(claudeUpdateRun?.kill()), engine?.shutdown()])
+        await shutdownOnce()
       } finally {
         app.exit(exitCode)
       }
@@ -260,7 +268,18 @@ if (!app.requestSingleInstanceLock()) {
       // 엔진 시작(갱신 뒤)이 끝나면 풀린다 — 그 전엔 claude 를 띄우는 엔진 메서드가 기다린다
       let markEngineReady!: () => void
       const engineReady = new Promise<void>((r) => (markEngineReady = r))
-      // 엔진 없이 도는 앱 쪽 일 — appInfo·prefs·setPrefs·준비 흐름·claude 최신으로가 진짜. 두레 업데이트(Task 11)는 아직 흉내
+      // 두레 업데이트 — 설치본만 electron-updater(ESM 이라 기본 내보내기에서 꺼낸다). 개발 실행은 늘 'dev'
+      const updater = createUpdater({
+        updater: app.isPackaged ? (electronUpdater.autoUpdater as unknown as UpdaterLike) : null,
+        current: app.getVersion(),
+        beforeInstall: async () => {
+          // quitAndInstall 은 before-quit 을 거치지 않을 수 있다 — 엔진을 먼저 끄고, 끄는 길이 겹쳐 또 끄지 않게 한다
+          quitting = true
+          await shutdownOnce()
+        },
+        emit: (s) => emitApp('update', s),
+      })
+      // 엔진 없이 도는 앱 쪽 일 — appInfo·prefs·setPrefs·준비 흐름·claude 최신으로·두레 업데이트
       const appHost: AppHost = {
         async appInfo() {
           return { version: app.getVersion(), packaged: app.isPackaged }
@@ -288,14 +307,21 @@ if (!app.requestSingleInstanceLock()) {
           return claudeUpdateState
         },
         async updateState() {
-          return { kind: 'dev' }
+          return updater.state()
         },
         async checkUpdate() {
-          return { kind: 'dev' }
+          return updater.check()
         },
-        async downloadUpdate() {},
-        async installUpdate() {},
-        async openReleasePage() {},
+        async downloadUpdate() {
+          await updater.download()
+        },
+        async installUpdate() {
+          await updater.install()
+        },
+        async openReleasePage() {
+          const s = updater.state()
+          if ('version' in s && s.version) await shell.openExternal(RELEASE_URL(s.version))
+        },
       }
       // 저장한 화면 테마를 Windows 에 알린다 — 화면의 prefers-color-scheme·제목 표시줄 단추·스크롤바가 따른다(claude 가 없으면 Windows 따라감)
       nativeTheme.themeSource = engine?.theme() ?? 'system'
@@ -377,6 +403,9 @@ if (!app.requestSingleInstanceLock()) {
 
       const smokeMs = Number(env.DURE_SMOKE_EXIT_MS)
       if (smokeMs > 0) setTimeout(() => app.quit(), smokeMs)
+
+      // 두레 업데이트 확인 — 설치본만, 창이 뜬 10초 뒤 한 번. 실패는 error 상태만(토스트는 available 부터)
+      if (app.isPackaged) setTimeout(() => void updater.check(), 10_000)
 
       // 창을 막지 않는다 — 결과는 'setup'·'claude-update' 사건으로. 차례대로(claude 가 둘 겹치지 않게): 준비 확인 → claude 최신으로 → 엔진 시작
       const updateWith = engine && prefs.claudeAutoUpdate ? claude : null
