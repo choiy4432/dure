@@ -336,3 +336,23 @@ export function tokensText(n: number): string {
   if (man < 10) return `${Number(man.toFixed(1))}만`
   return `${Math.round(man)}만`
 }
+
+/** 업데이트 토스트 */
+export const UPDATE_TOAST = {
+  title: '새 버전이 나왔어요',
+  versions: (next: string, now: string) => `두레 ${next} · 지금 ${now}`,
+  update: '업데이트',
+  later: '나중에',
+  all: '모두 보기',
+  close: '닫기',
+  downloading: (p: number) => `받고 있어요 · ${p}%`,
+  keepUsing: '받는 동안 계속 써도 돼요',
+  ready: '업데이트 준비됐어요',
+  readyBody: (v: string) => `다시 켜면 새 버전(${v})으로 바뀌어요`,
+  working: (n: number) => `일하는 에이전트 ${n}명이 멈춰요 — 다시 켜진 뒤 말을 걸면 이어서 해요`,
+  restart: '지금 다시 켜기',
+  onQuit: '끌 때 할게요',
+  failed: '받지 못했어요',
+  installFailed: '업데이트를 설치하지 못했어요',
+  retry: '다시 시도',
+} as const

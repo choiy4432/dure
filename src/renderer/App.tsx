@@ -17,6 +17,7 @@ import { RelationMap } from './map/RelationMap'
 import { AgentPanel } from './panel/AgentPanel'
 import { useAttention } from './shell/useAttention'
 import { Announcer } from './shell/Announcer'
+import { UpdateToast } from './shell/UpdateToast'
 
 type Dialog = 'room' | 'agent' | 'settings' | null
 
@@ -86,6 +87,7 @@ export function App() {
         {body}
         <StatusBar />
         <Announcer {...announced} />
+        <UpdateToast />
         <Presence show={dialog === 'room'}>
           <NewRoomDialog onClose={close} />
         </Presence>
