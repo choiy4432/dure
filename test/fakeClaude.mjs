@@ -75,6 +75,32 @@ const logFile = process.env.FAKE_CLAUDE_LOG;
 const log = (s) => {
   if (logFile) fs.appendFileSync(logFile, s + '\n');
 };
+
+// 설치·로그인·갱신 갈래 — stream-json 세션 앞에서 갈라 바로 끝낸다(두레가 시작 때 부르는 claude 하위 명령).
+//   --version                  → "2.1.304 (Claude Code)"
+//   auth status --json         → {"loggedIn":…}. 우선순위: FAKE_CLAUDE_LOGIN_FILE 이 있고 그 파일이 존재하면 true(로그인 뒤),
+//                                아니면 FAKE_CLAUDE_LOGGED_OUT==='1' 이면 false, 그 밖은 true
+//   auth login --claudeai      → FAKE_CLAUDE_LOGIN_FILE 이 있으면 그 파일을 만든다. 종료 0
+//   update                     → FAKE_CLAUDE_UPDATE_MS(기본 0) 기다린 뒤 {event:'update'} 한 줄 기록, 종료 FAKE_CLAUDE_UPDATE_CODE(기본 0)
+if (argv[0] === '--version') {
+  process.stdout.write('2.1.304 (Claude Code)\n', () => process.exit(0));
+} else if (argv[0] === 'auth' && argv[1] === 'status') {
+  const loginFile = process.env.FAKE_CLAUDE_LOGIN_FILE;
+  const loggedIn = (!!loginFile && fs.existsSync(loginFile)) || process.env.FAKE_CLAUDE_LOGGED_OUT !== '1';
+  process.stdout.write(JSON.stringify({ loggedIn }) + '\n', () => process.exit(0));
+} else if (argv[0] === 'auth' && argv[1] === 'login') {
+  if (process.env.FAKE_CLAUDE_LOGIN_FILE) fs.writeFileSync(process.env.FAKE_CLAUDE_LOGIN_FILE, 'ok\n');
+  process.exit(0);
+} else if (argv[0] === 'auth') {
+  process.exit(2); // 모르는 auth 하위 명령
+} else if (argv[0] === 'update') {
+  setTimeout(() => {
+    log(JSON.stringify({ event: 'update' }));
+    process.exit(Number(process.env.FAKE_CLAUDE_UPDATE_CODE ?? 0));
+  }, Number(process.env.FAKE_CLAUDE_UPDATE_MS ?? 0));
+}
+const setupBranch = ['--version', 'auth', 'update'].includes(argv[0] ?? '');
+if (setupBranch) await new Promise(() => {}); // 위 갈래가 끝낼 때까지 아래 세션 코드로 흘러가지 않게 멈춘다
 log(JSON.stringify({ argv, pid: process.pid, mcpToolTimeout: process.env.MCP_TOOL_TIMEOUT ?? null }));
 // FAKE_STDERR_START=<글> — 뜨자마자 stderr 에 한 줄(서버 로그인 셸 프로필 잡음 흉내)
 if (process.env.FAKE_STDERR_START) process.stderr.write(`${process.env.FAKE_STDERR_START}\n`);
