@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react'
 import { useLeaving } from './presence'
 
-const FOCUSABLE =
+/** Tab 으로 갈 수 있는 것 — 대화상자와 안내 투어 카드가 그 안에서 초점을 돌릴 때 */
+export const FOCUSABLE =
   'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
 
 /**

@@ -268,6 +268,7 @@ export function RoomSwitcher() {
           ref={button}
           type="button"
           className="room"
+          data-tour="room-switcher"
           aria-haspopup="dialog"
           aria-expanded={open}
           title="방 고르기"

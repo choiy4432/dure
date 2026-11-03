@@ -85,6 +85,12 @@
   --overlay-blur: 6px;                 /* 그림 크게 보기 뒤 막의 흐림 */
   --on-overlay: #FFFFFF;               /* 막 위 글(썸네일 '+N') */
 
+  /* 안내 투어 겹(시안 tour-look B) — 짚은 곳 밖은 살짝 흐리고 옅은 막, 짚은 곳은 파란 테 + 옅은 번짐 */
+  --tour-veil: rgba(15, 23, 42, 0.2);
+  --tour-blur: 3px;
+  --tour-ring: var(--primary);
+  --tour-glow: rgba(37, 99, 235, 0.18);
+
   /* 글꼴 */
   --font: 'Noto Sans KR', system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, Consolas, monospace;
@@ -154,6 +160,10 @@
     --shadow-dlg: 0 1px 2px rgba(0, 0, 0, 0.45), 0 24px 48px -12px rgba(0, 0, 0, 0.75);
     --overlay: rgba(2, 6, 23, 0.6);
     --on-overlay: #FFFFFF;
+
+    --tour-veil: rgba(2, 6, 23, 0.4);
+    --tour-ring: var(--primary);
+    --tour-glow: rgba(37, 99, 235, 0.18);
 
     color-scheme: dark;
   }

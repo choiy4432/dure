@@ -9,6 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
+import { markOnboarded } from './onboarded'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const MAIN = path.join(ROOT, 'out', 'main', 'index.js')
@@ -47,6 +48,7 @@ function makeWork(): Work {
   }
   fs.mkdirSync(w.planFolder)
   fs.mkdirSync(w.webFolder)
+  markOnboarded(w.userData) // 안내 투어·승인 한 번은 이 시험의 일이 아니다
   return w
 }
 

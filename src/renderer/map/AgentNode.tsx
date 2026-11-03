@@ -115,7 +115,7 @@ function Approval({ agent, request }: { agent: AgentView; request: PendingReques
   }
   const target = requestTarget(request.toolName, request.input, agent.folder)
   return (
-    <div className="ap nodrag" onClick={stop}>
+    <div className="ap nodrag" data-tour="approval" onClick={stop}>
       <b className="ap-t">{requestTitle(agent.name, request.toolName, request.input, request.fromSubagent)}</b>
       {target && (
         <code className="trunc" title={target}>
@@ -210,6 +210,7 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
       ref={card}
       className={`nd${selected ? ' sel' : ''}${byp ? ' byp' : ''}${request ? ' pend' : ''}`}
       data-status={status}
+      data-tour={selected ? 'agent-card' : undefined}
     >
       <div className="nh">
         <span className={`av${selected ? ' b' : ''}`} aria-hidden="true">

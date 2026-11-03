@@ -17,6 +17,8 @@ interface Props {
   onClose: () => void
   /** 어느 칸에도 맞지 않는 엔진 문구 — 버튼 위에 */
   error?: string | null
+  /** 안내 투어가 이 대화상자를 짚을 때 쓰는 이름(data-tour) — 설정 */
+  tourId?: string
   children: ReactNode
 }
 
@@ -28,7 +30,7 @@ export function FormDialog(props: Props) {
   return createPortal(<Frame {...props} />, document.body)
 }
 
-function Frame({ title, submitLabel, canSubmit, busy, onSubmit, onClose, error, children }: Props) {
+function Frame({ title, submitLabel, canSubmit, busy, onSubmit, onClose, error, tourId, children }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const backdrop = useRef<HTMLDivElement>(null)
   const submitButton = useRef<HTMLButtonElement>(null)
@@ -59,6 +61,7 @@ function Frame({ title, submitLabel, canSubmit, busy, onSubmit, onClose, error, 
       <div
         ref={ref}
         className="dlg dlg-form"
+        data-tour={tourId}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

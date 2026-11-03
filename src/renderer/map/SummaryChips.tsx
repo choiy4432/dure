@@ -28,7 +28,7 @@ export function SummaryChips({ roomId }: { roomId: RoomId }) {
   }
 
   return (
-    <div className="sum" role="group" aria-label="요약">
+    <div className="sum" role="group" aria-label="요약" data-tour="summary">
       {CHIPS.map(c => (
         // 0 이면 누를 것도 없다 — 점·수를 흐리게 해 뒤로 물린다(0 이 아닌 칩만 눈에 띈다)
         <button

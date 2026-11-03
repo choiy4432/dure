@@ -55,6 +55,8 @@ export type UiState = Snapshot & {
   subagentFocus: { agentId: AgentId; key: string; n: number } | null
   /** 메시지 탭의 '대화에서 보기'를 눌렀다 — 그 에이전트의 대화가 messageId 메시지 줄로 간다. 간 뒤엔 대화 목록이 지운다(다시 열려도 또 가지 않게) */
   messageFocus: { agentId: AgentId; messageId: string; n: number } | null
+  /** focusAgent 가 그 카드를 관계도에 보이게 해 달라고 했다 — 관계도가 카드가 밖에 있을 때만 옮긴다. n 은 부를 때마다 오른다 */
+  mapFocus: { agentId: AgentId; n: number } | null
   /** 관계도 선 보기 — 이 PC 에 기억한다(EDGE_MODE_KEY), 처음엔 최근 */
   edgeMode: EdgeMode
   /**
@@ -116,7 +118,7 @@ export interface Store {
   doneMessageFocus(n: number): void
   /** 관계도 선 보기를 바꾸고 이 PC 에 기억한다 */
   setEdgeMode(mode: EdgeMode): void
-  /** 그 에이전트의 방으로 바꾸고(다르면) 고른다 — 기록도 불러온다. 모르는 id 면 아무것도 안 한다 */
+  /** 그 에이전트의 방으로 바꾸고(다르면) 고르고, 관계도에 그 카드를 보이게 해 달라고 한다(mapFocus) — 기록도 불러온다. 모르는 id 면 아무것도 안 한다 */
   focusAgent(id: AgentId): void
   /** 방 목록을 열어 달라고 요청한다 — roomMenuRequest 가 하나 오른다 */
   requestRoomMenu(): void
@@ -131,7 +133,10 @@ export interface Store {
   startTour(replay: boolean): void
   /** TourLayer 가 tourAdvance 결과를 넣는다 — 같은 값이면 알리지 않는다 */
   setTour(t: TourState): void
-  /** ok·환영 단계의 단추 — 다음 단계(고른 에이전트가 없으면 카드 단계를 건너뜀). 끝 다음이면 endTour */
+  /**
+   * ok·환영 단계의 단추 — 다음 단계(고른 에이전트가 없으면 카드 단계를 건너뜀). 끝 다음이면 endTour.
+   * 설정 안 단계에선 아무것도 안 한다 — 그 단계는 사용자가 설정 창을 닫아야 끝난다(tourAdvance)
+   */
   tourNext(): void
   /** 투어를 닫고 끝낸 것으로 저장한다 — 저장이 실패해도 던지지 않고, 이번 실행엔 다시 저절로 뜨지 않는다 */
   endTour(): Promise<void>
@@ -183,7 +188,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     app: { info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false },
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
-    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null,
+    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, mapFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null,
     tour: null,
   }
   const listeners = new Set<() => void>()
@@ -662,7 +667,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     },
     tourNext() {
       const t = state.tour
-      if (!t) return
+      if (!t || t.step === 'settings') return
       const hasAgent = state.agents.some(a => a.id === state.selectedAgentId && a.roomId === state.roomId)
       const next = nextStep(t.step, { hasAgent })
       if (next === null) {
@@ -690,7 +695,8 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       if (!a) return
       // 방을 바꾸면서 고르기 — selectRoom 은 고르기를 비우니 쓰지 않고 한 번에 바꾼다
       const roomId = state.rooms.some(r => r.id === a.roomId) ? a.roomId : state.roomId
-      set({ ...state, roomId, selectedAgentId: id, fresh: without(state.fresh, id) })
+      const mapFocus = { agentId: id, n: (state.mapFocus?.n ?? 0) + 1 }
+      set({ ...state, roomId, selectedAgentId: id, fresh: without(state.fresh, id), mapFocus })
       tellSelected(id)
       void loadHistory(id)
     },

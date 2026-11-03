@@ -24,7 +24,16 @@ const darkStart = tokens.indexOf('@media (prefers-color-scheme: dark)');
 const light = varsOf(tokens.slice(0, darkStart));
 const dark = varsOf(tokens.slice(darkStart));
 /** 테마와 상관없는 값 — 반경·글꼴·흐림 */
-const SHARED = /^--(radius-|font$|mono$|overlay-blur$)/;
+const SHARED = /^--(radius-|font$|mono$|overlay-blur$|tour-blur$)/;
+
+test('투어 겹 토큰 — 막·흐림·테·번짐(시안 tour-look B), 색은 라이트·다크 둘 다', () => {
+  expect(light.get('--tour-veil')).toBe('rgba(15, 23, 42, 0.2)');
+  expect(dark.get('--tour-veil')).toBe('rgba(2, 6, 23, 0.4)');
+  expect(light.get('--tour-blur')).toBe('3px');
+  expect(light.get('--tour-ring')).toBe('var(--primary)');
+  expect(light.get('--tour-glow')).toBe('rgba(37, 99, 235, 0.18)');
+  for (const k of ['--tour-ring', '--tour-glow']) expect(dark.has(k)).toBe(true);
+});
 
 test('tokens.css 에 어두운 세트가 있고, 라이트의 색 토큰을 빠짐없이 다시 정한다', () => {
   expect(darkStart).toBeGreaterThan(0);

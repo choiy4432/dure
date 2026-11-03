@@ -109,7 +109,7 @@ export function LevelSwitch({ agent, onError }: Props) {
   }
 
   return (
-    <div className={`sw lvl s${now}`}>
+    <div className={`sw lvl s${now}`} data-tour="auto">
       <span className="lvl-n" aria-hidden="true">
         {NAMES[now]}
       </span>

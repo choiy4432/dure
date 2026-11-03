@@ -11,6 +11,9 @@ const COPY: Record<EmptyKind, { title: string; text?: string; action?: string }>
   load: { title: '두레를 불러오지 못했어요', text: '잠시 뒤 다시 시도해 주세요. 계속 안 되면 두레를 껐다 켜 주세요.', action: '다시 시도' },
 }
 
+/** 안내 투어가 짚는 단추(data-tour) — 방 만들기 · 에이전트 추가 */
+const TOUR_ID: Partial<Record<EmptyKind, string>> = { room: 'new-room', agent: 'add-agent' }
+
 interface Props {
   kind: EmptyKind
   /** 버튼을 누르면 — 방 만들기·에이전트 추가 대화상자를 열거나 다시 불러온다 */
@@ -34,7 +37,7 @@ export function Empty({ kind, onAction, text, detail, busy }: Props) {
         <p className="empty-t">{c.title}</p>
         {body && <p className="empty-d">{body}</p>}
         {c.action && (
-          <button type="button" className="btn pri" onClick={onAction} disabled={busy}>
+          <button type="button" className="btn pri" data-tour={TOUR_ID[kind]} onClick={onAction} disabled={busy}>
             <Icon className="i" />
             {c.action}
           </button>

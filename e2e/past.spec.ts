@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { markOnboarded } from './onboarded'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const MAIN = path.join(ROOT, 'out', 'main', 'index.js')
@@ -45,6 +46,7 @@ test('지난 대화 — 돌아가기 · 새 에이전트로 이어 가기', asyn
   const log = path.join(dir, 'fake-claude.log')
   fs.mkdirSync(folder)
   fs.mkdirSync(claudeDir)
+  markOnboarded(userData) // 안내 투어·승인 한 번은 이 시험의 일이 아니다
 
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v

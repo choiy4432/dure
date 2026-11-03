@@ -293,8 +293,10 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
   let shown = 0
   return (
     <div className="cmp">
+      {/* 안내 투어는 입력 상자만 짚는다(패널 여백까지 짚으면 테가 창 밖으로 나간다 — 시안 tour-steps-v2 4) */}
       <div
         className={`box${dragging ? ' drop' : ''}${planOn ? ' plan' : ''}`}
+        data-tour="composer"
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         onDrop={onDrop}

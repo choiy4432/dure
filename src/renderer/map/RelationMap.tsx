@@ -217,6 +217,23 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
     void flow.fitView({ ...AUTO_FIT, duration: moveMs(260), ease: easeOut5 })
   }, [seats, flow]) // eslint-disable-line react-hooks/exhaustive-deps -- posOf·build 는 seats 와 ref 만 읽는다
 
+  // focusAgent(알림 누르기·안내 투어)가 그 카드를 보이게 해 달라고 하면 — 카드가 관계도 밖(일부라도)에 있을 때만 요약 칩처럼 옮겨 간다.
+  // 그릴 때 이미 있던 요청은 지난 것이다(방을 바꿔 새로 그리면 처음 맞춤이 보인다)
+  const mapFocus = useDure(s => s.mapFocus)
+  const seenFocus = useRef(mapFocus?.n ?? 0)
+  useEffect(() => {
+    if (!mapFocus || mapFocus.n === seenFocus.current) return
+    seenFocus.current = mapFocus.n
+    const id = mapFocus.agentId
+    const box = wrap.current?.getBoundingClientRect()
+    const card = Array.from(wrap.current?.querySelectorAll('.react-flow__node') ?? [])
+      .find(el => el.getAttribute('data-id') === id)
+      ?.getBoundingClientRect()
+    if (!box || !card) return
+    if (card.left >= box.left && card.right <= box.right && card.top >= box.top && card.bottom <= box.bottom) return
+    void flow.fitView({ nodes: [{ id }], maxZoom: 1, padding: 0.4, duration: moveMs(300) })
+  }, [mapFocus, flow])
+
   const [pair, setPair] = useState<PairAt | null>(null)
   const openPair = useCallback((a: AgentId, b: AgentId, e: MouseEvent) => {
     const r = wrap.current?.getBoundingClientRect()
@@ -344,7 +361,7 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
       </div>
       {/* 오른쪽 아래 — 에이전트 추가(주 동작, 보기 도구와 떨어뜨린다) */}
       {onAddAgent && (
-        <button type="button" className="btn pri mbr" onClick={onAddAgent}>
+        <button type="button" className="btn pri mbr" data-tour="add-agent-map" onClick={onAddAgent}>
           <Plus className="i" />
           에이전트 추가
         </button>

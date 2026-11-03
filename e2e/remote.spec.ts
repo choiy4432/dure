@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { markOnboarded } from './onboarded'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const MAIN = path.join(ROOT, 'out', 'main', 'index.js')
@@ -51,6 +52,7 @@ test('서버(SSH) 방 — 만들기 · 에이전트 추가 · 대화 · 새 대�
   fs.writeFileSync(path.join(fakeHome, '.ssh', 'config'), 'Host dev\n  HostName 10.0.0.12\n  User a\n')
   fs.mkdirSync(path.join(serverRoot, 'home', 'a', 'web'), { recursive: true })
   fs.mkdirSync(claudeDir)
+  markOnboarded(userData) // 안내 투어·승인 한 번은 이 시험의 일이 아니다
 
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v

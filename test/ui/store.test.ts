@@ -1191,6 +1191,17 @@ describe('store 끝남 · 새 결과', () => {
       s.focusAgent('nope')
       expect(s.getState()).toBe(before)
     })
+
+    it('관계도에 그 카드를 보이게 해 달라고 한다 — 누를 때마다 n 이 오른다', async () => {
+      const { api } = fake()
+      const s = createStore(api)
+      await s.init()
+      expect(s.getState().mapFocus).toBeNull()
+      s.focusAgent('b')
+      expect(s.getState().mapFocus).toEqual({ agentId: 'b', n: 1 })
+      s.focusAgent('b')
+      expect(s.getState().mapFocus).toEqual({ agentId: 'b', n: 2 })
+    })
   })
 
   it('requestRoomMenu 가 roomMenuRequest 를 하나씩 올린다', async () => {
@@ -1525,6 +1536,18 @@ describe('store 투어', () => {
     expect(s.getState().tour).toBeNull()
     await settle()
     expect(api.setPrefs).toHaveBeenCalledWith({ tourDone: true })
+  })
+
+  it('tourNext — 설정 안 단계에선 아무것도 안 한다(설정 창을 닫아야 끝으로)', async () => {
+    const { api } = fake()
+    const s = createStore(api)
+    await s.init()
+    const settings = { step: 'settings', replay: false, base: { rooms: 2, agents: 2, sent: 0 } } as const
+    s.setTour(settings)
+    const before = s.getState()
+    s.tourNext()
+    expect(s.getState()).toBe(before)
+    expect(s.getState().tour).toEqual(settings)
   })
 
   it('setTour — 같은 값이면 알리지 않는다', async () => {

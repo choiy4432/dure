@@ -5935,3 +5935,190 @@ code {
     animation: none;
   }
 }
+
+/*
+ * 안내 투어 겹(시안 tour-look B) — 대화상자(50) 위. 짚은 곳 밖 네 칸은 살짝 흐린 옅은 막, 짚은 곳은 1.5px 파란 테 + 6px 옅은 번짐.
+ * 겹 자체는 누르기를 흘려보내고, 막·구멍 막이·카드만 누르기를 받는다(TourLayer 가 단계마다 무엇을 그릴지 정한다)
+ */
+.tour {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+
+.tour-veil,
+.tour-block {
+  position: fixed;
+  pointer-events: auto;
+}
+
+.tour-veil {
+  background: var(--tour-veil);
+  backdrop-filter: blur(var(--tour-blur));
+}
+
+.tour-spot {
+  position: fixed;
+  border: 1.5px solid var(--tour-ring);
+  border-radius: var(--radius-box);
+  box-shadow: 0 0 0 6px var(--tour-glow);
+}
+
+/* 카드 — 떠 있는 판, 위 3px 진행 막대(n / 8) */
+.tour-card {
+  position: fixed;
+  width: 288px;
+  max-height: calc(100vh - 24px);
+  overflow: hidden auto;
+  padding: 16px 16px 12px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  box-shadow: var(--shadow-pop);
+  word-break: keep-all; /* 한국어는 낱말 사이에서만 줄을 바꾼다 */
+  overflow-wrap: anywhere;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  animation: tour-in 0.22s cubic-bezier(0.22, 1, 0.36, 1); /* 들어올 때 outQuint — 떠 있는 목록(MOTION.pop)과 같은 곡선 */
+}
+
+/* 카드 자체는 초점만 받아 둔다(do 단계) — 테두리는 그리지 않는다 */
+.tour-card:focus {
+  outline: none;
+}
+
+@keyframes tour-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.tour-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--border);
+}
+
+.tour-bar i {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+}
+
+.tour-n {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tour-t {
+  margin: 2px 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 20px;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.tour-b {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-2);
+}
+
+.tour-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tour-list li {
+  padding: 6px 0;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--text-2);
+  border-top: 1px solid var(--border-soft);
+}
+
+.tour-list li:first-child {
+  padding-top: 2px;
+  border-top: 0;
+}
+
+.tour-list b {
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* 아래 줄 — 왼쪽 '투어 끝내기'(없을 수 있다), 오른쪽 주 단추 또는 '…하면 넘어가요' */
+.tour-r {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  margin-top: 12px;
+}
+
+.tour-r > :last-child {
+  margin-left: auto;
+}
+
+.tour-skip {
+  height: 28px;
+  margin-left: -4px;
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.tour-skip:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.tour-wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 28px;
+  color: var(--primary-text);
+}
+
+.tour-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-dot);
+  background: var(--primary);
+}
+
+.tour-dot.blink {
+  animation: tour-blink 1.4s ease-in-out infinite;
+}
+
+@keyframes tour-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tour-card,
+  .tour-dot.blink {
+    animation: none;
+  }
+}

@@ -142,7 +142,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
                 )}
               </div>
               <div className="ph-acts">
-                <button type="button" className="btn sec" disabled={!canStop} onClick={stop}>
+                <button type="button" className="btn sec" data-tour="stop" disabled={!canStop} onClick={stop}>
                   <Square className="i ph-stop" size={11} strokeWidth={1.2} absoluteStrokeWidth aria-hidden="true" />
                   멈추기
                 </button>
@@ -189,6 +189,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
             <button
               type="button"
               className="sw"
+              data-tour="auto"
               role="switch"
               aria-checked={agent.auto}
               title="받은 메시지를 바로 시작해요"

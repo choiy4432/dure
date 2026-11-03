@@ -27,7 +27,7 @@ export function TopBar({ hasRoom, settingsDisabled, onSettings }: Props) {
         </>
       )}
       <span className="top-sp" />
-      <button type="button" className="ib" title="설정" aria-label="설정" onClick={onSettings} disabled={settingsDisabled}>
+      <button type="button" className="ib" data-tour="settings-gear" title="설정" aria-label="설정" onClick={onSettings} disabled={settingsDisabled}>
         <Settings className="i" size={18} />
       </button>
     </header>

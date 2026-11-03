@@ -110,6 +110,7 @@ export function SettingsDialog({ onClose, onAskAllow }: { onClose: () => void; o
       busy={busy}
       onSubmit={() => void submit()}
       onClose={cancel}
+      tourId="settings-dialog"
     >
       <div className="fld">
         <span className="fld-l" id={`${id}-t`}>
