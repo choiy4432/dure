@@ -78,6 +78,16 @@ test('facts: 그림만이면 그림 N장', () => {
   expect(conversationFacts(c, none)?.title).toBe('그림 2장');
 });
 
+test('facts: 첨부만이면 첨부 N개 · 그림도 있으면 그림 N장 · 첨부 N개', () => {
+  const img = { type: 'image' as const, mediaType: 'image/png', bytes: 1 };
+  const file = (n: number) => ({ type: 'file' as const, name: `${n}.txt`, bytes: 1, file: `20261104-090507-${n}.txt` });
+  const human = (parts: any[]): HistoryItem => ({ t: 1, kind: 'user', source: 'human', parts });
+  expect(conversationFacts(conv([human([file(1), file(2)])]), none)?.title).toBe('첨부 2개');
+  expect(conversationFacts(conv([human([{ type: 'text', text: ' ' }, file(1)])]), none)?.title).toBe('첨부 1개');
+  expect(conversationFacts(conv([human([img, file(1), file(2)])]), none)?.title).toBe('그림 1장 · 첨부 2개');
+  expect(conversationFacts(conv([human([{ type: 'text', text: '읽어 줘' }, file(1)])]), none)?.title).toBe('읽어 줘'); // 글이 있으면 글
+});
+
 test('facts: turns·lastReply·at', () => {
   const c = conv([u(1, 'a'), a(2, '첫 답'), u(3, 'b'), a(4, '부모 답\n둘째 줄'), a(5, '서브', 'p1'), n(6, '끝')]);
   expect(conversationFacts(c, none)).toEqual({ title: 'a', at: 6, turns: 2, lastReply: '부모 답' });

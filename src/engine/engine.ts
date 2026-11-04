@@ -458,6 +458,8 @@ const ATTACH_NOT_FILE = '보통 파일이 아니에요';
 const ATTACH_CREDENTIALS = '자격 증명 파일은 보낼 수 없어요';
 /** Claude 자격 증명 파일 이름 — 첨부로도 읽거나 옮기지 않는다 */
 const CREDENTIALS_FILE = '.credentials.json';
+/** 에이전트를 지웠는데 첨부 폴더가 잠겨 남았다(다른 프로그램이 연 파일 등) — 켤 때 주인 없는 첨부 폴더를 다시 지운다(prune) */
+const ATTACH_LEFT = '첨부 폴더를 다 지우지 못했어요 — 두레를 다시 켜면 다시 지워요';
 
 /** 엔진이 써 넣은 /effort 한 줄 — 그 result 까지 */
 interface EffortTurn {
@@ -647,6 +649,12 @@ class EngineImpl extends EventEmitter implements Engine {
 
   private images: ImageStore;
   private attachments: AttachmentStore;
+  // 에이전트마다 보내기 차례 — 첨부를 준비하는(복사하는) 보내기가 있으면 그 에이전트의 다음 보내기는 그 뒤에(앞지르지 않는다).
+  // 끝난 차례는 바로 빠진다 — 준비할 것도 기다릴 것도 없는 보내기는 부른 그 자리에서(동기) 줄에 선다
+  private sending = new Map<AgentId, Promise<void>>();
+  private stops = new Map<AgentId, number>(); // 멈춤 횟수 — 준비하는(또는 그 뒤에 기다리던) 사이 멈췄으면 그 입력은 붙잡는다(메모리만)
+  private written = new WeakSet<HeldInput>(); // Claude 에게 쓴 내 입력 — 기록에 남았다(붙잡혀 버려도 첨부 사본은 칩이 쓴다)
+  private pruning: Promise<void> = Promise.resolve(); // 켤 때 주인 없는 첨부 폴더 지우기 — 끌 때 기다린다
 
   constructor(private o: EngineOptions, private store: Store, private log: MessageLog, private hist: History) {
     super();
@@ -745,6 +753,8 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     // 지운 에이전트의 서버 claude 중 정리하지 못한 것(기다리는 정리 목록) — 되면 목록에서 뺀다(forgetLaunch), 안 되면 남겨 다음에 켤 때 다시
     for (const p of this.store.pendingCleanups()) this.guard(null, () => void this.queueClean(p.agentId, p.host, p.launch));
+    // 지운 에이전트의 첨부 폴더가 잠겨 남았던 것 — 주인(에이전트)이 없는 폴더만 조용히 지운다. 기다리지 않는다(끌 때는 기다린다)
+    this.pruning = this.attachments.prune((id) => !!this.store.agent(id));
     this.router.flushAll();
     this.watcher?.start();
     this.sweepTimer = setInterval(() => this.guard(null, () => this.sweep()), this.o.sleepSweepMs ?? this.minuteMs());
@@ -1260,8 +1270,8 @@ class EngineImpl extends EventEmitter implements Engine {
       this.store.removeAgent(id);
       this.hist.remove(id);
       this.images.remove(id);
-      // 첨부 사본도 — 다른 프로그램이 연 채 잠가 못 지워도 지우기는 끝낸다(남은 것은 알린다)
-      this.guard(id, () => this.attachments.remove(id));
+      // 첨부 사본도 — 다른 프로그램이 연 채 잠가 못 지워도 지우기는 끝낸다(남은 것은 알리고, 다음에 켤 때 다시 지운다)
+      this.removeAttachments(id);
     } finally {
       this.removing.delete(id);
       this.shown.delete(id);
@@ -1280,6 +1290,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.modelNows.delete(id);
       this.remoteIssues.delete(id);
       this.portTries.delete(id);
+      this.stops.delete(id);
       if (had > 0) this.guard(id, () => this.emit('held-input', { agentId: id, count: 0 }));
       if (hadHold) this.guard(id, () => this.emit('hold', { agentId: id, hold: null }));
     }
@@ -1543,9 +1554,32 @@ class EngineImpl extends EventEmitter implements Engine {
   // ── 대화 ──
   async sendUser(id: AgentId, parts: UserPart[], o?: { plan?: boolean }) {
     this.need(id);
+    const before = this.sending.get(id);
+    // 첨부도 없고 앞에 준비 중인 보내기도 없으면 기다림 없이 — 부른 그 자리에서(동기) 끼우거나 줄에 선다
+    if (!before && noFiles(parts)) return this.deliverUser(id, parts, o, false);
     // 첨부는 맨 먼저 — 사본을 다 만든 뒤에 끼우기·줄 세우기·붙잡기. 하나라도 실패하면 만든 것을 되돌리고 던진다(아무것도 안 보냄).
-    // 줄에 선·붙잡힌 입력엔 원본 경로가 아니라 준비된 꼴이 들어간다(원본이 사라져도 그대로 간다). 첨부가 없으면 기다림 없이 지금 그대로
-    const ready: ReadyPart[] = noFiles(parts) ? parts : await this.prepareParts(id, parts);
+    // 복사는 비동기라 그 에이전트의 보내기를 한 줄로 세운다 — 준비하는 동안 온 말(/compact 포함)은 그 뒤에(순서 그대로).
+    // 앞 보내기가 실패해도 뒤 보내기는 제 차례에 간다(따로 친 말이다)
+    const stopsAt = this.stops.get(id) ?? 0;
+    let done!: () => void;
+    const mine = new Promise<void>((r) => (done = r));
+    this.sending.set(id, mine);
+    try {
+      await before;
+      const ready: ReadyPart[] = noFiles(parts) ? parts : await this.prepareParts(id, parts);
+      // 준비하는(또는 앞을 기다리는) 사이 멈췄다 — 멈출 때 기다리던 입력처럼 붙잡는다
+      this.deliverUser(id, ready, o, (this.stops.get(id) ?? 0) !== stopsAt);
+    } finally {
+      if (this.sending.get(id) === mine) this.sending.delete(id); // 마지막 차례면 빠진다 — 다음 보내기는 다시 그 자리에서
+      done();
+    }
+  }
+
+  /**
+   * 준비를 마친 사람 입력을 보낸다 — 일하는 중이면 지금 차례에 끼우고, 아니면 줄에 세운다. stopped: 준비하는 사이 멈췄다(붙잡는다).
+   * 줄에 선·붙잡힌 입력엔 원본 경로가 아니라 준비된 꼴이 들어간다(원본이 사라져도 그대로 간다)
+   */
+  private deliverUser(id: AgentId, ready: ReadyPart[], o: { plan?: boolean } | undefined, stopped: boolean): void {
     // 아래에서 보내지도 줄에 서지도 못하고 던지면 이번에 만든 사본을 되돌린다
     const undo = (e: unknown): never => {
       this.dropPrepared(id, ready);
@@ -1558,6 +1592,10 @@ class EngineImpl extends EventEmitter implements Engine {
       return undo(e);
     }
     this.router.humanInput(agent.roomId);
+    if (stopped) {
+      this.holdInput(id, { id: crypto.randomUUID(), parts: ready, ...(o?.plan === true ? { plan: true as const } : {}) });
+      return;
+    }
     // 일하는 중이면 바로 보낸다 — Claude Code 처럼 지금 차례에 끼어든다(다음 걸음에서 읽는다, probe17)
     const s = this.sessions.get(id);
     if (s && o?.plan !== true && this.canSendMid(id, s, ready)) {
@@ -1610,8 +1648,18 @@ class EngineImpl extends EventEmitter implements Engine {
     const shown = typeof p.name === 'string' ? firstLine(p.name) : '';
     const fail = (why: string) => new Error(`${ATTACH_FAILED} — ${shown ? `${shown}: ` : ''}${why}`);
     if (typeof p.path !== 'string' || !path.isAbsolute(p.path)) throw fail(ATTACH_BAD_PATH);
+    // 대체 데이터 스트림(`파일:스트림`, `파일::$DATA`)은 보내지 않는다 — 드라이브 글자(C:) 뒤의 ':' 는 이것뿐이고, 이름 검사도 비껴간다
+    if (p.path.replace(/^[A-Za-z]:/, '').includes(':')) throw fail(ATTACH_BAD_PATH);
     // 자격 증명 파일은 읽지도 옮기지도 않는다(약관 경계) — 사용자가 골라도
-    if (path.basename(p.path).toLowerCase() === CREDENTIALS_FILE) throw fail(ATTACH_CREDENTIALS);
+    if (isCredentials(p.path)) throw fail(ATTACH_CREDENTIALS);
+    // 짧은 이름(8.3)·링크로 가린 자격 증명 파일도 — 진짜 경로의 이름으로 다시 본다(fs.promises.realpath 는 realpath.native 와 같은 뜻)
+    let real: string;
+    try {
+      real = await fs.promises.realpath(p.path);
+    } catch (e) {
+      throw fail(fileErrorText(e));
+    }
+    if (isCredentials(real)) throw fail(ATTACH_CREDENTIALS);
     let st: fs.Stats;
     try {
       st = await fs.promises.stat(p.path);
@@ -1624,14 +1672,14 @@ class EngineImpl extends EventEmitter implements Engine {
     const name = shown || path.basename(p.path);
     let copy: { file: string; abs: string };
     try {
-      copy = this.attachments.copyIn(id, p.path, name);
+      copy = await this.attachments.copyIn(id, p.path, name); // 비동기 — 큰·느린 원본을 복사하는 동안 main 을 막지 않는다
     } catch (e) {
       throw fail(fileErrorText(e));
     }
     // 잰 뒤 복사하는 사이 원본이 커졌을 수 있다 — 상한·기록의 크기는 사본으로
     let bytes: number;
     try {
-      bytes = fs.statSync(copy.abs).size;
+      bytes = (await fs.promises.stat(copy.abs)).size;
     } catch (e) {
       this.dropFile(id, copy.file);
       throw fail(fileErrorText(e));
@@ -1647,7 +1695,7 @@ class EngineImpl extends EventEmitter implements Engine {
   /** 준비한 첨부를 되돌린다(보내지도 줄에 서지도 못했다) — 이 PC 사본을 지운다. 그새 에이전트가 지워졌으면 첨부 폴더째 */
   private dropPrepared(id: AgentId, parts: ReadyPart[]): void {
     for (const p of parts) if (p.type === 'file') this.dropFile(id, p.file);
-    if (!this.store.agent(id)) this.guard(null, () => this.attachments.remove(id));
+    if (!this.store.agent(id)) this.removeAttachments(id);
   }
 
   private dropFile(id: AgentId, file: string): void {
@@ -1658,8 +1706,25 @@ class EngineImpl extends EventEmitter implements Engine {
     }
   }
 
+  /** 버린 내 입력의 첨부 사본 — Claude 에게 한 번도 쓰지 않은(기록에 없는) 입력만. 돌려받은 말은 이미 기록에 있다(칩이 그 사본을 쓴다) */
+  private dropUnsent(id: AgentId, input: HeldInput): void {
+    if (this.written.has(input)) return;
+    for (const p of input.parts) if (p.type === 'file') this.dropFile(id, p.file);
+  }
+
+  /** 그 에이전트의 첨부 폴더를 지운다 — 못 지우면(잠김) 쉬운 말로 알린다(오류 원문엔 영어·내 PC 경로가 실린다). 남은 것은 켤 때 prune */
+  private removeAttachments(id: AgentId): void {
+    try {
+      this.attachments.remove(id);
+    } catch {
+      this.guard(id, () => this.emit('engine-error', { agentId: id, message: ATTACH_LEFT }));
+    }
+  }
+
   async interrupt(id: AgentId) {
     this.need(id);
+    // 첨부를 준비하는(또는 그 뒤에 기다리는) 보내기는 멈춘 뒤에 줄에 서지 않고 붙잡힌다(sendUser 가 이 수를 견준다)
+    this.stops.set(id, (this.stops.get(id) ?? 0) + 1);
     // 계획 모드 답을 기다리며 쥔 입력도 기다리던 것 — 줄 맨 앞으로 돌려놓아 아래에서 함께 붙잡는다(늦게 온 답이 쓰지 않게)
     const gated = this.ungate(id, this.sessions.get(id));
     const live = this.sessions.get(id);
@@ -1736,8 +1801,9 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     const entry = this.holds.get(id)?.entries.find((e) => e.item.id === itemId);
     if (!entry) return;
-    // 메시지는 '버림'으로 — 그 message 사건에서 목록에서 빠진다(noteHoldMessage). 내 입력은 그냥 버린다
+    // 메시지는 '버림'으로 — 그 message 사건에서 목록에서 빠진다(noteHoldMessage). 내 입력은 그냥 버린다(안 간 입력의 첨부 사본도)
     if (!entry.input) this.router.dismiss(itemId);
+    else this.dropUnsent(id, entry.input);
     this.unhold(id, entry);
   }
 
@@ -1747,7 +1813,10 @@ class EngineImpl extends EventEmitter implements Engine {
     if (!h) return;
     // 먼저 푼다 — 버리는 메시지가 목록에서 하나씩 빠지며 알리지 않게(풀림은 한 번)
     this.holds.delete(id);
-    for (const e of h.entries) if (!e.input) this.guard(id, () => this.router.dismiss(e.item.id));
+    for (const e of h.entries) {
+      if (!e.input) this.guard(id, () => this.router.dismiss(e.item.id));
+      else this.dropUnsent(id, e.input);
+    }
     this.emitHold(id);
   }
 
@@ -2042,7 +2111,7 @@ class EngineImpl extends EventEmitter implements Engine {
       const ids = [...this.sessions.keys()];
       for (const r of this.perms.pending()) this.perms.cancelForAgent(r.agentId, EXITED);
       // 맵에서 이미 빠진 채 끄는 중인 세션(다시 띄우기·새 대화)도 기다린다 — 각각 STOP_LIMIT_MS 상한
-      await Promise.all([this.stopWatcher(), ...ids.map((id) => this.endSession(id)), ...this.stopping]);
+      await Promise.all([this.stopWatcher(), ...ids.map((id) => this.endSession(id)), ...this.stopping, this.pruning]);
       // 상한이 먼저 지나 아직 살아 있는 claude(바쁜 PC 에서 taskkill 이 늦음) — 앱이 닫힌 뒤 떠돌지 않게 직접 끈다.
       // 서버 방 정리(끄기·시작 때 것)도 함께 기다린다 — 상한 안에서만(못 끝낸 띄우기는 저장돼 있어 다음에 켤 때 다시)
       await Promise.all([this.waitRemoteWork(), ...[...this.unstopped].map((s) => s.forceKill(FORCE_KILL_WAIT_MS))]);
@@ -2352,6 +2421,7 @@ class EngineImpl extends EventEmitter implements Engine {
 
   private sendTo(id: AgentId, s: ClaudeSession, parts: ReadyPart[], item: Extract<InFlight, { kind: 'human' }>): void {
     this.write(s, parts, item);
+    this.written.add(item.input); // 돌려받아 붙잡혔다 버려도 첨부 사본은 둔다 — 기록·Claude 의 기억이 그 경로를 안다
     // 실제로 쓴 줄만 기록한다 — 대기 중인 입력은 보낼 때 나타난다
     this.guard(id, () => this.record(id, { kind: 'user', source: 'human', parts: parts.map((p) => this.historyPart(id, p)) }));
   }
@@ -2431,6 +2501,16 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     this.emitHold(id);
     this.emitStatus(id); // /effort 차례 중 기다리던 입력 때문에 작업 중이었으면 이제 대기
+  }
+
+  /** 준비하는 사이 멈춘 내 입력 — 붙잡기의 내 입력 끝에(holdQueue 와 같은 자리). 붙잡기가 없으면 새로 연다 */
+  private holdInput(id: AgentId, input: HeldInput): void {
+    const h = this.holds.get(id) ?? { since: Date.now(), entries: [] };
+    const mine = h.entries.filter((e) => e.input).length;
+    h.entries.splice(mine, 0, { item: humanItem(input), input });
+    this.holds.set(id, h);
+    this.emitHold(id);
+    this.emitStatus(id);
   }
 
   /** 기록이 바뀐 메시지 — 받는 쪽이 붙잡혀 있으면 새로 queued 가 된 것은 목록 끝에, queued 가 아니게 된 것(버림 등)은 목록에서 뺀다 */
@@ -3546,6 +3626,11 @@ function sameFlags(x: Flags, y: Flags): boolean {
 /** 보낸 말의 글 — 되돌림(replay)과 맞출 때. 쓴 글 블록만 줄바꿈으로(첨부의 경로 줄 블록 포함 — 되돌림도 같은 꼴) */
 function inputText(parts: ReadyPart[]): string {
   return sentText(parts);
+}
+
+/** Claude 자격 증명 파일 이름인가 — 대소문자 없이(윈도 파일 이름) */
+function isCredentials(p: string): boolean {
+  return path.basename(p).toLowerCase() === CREDENTIALS_FILE;
 }
 
 /** 첨부가 하나도 없는 입력 — 준비 없이 그대로 보낼 꼴 */

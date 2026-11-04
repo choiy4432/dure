@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,41 +32,49 @@ test('상한 — 파일 하나 100MB', () => {
   expect(ATTACH_MAX_BYTES).toBe(100 * 1024 * 1024);
 });
 
-test('안전한 사본 이름 · 같은 이름 — 숫자 붙임', () => {
+test('안전한 사본 이름 · 같은 이름 — 숫자 붙임', async () => {
   const s = open();
   const src = source('a.txt', '원본 내용');
-  const one = s.copyIn('a1', src, 'a.txt');
+  const one = await s.copyIn('a1', src, 'a.txt');
   expect(one).toEqual({ file: `${STAMP}-a.txt`, abs: path.join(dir, 'attachments', 'a1', `${STAMP}-a.txt`) });
   expect(fs.readFileSync(one.abs, 'utf8')).toBe('원본 내용');
   expect(fs.readFileSync(src, 'utf8')).toBe('원본 내용'); // 원본은 그대로
   // 같은 이름(같은 시각) — 확장자 앞에 -2 · -3
-  expect(s.copyIn('a1', src, 'a.txt').file).toBe(`${STAMP}-a-2.txt`);
-  expect(s.copyIn('a1', src, 'a.txt').file).toBe(`${STAMP}-a-3.txt`);
+  expect((await s.copyIn('a1', src, 'a.txt')).file).toBe(`${STAMP}-a-2.txt`);
+  expect((await s.copyIn('a1', src, 'a.txt')).file).toBe(`${STAMP}-a-3.txt`);
   expect(fs.readdirSync(path.join(dir, 'attachments', 'a1'))).toHaveLength(3);
 
-  const name = (n: string, id = 'a2') => s.copyIn(id, src, n).file.slice(STAMP.length + 1);
+  const name = async (n: string, id = 'a2') => (await s.copyIn(id, src, n)).file.slice(STAMP.length + 1);
   // 윈도 금지 글자·제어 글자 → _ · 공백·한글·따옴표·$;& 는 그대로
-  expect(name('x/y\\z:*?"<>|.md')).toBe(`x_y_z${'_'.repeat(7)}.md`);
-  expect(name('a\nb\tc\u0000d\u007f.txt')).toBe('a_b_c_d_.txt');
-  expect(name("a b'$;&.txt")).toBe("a b'$;&.txt");
-  expect(name('보고서 최종본.pdf')).toBe('보고서 최종본.pdf');
-  // 앞뒤 공백·점 정리, 비면 file
-  expect(name('  .env. ')).toBe('env');
-  expect(name('...', 'b1')).toBe('file');
-  expect(name('', 'b2')).toBe('file');
-  expect(name('   ', 'b2')).toBe('file-2'); // 겹치면 숫자
+  expect(await name('x/y\\z:*?"<>|.md')).toBe(`x_y_z${'_'.repeat(7)}.md`);
+  expect(await name('a\nb\tc\u0000d\u007f.txt')).toBe('a_b_c_d_.txt');
+  expect(await name("a b'$;&.txt")).toBe("a b'$;&.txt");
+  expect(await name('보고서 최종본.pdf')).toBe('보고서 최종본.pdf');
+  // 앞 공백·뒤 공백·점 정리(앞 점은 그대로 — 시각 접두가 늘 앞이다), 점뿐이거나 비면 file
+  expect(await name('  .env. ')).toBe('.env');
+  expect(await name('.gitignore')).toBe('.gitignore');
+  expect(await name('.env.local')).toBe('.env.local');
+  expect(await name('...', 'b1')).toBe('file');
+  expect(await name('. .', 'b3')).toBe('file');
+  expect(await name('..', 'b4')).toBe('file');
+  expect(await name('', 'b2')).toBe('file');
+  expect(await name('   ', 'b2')).toBe('file-2'); // 겹치면 숫자
   // 아주 긴 이름은 줄이되(UTF-8 100 바이트 — 서버 이름 상한 255 바이트·윈도 경로 길이 안쪽) 확장자는 남기고 글자를 쪼개지 않는다
-  const long = name(`${'가'.repeat(300)}.pdf`);
+  const long = await name(`${'가'.repeat(300)}.pdf`);
   expect(long).toBe(`${'가'.repeat(32)}.pdf`);
   expect(Buffer.byteLength(long)).toBeLessThanOrEqual(100);
 });
 
-test('resolve — 폴더 밖 거절', () => {
+test('resolve — 폴더 밖 거절', async () => {
   const s = open();
-  const { file, abs } = s.copyIn('a1', source('a.txt'), 'a.txt');
+  const { file, abs } = await s.copyIn('a1', source('a.txt'), 'a.txt');
   expect(s.dir('a1')).toBe(path.join(dir, 'attachments', 'a1'));
   expect(() => s.dir('../a1')).toThrow();
   expect(s.resolve('a1', file)).toBe(abs);
+  // 앞 점 이름의 사본도 푼다
+  const dot = await s.copyIn('a1', source('.env'), '.env');
+  expect(dot.file).toBe(`${STAMP}-.env`);
+  expect(s.resolve('a1', dot.file)).toBe(dot.abs);
   fs.writeFileSync(path.join(dir, 'attachments', 'secret.txt'), 'x');
   fs.writeFileSync(path.join(dir, 'secret.txt'), 'x');
   for (const bad of [
@@ -87,9 +95,9 @@ test('resolve — 폴더 밖 거절', () => {
   s.removeFile('a1', file); // 없어도 조용히
 });
 
-test('copy — 다른 에이전트 폴더로 같은 이름, 없는 파일·틀린 이름·폴더는 false', () => {
+test('copy — 다른 에이전트 폴더로 같은 이름, 없는 파일·틀린 이름·폴더는 false', async () => {
   const s = open();
-  const { file } = s.copyIn('a1', source('a.txt', '같은 내용'), 'a.txt');
+  const { file } = await s.copyIn('a1', source('a.txt', '같은 내용'), 'a.txt');
   expect(s.copy('a1', 'a2', file)).toBe(true);
   expect(fs.readFileSync(s.resolve('a2', file)!, 'utf8')).toBe('같은 내용');
   expect(s.copy('a1', 'a2', file)).toBe(true); // 이미 있어도
@@ -101,15 +109,15 @@ test('copy — 다른 에이전트 폴더로 같은 이름, 없는 파일·틀�
   expect(fs.existsSync(path.join(dir, 'attachments', 'a3'))).toBe(false);
 });
 
-test('remove', () => {
+test('remove', async () => {
   const s = open();
   const src = source('a.txt');
   const ro = source('읽기 전용.txt');
   fs.chmodSync(ro, 0o444); // 읽기 전용 원본의 사본도 지울 수 있어야 한다
   try {
-    s.copyIn('a1', src, 'a.txt');
-    s.copyIn('a1', ro, '읽기 전용.txt');
-    const other = s.copyIn('a2', src, 'a.txt');
+    await s.copyIn('a1', src, 'a.txt');
+    await s.copyIn('a1', ro, '읽기 전용.txt');
+    const other = await s.copyIn('a2', src, 'a.txt');
     s.remove('a1');
     expect(fs.existsSync(path.join(dir, 'attachments', 'a1'))).toBe(false);
     expect(fs.existsSync(other.abs)).toBe(true); // 다른 에이전트 것은 그대로
@@ -125,4 +133,105 @@ test('remove', () => {
 test('attachmentLines — 빈 줄 · 첨부 파일: · 줄마다 - <경로>(따옴표 없이)', () => {
   expect(attachmentLines([])).toBe('');
   expect(attachmentLines(['C:\\a b\\x.txt', '/srv/한글 y.pdf'])).toBe('\n\n첨부 파일:\n- C:\\a b\\x.txt\n- /srv/한글 y.pdf');
+});
+
+test('copyIn — 비동기 복사(큰 파일·느린 디스크에서도 main 을 막지 않는다)', async () => {
+  const s = open();
+  const sync = vi.spyOn(fs, 'copyFileSync');
+  const async = vi.spyOn(fs.promises, 'copyFile');
+  try {
+    const p = s.copyIn('a1', source('a.txt', '비동기'), 'a.txt');
+    expect(p).toBeInstanceOf(Promise);
+    const { abs } = await p;
+    expect(fs.readFileSync(abs, 'utf8')).toBe('비동기');
+    expect(sync).not.toHaveBeenCalled();
+    expect(async).toHaveBeenCalledWith(path.join(srcDir, 'a.txt'), abs, fs.constants.COPYFILE_EXCL);
+  } finally {
+    sync.mockRestore();
+    async.mockRestore();
+  }
+});
+
+test('copyIn — 복사가 끊기면 반쯤 쓴 사본을 지우고(잠김엔 다시 시도) 그 까닭을 던진다', async () => {
+  const s = open();
+  const src = source('a.txt');
+  const real = fs.promises.copyFile.bind(fs.promises);
+  // 반쯤 쓰고 끊긴 복사 흉내
+  const cp = vi.spyOn(fs.promises, 'copyFile').mockImplementationOnce((async (_from: fs.PathLike, to: fs.PathLike) => {
+    fs.writeFileSync(to, 'hal');
+    throw Object.assign(new Error('EIO: i/o error'), { code: 'EIO' });
+  }) as any);
+  const rm = vi.spyOn(fs.promises, 'rm');
+  try {
+    await expect(s.copyIn('a1', src, 'a.txt')).rejects.toThrow('EIO');
+    expect(fs.readdirSync(path.join(dir, 'attachments', 'a1'))).toEqual([]);
+    const half = path.join(dir, 'attachments', 'a1', `${STAMP}-a.txt`);
+    expect(rm).toHaveBeenCalledWith(half, expect.objectContaining({ force: true, recursive: true, maxRetries: 3 }));
+    // 다음 복사는 그대로 된다
+    cp.mockImplementation(real as any);
+    expect((await s.copyIn('a1', src, 'a.txt')).file).toBe(`${STAMP}-a.txt`);
+  } finally {
+    cp.mockRestore();
+    rm.mockRestore();
+  }
+});
+
+test('removeFile — 막 만든 파일을 다른 프로그램(백신 등)이 잠깐 잡아도 다시 시도한다', async () => {
+  const s = open();
+  const { file, abs } = await s.copyIn('a1', source('a.txt'), 'a.txt');
+  const rm = vi.spyOn(fs, 'rmSync');
+  try {
+    s.removeFile('a1', file);
+    expect(fs.existsSync(abs)).toBe(false);
+    expect(rm).toHaveBeenCalledWith(abs, expect.objectContaining({ force: true, recursive: true, maxRetries: 3 }));
+  } finally {
+    rm.mockRestore();
+  }
+});
+
+test('copy — 쓰다 끊기면 임시 파일을 남기지 않고 던진다', async () => {
+  const s = open();
+  const { file } = await s.copyIn('a1', source('a.txt'), 'a.txt');
+  const cp = vi.spyOn(fs, 'copyFileSync').mockImplementationOnce(((_from: fs.PathLike, to: fs.PathLike) => {
+    fs.writeFileSync(to, 'hal');
+    throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+  }) as any);
+  try {
+    expect(() => s.copy('a1', 'a2', file)).toThrow('ENOSPC');
+    expect(fs.readdirSync(path.join(dir, 'attachments', 'a2'))).toEqual([]);
+    expect(s.copy('a1', 'a2', file)).toBe(true); // 다음엔 된다
+    expect(fs.readdirSync(path.join(dir, 'attachments', 'a2'))).toEqual([file]);
+  } finally {
+    cp.mockRestore();
+  }
+});
+
+test('prune — 주인 없는 에이전트 폴더만 지운다(링크는 따라가지 않는다, 던지지 않는다)', async () => {
+  const s = open();
+  const root = path.join(dir, 'attachments');
+  const kept = await s.copyIn('agent-1', source('a.txt'), 'a.txt');
+  const gone = await s.copyIn('gone-2', source('b.txt'), 'b.txt');
+  fs.mkdirSync(path.join(root, '모양이 틀림'));
+  fs.writeFileSync(path.join(root, 'stray-file'), 'x'); // 폴더가 아닌 것
+  // 폴더 밖을 가리키는 링크(윈도는 junction) — 따라가 지우지 않는다
+  const outside = path.join(dir, 'outside');
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'keep.txt'), '밖');
+  fs.symlinkSync(outside, path.join(root, 'link-3'), 'junction');
+
+  await s.prune((id) => id === 'agent-1');
+
+  expect(fs.existsSync(kept.abs)).toBe(true);
+  expect(fs.existsSync(path.dirname(gone.abs))).toBe(false);
+  expect(fs.existsSync(path.join(root, '모양이 틀림'))).toBe(true);
+  expect(fs.existsSync(path.join(root, 'stray-file'))).toBe(true);
+  expect(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8')).toBe('밖');
+  // 첨부 폴더가 없어도 · 첨부 폴더 자체가 링크여도 조용히(따라가지 않는다)
+  await openAttachmentStore(path.join(dir, 'none')).prune(() => false);
+  const linked = path.join(dir, 'linked');
+  fs.mkdirSync(linked);
+  fs.mkdirSync(path.join(outside, 'orphan-4'));
+  fs.symlinkSync(outside, path.join(linked, 'attachments'), 'junction');
+  await openAttachmentStore(linked).prune(() => false);
+  expect(fs.existsSync(path.join(outside, 'orphan-4'))).toBe(true);
 });

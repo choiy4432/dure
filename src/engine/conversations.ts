@@ -62,8 +62,10 @@ export function conversationFacts(c: Conversation, senderName: (messageId: strin
   const line = firstLine(textOf(first.parts));
   let title: string;
   if (!line) {
-    const n = first.parts.filter((p) => p.type === 'image').length;
-    title = n > 0 ? `그림 ${n}장` : '';
+    // 글이 없으면 그림·첨부 수 — 둘 다면 '그림 1장 · 첨부 2개'
+    const images = first.parts.filter((p) => p.type === 'image').length;
+    const files = first.parts.filter((p) => p.type === 'file').length;
+    title = [images > 0 ? `그림 ${images}장` : '', files > 0 ? `첨부 ${files}개` : ''].filter(Boolean).join(' · ');
   } else if (first.source === 'relay') {
     const from = first.messageId ? senderName(first.messageId) : null;
     title = from ? `${from}에게서 온 메시지: ${line}` : `받은 메시지: ${line}`;

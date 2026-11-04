@@ -6848,3 +6848,226 @@ test('서버 방 첨부는 아직 — 사본도 ssh 도 없이 거절', async ()
   expect(attFiles(w.id)).toEqual([]);
   expect(e.history(w.id)).toEqual([]);
 }, 20_000);
+
+/** 원본 재기(fs.promises.stat)를 그 경로에서 붙잡아 둔다 — 첨부를 준비하는 도중(느린 원본)을 흉내. open() 하면 놓는다 */
+function holdStat(target: string) {
+  const real = fs.promises.stat.bind(fs.promises);
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  let reached = false;
+  const spy = vi.spyOn(fs.promises, 'stat').mockImplementation((async (p: fs.PathLike, o?: any) => {
+    if (p === target) {
+      reached = true;
+      await gate;
+    }
+    return real(p, o);
+  }) as any);
+  return { open, reached: () => reached, restore: () => spy.mockRestore() };
+}
+
+test('보내기 차례 — 첨부를 준비하는 동안 온 말·/compact 는 그 뒤에(순서 그대로) · 준비하는 것이 없으면 다시 그 자리에서', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const src = original('큰 파일.txt', '느린 원본');
+  const gate = holdStat(src);
+  let sends: Promise<void>[] = [];
+  try {
+    sends = [e.sendUser(a.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(src)])];
+    await until('준비 중', gate.reached);
+    sends.push(e.sendUser(a.id, text('echo 둘')), e.sendUser(a.id, text('/compact')));
+    await sleep(150);
+    expect(spawns()).toEqual([]); // 앞 보내기가 준비하는 동안 뒤 말은 앞질러 나가지 않는다
+    expect(e.heldInput(a.id)).toBe(0);
+    gate.open();
+    await Promise.all(sends);
+  } finally {
+    gate.restore();
+  }
+  await until('셋 다 감', () => userTexts().length === 3);
+  expect(userTexts().map((t) => t.split('\n')[0])).toEqual(['echo 첨부', 'echo 둘', '/compact']);
+  await until('쉼', () => e.status(a.id) === 'idle');
+  // 준비하는 보내기가 없으면 기다림 없이 — 부른 그 자리에서 줄에 선다(첨부 전과 같다)
+  await slowTurn(e, a.id);
+  void e.sendUser(a.id, text('/대기'));
+  expect(e.heldInput(a.id)).toBe(1);
+});
+
+test('첨부를 준비하는 사이 멈추면 그 입력은 붙잡는다 — 멈춘 뒤에 친 말은 그대로 나간다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const src = original('메모.txt', '멈춘 첨부');
+  await slowTurn(e, a.id);
+  const gate = holdStat(src);
+  try {
+    const sending = e.sendUser(a.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(src)]);
+    await until('준비 중', gate.reached);
+    await e.interrupt(a.id);
+    gate.open();
+    await sending;
+  } finally {
+    gate.restore();
+  }
+  expect(e.hold(a.id)?.items.map((x) => [x.source, x.text, x.files ?? 0])).toEqual([['human', 'echo 첨부', 1]]);
+  expect(e.heldInput(a.id)).toBe(0);
+  expect(attFiles(a.id)).toHaveLength(1);
+  await until('쉼', () => e.status(a.id) === 'idle');
+  await sleep(200);
+  expect(userTexts()).toEqual(['SLOW']); // 멈춘 뒤에 나가지 않았다
+  // 멈춘 뒤에 친 말은 붙잡기를 거치지 않는다
+  await talk(e, a.id, 'echo 뒤');
+  expect(userTexts()).toEqual(['SLOW', 'echo 뒤']);
+  // 이어서 보내면 그 첨부도 간다
+  const [file] = attFiles(a.id);
+  const got = resultTextIs(e, a.id, `받음: echo 첨부\n\n\n첨부 파일:\n- ${path.join(attDir(a.id), file)}`);
+  e.resumeHold(a.id);
+  await got;
+});
+
+test('붙잡은 내 입력을 버리면 그 첨부 사본도 지운다 — 돌려받은 말(이미 기록에 있다)의 사본은 둔다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  // 기록에 남은 말 — 차례 도중 끼운 첨부를 Claude 가 안 읽은 채 멈추면 돌려받아 붙잡는다
+  await slowTurn(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 끼움' }, fileOf(original('끼움.txt'))]);
+  expect(e.heldInput(a.id)).toBe(0);
+  const [mid] = attFiles(a.id);
+  await e.interrupt(a.id);
+  expect(e.hold(a.id)?.items.map((x) => x.text)).toEqual(['echo 끼움']);
+  e.dropHold(a.id);
+  expect(attFiles(a.id)).toEqual([mid]); // 기록의 칩이 그 사본을 쓴다
+  expect(e.history(a.id).filter((x) => x.kind === 'user').at(-1)).toMatchObject({ parts: [{ type: 'text', text: 'echo 끼움' }, { type: 'file', file: mid }] });
+
+  // 한 번도 안 간 말 — 줄에 섰다가 멈춰 붙잡힌 것
+  await until('쉼', () => e.status(a.id) === 'idle');
+  await slowTurn(e, a.id);
+  await e.sendUser(a.id, text('/대기'));
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 하나' }, fileOf(original('하나.txt'))]);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 둘' }, fileOf(original('둘.txt'))]);
+  await e.interrupt(a.id);
+  expect(attFiles(a.id)).toHaveLength(3);
+  const one = e.hold(a.id)!.items.find((x) => x.text === 'echo 하나')!;
+  e.dropHoldItem(a.id, one.id);
+  expect(attFiles(a.id).filter((f) => f.endsWith('하나.txt'))).toEqual([]);
+  expect(attFiles(a.id)).toHaveLength(2);
+  e.dropHold(a.id);
+  expect(attFiles(a.id)).toEqual([mid]);
+});
+
+test('에이전트 지우기 — 첨부 폴더가 잠겨 못 지우면 쉬운 말로 알리고(경로 없이), 다시 켤 때 주인 없는 첨부 폴더를 지운다', async () => {
+  const e1 = await start();
+  const { a, b } = setup(e1);
+  const done = resultOf(e1, a.id);
+  await e1.sendUser(a.id, [{ type: 'text', text: 'echo' }, fileOf(original('x.txt'))]);
+  await done;
+  await talk(e1, b.id, 'echo b');
+  const errs: { agentId: string | null; message: string }[] = [];
+  e1.on('engine-error', (x: { agentId: string | null; message: string }) => errs.push(x));
+  const realRm = fs.rmSync;
+  // 다른 프로그램이 연 채 잠근 첨부 — 영어 오류에 내 PC 경로가 실려 온다
+  const spy = vi.spyOn(fs, 'rmSync').mockImplementation(((p: fs.PathLike, o?: fs.RmOptions) => {
+    if (p === attDir(a.id)) throw Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${p}'`), { code: 'EBUSY' });
+    return realRm(p, o);
+  }) as any);
+  try {
+    await e1.removeAgent(a.id);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(errs).toEqual([{ agentId: a.id, message: '첨부 폴더를 다 지우지 못했어요 — 두레를 다시 켜면 다시 지워요' }]);
+  expect(e1.agents().map((x) => x.id)).toEqual([b.id]); // 지우기는 끝났다
+  expect(fs.existsSync(attDir(a.id))).toBe(true);
+  fs.mkdirSync(path.join(dataDir, 'attachments', '모양 틀림'));
+  await e1.shutdown();
+
+  const e2 = await start();
+  await until('남은 첨부 폴더를 지움', () => !fs.existsSync(attDir(a.id)));
+  expect(attFiles(b.id)).toEqual([]); // b 는 첨부가 없지만 폴더는 그대로(띄울 때 만든 것)
+  expect(fs.existsSync(attDir(b.id))).toBe(true);
+  expect(fs.existsSync(path.join(dataDir, 'attachments', '모양 틀림'))).toBe(true);
+  expect(e2.agents().map((x) => x.id)).toEqual([b.id]);
+});
+
+test('자격 증명 파일은 다른 이름으로도 보내지 않는다 — 대체 데이터 스트림(:)·짧은 이름(8.3)', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const cred = original('.credentials.json', '{}'); // 시험 폴더의 가짜 파일
+  // 스트림 이름을 붙이면 이름 검사를 비껴가고 stat·복사는 된다 — 드라이브 글자 뒤의 ':' 는 거절
+  await expect(e.sendUser(a.id, [{ type: 'file', path: `${cred}::$DATA`, name: 'notes.txt', bytes: 2 }])).rejects.toThrow(
+    `${ATTACH_FAIL}notes.txt: 파일 경로가 올바르지 않아요`,
+  );
+  await expect(e.sendUser(a.id, [{ type: 'file', path: `${original('보통.txt')}:숨은`, name: '보통.txt', bytes: 2 }])).rejects.toThrow(
+    `${ATTACH_FAIL}보통.txt: 파일 경로가 올바르지 않아요`,
+  );
+  // 짧은 이름(CREDEN~1.JSO)·링크 — 진짜 경로의 이름으로 다시 본다. 짧은 이름은 볼륨 설정에 따라 안 생겨 realpath 를 흉내
+  const short = original('CREDEN~1.JSO', '{}');
+  const real = fs.promises.realpath.bind(fs.promises);
+  const spy = vi.spyOn(fs.promises, 'realpath').mockImplementation((async (p: fs.PathLike, o?: any) => (p === short ? cred.toUpperCase() : real(p, o))) as any);
+  try {
+    await expect(e.sendUser(a.id, [fileOf(short)])).rejects.toThrow(`${ATTACH_FAIL}CREDEN~1.JSO: 자격 증명 파일은 보낼 수 없어요`);
+    expect(spy).toHaveBeenCalledWith(short);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(spawns()).toEqual([]);
+  expect(attFiles(a.id)).toEqual([]);
+  expect(e.history(a.id)).toEqual([]);
+});
+
+test('준비하는 사이 에이전트를 지우면 아무것도 안 보내고, 지운 뒤에 만든 사본·첨부 폴더도 남기지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const src = original('x.txt');
+  const gate = holdStat(src);
+  try {
+    const sending = e.sendUser(a.id, [{ type: 'text', text: 'echo' }, fileOf(src)]);
+    const failed = expect(sending).rejects.toThrow(`에이전트를 찾을 수 없습니다: ${a.id}`);
+    await until('준비 중', gate.reached);
+    await e.removeAgent(a.id);
+    gate.open(); // 이제 복사한다 — 첨부 폴더를 다시 만든다
+    await failed;
+  } finally {
+    gate.restore();
+  }
+  expect(fs.existsSync(attDir(a.id))).toBe(false);
+  expect(spawns()).toEqual([]);
+  expect(fs.readFileSync(src, 'utf8')).toBe('첨부 내용');
+});
+
+test('잰 뒤 복사하는 사이 원본이 100MB 를 넘게 커지면 — 사본을 다시 재서 거절', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const src = original('자라는.log', 'x');
+  const real = fs.promises.stat.bind(fs.promises);
+  // 사본(첨부 폴더 안)은 잰 뒤 커진 원본을 복사한 것처럼
+  const spy = vi.spyOn(fs.promises, 'stat').mockImplementation((async (p: fs.PathLike, o?: any) => {
+    const st = await real(p, o);
+    return String(p).startsWith(attDir(a.id)) ? Object.assign(st, { size: ATTACH_MAX_BYTES + 1 }) : st;
+  }) as any);
+  try {
+    await expect(e.sendUser(a.id, [fileOf(src)])).rejects.toThrow(`${ATTACH_FAIL}자라는.log: 100MB 보다 큰 파일은 보낼 수 없어요`);
+  } finally {
+    spy.mockRestore();
+  }
+  expect(attFiles(a.id)).toEqual([]);
+  expect(spawns()).toEqual([]);
+});
+
+test('첨부 폴더 --add-dir — 갈래의 첫 실행 · 권한 모드 때문에 다시 띄울 때도', async () => {
+  const { e } = await startConv();
+  const { a, s1 } = await pastOfA(e);
+  const made = await e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+  await talk(e, made.id, 'echo 둘');
+  const fork = lastSpawnOf('A 2').argv;
+  expect(fork).toContain('--fork-session');
+  expect(flagValue(fork, '--add-dir')).toBe(attDir(made.id));
+  // 옵션 없이 뜬 세션에서 묻지 않음을 켜면 옵션을 붙여 다시 띄운다(--resume)
+  await talk(e, a.id, 'echo 셋');
+  const before = spawnsOf('A').length;
+  await e.setAllowBypass(true);
+  await e.setBypass(a.id, true);
+  expect(spawnsOf('A')).toHaveLength(before + 1);
+  const restarted = lastSpawnOf('A').argv;
+  expect(restarted).toContain(ALLOW_FLAG);
+  expect(restarted).toContain('--resume');
+  expect(flagValue(restarted, '--add-dir')).toBe(attDir(a.id));
+});
