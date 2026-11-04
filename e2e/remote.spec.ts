@@ -1,4 +1,4 @@
-// E2E — 서버(SSH) 방: 새 방(서버) → 에이전트 추가(서버 폴더 확인) → 대화 → 새 대화(서버 정리).
+// E2E — 서버(SSH) 방: 새 방(서버) → 에이전트 추가(서버 폴더 확인) → 대화 → 첨부(서버로 올리기) → 새 대화(서버 정리) → 에이전트 지우기(첨부 정리).
 // 가짜 ssh(test/fakeSsh.mjs) + 가짜 claude + 임시 HOME(.ssh/config) + 임시 user-data — 실제 ~/.ssh·%APPDATA%/Dure 는 건드리지 않는다.
 // 실행: `npm run build` 다음 `npx playwright test e2e/remote.spec.ts`.
 import { test, expect, _electron as electron, type Locator, type Page } from '@playwright/test'
@@ -15,6 +15,10 @@ const FAKE_CLAUDE = path.join(ROOT, 'test', 'fakeClaude.mjs')
 const FAKE_SSH = path.join(ROOT, 'test', 'fakeSsh.mjs')
 
 const AGENT = { name: '서버일꾼', role: '웹 · 서버' }
+const ATTACH_TEXT = '이 파일 봐 주세요'
+const BIN_NAME = 'bytes.bin'
+/** 0x00·0x1A·CRLF·0xFF 가 섞인 바이트(0..255 + \r\n) — 올리기(ssh stdin)가 바이트를 바꾸지 않는지 */
+const BIN_BYTES = Buffer.concat([Buffer.from(Array.from({ length: 256 }, (_, i) => i)), Buffer.from('\r\n')])
 
 const node = (page: Page, name: string): Locator =>
   page.locator('.react-flow__node').filter({ has: page.locator('.nn b', { hasText: new RegExp(`^${name}$`) }) })
@@ -40,7 +44,7 @@ function sshLines(log: string): SshLine[] {
   return out
 }
 
-test('서버(SSH) 방 — 만들기 · 에이전트 추가 · 대화 · 새 대화 정리', async () => {
+test('서버(SSH) 방 — 만들기 · 에이전트 추가 · 대화 · 첨부 · 새 대화 정리 · 지우기', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dure-e2e-remote-'))
   const userData = path.join(dir, 'userData')
   const fakeHome = path.join(dir, 'home')
@@ -48,6 +52,9 @@ test('서버(SSH) 방 — 만들기 · 에이전트 추가 · 대화 · 새 대�
   const claudeDir = path.join(dir, 'claude-config')
   const claudeLog = path.join(dir, 'fake-claude.log')
   const sshLog = path.join(dir, 'fake-ssh.log')
+  const picks = path.join(dir, 'picks')
+  let agentId = ''
+  fs.mkdirSync(picks)
   fs.mkdirSync(path.join(fakeHome, '.ssh'), { recursive: true })
   fs.writeFileSync(path.join(fakeHome, '.ssh', 'config'), 'Host dev\n  HostName 10.0.0.12\n  User a\n')
   fs.mkdirSync(path.join(serverRoot, 'home', 'a', 'web'), { recursive: true })
@@ -122,6 +129,51 @@ test('서버(SSH) 방 — 만들기 · 에이전트 추가 · 대화 · 새 대�
       await expect(node(page, AGENT.name).locator('.nd')).toHaveAttribute('data-status', 'idle')
     })
 
+    await test.step('첨부 — 서버로 올라간 바이트 그대로 · 경로 줄은 서버 경로 · 파일 칩', async () => {
+      const snap = (await page.evaluate(() => (window as unknown as { dure: { snapshot(): Promise<unknown> } }).dure.snapshot())) as {
+        agents: { id: string; name: string }[]
+      }
+      agentId = snap.agents.find((a) => a.name === AGENT.name)!.id
+      const original = path.join(picks, BIN_NAME)
+      fs.writeFileSync(original, BIN_BYTES)
+      await chat.locator('input[type="file"]').setInputFiles(original)
+      await expect(chat.locator('.atts .att-file')).toHaveCount(1)
+      const box = page.getByRole('textbox', { name: `${AGENT.name}에게 보낼 메시지` })
+      await box.fill(ATTACH_TEXT)
+      await box.press('Enter')
+      await expect(chat.locator('.ci-claude', { hasText: `받음: ${ATTACH_TEXT}` })).toBeVisible({ timeout: 20_000 })
+
+      // 올리기 한 번 — 그 에이전트 폴더에 그 사본 이름으로, 바이트 그대로
+      const uploads = sshLines(sshLog).filter((l) => l.event === 'upload')
+      expect(uploads).toHaveLength(1)
+      const { file } = uploads[0] as { agentId?: string; file?: string; bytes?: number; partial?: boolean }
+      expect(uploads[0]).toMatchObject({ agentId, bytes: BIN_BYTES.length })
+      expect(file).toMatch(/^\d{8}-\d{6}-bytes\.bin$/)
+      const onServer = path.join(serverRoot, 'home', 'a', '.dure', 'attachments', agentId, file!)
+      expect(fs.readFileSync(onServer).equals(BIN_BYTES)).toBe(true)
+      // 이 PC 사본도 같은 이름으로 남는다(대화의 칩이 연다)
+      expect(fs.readFileSync(path.join(userData, 'attachments', agentId, file!)).equals(BIN_BYTES)).toBe(true)
+
+      // Claude 에게 간 경로 줄 — 서버 경로(서버의 $HOME 을 펼친 것)
+      const sent = fs
+        .readFileSync(claudeLog, 'utf8')
+        .split(/\r?\n/)
+        .flatMap((l) => {
+          try {
+            const m = JSON.parse(l) as { type?: string; message?: { content?: { type?: string; text?: string }[] } }
+            return m.type === 'user' && Array.isArray(m.message?.content) ? [m.message!.content!.map((c) => c.text ?? '')] : []
+          } catch {
+            return []
+          }
+        })
+        .find((texts) => texts[0] === ATTACH_TEXT)
+      expect(sent).toEqual([ATTACH_TEXT, `\n\n첨부 파일:\n- /home/a/.dure/attachments/${agentId}/${file}`])
+
+      const me = chat.locator('.me', { hasText: ATTACH_TEXT })
+      await expect(me.locator('.me-file')).toHaveCount(1)
+      await expect(me.locator('.me-file')).toHaveAttribute('aria-label', new RegExp(`^${BIN_NAME.replace('.', '\\.')} .* · ${BIN_BYTES.length} B$`))
+    })
+
     await test.step('띄우기 — -R · BatchMode · 토큰 없음', async () => {
       const launches = sshLines(sshLog).filter((l) => l.event === 'start' && l.kind === 'launch')
       expect(launches.length).toBeGreaterThan(0)
@@ -147,6 +199,22 @@ test('서버(SSH) 방 — 만들기 · 에이전트 추가 · 대화 · 새 대�
       await expect
         .poll(() => sshLines(sshLog).some((l) => l.event === 'start' && l.kind === 'cleanup'), { timeout: 15_000 })
         .toBe(true)
+    })
+
+    await test.step('에이전트 지우기 → 서버·이 PC 첨부 폴더 정리', async () => {
+      const serverDir = path.join(serverRoot, 'home', 'a', '.dure', 'attachments', agentId)
+      expect(fs.existsSync(serverDir)).toBe(true)
+      await chat.getByRole('button', { name: '메뉴', exact: true }).click()
+      await page.getByRole('menuitem', { name: '지우기' }).click()
+      const ask = page.getByRole('alertdialog')
+      await ask.getByRole('button', { name: '지우기', exact: true }).click()
+      await expect(ask).toBeHidden()
+      await expect(node(page, AGENT.name)).toHaveCount(0)
+      await expect
+        .poll(() => sshLines(sshLog).some((l) => l.event === 'attachments-cleanup' && (l as { agentId?: string }).agentId === agentId), { timeout: 15_000 })
+        .toBe(true)
+      expect(fs.existsSync(serverDir)).toBe(false)
+      expect(fs.existsSync(path.join(userData, 'attachments', agentId))).toBe(false)
     })
 
     expect(pageErrors).toEqual([])
