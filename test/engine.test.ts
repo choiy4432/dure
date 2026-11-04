@@ -589,6 +589,8 @@ test('Claude 가 죽을 때 기다리던 사람 입력은 남고, 다음 입력 
   await e.sendUser(a.id, text('SLOW'));
   await init;
   await e.sendUser(a.id, text('echo 사람 하나')); // 일하는 중이라 바로 보낸다 — 읽기 전에 죽으면 기다리는 줄로 돌아온다
+  // 가짜 claude 가 그 줄을 읽은 뒤에 죽인다 — 안 그러면 kill 이 먼저 닿아 줄이 기록에 없을 수 있다(부하에서 흔들림, SLOW 는 끼운 말을 되돌리지 않음)
+  await until('A 가 받음', () => userTexts().includes('echo 사람 하나'));
   const errored = waitFor<StatusEvent>(e, 'status', (s) => s.agentId === a.id && s.status === 'error');
   process.kill(lastSpawnOf('A').pid);
   await errored;
@@ -7011,6 +7013,33 @@ test('자격 증명 파일은 다른 이름으로도 보내지 않는다 — 대
   expect(spawns()).toEqual([]);
   expect(attFiles(a.id)).toEqual([]);
   expect(e.history(a.id)).toEqual([]);
+});
+
+test('진짜 경로를 못 푸는 볼륨 — 이름 검사만으로 보낸다 · 모르는 오류는 원문 대신 코드만', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const odd = original('램디스크.txt', 'ram');
+  const gone = path.join(path.dirname(odd), '없는 곳', 'x.txt');
+  const real = fs.promises.realpath.bind(fs.promises);
+  const realStat = fs.promises.stat.bind(fs.promises);
+  const spy = vi.spyOn(fs.promises, 'realpath').mockImplementation((async (p: fs.PathLike, o?: any) => {
+    if (p === odd || p === gone) throw Object.assign(new Error(`EINVAL: invalid argument, realpath '${String(p)}'`), { code: 'EINVAL' });
+    return real(p, o);
+  }) as any);
+  const statSpy = vi.spyOn(fs.promises, 'stat').mockImplementation((async (p: fs.PathLike, o?: any) => {
+    if (p === gone) throw Object.assign(new Error(`EIO: i/o error, stat '${String(p)}'`), { code: 'EIO' });
+    return realStat(p, o);
+  }) as any);
+  try {
+    const done = resultOf(e, a.id);
+    await e.sendUser(a.id, [{ type: 'text', text: 'echo 램' }, fileOf(odd)]);
+    await done;
+    expect(attFiles(a.id)).toHaveLength(1);
+    await expect(e.sendUser(a.id, [{ type: 'file', path: gone, name: 'x.txt', bytes: 1 }])).rejects.toThrow(`${ATTACH_FAIL}x.txt: 읽을 수 없어요(EIO)`);
+  } finally {
+    spy.mockRestore();
+    statSpy.mockRestore();
+  }
 });
 
 test('준비하는 사이 에이전트를 지우면 아무것도 안 보내고, 지운 뒤에 만든 사본·첨부 폴더도 남기지 않는다', async () => {

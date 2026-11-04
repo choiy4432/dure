@@ -1653,13 +1653,15 @@ class EngineImpl extends EventEmitter implements Engine {
     // 자격 증명 파일은 읽지도 옮기지도 않는다(약관 경계) — 사용자가 골라도
     if (isCredentials(p.path)) throw fail(ATTACH_CREDENTIALS);
     // 짧은 이름(8.3)·링크로 가린 자격 증명 파일도 — 진짜 경로의 이름으로 다시 본다(fs.promises.realpath 는 realpath.native 와 같은 뜻)
-    let real: string;
+    // 진짜 경로를 못 푸는 볼륨(RAM 디스크·일부 가상 FS)도 있다 — 없음·권한·잠김이 아니면 이름 검사만으로 넘어가 stat 으로 간다
+    // (자격 증명 파일은 시스템 드라이브에 있어 realpath 가 늘 된다)
+    let real: string | null = null;
     try {
       real = await fs.promises.realpath(p.path);
     } catch (e) {
-      throw fail(fileErrorText(e));
+      if (REALPATH_FATAL.has((e as NodeJS.ErrnoException | null)?.code ?? '')) throw fail(fileErrorText(e));
     }
-    if (isCredentials(real)) throw fail(ATTACH_CREDENTIALS);
+    if (real !== null && isCredentials(real)) throw fail(ATTACH_CREDENTIALS);
     let st: fs.Stats;
     try {
       st = await fs.promises.stat(p.path);
@@ -3653,10 +3655,16 @@ function fileErrorText(e: unknown): string {
       return '디스크에 빈 자리가 없어요';
     case 'EISDIR':
       return ATTACH_FOLDER;
-    default:
-      return firstLine(e instanceof Error ? e.message : String(e)) || '알 수 없는 오류예요';
+    default: {
+      // 원문(영어·내 PC 경로가 섞인다)은 보이지 않는다 — 오류 코드만 덧붙인다
+      const code = (e as NodeJS.ErrnoException | null)?.code;
+      return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `읽을 수 없어요(${code})` : '읽을 수 없어요';
+    }
   }
 }
+
+/** realpath 가 이 까닭으로 실패하면 보내지 않는다 — 그 밖(EINVAL·UNKNOWN …)은 이름 검사만으로 넘어간다 */
+const REALPATH_FATAL = new Set(['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'EBUSY']);
 
 function readsInput(ev: StreamEvent): boolean {
   if (
