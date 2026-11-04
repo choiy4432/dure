@@ -7142,8 +7142,8 @@ describe('서버 방 첨부', () => {
     expect(errs).toEqual([]); // 지우기를 세웠다면 그 ssh 도 못 띄워 engine-error 가 났다
   }, 30_000);
 
-  test('이 PC 사본을 못 읽음 — 그 까닭(코드만) · 서버를 지우러 가지 않는다', async () => {
-    const { e, web, calls } = await attachRoom();
+  test('이 PC 사본을 못 읽음 — 그 까닭(코드만) · 앞부분이 갔을 수 있어 서버 파일도 지운다', async () => {
+    const { e, web, ofKind, servedFiles } = await attachRoom();
     const errs: unknown[] = [];
     e.on('engine-error', (x) => errs.push(x));
     const real = fs.createReadStream;
@@ -7161,8 +7161,7 @@ describe('서버 방 첨부', () => {
     }
     expect(err.message).toBe(`${ATTACH_FAIL}x.txt: 이 PC 사본을 읽지 못했어요(EBUSY)`);
     expect(attFiles(web.id)).toEqual([]);
-    await sleep(500);
-    expect(calls().filter((c) => c.kind === 'attachment-remove')).toEqual([]);
+    await until('서버 파일 되돌림', () => ofKind('attachment-remove').length === 1 && servedFiles().length === 0, 10_000);
     expect(errs).toEqual([]);
   }, 30_000);
 

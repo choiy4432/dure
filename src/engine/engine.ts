@@ -1780,7 +1780,7 @@ class EngineImpl extends EventEmitter implements Engine {
    * 이 PC 사본 하나를 서버 첨부 폴더로(uploadScript — 바이트는 ssh stdin, 상한 uploadTimeoutMs). 되면 서버 절대 경로
    * (`<DURE_HOME>/.dure/attachments/<에이전트>/<사본 이름>`). 안 되면 쉬운 까닭으로 던진다(ssh·서버의 영어 원문·경로는 싣지 않는다) —
    * 서버에 반쯤 썼을 수 있으면(끊김·끊음·시간 넘김·서버 명령 실패) 그 파일 지우기를 그 에이전트의 서버 줄에 세운다
-   * (접속도 못 했거나 ssh 를 못 띄웠거나 이 PC 사본을 못 읽었으면 지우러 가지 않는다)
+   * (접속도 못 했거나 ssh 를 못 띄웠으면 지우러 가지 않는다 — 이 PC 사본을 도중에 못 읽었으면 앞부분이 갔을 수 있어 지운다)
    */
   private async uploadFile(id: AgentId, host: string, copy: { file: string; abs: string }, signal: AbortSignal): Promise<string> {
     // 앞서 세운 되돌리기(서버 파일 지우기)가 끝난 뒤에 — 같은 이름으로 다시 올린 파일을 늦게 온 지우기가 지우지 않게.
@@ -1794,7 +1794,10 @@ class EngineImpl extends EventEmitter implements Engine {
       undo();
       throw new Error(ATTACH_UPLOAD_STOPPED);
     }
-    if (r.readFailed) throw new Error(attachCopyReadText(r.readFailed.code));
+    if (r.readFailed) {
+      undo(); // 앞부분은 서버에 갔을 수 있다 — 반쯤 쓴 파일을 남기지 않는다
+      throw new Error(attachCopyReadText(r.readFailed.code));
+    }
     if (r.timedOut) {
       undo();
       throw new Error(ATTACH_UPLOAD_SLOW);
