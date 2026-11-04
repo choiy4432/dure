@@ -1,6 +1,8 @@
 // probe27 — 첨부 폴더 --add-dir: 두레처럼(--permission-prompts host) 띄우고 cwd 와 다른 첨부 폴더의 txt·pdf 를 Read 가
 // 승인 요청(control_request can_use_tool) 없이 읽나. A1 = 이 PC, A2 = 서버(WSL, ssh), A3 = --allowedTools "Read(폴더/**)".
 // Haiku 로 한 차례씩(사용자 허락). 승인 요청이 오면 언제나 거절한다.
+// 한계: 두레는 --permission-prompt-tool(MCP approve) 도 붙이지만 이 실측은 붙이지 않는다 — 'can_use_tool=X' 는 host 쪽 요청이
+// 없었다는 뜻일 뿐이다. 판정은 '첫 줄을 말했나'(+ 허용 없는 대조군이 막혔나)로 한다. 두레의 진짜 승인 길은 Task 6 진짜 확인에서 본다.
 // 환경: DURE_PROBE_KEY · DURE_PROBE_KNOWN_HOSTS · DURE_PROBE_WSL(배포판, 기본 Ubuntu) · PROBE27_SKIP_WSL=1 · PROBE27_ONLY_WSL=1
 import { spawn } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -64,7 +66,7 @@ function drive(child, prompt) {
 }
 const show = (tag, r) => {
   const asked = r.requests.length > 0
-  console.log(`${tag}: 승인요청=${asked ? 'O ' + JSON.stringify(r.requests) : 'X'} · 첫줄말함=${r.answer.includes(LINE)} · result=${r.result} · tool_result=${JSON.stringify(r.results)}`)
+  console.log(`${tag}: can_use_tool=${asked ? 'O ' + JSON.stringify(r.requests) : 'X'} · 첫줄말함=${r.answer.includes(LINE)} · result=${r.result} · tool_result=${JSON.stringify(r.results)}`)
   if (!r.answer.includes(LINE)) console.log(`   답: ${r.answer.slice(0, 160).replace(/\n/g, ' / ')}${r.err ? ' · stderr: ' + r.err.slice(0, 160) : ''}`)
   return asked
 }
