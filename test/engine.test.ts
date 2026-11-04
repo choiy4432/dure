@@ -6819,6 +6819,33 @@ test('에이전트 지우기 — 첨부 폴더 지움', async () => {
   expect(fs.readFileSync(src, 'utf8')).toBe('첨부 내용'); // 원본은 그대로
 });
 
+test('attachmentPath — 기록의 사본 이름만 그 에이전트 첨부 폴더 안으로 푼다(밖·없음·다른 에이전트·없는 에이전트는 null)', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  const src = original('보고서.txt');
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo' }, fileOf(src)]);
+  await done;
+  const [file] = attFiles(a.id);
+  const abs = path.join(attDir(a.id), file);
+  const launched = spawns().length;
+  expect(e.attachmentPath(a.id, file)).toBe(abs);
+  // 다른 에이전트 폴더엔 없다 · 그 폴더에서 .. 로 넘어가지 못한다
+  expect(e.attachmentPath(b.id, file)).toBeNull();
+  for (const bad of [`..\\${a.id}\\${file}`, `../${a.id}/${file}`, abs, src, '', '20261104-120000-없음.txt', 5 as unknown as string]) {
+    expect(e.attachmentPath(a.id, bad), String(bad)).toBeNull();
+    expect(e.attachmentPath(b.id, bad), String(bad)).toBeNull();
+  }
+  // 등록되지 않은 에이전트(주인 없이 남은 폴더 포함)는 풀지 않는다
+  fs.mkdirSync(attDir('ghost-1'), { recursive: true });
+  fs.copyFileSync(abs, path.join(attDir('ghost-1'), file));
+  expect(e.attachmentPath('ghost-1', file)).toBeNull();
+  expect(e.attachmentPath(5 as unknown as string, file)).toBeNull();
+  expect(spawns()).toHaveLength(launched); // claude 를 띄우지 않는다
+  await e.removeAgent(a.id);
+  expect(e.attachmentPath(a.id, file)).toBeNull();
+});
+
 test('모든 에이전트 띄우기에 첨부 폴더 --add-dir(폴더 생성)', async () => {
   const e1 = await start();
   const { a, b } = setup(e1);

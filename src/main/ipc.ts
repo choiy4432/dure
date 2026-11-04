@@ -1,10 +1,12 @@
+import path from 'node:path'
 import type { Engine } from '../engine'
 import {
   APP_METHODS, BEFORE_START, CHANNEL, CLAUDE_MISSING_ERROR, EVENT_NAMES, METHODS,
   type AgentView, type DureApi, type InvokeRequest, type InvokeResult, type Snapshot,
 } from '../shared/ipcContract'
 import type { AppEventMap } from '../shared/appTypes'
-import { SLEEP_DEFAULT_MIN, type ThemePref } from '../engine/types'
+import { ATTACH_FAILED, ATTACH_NOT_FOUND, ATTACH_OPEN_FAILED } from '../shared/attachments'
+import { SLEEP_DEFAULT_MIN, type ThemePref, type UserPart } from '../engine/types'
 import { pickPrefs } from './appPrefs'
 
 export interface IpcLike {
@@ -24,6 +26,8 @@ export interface IpcDeps {
   onAppEvent(fn: (name: keyof AppEventMap, payload: unknown) => void): void
   pickFolder(): Promise<string | null>
   openFolder(path: string): Promise<void>
+  /** 기본 앱으로 파일 열기(shell.openPath) — 못 열면 던진다. 엔진이 첨부 폴더 안으로 푼 경로만 온다(openAttachment) */
+  openPath(path: string): Promise<void>
   /** 기본 앱으로 주소 열기(VS Code 원격 창) — 못 열면 던진다 */
   openExternal(url: string): Promise<void>
   /** 저장 창으로 글을 저장 — 저장한 경로, 취소면 null. 이름은 이미 다듬어 온다(saveName) */
@@ -57,6 +61,30 @@ export function saveName(name: string): string {
 }
 
 const CONV_BAD = '지난 대화를 부를 수 없어요'
+const PARTS_BAD = '보낼 내용이 올바르지 않아요'
+const FILE_PART_BAD = `${ATTACH_FAILED} — 첨부 정보가 올바르지 않아요`
+/** 화면이 보내는 file part 의 칸 — 이것뿐(준비된 꼴의 file·sendPath·remotePath 를 꾸며 넣지 못하게) */
+const FILE_PART_KEYS: ReadonlySet<string> = new Set(['type', 'path', 'name', 'bytes'])
+
+/**
+ * sendUser 의 칸 목록을 거른다 — 목록이 아니면 거절. file part 는 type·path(절대 경로, NUL 없음)·name(글)·bytes(0 이상 정수)만,
+ * 다른 칸·틀린 값이면 거절(엔진에 닿지 않는다). 글·그림 칸은 지금처럼 그대로 엔진으로(엔진이 다룬다).
+ * bytes 는 화면이 본 크기일 뿐 — 상한(100MB)은 엔진이 원본을 fs.stat 으로 다시 재서 막는다
+ */
+function checkedParts(parts: unknown): UserPart[] {
+  if (!Array.isArray(parts)) throw new Error(PARTS_BAD)
+  return parts.map((p) => {
+    if (!p || typeof p !== 'object' || (p as { type?: unknown }).type !== 'file') return p as UserPart
+    const f = p as Record<string, unknown>
+    const keys = Object.keys(f)
+    if (keys.length !== FILE_PART_KEYS.size || !keys.every((k) => FILE_PART_KEYS.has(k))) throw new Error(FILE_PART_BAD)
+    const { path: at, name, bytes } = f
+    if (typeof at !== 'string' || at.includes('\u0000') || !path.isAbsolute(at)) throw new Error(FILE_PART_BAD)
+    if (typeof name !== 'string') throw new Error(FILE_PART_BAD)
+    if (typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes < 0) throw new Error(FILE_PART_BAD)
+    return { type: 'file', path: at, name, bytes }
+  })
+}
 
 function agentViews(engine: Engine): AgentView[] {
   return engine.agents().map((a) => {
@@ -127,7 +155,7 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   updateAgent: (e, _d, id, p) => e.updateAgent(id, p),
   removeAgent: (e, _d, id) => e.removeAgent(id),
   setSelected: (e, _d, id) => e.setSelected(id),
-  sendUser: (e, _d, id, parts, o) => e.sendUser(id, parts, (o as { plan?: unknown } | undefined)?.plan === true ? { plan: true } : undefined),
+  sendUser: (e, _d, id, parts, o) => e.sendUser(id, checkedParts(parts), (o as { plan?: unknown } | undefined)?.plan === true ? { plan: true } : undefined),
   setPlanMode: (e, _d, id, on) => e.setPlanMode(id, on),
   resumeHold: (e, _d, id) => e.resumeHold(id),
   dropHoldItem: (e, _d, id, itemId) => e.dropHoldItem(id, itemId),
@@ -158,6 +186,17 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
     return e.forkAgent({ from: x.from, key: x.key, name: x.name, role: x.role })
   },
   image: (e, _d, id, file) => e.image(id, file),
+  openAttachment: async (e, d, id, file) => {
+    // renderer 가 임의 경로를 열지 못하게 — 기록의 사본 이름만 받고, 엔진이 그 에이전트 첨부 폴더 안의 있는 사본으로 푼 경로만 연다
+    if (typeof id !== 'string' || typeof file !== 'string') throw new Error(ATTACH_NOT_FOUND)
+    const abs = e.attachmentPath(id, file)
+    if (!abs) throw new Error(ATTACH_NOT_FOUND)
+    try {
+      await d.openPath(abs)
+    } catch {
+      throw new Error(ATTACH_OPEN_FAILED) // Windows 원문(경로가 들 수 있다)은 넘기지 않는다
+    }
+  },
   approveMessage: (e, _d, id) => e.approveMessage(id),
   dismissMessage: (e, _d, id) => e.dismissMessage(id),
   continueHeld: (e, _d, roomId) => e.continueHeld(roomId),

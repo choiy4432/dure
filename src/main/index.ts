@@ -357,6 +357,11 @@ if (!app.requestSingleInstanceLock()) {
             const err = await shell.openPath(path)
             if (err) throw new Error(err)
           },
+          async openPath(path) {
+            // 첨부 사본 — ipc 가 엔진이 첨부 폴더 안으로 푼 경로만 넘긴다. 못 열면(연결된 프로그램 없음 등) 빈 글이 아닌 까닭이 온다
+            const err = await shell.openPath(path)
+            if (err) throw new Error(err)
+          },
           async openExternal(url) {
             await shell.openExternal(url)
           },

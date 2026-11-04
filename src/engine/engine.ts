@@ -281,6 +281,11 @@ export interface Engine extends EventEmitter {
   forkAgent(i: { from: AgentId; key: string; name: string; role: string }): Promise<Agent>;
   /** 사람이 보낸 그림(기록의 file) — data URL. 이름이 틀리거나 없으면 null, 없는 에이전트면 던진다 */
   image(id: AgentId, file: string): Promise<string | null>;
+  /**
+   * 사람이 보낸 첨부(기록의 file — 사본 이름)의 이 PC 절대 경로 — 그 에이전트 첨부 폴더 안의 사본만(서버 방도 이 PC 사본).
+   * 없는 에이전트·이름 모양이 틀림·폴더 밖(`..`·절대 경로)·없는 파일이면 null. 읽기만 한다(claude 를 띄우지 않는다)
+   */
+  attachmentPath(id: AgentId, file: string): string | null;
   messages(f?: Parameters<MessageLog['list']>[0]): RelayMessage[];
   approveMessage(id: string): void;
   dismissMessage(id: string): void;
@@ -2385,6 +2390,11 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     const img = typeof file === 'string' ? this.images.read(id, file) : null;
     return img ? `data:${img.mediaType};base64,${img.base64}` : null;
+  }
+  attachmentPath(id: AgentId, file: string): string | null {
+    // 등록된 에이전트만 — 지울 때 잠겨 남은 주인 없는 폴더의 사본은 풀지 않는다
+    if (typeof id !== 'string' || typeof file !== 'string' || !this.store.agent(id)) return null;
+    return this.attachments.resolve(id, file);
   }
   messages(f?: Parameters<MessageLog['list']>[0]) { return this.log.list(f); }
   approveMessage(id: string) { this.router.approve(id); }

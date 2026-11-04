@@ -103,6 +103,11 @@ export interface DureApi {
   forkAgent(i: { from: AgentId; key: string; name: string; role: string }): Promise<Agent>
   /** 보낸 그림(기록의 image file) — data URL, 없으면 null */
   image(id: AgentId, file: string): Promise<string | null>
+  /**
+   * 보낸 첨부(기록의 file part 의 file — 사본 이름)를 기본 앱으로 연다. 그 에이전트의 첨부 폴더 안 사본만(서버 방도 이 PC 사본) —
+   * 이름이 틀리거나 폴더 밖·없으면 '첨부 파일을 찾을 수 없어요', 열지 못하면 '첨부 파일을 열지 못했어요'. claude 를 띄우지 않는다
+   */
+  openAttachment(agentId: AgentId, file: string): Promise<void>
   approveMessage(id: string): Promise<void>
   dismissMessage(id: string): Promise<void>
   continueHeld(roomId: RoomId): Promise<void>
@@ -160,11 +165,18 @@ export interface DureApi {
 
   /** 해제 함수를 돌려준다 */
   on<K extends keyof DureEventMap>(k: K, fn: (p: DureEventMap[K]) => void): () => void
+  /**
+   * 사용자가 고르거나 끌어다 놓은 File 의 이 PC 절대 경로(preload 안의 webUtils.getPathForFile — IPC 아님, 동기).
+   * 디스크 파일이 아닌 File(코드로 만든 것 등)이면 빈 글. 화면은 이 경로를 sendUser 의 file part 로만 넘긴다(읽지 않는다)
+   */
+  pathForFile(file: File): string
 }
 
 export const CHANNEL = { invoke: 'dure:invoke', event: 'dure:event' } as const
 
-type ApiMethod = Exclude<keyof DureApi, 'on'>
+/** preload 안에서 처리해 invoke 로 가지 않는 것 — 사건 받기(on)·File 경로(pathForFile) */
+type PreloadOnly = 'on' | 'pathForFile'
+type ApiMethod = Exclude<keyof DureApi, PreloadOnly>
 
 /** 앱 쪽 메서드 — 엔진이 없어도(claude 가 없어도)·엔진 시작 전에도 main 의 AppHost 로 간다 */
 export const APP_METHODS = [
@@ -172,10 +184,10 @@ export const APP_METHODS = [
   'claudeUpdateState', 'updateState', 'checkUpdate', 'downloadUpdate', 'installUpdate', 'openReleasePage', 'setTourVeil',
 ] as const satisfies readonly ApiMethod[]
 
-/** invoke 로 부를 수 있는 엔진 쪽 이름 — DureApi 의 메서드 중 on(preload 안에서 처리)과 APP_METHODS 가 빠진다 */
+/** invoke 로 부를 수 있는 엔진 쪽 이름 — DureApi 의 메서드 중 on·pathForFile(preload 안에서 처리)과 APP_METHODS 가 빠진다 */
 export const METHODS = [
   'snapshot', 'addRoom', 'sshAvailable', 'sshHosts', 'checkRemote', 'checkRemoteFolder', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
-  'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'conversations', 'conversation', 'resumeConversation', 'forkAgent', 'image',
+  'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'conversations', 'conversation', 'resumeConversation', 'forkAgent', 'image', 'openAttachment',
   'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
   'setAllowBypass', 'setNotify', 'setTheme', 'setBypass',
   'sleep', 'sleepRoom', 'sleepBlock', 'sleepableIn', 'setSleepAfter',
@@ -192,7 +204,7 @@ const ALL_COVERED: [Uncovered] extends [never] ? true : Uncovered = true
  * 그 밖의 엔진 메서드는 main 의 engineReady 가 풀릴 때까지 기다린다(claude 를 띄우는 일이 업데이트와 겹치지 않게)
  */
 export const BEFORE_START = [
-  'snapshot', 'history', 'conversations', 'conversation', 'image', 'sshAvailable', 'sshHosts', 'sleepBlock', 'sleepableIn',
+  'snapshot', 'history', 'conversations', 'conversation', 'image', 'openAttachment', 'sshAvailable', 'sshHosts', 'sleepBlock', 'sleepableIn',
   'pickFolder', 'saveConversation', 'setTaskbar', 'flashWindow', 'focusWindow',
 ] as const satisfies readonly (typeof METHODS)[number][]
 

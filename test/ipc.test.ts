@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { logEngineErrors, registerIpc, type AppHost, type IpcDeps } from '../src/main/ipc'
@@ -7,6 +9,7 @@ import { appPageMatcher } from '../src/main/window'
 import { APP_EVENT_NAMES, APP_METHODS, BEFORE_START, CHANNEL, EVENT_NAMES, METHODS } from '../src/shared/ipcContract'
 import type { AppEventMap } from '../src/shared/appTypes'
 import type { Engine } from '../src/engine'
+import { openAttachmentStore } from '../src/engine/attachmentStore'
 
 type Fn = (event: unknown, req: unknown) => unknown
 
@@ -69,6 +72,7 @@ function fakeEngine() {
     resumeConversation: rec('resumeConversation', Promise.resolve()),
     forkAgent: rec('forkAgent', agent),
     image: rec('image', Promise.resolve(null)),
+    attachmentPath: (_id: string, _file: string) => null, // 기록 안 함 — 시험이 진짜 첨부 가게로 갈아 낀다
     approveMessage: rec('approveMessage'),
     dismissMessage: rec('dismissMessage'),
     continueHeld: rec('continueHeld'),
@@ -120,7 +124,7 @@ function fakeApp() {
 /** 아무것도 하지 않는 deps — 각 시험이 필요한 칸만 갈아 낀다 */
 function quietDeps(): IpcDeps {
   return {
-    pickFolder: async () => null, openFolder: async () => {}, openExternal: async () => {}, isAppPage,
+    pickFolder: async () => null, openFolder: async () => {}, openPath: async () => {}, openExternal: async () => {}, isAppPage,
     setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {}, saveText: async () => null,
     app: fakeApp(), engineReady: Promise.resolve(), onAppEvent: () => {},
   }
@@ -134,7 +138,8 @@ function setup(withEngine = true, over: { engineReady?: Promise<void> } = {}) {
   const sent: [string, any][] = []
   let appEvent: AppEventFn | null = null
   const deps = {
-    pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), openExternal: vi.fn(async (_url: string) => {}), isAppPage,
+    pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), openPath: vi.fn(async (_p: string) => {}),
+    openExternal: vi.fn(async (_url: string) => {}), isAppPage,
     setTaskbar: vi.fn(async () => {}), flashWindow: vi.fn(async () => {}), focusWindow: vi.fn(async () => {}),
     applyTheme: vi.fn(), saveText: vi.fn(async (name: string, _text: string) => `C:/docs/${name}`),
     app: fakeApp(),
@@ -261,7 +266,7 @@ describe('registerIpc', () => {
     ])
     for (const m of APP_METHODS) expect(METHODS as readonly string[], m).not.toContain(m)
     expect([...BEFORE_START].sort()).toEqual([
-      'conversation', 'conversations', 'flashWindow', 'focusWindow', 'history', 'image', 'pickFolder', 'saveConversation',
+      'conversation', 'conversations', 'flashWindow', 'focusWindow', 'history', 'image', 'openAttachment', 'pickFolder', 'saveConversation',
       'setTaskbar', 'sleepBlock', 'sleepableIn', 'snapshot', 'sshAvailable', 'sshHosts',
     ])
     for (const m of BEFORE_START) expect(METHODS as readonly string[], m).toContain(m)
@@ -331,6 +336,8 @@ describe('registerIpc', () => {
     expect(await call('sleepBlock', 'a1')).toEqual({ ok: true, value: 'working' })
     expect(await call('pickFolder')).toEqual({ ok: true, value: 'C:/picked' })
     expect(await call('prefs')).toEqual({ ok: true, value: PREFS })
+    // 첨부 열기는 claude 를 띄우지 않는다 — 시작 전에도 바로 답한다
+    expect(await call('openAttachment', 'a1', '20261104-120000-a.txt')).toEqual({ ok: false, error: '첨부 파일을 찾을 수 없어요' })
     await new Promise((r) => setTimeout(r, 10))
     expect(settled).toBe(false)
     expect(calls.map(([n]) => n)).toEqual(['history', 'sleepBlock']) // setSelected 는 아직 엔진에 닿지 않았다
@@ -464,6 +471,87 @@ describe('registerIpc', () => {
     }
     deps.openExternal.mockRejectedValueOnce(new Error('x'))
     expect(await call('openAgentFolder', 'a1')).toEqual({ ok: false, error: 'VS Code 를 찾지 못했어요' })
+  })
+
+  it('openAttachment — 폴더 밖 거절·없으면 오류·있으면 openPath', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dure-ipc-attach-'))
+    try {
+      // 진짜 첨부 가게(시험 폴더 안) — 엔진 흉내는 등록된 에이전트(a1)만 그 가게로 푼다
+      const store = openAttachmentStore(dir)
+      const src = path.join(dir, '원본.txt')
+      fs.writeFileSync(src, '내용')
+      const { file, abs } = await store.copyIn('a1', src, '보고서 최종.txt')
+      fs.writeFileSync(path.join(dir, 'attachments', '20261104-120000-밖.txt'), '밖') // 첨부 폴더 안이지만 a1 폴더 밖
+      const { call, calls, deps, engine } = setup()
+      const attachmentPath = vi.fn((id: string, f: string) => (id === 'a1' ? store.resolve(id, f) : null))
+      ;(engine as any).attachmentPath = attachmentPath
+      const NOT_FOUND = { ok: false, error: '첨부 파일을 찾을 수 없어요' }
+      // 글이 아닌 인자는 엔진에 닿지도 않는다
+      for (const a of [[5, file], ['a1', 5], ['a1'], ['a1', null], [null, file], ['a1', { file }], ['a1', [file]]] as unknown[][]) {
+        expect(await call('openAttachment', ...a), JSON.stringify(a)).toEqual(NOT_FOUND)
+      }
+      expect(attachmentPath).not.toHaveBeenCalled()
+      // 폴더 밖(.. · 절대 경로 · 원본) · 없는 사본 · 빈 이름 · 다른(없는) 에이전트 — 아무것도 열지 않는다
+      for (const [id, f] of [
+        ['a1', '..\\20261104-120000-밖.txt'], ['a1', '../20261104-120000-밖.txt'], ['a1', abs], ['a1', src],
+        ['a1', 'C:\\Windows\\notepad.exe'], ['a1', '20261104-120000-없음.txt'], ['a1', ''], ['ghost', file], ['..', file],
+      ]) {
+        expect(await call('openAttachment', id, f), `${id} ${f}`).toEqual(NOT_FOUND)
+      }
+      expect(deps.openPath).not.toHaveBeenCalled()
+      expect(deps.openFolder).not.toHaveBeenCalled()
+      // 있으면 그 사본의 절대 경로를 연다 — 엔진의 다른 메서드(claude 를 띄우는 것 등)는 부르지 않는다
+      expect(await call('openAttachment', 'a1', file)).toEqual({ ok: true, value: null })
+      expect(deps.openPath).toHaveBeenCalledTimes(1)
+      expect(deps.openPath).toHaveBeenCalledWith(abs)
+      expect(calls).toEqual([])
+      // 열지 못하면(연결된 프로그램 없음 등) 쉬운 글 — 원문(경로가 들 수 있다)은 싣지 않는다
+      deps.openPath.mockRejectedValueOnce(new Error(`Failed to open path ${abs}`))
+      expect(await call('openAttachment', 'a1', file)).toEqual({ ok: false, error: '첨부 파일을 열지 못했어요' })
+      expect(fs.readFileSync(src, 'utf8')).toBe('내용') // 원본은 그대로
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('sendUser file part 검증 — type·path(절대)·name(글)·bytes(0 이상 정수)만, 다른 칸·틀린 값은 엔진에 닿지 않고 거절', async () => {
+    const { call, calls } = setup()
+    const abs = path.resolve(os.tmpdir(), '보고서 최종.pdf')
+    const good = { type: 'file', path: abs, name: '보고서 최종.pdf', bytes: 1234 }
+    const empty = { type: 'file', path: abs, name: '', bytes: 0 }
+    const text = { type: 'text', text: '읽어 줘' }
+    const image = { type: 'image', mediaType: 'image/png', base64: 'AAAA' }
+    expect(await call('sendUser', 'a1', [text, good, image, empty])).toEqual({ ok: true, value: null })
+    expect(await call('sendUser', 'a1', [good], { plan: true })).toEqual({ ok: true, value: null })
+    expect(calls).toEqual([
+      ['sendUser', ['a1', [text, good, image, empty], undefined]],
+      ['sendUser', ['a1', [good], { plan: true }]],
+    ])
+    const BAD = { ok: false, error: '파일을 보내지 못했어요 — 첨부 정보가 올바르지 않아요' }
+    const { path: _p, ...noPath } = good
+    const { name: _n, ...noName } = good
+    const { bytes: _b, ...noBytes } = good
+    const bads: unknown[] = [
+      { ...good, extra: 1 },
+      { ...good, sendPath: abs }, // 준비된 꼴(Claude 에게 줄 경로)을 화면이 꾸며 보내도
+      { type: 'file', name: good.name, bytes: 1, file: '20261104-120000-x.txt', sendPath: abs },
+      { ...good, remotePath: '/home/a/x' },
+      noPath, noName, noBytes,
+      { ...good, path: 'rel.txt' }, { ...good, path: '..\\a.txt' }, { ...good, path: 'C:a.txt' }, { ...good, path: '' },
+      { ...good, path: 5 }, { ...good, path: null }, { ...good, path: [abs] }, { ...good, path: `${abs}\u0000.txt` },
+      { ...good, name: 5 }, { ...good, name: null }, { ...good, name: ['a'] },
+      { ...good, bytes: -1 }, { ...good, bytes: 1.5 }, { ...good, bytes: '3' }, { ...good, bytes: NaN }, { ...good, bytes: Infinity },
+      { ...good, bytes: null }, { ...good, bytes: 2 ** 53 },
+    ]
+    for (const bad of bads) {
+      expect(await call('sendUser', 'a1', [text, bad]), JSON.stringify(bad)).toEqual(BAD)
+      expect(await call('sendUser', 'a1', [bad, good]), JSON.stringify(bad)).toEqual(BAD) // 몇째 칸이든
+    }
+    // 칸 목록이 아니면 거절
+    for (const parts of [undefined, null, 'hi', 5, text, { 0: good, length: 1 }]) {
+      expect(await call('sendUser', 'a1', parts), JSON.stringify(parts)).toEqual({ ok: false, error: '보낼 내용이 올바르지 않아요' })
+    }
+    expect(calls).toHaveLength(2)
   })
 
   it('setAllowBypass · setBypass 는 인자 그대로 엔진으로 가고 엔진 오류 문구가 그대로 돌아온다', async () => {
