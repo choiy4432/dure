@@ -1848,7 +1848,8 @@ class EngineImpl extends EventEmitter implements Engine {
       let killing = false;
       /** 나무째(taskkill /T /F) — 다 끈 뒤 그 ssh 를 한 번 더(이미 끝났으면 아무 일 없음) */
       const kill = () => {
-        if (killing || child.pid === undefined) return;
+        // 이미 끝난 ssh 의 pid 는 다른 프로세스가 다시 받을 수 있다 — 끝났으면 건드리지 않는다
+        if (killing || child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
         killing = true;
         void killTree(child.pid).then(() => {
           try {
@@ -1870,12 +1871,17 @@ class EngineImpl extends EventEmitter implements Engine {
       const input = fs.createReadStream(srcPath);
       const inputClosed = new Promise<void>((r) => input.once('close', () => r()));
       // 사본을 못 읽으면 ssh 를 끈다 — stdin 이 닫히면 서버 cat 은 반쯤 받은 것으로 끝나 DURE_HOME 까지 찍는다(완성으로 치지 않게)
-      input.on('error', (e) => {
+      // pipeline 은 stdin 쓰기 오류(ssh 가 먼저 끝남 → EPIPE)를 읽는 쪽에도 흘린다 — 그것은 사본 읽기 실패가 아니다(종료 코드로 가른다)
+      let stdinBroken = false;
+      input.on('error', (e: NodeJS.ErrnoException) => {
+        if (stdinBroken || e.syscall === 'write') return;
         readFailed = { code: errCode(e) };
         kill();
       });
-      // ssh 가 먼저 끝나면(접속 실패 등) stdin 쓰기가 EPIPE·EOF(윈도우) — 오류는 버리고 종료 코드로 가른다
-      child.stdin!.on('error', () => {});
+      // ssh 가 먼저 끝나면(접속 실패·서버 명령이 stdin 을 안 읽고 끝남) stdin 쓰기가 EPIPE·EOF(윈도우) — 오류는 버리고 종료 코드로 가른다
+      child.stdin!.on('error', () => {
+        stdinBroken = true;
+      });
       pipeline(input, child.stdin!, () => {});
       /** 한 번만 — 사본 읽기를 닫은 뒤에 알린다(되돌릴 때 그 사본을 지울 수 있게) */
       const settle = (fn: () => void) => {

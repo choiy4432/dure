@@ -36,6 +36,8 @@
 //   FAKE_SSH_UPLOAD_CODE 첨부 올리기의 종료 코드(기본 0). 0 이 아니면 stdin 을 다 받은 뒤 반만 쓰고 DURE_HOME 없이 끝난다 —
 //                        255·-1 은 'Connection to <host> closed by remote host.'(도중 끊김), 그 밖은 'cat: write error: No space left on device'
 //   FAKE_SSH_UPLOAD_ERR  FAKE_SSH_UPLOAD_CODE 가 서버 명령 오류일 때(255·-1 이 아님) stderr 의 글(기본 위의 No space left)
+//   FAKE_SSH_UPLOAD_EARLY 첨부 올리기가 stdin 을 하나도 읽지 않고 이 종료 코드로 바로 끝난다(진짜 서버의 mkdir 실패처럼) — stderr 는
+//                        FAKE_SSH_UPLOAD_ERR(기본 mkdir 권한 없음)
 //   FAKE_SSH_UPLOAD_HOLD 올릴 사본 이름에 그 글자가 들어 있으면 다 쓴 뒤 끝내지 않는다(DURE_HOME 없이 — 끌 때까지, 안전 상한 60초 뒤 255).
 //                        느린·멈춘 올리기 흉내(멈춤·새 대화·시간 상한 시험). FAKE_SSH_LOG 에 {event:'upload', agentId, file, bytes[, partial]}
 //   FAKE_SSH_UPLOAD_RELEASE  붙잡은 올리기는 이 파일이 생기면 풀고 보통처럼 끝난다(DURE_HOME, 0) — 느린 올리기가 끝나는 것 흉내
@@ -533,6 +535,12 @@ const attachLocal = (agentId, file) => toLocal(`${REMOTE_HOME}/.dure/attachments
 
 /** 첨부 올리기 — umask 077 · mkdir -p · cat > 그 경로 · 새 줄 + DURE_HOME=$HOME(uploadScript 차례 그대로) */
 async function runUpload(spec, host) {
+  const early = process.env.FAKE_SSH_UPLOAD_EARLY;
+  if (early) {
+    // stdin 을 안 읽고 끝난다 — 큰 파일이면 두레의 stdin 쓰기가 EPIPE 로 깨진다
+    log({ event: 'upload-early', agentId: spec.agentId, file: spec.file });
+    return fail(Number(early), process.env.FAKE_SSH_UPLOAD_ERR || `mkdir: cannot create directory '/home/a/.dure/attachments/${spec.agentId}': Permission denied`);
+  }
   const data = await readAll();
   const target = attachLocal(spec.agentId, spec.file);
   fs.mkdirSync(path.dirname(target), { recursive: true });

@@ -6904,6 +6904,24 @@ describe('서버 방 첨부', () => {
     expect(flagValue(lastSpawnOf('web').argv, '--add-dir')).toBe(path.join(root, 'home', 'a', '.dure', 'attachments', web.id));
   }, 30_000);
 
+  test('큰 파일인데 서버가 stdin 을 안 읽고 끝남 — 사본 읽기 실패가 아니라 진짜 까닭 · 접속 실패면 서버를 지우러 가지 않는다', async () => {
+    const big = Buffer.alloc(1024 * 1024, 7); // 300KB 넘게 — stdin 쓰기가 EPIPE 로 깨져 그것이 읽는 쪽으로 번지던 크기
+    // 접속 못 함(서버 내려감)
+    const a = await attachRoom();
+    const src = original('큰.bin');
+    fs.writeFileSync(src, big);
+    a.mode('refused');
+    await expect(a.e.sendUser(a.web.id, [fileOf(src)])).rejects.toThrow(`${ATTACH_FAIL}큰.bin: dev 에 접속하지 못했어요 — ssh: connect to host dev port 22: Connection refused`);
+    await sleep(500);
+    expect(a.ofKind('attachment-remove')).toEqual([]);
+    a.mode(''); // 모드 파일은 이 시험 안에서 같이 쓴다
+    // 서버 명령이 stdin 을 안 읽고 실패(mkdir 권한 없음) — 쉬운 까닭
+    const b = await attachRoom({ FAKE_SSH_UPLOAD_EARLY: '1' });
+    const err = (await b.e.sendUser(b.web.id, [fileOf(src)]).catch((x: Error) => x)) as Error;
+    expect(err.message).toBe(`${ATTACH_FAIL}큰.bin: 서버 첨부 폴더에 쓸 권한이 없어요`);
+    expect(b.ofKind('upload-early')).toHaveLength(1);
+  }, 40_000);
+
   test('올리기 실패 — 끊김 글, 아무것도 안 보냄, 사본 되돌림', async () => {
     const { e, web, calls, mode, ofKind, served } = await attachRoom({ FAKE_SSH_UPLOAD_CODE: '255' });
     const src = original('x.txt', 'hello');
