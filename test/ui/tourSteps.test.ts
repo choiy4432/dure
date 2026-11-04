@@ -40,7 +40,7 @@ describe('stepFor — 단계 모양', () => {
     expect(stepFor('controls', false)).toMatchObject({ kind: 'ok', targets: ['stop', 'auto'], title: '멈추기 · 자동' })
     expect(stepFor('todo', false)).toMatchObject({ kind: 'ok', targets: ['todo', 'summary'], title: '할 일은 여기 모여요' })
     expect(stepFor('settings', false)).toMatchObject({ kind: 'ok', targets: ['settings-dialog'], title: '설정 안에는', list: TOUR.settings.list })
-    expect(stepFor('settings', false).list).toHaveLength(6)
+    expect(stepFor('settings', false).list).toHaveLength(5)
     expect(stepFor('done', false)).toMatchObject({ kind: 'intro', targets: [], title: '준비됐어요' })
     for (const id of TOUR_ORDER) if (stepFor(id, false).kind !== 'do') expect(stepFor(id, false).wait).toBeUndefined()
   })
