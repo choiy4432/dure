@@ -3,6 +3,8 @@ import '@testing-library/jest-dom/vitest'
 import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react'
 import type { AgentDescription, EngineEventMap, UserPart } from '../../src/engine/types'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
+import { ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../../src/shared/attachments'
+import { IMAGE_TOO_BIG } from '../../src/renderer/lib/image'
 
 // 이미지 줄이기는 image.test 가 따로 본다 — 여기선 그 결과만 정해 준다(jsdom 엔 캔버스가 없다)
 const prep = vi.hoisted(() => vi.fn())
@@ -38,6 +40,9 @@ const DESC: AgentDescription = {
 let snapshot: Snapshot
 let handlers: Record<string, ((p: any) => void)[]>
 let api: Record<'sendUser' | 'describe' | 'newConversation' | 'setModel' | 'setPlanMode' | 'interrupt', ReturnType<typeof vi.fn>>
+/** preload 의 webUtils.getPathForFile 흉내 — 디스크 파일이면 경로, noPath 에 넣은 것(붙여 넣은 그림 등)은 '' */
+let pathForFile: ReturnType<typeof vi.fn>
+let noPath: WeakSet<File>
 
 const emit = <K extends keyof EngineEventMap>(k: K, p: EngineEventMap[K]) => act(() => (handlers[k] ?? []).forEach(f => f(p)))
 const settle = () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
@@ -70,8 +75,11 @@ beforeEach(() => {
     setPlanMode: vi.fn(async (_id: string, _on: boolean) => {}),
     interrupt: vi.fn(async (_id: string) => {}),
   }
+  pathForFile = vi.fn((f: File) => (noPath.has(f) ? '' : `C:\\files\\${f.name}`))
+  noPath = new WeakSet()
   ;(window as any).dure = {
     ...api,
+    pathForFile,
     snapshot: async () => snapshot,
     history: async () => [],
     on: (k: string, fn: (p: any) => void) => {
@@ -512,13 +520,23 @@ const png = (name = 'shot.png') => new File([new Uint8Array(10)], name, { type: 
 const ready = (base64 = 'QUJD') => ({ mediaType: 'image/png', base64, bytes: 3, blob: new Blob([base64], { type: 'image/png' }) })
 const fileInput = (c: HTMLElement) => c.querySelector('input[type="file"]') as HTMLInputElement
 const chips = () => screen.queryAllByRole('img', { name: /붙인 이미지/ })
+const pdf = (name = 'report.pdf', bytes = 1229) => new File([new Uint8Array(bytes)], name, { type: 'application/pdf' })
+/** 큰 파일 — 바이트는 만들지 않고 크기만(jsdom 의 File.size 를 덮는다) */
+const sized = (name: string, size: number, type = 'application/zip') => {
+  const f = new File([], name, { type })
+  Object.defineProperty(f, 'size', { value: size })
+  return f
+}
+const fileChips = () => Array.from(document.querySelectorAll('.att-file')) as HTMLElement[]
+/** 파일 칩의 [이름, 아랫줄(크기 또는 오류)] */
+const chipText = (c: HTMLElement) => [c.querySelector('.af-n')!.textContent, c.querySelector('.af-m')!.textContent]
 
 describe('Composer — 이미지', () => {
 
-  it('이미지 버튼 → 파일 고르기 → 미리보기 칩, 보내면 이미지가 먼저 · 글이 뒤', async () => {
+  it('파일 첨부 단추 → 파일 고르기 → 그림은 미리보기 칩, 보내면 이미지가 먼저 · 글이 뒤', async () => {
     prep.mockResolvedValue(ready())
     const { container } = await renderPanel()
-    const pick = screen.getByRole('button', { name: '이미지 붙여 넣기' })
+    const pick = screen.getByRole('button', { name: '파일 첨부' })
     const fi = fileInput(container)
     const clicked = vi.spyOn(fi, 'click')
     fireEvent.click(pick)
@@ -564,13 +582,16 @@ describe('Composer — 이미지', () => {
     expect(screen.getAllByRole('button', { name: '이미지 지우기' })).toHaveLength(2)
   })
 
-  it('못 붙이면 그 문구 — 칩도 없고 원본도 보내지 않는다', async () => {
+  it('경로가 없는 그림(붙여 넣은 것)을 못 붙이면 그 문구 — 칩도 없고 원본도 보내지 않는다', async () => {
     prep.mockResolvedValue({ error: '이미지가 너무 커요 — 더 작은 이미지를 붙여 주세요' })
-    const { container } = await renderPanel()
-    fireEvent.change(fileInput(container), { target: { files: [png('huge.png')] } })
+    await renderPanel()
+    const huge = png('huge.png')
+    noPath.add(huge)
+    fireEvent.paste(input(), { clipboardData: { files: [huge], types: ['Files'], getData: () => '' } })
     await settle()
     expect(screen.getByRole('alert')).toHaveTextContent('이미지가 너무 커요 — 더 작은 이미지를 붙여 주세요')
     expect(chips()).toHaveLength(0)
+    expect(fileChips()).toHaveLength(0)
     expect(sendButton()).toBeDisabled()
   })
 
@@ -615,6 +636,229 @@ describe('Composer — 이미지', () => {
     expect(api.sendUser).not.toHaveBeenCalled()
     await act(async () => { done(ready()) })
     expect(sendButton()).toBeEnabled()
+  })
+})
+
+describe('Composer — 파일 첨부', () => {
+  const select = async (store: { selectAgent(id: string): void }, id: string) => {
+    await act(async () => { store.selectAgent(id) })
+    await settle()
+  }
+
+  it('단추는 "파일 첨부"(툴팁도) — 고르기 창은 종류 제한 없이 여러 개', async () => {
+    const { container } = await renderPanel()
+    expect(screen.getByRole('button', { name: '파일 첨부' })).toHaveAttribute('title', '파일 첨부')
+    expect(screen.queryByRole('button', { name: '이미지 붙여 넣기' })).toBeNull()
+    const fi = fileInput(container)
+    expect(fi).not.toHaveAttribute('accept')
+    expect(fi.multiple).toBe(true)
+  })
+
+  it('고르기 — 그림은 그림 칩, pdf 는 파일 칩(이름 · 크기 · 빼기)', async () => {
+    prep.mockResolvedValue(ready())
+    const { container } = await renderPanel()
+    const doc = pdf('report.pdf', 1229)
+    fireEvent.change(fileInput(container), { target: { files: [png('a.png'), doc] } })
+    await settle()
+    expect(prep).toHaveBeenCalledTimes(1) // 그림만 그림 길로
+    expect((prep.mock.calls[0][0] as File).name).toBe('a.png')
+    expect(chips()).toHaveLength(1)
+    expect(fileChips()).toHaveLength(1)
+    expect(chipText(fileChips()[0])).toEqual(['report.pdf', '1.2 KB'])
+    expect(fileChips()[0]).toHaveAttribute('title', 'report.pdf')
+    expect(pathForFile).toHaveBeenCalledWith(doc)
+    // 고른 차례 그대로 — 그림 칩 다음 파일 칩
+    expect([...container.querySelector('.atts')!.children].map(e => (e.classList.contains('att-file') ? 'file' : 'img'))).toEqual(['img', 'file'])
+    expect(sendButton()).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'report.pdf 빼기' }))
+    expect(fileChips()).toHaveLength(0)
+    expect(chips()).toHaveLength(1)
+  })
+
+  it('끌어다 놓기도 같음 — 종류를 모르는 파일도 파일 칩', async () => {
+    prep.mockResolvedValue(ready())
+    await renderPanel()
+    const box = input().closest('.box')!
+    fireEvent.dragOver(box, { dataTransfer: { types: ['Files'], files: [] } })
+    expect(box).toHaveClass('drop')
+    const files = [png('a.png'), pdf('spec.pdf', 512), new File(['# 메모'], 'notes.md', { type: 'text/markdown' }), new File(['all:'], 'Makefile')]
+    fireEvent.drop(box, { dataTransfer: { types: ['Files'], files } })
+    await settle()
+    expect(box).not.toHaveClass('drop')
+    expect(prep).toHaveBeenCalledTimes(1)
+    expect(chips()).toHaveLength(1)
+    expect(fileChips().map(chipText)).toEqual([['spec.pdf', '512 B'], ['notes.md', '8 B'], ['Makefile', '4 B']])
+  })
+
+  it('100MB 정확히 됨 · 100MB+1 막음', async () => {
+    const { container } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [sized('exact.zip', ATTACH_MAX_BYTES)] } })
+    await settle()
+    expect(chipText(fileChips()[0])).toEqual(['exact.zip', '100 MB'])
+    expect(fileChips()[0]).not.toHaveClass('bad')
+    expect(sendButton()).toBeEnabled()
+
+    fireEvent.change(fileInput(container), { target: { files: [sized('over.zip', ATTACH_MAX_BYTES + 1)] } })
+    await settle()
+    const over = fileChips()[1]
+    expect(over).toHaveClass('bad')
+    expect(within(over).getByRole('alert')).toHaveTextContent(ATTACH_TOO_BIG)
+    expect(ATTACH_TOO_BIG).toBe('100MB 보다 큰 파일은 보낼 수 없어요')
+    type('같이 보내 줘')
+    expect(sendButton()).toBeDisabled()
+    key('Enter')
+    await settle()
+    expect(api.sendUser).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'over.zip 빼기' }))
+    expect(sendButton()).toBeEnabled()
+    key('Enter')
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledWith('w', [
+      { type: 'text', text: '같이 보내 줘' },
+      { type: 'file', path: 'C:\\files\\exact.zip', name: 'exact.zip', bytes: ATTACH_MAX_BYTES },
+    ])
+  })
+
+  it('상한 넘는 그림 — 파일 칩으로(거절하지 않고 경로 줄로 보낸다)', async () => {
+    prep.mockResolvedValue({ error: IMAGE_TOO_BIG })
+    const { container } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [png('huge.png')] } })
+    await settle()
+    expect(chips()).toHaveLength(0)
+    expect(screen.queryByRole('status', { name: '이미지 준비 중' })).toBeNull()
+    expect(fileChips().map(chipText)).toEqual([['huge.png', '10 B']])
+    expect(screen.queryByRole('alert')).toBeNull()
+    fireEvent.click(sendButton())
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledWith('w', [{ type: 'file', path: 'C:\\files\\huge.png', name: 'huge.png', bytes: 10 }])
+  })
+
+  it('경로를 모르는 파일(디스크 파일이 아님)은 칩 없이 안내', async () => {
+    await renderPanel()
+    const blob = pdf('clip.pdf')
+    noPath.add(blob)
+    fireEvent.paste(input(), { clipboardData: { files: [blob], types: ['Files'], getData: () => '' } })
+    await settle()
+    expect(fileChips()).toHaveLength(0)
+    expect(screen.getByRole('alert')).toHaveTextContent('이 파일은 붙일 수 없어요 — 파일 첨부 단추로 골라 주세요')
+  })
+
+  it('보내기 — sendUser 에 file part(path·name·bytes) · 그림 → 글 → 파일 차례, 보내면 칩을 비운다', async () => {
+    prep.mockResolvedValue(ready())
+    const { container } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [pdf('보고서 최종.pdf', 2048), png('a.png')] } })
+    await settle()
+    type('둘 다 읽어 줘')
+    key('Enter')
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledWith('w', [
+      { type: 'image', mediaType: 'image/png', base64: 'QUJD' },
+      { type: 'text', text: '둘 다 읽어 줘' },
+      { type: 'file', path: 'C:\\files\\보고서 최종.pdf', name: '보고서 최종.pdf', bytes: 2048 },
+    ])
+    expect(fileChips()).toHaveLength(0)
+    expect(chips()).toHaveLength(0)
+    expect(input().value).toBe('')
+  })
+
+  it('보내기 실패 — 오류 줄에 엔진 글 그대로, 글·칩 그대로(다시 보내면 같은 것)', async () => {
+    api.sendUser.mockRejectedValueOnce(new Error('파일을 보내지 못했어요 — report.pdf: 찾을 수 없어요'))
+    const { container } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [pdf()] } })
+    await settle()
+    type('읽어 줘')
+    key('Enter')
+    await settle()
+    expect(screen.getByRole('alert')).toHaveTextContent('파일을 보내지 못했어요 — report.pdf: 찾을 수 없어요')
+    expect(input().value).toBe('읽어 줘')
+    expect(fileChips().map(chipText)).toEqual([['report.pdf', '1.2 KB']])
+    expect(sendButton()).toBeEnabled()
+    key('Enter')
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledTimes(2)
+    expect(api.sendUser.mock.calls[1][1]).toEqual(api.sendUser.mock.calls[0][1])
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('보내는 중 — "보내는 중…" · 다른 카드에 갔다 와도 그대로(두 번 보내지 않는다) · 끝나면 비운다', async () => {
+    let done!: () => void
+    api.sendUser.mockReturnValueOnce(new Promise<void>(r => { done = r }))
+    const { container, store } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [pdf()] } })
+    await settle()
+    type('읽어 줘')
+    key('Enter')
+    await settle()
+    expect(screen.getByText('보내는 중…')).toHaveAttribute('role', 'status')
+    expect(sendButton()).toBeDisabled()
+    // 이미 보내는 칩은 뺄 수 없다 — 빼도 그 파일은 간다(뺀 줄 알게 하지 않는다)
+    expect(screen.getByRole('button', { name: 'report.pdf 빼기' })).toBeDisabled()
+
+    await select(store, 'p')
+    expect(screen.queryByText('보내는 중…')).toBeNull() // 기획은 보내는 게 없다
+    await select(store, 'w')
+    expect(screen.getByText('보내는 중…')).toBeInTheDocument()
+    expect(sendButton()).toBeDisabled()
+    expect(input()).toHaveAttribute('readonly')
+    key('Enter')
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledTimes(1)
+
+    await act(async () => { done() })
+    expect(screen.queryByText('보내는 중…')).toBeNull()
+    expect(fileChips()).toHaveLength(0)
+    expect(input().value).toBe('')
+  })
+
+  it('보내는 사이 다른 카드로 갔어도 실패 글은 그 에이전트 입력창에 남는다', async () => {
+    let fail!: (e: Error) => void
+    api.sendUser.mockReturnValueOnce(new Promise<void>((_, rej) => { fail = rej }))
+    const { container, store } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [pdf()] } })
+    await settle()
+    fireEvent.click(sendButton())
+    await settle()
+    await select(store, 'p')
+    await act(async () => { fail(new Error('파일을 보내지 못했어요 — report.pdf: dev 연결이 끊겼어요 — 다시 보내면 이어서 해요')) })
+    expect(screen.queryByRole('alert')).toBeNull() // 기획 입력창엔 없다
+    await select(store, 'w')
+    expect(screen.getByRole('alert')).toHaveTextContent('파일을 보내지 못했어요 — report.pdf: dev 연결이 끊겼어요 — 다시 보내면 이어서 해요')
+    expect(fileChips()).toHaveLength(1)
+    expect(sendButton()).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'report.pdf 빼기' })).toBeEnabled()
+  })
+
+  it('첨부를 보내는 중엔 쉬는 에이전트여도 멈출 수 있다 — 머리의 멈추기 · Esc', async () => {
+    let fail!: (e: Error) => void
+    api.sendUser.mockReturnValueOnce(new Promise<void>((_, rej) => { fail = rej }))
+    const { container } = await renderPanel()
+    const stop = screen.getByRole('button', { name: '멈추기' })
+    expect(stop).toBeDisabled() // 쉬는 중 — 멈출 것이 없다
+    fireEvent.change(fileInput(container), { target: { files: [pdf()] } })
+    await settle()
+    fireEvent.click(sendButton())
+    await settle()
+    expect(stop).toBeEnabled()
+    await act(async () => { fireEvent.click(stop) })
+    expect(api.interrupt).toHaveBeenCalledWith('w')
+    key('Escape')
+    await settle()
+    expect(api.interrupt).toHaveBeenCalledTimes(2)
+    await act(async () => { fail(new Error('파일을 보내지 못했어요 — report.pdf: 서버로 올리는 중에 그만뒀어요')) })
+    expect(stop).toBeDisabled()
+    expect(fileChips()).toHaveLength(1)
+  })
+
+  it('글만 보낼 땐 "보내는 중…"을 띄우지 않는다', async () => {
+    let done!: () => void
+    api.sendUser.mockReturnValueOnce(new Promise<void>(r => { done = r }))
+    await renderPanel()
+    type('안녕')
+    key('Enter')
+    await settle()
+    expect(screen.queryByText('보내는 중…')).toBeNull()
+    await act(async () => { done() })
   })
 })
 

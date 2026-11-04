@@ -12,6 +12,7 @@ import { AgentMenu } from './AgentMenu'
 import { LevelSwitch } from './LevelSwitch'
 import { Presence } from '../lib/presence'
 import { ExpandBox } from '../lib/ExpandBox'
+import { useSendingFiles } from './drafts'
 
 /** 잘 끝난 일 한 줄(대화를 저장함)이 보이는 시간 */
 const NOTICE_MS = 6000
@@ -49,6 +50,8 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
     return { agent, status, look, host }
   })
   const allowBypass = useDure(s => s.allowBypass)
+  // 첨부를 보내는 중(사본·서버 올리기, 몇 분 걸릴 수 있다) — 쉬는 에이전트여도 멈추기로 끊는다(서버 방은 올리기를 끊고 글·칩은 입력창에 남는다)
+  const sendingFiles = useSendingFiles(agentId)
   const [editing, setEditing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // 잘 끝난 일 한 줄(대화를 저장함) — 잠깐 보이고 사라진다. 오류가 있으면 오류가 먼저
@@ -76,7 +79,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
   const issue = host ? agent.remoteIssue : null
   const pill = PILL[look]
   const sleep = sleepLook(agent, look)
-  const canStop = (status === 'working' || status === 'awaiting') && !stopping
+  const canStop = (status === 'working' || status === 'awaiting' || sendingFiles) && !stopping
 
   const stop = async () => {
     setError(null)

@@ -209,7 +209,7 @@ describe('ChatItem — 내 말의 그림은 썸네일', () => {
     ;(await import('../../src/renderer/panel/savedImage')).forgetSavedImages()
     ;(window as any).dure = { image: vi.fn(async (_id: string, file: string) => `data:image/png;base64,${file}`) }
   })
-  const me = (images: (string | null)[]): ChatLine => ({ kind: 'me', text: '이거 봐 줘', images, at: 1 })
+  const me = (images: (string | null)[]): ChatLine => ({ kind: 'me', text: '이거 봐 줘', images, files: [], at: 1 })
   const thumbs = (c: HTMLElement) => [...c.querySelectorAll('.me-th')] as HTMLElement[]
 
   it('그림마다 누를 수 있는 썸네일 — 누른 그림부터 크게', async () => {
@@ -248,6 +248,55 @@ describe('ChatItem — 내 말의 그림은 썸네일', () => {
   })
 })
 
+describe('ChatItem — 내 말의 첨부 파일은 칩', () => {
+  let openAttachment: ReturnType<typeof vi.fn>
+  beforeEach(async () => {
+    ;(await import('../../src/renderer/panel/savedImage')).forgetSavedImages()
+    openAttachment = vi.fn(async (_id: string, _file: string) => {})
+    ;(window as any).dure = { image: vi.fn(async (_id: string, file: string) => `data:image/png;base64,${file}`), openAttachment }
+  })
+  const REPORT = { name: '3분기 보고서.pdf', bytes: 1258291, file: '20261104-101010-3분기 보고서.pdf' }
+  const SCRIPT = { name: 'build.bat', bytes: 512, file: '20261104-101010-build.bat' }
+
+  it('파일 칩 — 이름 · 크기, 누르면 openAttachment(그 에이전트 · 사본 이름)', async () => {
+    const line: ChatLine = { kind: 'me', text: '이거 읽어 줘', images: ['a.png'], files: [REPORT, SCRIPT], at: 1 }
+    const { container } = render(<ChatItem line={line} index={0} agentId="w" />)
+    await settle(async () => {})
+    // 그림 썸네일 옆에 — 같은 줄(.me-atts) 안, 썸네일 다음
+    const row = container.querySelector('.me-atts')!
+    expect(row.querySelector('.me-th')).not.toBeNull()
+    const chip = screen.getByRole('button', { name: '3분기 보고서.pdf 열기 · 1.2 MB' })
+    expect(row.contains(chip)).toBe(true)
+    expect(chip.querySelector('.af-n')!.textContent).toBe('3분기 보고서.pdf')
+    expect(chip.querySelector('.af-m')!.textContent).toBe('1.2 MB')
+    expect(chip).toHaveAttribute('title', '3분기 보고서.pdf — 열기') // 줄인 이름의 전체 + 누르면 하는 일
+    await settle(async () => { fireEvent.click(chip) })
+    expect(openAttachment).toHaveBeenCalledWith('w', '20261104-101010-3분기 보고서.pdf')
+    // 실행되는 종류는 열지 않고 탐색기에서 보인다(main) — 읽는 이름도 그 말
+    const bat = screen.getByRole('button', { name: 'build.bat 폴더에서 보기 · 512 B' })
+    expect(bat).toHaveAttribute('title', 'build.bat — 폴더에서 보기')
+    await settle(async () => { fireEvent.click(bat) })
+    expect(openAttachment).toHaveBeenLastCalledWith('w', '20261104-101010-build.bat')
+    expect(container.querySelector('.me-atts + p')!.textContent).toBe('이거 읽어 줘')
+  })
+
+  it('못 열면 그 글을 칩 아래에 — 다시 누르면 지운다', async () => {
+    openAttachment.mockRejectedValueOnce(new Error('첨부 파일을 찾을 수 없어요'))
+    render(<ChatItem line={{ kind: 'me', text: '', images: [], files: [REPORT], at: 1 }} index={0} agentId="w" />)
+    const chip = screen.getByRole('button', { name: /3분기 보고서\.pdf 열기/ })
+    await settle(async () => { fireEvent.click(chip) })
+    expect(screen.getByRole('alert')).toHaveTextContent('3분기 보고서.pdf — 첨부 파일을 찾을 수 없어요')
+    await settle(async () => { fireEvent.click(chip) })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('파일이 바뀌면 다시 그린다(같은 줄 번호 · 새 줄 객체)', () => {
+    const { rerender } = render(<ChatItem line={{ kind: 'me', text: '', images: [], files: [REPORT], at: 1 }} index={0} agentId="w" />)
+    rerender(<ChatItem line={{ kind: 'me', text: '', images: [], files: [REPORT, SCRIPT], at: 1 }} index={0} agentId="w" />)
+    expect(screen.getAllByRole('button', { name: /열기|폴더에서 보기/ })).toHaveLength(2)
+  })
+})
+
 describe('ChatItem — 복사(답 · 내 말 · 받은 메시지)', () => {
   let writeText: ReturnType<typeof vi.fn>
   beforeEach(() => {
@@ -274,11 +323,11 @@ describe('ChatItem — 복사(답 · 내 말 · 받은 메시지)', () => {
   })
 
   it('내 말 — 글을 복사, 그림만 보낸 말엔 단추가 없다', async () => {
-    const { unmount } = render(<ChatItem line={{ kind: 'me', text: '이거 고쳐 줘', images: [], at: 1 }} index={0} />)
+    const { unmount } = render(<ChatItem line={{ kind: 'me', text: '이거 고쳐 줘', images: [], files: [], at: 1 }} index={0} />)
     await settle(async () => { fireEvent.click(screen.getByRole('button', { name: '내 말 복사' })) })
     expect(writeText).toHaveBeenCalledWith('이거 고쳐 줘')
     unmount()
-    render(<ChatItem line={{ kind: 'me', text: '', images: [null], at: 1 }} index={0} agentId="w" />)
+    render(<ChatItem line={{ kind: 'me', text: '', images: [null], files: [], at: 1 }} index={0} agentId="w" />)
     expect(screen.queryByRole('button', { name: '내 말 복사' })).toBeNull()
   })
 

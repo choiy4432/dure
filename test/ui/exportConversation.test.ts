@@ -67,6 +67,32 @@ describe('conversationMarkdown — 지금 대화를 마크다운으로(대화창
     expect(conversationMarkdown({ agent, items: [{ t: T, kind: 'result', ok: true, subtype: 'success' }], now: NOW })).toBeNull()
   })
 
+  it('첨부 줄 — 파일마다 "첨부: <이름>(<크기>)", 그림 줄 다음에', () => {
+    const md = conversationMarkdown({
+      agent, now: NOW,
+      items: [{
+        t: T, kind: 'user', source: 'human',
+        parts: [
+          { type: 'text', text: '둘 다 읽어 줘' },
+          { type: 'image', mediaType: 'image/png', bytes: 1, file: 'a.png' },
+          { type: 'file', name: '3분기 보고서.pdf', bytes: 1258291, file: '20261028-140300-3분기 보고서.pdf' },
+          { type: 'file', name: 'notes.md', bytes: 512, file: '20261028-140300-notes.md', remotePath: '/home/u/.dure/attachments/w/20261028-140300-notes.md' },
+        ],
+      }],
+    })!
+    expect(md).toContain(['### 나 · 10월 28일 14:03', '둘 다 읽어 줘', '[그림 1장]', '첨부: 3분기 보고서.pdf(1.2 MB)', '첨부: notes.md(512 B)'].join('\n\n'))
+    expect(md).not.toContain('20261028-140300') // 사본 이름·서버 경로는 내보내지 않는다
+    expect(md).not.toContain('/home/u')
+  })
+
+  it('글 없이 첨부만 보낸 말도 내보낸다', () => {
+    const md = conversationMarkdown({
+      agent, now: NOW,
+      items: [{ t: T, kind: 'user', source: 'human', parts: [{ type: 'file', name: 'a.zip', bytes: 100 * 1024 * 1024, file: '20261028-140300-a.zip' }] }],
+    })!
+    expect(md).toContain('### 나 · 10월 28일 14:03\n\n첨부: a.zip(100 MB)\n')
+  })
+
   it('대상에 백틱이 들어 있어도 코드 조각이 깨지지 않는다', () => {
     const md = conversationMarkdown({
       agent, now: NOW,

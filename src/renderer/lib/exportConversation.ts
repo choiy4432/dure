@@ -1,6 +1,7 @@
 // 대화 내보내기 — 지금 대화(마지막 '새 대화' 뒤)를 마크다운 글로. 대화창과 같은 줄(buildTranscript)에서 만든다 (순수)
 import type { HistoryItem } from '../../engine/types'
 import { buildTranscript, type ActionLine, type ChatLine, type ClaudePart } from '../state/transcript'
+import { formatBytes } from './words'
 
 const pad = (n: number) => String(n).padStart(2, '0')
 const clock = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`
@@ -38,7 +39,13 @@ function claudeBody(parts: ClaudePart[]): string[] {
 function lineBlocks(line: ChatLine, when: string): string[] {
   switch (line.kind) {
     case 'me':
-      return [`### 나 · ${when}`, ...(line.text ? [line.text] : []), ...(line.images.length ? [`[그림 ${line.images.length}장]`] : [])]
+      // 첨부는 파일마다 한 덩어리 '첨부: 이름(크기)' — 사본 이름·서버 경로는 내보내지 않는다
+      return [
+        `### 나 · ${when}`,
+        ...(line.text ? [line.text] : []),
+        ...(line.images.length ? [`[그림 ${line.images.length}장]`] : []),
+        ...line.files.map((f) => `첨부: ${f.name}(${formatBytes(f.bytes)})`),
+      ]
     case 'relay':
       return [`### ${line.from ? `${line.from}에게서 온 메시지` : '전달된 메시지'} · ${when}`, line.text]
     case 'claude':

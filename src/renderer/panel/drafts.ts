@@ -2,10 +2,14 @@ import { useSyncExternalStore } from 'react'
 import type { AgentId } from '../../engine/types'
 import { getStore } from '../state/store'
 
-/** 입력창에 붙인 이미지 — 준비 중이거나, 보낼 글(base64)과 미리보기 주소(object URL)를 가진 것 */
+/**
+ * 입력창에 붙인 것 — 그림(준비 중이거나, 보낼 글(base64)과 미리보기 주소(object URL)를 가진 것) 또는 파일 칩.
+ * 파일은 바이트를 옮기지 않고 경로만 — 엔진이 보낼 때 사본을 만든다. error 가 있으면(100MB 넘음) 보내기를 막는다
+ */
 export type Attached =
   | { key: number; state: 'loading' }
   | { key: number; state: 'ready'; mediaType: string; base64: string; url: string }
+  | { key: number; state: 'file'; name: string; bytes: number; path: string; error?: string }
 
 /** 에이전트 하나의 쓰던 입력 — 이번 실행 동안만(저장하지 않는다) */
 export interface Draft {
@@ -13,6 +17,13 @@ export interface Draft {
   attached: Attached[]
   /** '계획 먼저' — 다음 한 번만 계획부터 세우게 보낸다 */
   plan: boolean
+  /**
+   * 보내는 중 — 'files' 면 첨부가 든 보내기(사본·서버 올리기, 몇 분 걸릴 수 있다). 다른 카드로 갔다 와도 그대로라
+   * 그동안 같은 입력을 또 보내지 않는다
+   */
+  sending?: 'text' | 'files'
+  /** 입력창 아래 오류 줄 — 보내는 사이 다른 카드로 갔어도 돌아오면 보인다 */
+  error?: string
 }
 
 export const EMPTY_DRAFT: Draft = { text: '', attached: [], plan: false }
@@ -39,7 +50,7 @@ export function updateDraft(id: AgentId, fn: (d: Draft) => Draft): void {
   if (after === before) return
   const kept = urlsOf(after)
   for (const url of urlsOf(before)) if (!kept.has(url)) URL.revokeObjectURL(url)
-  if (after.text === '' && after.attached.length === 0 && !after.plan) drafts.delete(id)
+  if (after.text === '' && after.attached.length === 0 && !after.plan && !after.sending && !after.error) drafts.delete(id)
   else drafts.set(id, after)
   watchAgents()
   listeners.forEach(fn => fn())
@@ -66,4 +77,9 @@ const subscribe = (fn: () => void) => {
 
 export function useDraft(id: AgentId): Draft {
   return useSyncExternalStore(subscribe, () => getDraft(id))
+}
+
+/** 첨부가 든 보내기가 도는 중인가 — 패널 머리의 멈추기(쉬는 에이전트여도 올리기를 끊을 수 있게). 글자를 칠 때마다 다시 그리지 않게 참·거짓만 */
+export function useSendingFiles(id: AgentId): boolean {
+  return useSyncExternalStore(subscribe, () => getDraft(id).sending === 'files')
 }

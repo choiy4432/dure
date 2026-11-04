@@ -322,7 +322,7 @@ test('방·에이전트·넘김·승인·큰 이미지·다시 켜기 + 검수 �
       const web = panel(page, WEB.name)
       const [chooser] = await Promise.all([
         page.waitForEvent('filechooser'),
-        web.getByRole('button', { name: '이미지 붙여 넣기' }).click(),
+        web.getByRole('button', { name: '파일 첨부' }).click(),
       ])
       await chooser.setFiles(w.bigPng)
       await expect(web.getByRole('img', { name: '붙인 이미지 1' })).toBeVisible({ timeout: 30_000 })

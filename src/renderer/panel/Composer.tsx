@@ -2,19 +2,21 @@ import {
   useEffect, useId, useLayoutEffect, useRef, useState,
   type ChangeEvent, type ClipboardEvent, type DragEvent, type KeyboardEvent,
 } from 'react'
-import { ArrowUp, Image as ImageIcon, ListChecks, X } from 'lucide-react'
+import { ArrowUp, FileText, FileX, ListChecks, Paperclip, X } from 'lucide-react'
 import type { AgentId, UserPart } from '../../engine/types'
+import { ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../../shared/attachments'
 import { getStore, useDure } from '../state/store'
 import { displayStatus } from '../state/selectors'
 import { ContextRing } from './ContextRing'
-import { errorMessage, RENEW_CONFIRM } from '../lib/words'
-import { IMAGE_TYPES, prepareImage } from '../lib/image'
+import { ATTACH_NO_PATH, ATTACH_SENDING, ATTACH_WORD, errorMessage, formatBytes, RENEW_CONFIRM } from '../lib/words'
+import { isImageType, prepareImage } from '../lib/image'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
 import type { Described } from './ModelPicker'
 import { matchCommands, slashOptionId, SlashMenu, type SlashEntry } from './SlashMenu'
 import { Presence } from '../lib/presence'
 import { ImageViewer } from './ImageViewer'
 import { getDraft, nextAttachKey, updateDraft, useDraft, type Attached } from './drafts'
+import { FileName } from './MeFiles'
 
 /** 본문 줄 높이(px, base.css 와 같다) — 입력창은 8줄까지 늘고 그 뒤로는 안에서 스크롤 */
 const LINE_PX = 22
@@ -38,9 +40,22 @@ interface Props {
 
 const hasFiles = (types: ArrayLike<string> | undefined) => Array.from(types ?? []).includes('Files')
 
+type FileChip = Extract<Attached, { state: 'file' }>
+
 /**
- * 입력창(시안 .cmp/.box) — 글·이미지 보내기, / 명령.
- * 쓰던 글과 붙인 이미지는 에이전트마다 drafts 에 둔다 — 다른 카드로 갔다 와도 그대로(이번 실행 동안만).
+ * 디스크 파일이면 파일 칩 — 바이트는 옮기지 않고 경로만(엔진이 보낼 때 사본을 만든다). 경로를 모르면(붙여 넣은 내용 등) null.
+ * 100MB 를 넘으면 칩에 오류를 달아 보내기를 막는다(정확히 100MB 는 보낸다 — 엔진이 다시 잰다)
+ */
+function fileChip(key: number, file: File): FileChip | null {
+  const path = window.dure.pathForFile(file)
+  if (!path) return null
+  return { key, state: 'file', name: file.name, bytes: file.size, path, ...(file.size > ATTACH_MAX_BYTES ? { error: ATTACH_TOO_BIG } : {}) }
+}
+
+/**
+ * 입력창(시안 .cmp/.box) — 글·그림·파일 보내기, / 명령.
+ * 쓰던 글과 붙인 것(그림·파일 칩)·보내는 중·오류 줄은 에이전트마다 drafts 에 둔다 — 다른 카드로 갔다 와도 그대로(이번 실행 동안만).
+ * 파일 첨부: 지금 받는 그림(IMAGE_TYPES)은 그림 길(미리보기·줄여 보내기), 그 밖·그림 길로 못 가는 그림은 파일 칩(경로 줄로 보낸다)
  */
 export function Composer({ agentId, name, description, onLoadCommands, onRetryCommands, onOpenModel, onSent }: Props) {
   const heldInput = useDure(s => s.agents.find(a => a.id === agentId)?.heldInput ?? 0)
@@ -53,12 +68,14 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     return d === 'working' || d === 'awaiting'
   })
   const planMode = useDure(s => s.agents.find(a => a.id === agentId)?.planMode ?? false)
-  const { text, attached, plan } = useDraft(agentId)
+  const { text, attached, plan, sending, error: draftError } = useDraft(agentId)
   // 켬 = 에이전트가 이미 계획 모드이거나 다음 한 번을 계획부터로 정해 둔 것
   const planOn = planMode || plan
   const setText = (next: string) => updateDraft(agentId, d => (d.text === next ? d : { ...d, text: next }))
   const setAttached = (fn: (list: Attached[]) => Attached[]) => updateDraft(agentId, d => ({ ...d, attached: fn(d.attached) }))
-  const [error, setError] = useState<string | null>(null)
+  // 오류 줄도 그 에이전트의 입력에 — 몇 분 걸린 보내기가 다른 카드에 가 있는 사이 실패해도 돌아오면 보인다
+  const error = draftError ?? null
+  const setError = (e: string | null) => updateDraft(agentId, d => ((d.error ?? null) === e ? d : { ...d, error: e ?? undefined }))
   /** 크게 보고 있는 붙인 그림(준비가 끝난 것 가운데 몇 번째) */
   const [viewing, setViewing] = useState<number | null>(null)
   const [busy, setBusy] = useState(false)
@@ -93,8 +110,11 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
   }, [text])
 
   const images = attached.filter((a): a is Extract<Attached, { state: 'ready' }> => a.state === 'ready')
-  const preparing = attached.length - images.length
-  const canSend = !busy && preparing === 0 && (text.trim() !== '' || images.length > 0)
+  const files = attached.filter((a): a is FileChip => a.state === 'file')
+  const preparing = attached.filter(a => a.state === 'loading').length
+  // 보내는 중(첨부는 몇 분 걸릴 수 있다)이거나 /model 을 바꾸는 중 — 글을 바꾸거나 또 보내지 않는다
+  const locked = busy || sending !== undefined
+  const canSend = !locked && preparing === 0 && !files.some(f => f.error) && (text.trim() !== '' || images.length > 0 || files.length > 0)
 
   const edit = (next: string) => {
     setText(next)
@@ -138,11 +158,13 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
       await runOwn(own[1] as 'clear' | 'model', (own[2] ?? '').trim())
       return
     }
+    // 그림 → 글 → 파일 차례(엔진은 파일을 모아 맨 끝 '첨부 파일:' 줄로 붙인다)
     const parts: UserPart[] = images.map(i => ({ type: 'image', mediaType: i.mediaType, base64: i.base64 }))
     if (text.trim() !== '') parts.push({ type: 'text', text: text.trim() })
-    const sent = new Set(images.map(i => i.key))
-    setBusy(true)
-    setError(null)
+    for (const f of files) parts.push({ type: 'file', path: f.path, name: f.name, bytes: f.bytes })
+    const sent = new Set([...images, ...files].map(a => a.key))
+    // 보내는 중은 drafts 에 — 다른 카드로 갔다 와도 그대로라 같은 입력을 또 보내지 않는다. 실패는 그 에이전트 입력의 오류 줄로(글·칩 그대로)
+    updateDraft(agentId, d => ({ ...d, sending: files.length > 0 ? 'files' : 'text', error: undefined }))
     try {
       // 보낸 말은 기록(history 이벤트)으로 목록에 붙는다 — 일하는 중이면 엔진이 차례를 기다리게 둔다
       // 계획 먼저는 한 번짜리 — 이미 계획 모드인 에이전트에겐 따로 정하지 않는다
@@ -152,9 +174,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
       updateDraft(agentId, d => ({ text: '', attached: d.attached.filter(a => !sent.has(a.key)), plan: false }))
       onSent?.(agentId)
     } catch (e) {
-      setError(errorMessage(e))
-    } finally {
-      setBusy(false)
+      updateDraft(agentId, d => ({ ...d, sending: undefined, error: errorMessage(e) }))
     }
   }
 
@@ -222,8 +242,8 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
         }
       }
     }
-    // 목록이 없을 때의 Esc — 일하는 중·승인 대기면 멈춘다
-    if (e.key === 'Escape' && working) {
+    // 목록이 없을 때의 Esc — 일하는 중·승인 대기·첨부를 보내는 중이면 멈춘다(서버 방은 올리기를 끊는다)
+    if (e.key === 'Escape' && (working || sending === 'files')) {
       e.preventDefault()
       void window.dure.interrupt(agentId).catch(err => setError(errorMessage(err)))
       return
@@ -234,20 +254,28 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     }
   }
 
-  const addFiles = (files: File[]) => {
-    if (files.length === 0) return
+  const addFiles = (list: File[]) => {
+    if (list.length === 0) return
     setError(null)
-    for (const file of files) {
+    for (const file of list) {
       const key = nextAttachKey()
+      if (!isImageType(file.type)) {
+        const chip = fileChip(key, file)
+        if (chip) setAttached(a => [...a, chip])
+        else setError(ATTACH_NO_PATH)
+        continue
+      }
       setAttached(a => [...a, { key, state: 'loading' }])
       void prepareImage(file).then(r => {
         // 그사이 다른 에이전트로 갔어도 이 에이전트의 입력에 넣는다(setAttached 는 agentId 로 drafts 를 고친다)
+        if (!getDraft(agentId).attached.some(x => x.key === key)) return // 그사이 버려졌다(에이전트 지움)
         if ('error' in r) {
-          setAttached(a => a.filter(x => x.key !== key))
-          setError(r.error)
+          // 그림 길로 못 가는 그림(줄여도 상한을 넘음·못 읽음) — 디스크 파일이면 거절하지 않고 파일 첨부로 내린다(경로 줄)
+          const chip = fileChip(key, file)
+          setAttached(a => (chip ? a.map(x => (x.key === key ? chip : x)) : a.filter(x => x.key !== key)))
+          if (!chip) setError(r.error)
           return
         }
-        if (!getDraft(agentId).attached.some(x => x.key === key)) return // 그사이 버려졌다(에이전트 지움)
         // 미리보기 주소는 붙일 때 한 번 — 글자를 칠 때마다 몇 MB 짜리 data: 주소를 다시 만들지 않는다
         const url = URL.createObjectURL(r.blob)
         setAttached(a => a.map(x => (x.key === key ? { key, state: 'ready', mediaType: r.mediaType, base64: r.base64, url } : x)))
@@ -317,6 +345,27 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
             {attached.map(a =>
               a.state === 'loading' ? (
                 <span key={a.key} className="att wait" role="status" aria-label="이미지 준비 중" />
+              ) : a.state === 'file' ? (
+                // 파일 칩 — 이름(가운데 줄임) · 크기, 100MB 를 넘으면 크기 자리에 오류
+                <span key={a.key} className={`att-file${a.error ? ' bad' : ''}`} title={a.name}>
+                  {a.error ? <FileX className="i af-i" aria-hidden="true" /> : <FileText className="i af-i" aria-hidden="true" />}
+                  <span className="af-tx">
+                    <FileName name={a.name} />
+                    <span className="af-m" role={a.error ? 'alert' : undefined}>
+                      {a.error ?? formatBytes(a.bytes)}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    className="att-x"
+                    aria-label={`${a.name} 빼기`}
+                    title="빼기"
+                    disabled={sending !== undefined}
+                    onClick={() => setAttached(list => list.filter(x => x.key !== a.key))}
+                  >
+                    <X className="i" size={12} strokeWidth={2.25} aria-hidden="true" />
+                  </button>
+                </span>
               ) : (
                 <span key={a.key} className="att">
                   <img src={a.url} alt={`붙인 이미지 ${++shown}`} />
@@ -331,6 +380,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
                     className="att-x"
                     aria-label="이미지 지우기"
                     title="지우기"
+                    disabled={sending !== undefined}
                     onClick={() => setAttached(list => list.filter(x => x.key !== a.key))}
                   >
                     <X className="i" size={12} strokeWidth={2.25} aria-hidden="true" />
@@ -351,7 +401,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
           ref={area}
           rows={2}
           value={text}
-          readOnly={busy}
+          readOnly={locked}
           placeholder={planOn ? `${name}에게 계획부터 세워 달라고 하기…` : `${name}에게 일 시키기… ( / 명령 )`}
           aria-label={`${name}에게 보낼 메시지`}
           aria-autocomplete="list"
@@ -362,14 +412,8 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
           onPaste={onPaste}
         />
         <div className="tb">
-          <button
-            type="button"
-            className="ib"
-            title="이미지 붙여 넣기"
-            aria-label="이미지 붙여 넣기"
-            onClick={() => filePick.current?.click()}
-          >
-            <ImageIcon className="i" aria-hidden="true" />
+          <button type="button" className="ib" title={ATTACH_WORD} aria-label={ATTACH_WORD} onClick={() => filePick.current?.click()}>
+            <Paperclip className="i" aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -381,8 +425,14 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
             <ListChecks className="i" size={14} aria-hidden="true" />
             계획 먼저
           </button>
-          <input ref={filePick} type="file" accept={IMAGE_TYPES.join(',')} multiple hidden onChange={onPick} />
+          {/* 종류 제한 없음 — 그림은 그림 길, 그 밖은 파일 칩 */}
+          <input ref={filePick} type="file" multiple hidden onChange={onPick} />
           <span className="tb-sp" />
+          {sending === 'files' && (
+            <span className="cmp-sending" role="status">
+              {ATTACH_SENDING}
+            </span>
+          )}
           {heldInput > 0 && <span className="held-in">보낼 차례를 기다리는 입력 {heldInput}개</span>}
           <ContextRing agentId={agentId} name={name} value={lastContext} working={working} onCompact={() => void compact()} />
           <button type="button" className="send" aria-label="보내기" title="보내기" disabled={!canSend} onClick={() => void send()}>

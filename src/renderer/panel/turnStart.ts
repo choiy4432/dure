@@ -31,9 +31,11 @@ export function stickyPromptIndex(boxes: PromptBox[], viewTop: number, zone = 0)
   return last && last.bottom <= viewTop ? last.index : null
 }
 
-/** 고정 상자의 한 줄 — 내 말은 줄바꿈·빈칸을 한 칸으로(글 없이 그림만이면 그림 수), 전달된 메시지는 마크다운 기호를 뗀 첫 줄 */
+/** 고정 상자의 한 줄 — 내 말은 줄바꿈·빈칸을 한 칸으로(글 없이 그림·첨부만이면 그 수), 전달된 메시지는 마크다운 기호를 뗀 첫 줄 */
 export function promptText(line: PromptLine): string {
   if (line.kind === 'relay') return firstLine(line.text)
   const text = line.text.replace(/\s+/g, ' ').trim()
-  return text || `이미지 ${line.images.length}장`
+  const n = line.images.length
+  const f = line.files.length
+  return text || [n > 0 ? `이미지 ${n}장` : '', f > 0 ? `첨부 ${f}개` : ''].filter(Boolean).join(' · ')
 }

@@ -61,7 +61,7 @@ describe('buildTranscript', () => {
       [human('옛 말', 1), asst([{ type: 'text', text: '옛 답' }], 2), { t: 3, kind: 'boundary' }, human('새 말', 4)],
       undefined,
     )
-    expect(lines).toEqual([{ kind: 'me', text: '새 말', images: [], at: 4 }])
+    expect(lines).toEqual([{ kind: 'me', text: '새 말', images: [], files: [], at: 4 }])
     expect(buildTranscript([human('옛 말', 1), { t: 2, kind: 'boundary' }], undefined).lines).toEqual([])
   })
   it('결과 없으면 진행 중', () => {
@@ -185,9 +185,29 @@ describe('buildTranscript', () => {
       ],
       undefined,
     )
-    expect(lines[0]).toEqual({ kind: 'me', text: 'a\n\nb', images: ['x.png', null], at: 1 })
+    expect(lines[0]).toEqual({ kind: 'me', text: 'a\n\nb', images: ['x.png', null], files: [], at: 1 })
     expect(lines[1]).toEqual({ kind: 'notice', text: '멈춤', at: 2 })
     expect(lines[2]).toEqual({ kind: 'local', text: 'out', at: 3 })
+  })
+  it('첨부 파일은 이름·크기·사본 이름 차례대로(서버 경로는 화면에 안 쓴다) — 글은 글 칸만', () => {
+    const { lines } = buildTranscript(
+      [
+        {
+          t: 1, kind: 'user', source: 'human',
+          parts: [
+            { type: 'text', text: '읽어 줘' },
+            { type: 'file', name: 'a.pdf', bytes: 10, file: '20261104-101010-a.pdf', remotePath: '/home/u/.dure/attachments/w/20261104-101010-a.pdf' },
+            { type: 'image', mediaType: 'image/png', bytes: 3, file: 'x.png' },
+            { type: 'file', name: 'b.md', bytes: 2, file: '20261104-101010-b.md' },
+          ],
+        },
+      ],
+      undefined,
+    )
+    expect(lines[0]).toEqual({
+      kind: 'me', text: '읽어 줘', images: ['x.png'], at: 1,
+      files: [{ name: 'a.pdf', bytes: 10, file: '20261104-101010-a.pdf' }, { name: 'b.md', bytes: 2, file: '20261104-101010-b.md' }],
+    })
   })
   it('1000항목 → 마지막 300줄, hiddenBefore 700, streaming 은 끝에 하나', () => {
     const items = Array.from({ length: 1000 }, (_, i) => human(`m${i}`, i))

@@ -4,7 +4,7 @@ import {
   SquareTerminal, Wrench, type LucideProps,
 } from 'lucide-react'
 import type { AgentId } from '../../engine/types'
-import type { ActionLine, ChatLine, ClaudePart } from '../state/transcript'
+import type { ActionLine, ChatLine, ClaudePart, SentFile } from '../state/transcript'
 import type { ToolIcon } from '../lib/toolSummary'
 import { getStore } from '../state/store'
 import { Markdown } from '../lib/Markdown'
@@ -16,6 +16,7 @@ import { Presence } from '../lib/presence'
 import { localSummary } from '../lib/words'
 import { DiffView } from './DiffView'
 import { MeImages } from './MeImages'
+import { MeFiles } from './MeFiles'
 
 const ICONS: Record<ToolIcon, ComponentType<LucideProps>> = {
   file: File,
@@ -195,7 +196,13 @@ function ChatItemView({ line, index, agentId, navigable = true }: Props) {
     case 'me':
       return (
         <div className="me" data-line={index}>
-          {line.images.length > 0 && <MeImages agentId={agentId} files={line.images} />}
+          {/* 그림 썸네일과 파일 칩은 한 줄에(넘치면 다음 줄로) — 그림이 먼저 */}
+          {(line.images.length > 0 || line.files.length > 0) && (
+            <div className="me-atts">
+              {line.images.length > 0 && <MeImages agentId={agentId} files={line.images} />}
+              {line.files.length > 0 && <MeFiles agentId={agentId} files={line.files} />}
+            </div>
+          )}
           {line.text && <p>{line.text}</p>}
           {line.text && <CopyButton className="msg-copy" text={line.text} label="내 말 복사" />}
         </div>
@@ -277,6 +284,9 @@ function samePart(p: ClaudePart, q: ClaudePart): boolean {
 /** 기록이 하나 늘 때마다 줄 객체는 새로 만들어진다 — 내용이 같으면 다시 그리지 않는다(마크다운을 다시 읽지 않게) */
 /** 그림 이름 목록 — 줄 객체가 새로 만들어져도 같은 이름 차례면 같다 */
 const sameList = (x: (string | null)[], y: (string | null)[]) => x.length === y.length && x.every((v, i) => v === y[i])
+/** 첨부 파일 목록 — 이름·크기·사본 이름이 차례대로 같으면 같다 */
+const sameFiles = (x: SentFile[], y: SentFile[]) =>
+  x.length === y.length && x.every((f, i) => f.name === y[i].name && f.bytes === y[i].bytes && f.file === y[i].file)
 
 function sameLine(prev: Props, next: Props): boolean {
   if (prev.index !== next.index || prev.agentId !== next.agentId || prev.navigable !== next.navigable) return false
@@ -286,7 +296,7 @@ function sameLine(prev: Props, next: Props): boolean {
   if (a.kind !== b.kind || a.text !== b.text) return false
   switch (a.kind) {
     case 'me':
-      return sameList(a.images, (b as typeof a).images) && a.at === (b as typeof a).at
+      return sameList(a.images, (b as typeof a).images) && sameFiles(a.files, (b as typeof a).files) && a.at === (b as typeof a).at
     case 'relay':
       return a.from === (b as typeof a).from && a.at === (b as typeof a).at && a.messageId === (b as typeof a).messageId
     case 'claude': {

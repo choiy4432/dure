@@ -78,6 +78,54 @@ export const PREPARING_HINT = '아직 Claude에게 질문을 보내기 전이에
 export const IMAGE_OLD = '저장하기 전에 보낸 그림이라 볼 수 없어요'
 export const IMAGE_GONE = '그림을 찾을 수 없어요'
 
+/** 파일 첨부 — 단추·고르기 창의 이름 */
+export const ATTACH_WORD = '파일 첨부'
+/** 경로를 모르는 파일(디스크 파일이 아닌 것 — 붙여 넣은 내용 등)은 사본을 만들 수 없다 */
+export const ATTACH_NO_PATH = '이 파일은 붙일 수 없어요 — 파일 첨부 단추로 골라 주세요'
+/** 첨부가 든 보내기(사본·서버 올리기) — 큰 파일은 몇 분 걸릴 수 있다 */
+export const ATTACH_SENDING = '보내는 중…'
+
+/** 파일 크기 — 1024 단위, 소수 한 자리(.0 은 뗀다): 512 B · 1.2 KB · 3.4 MB. 반올림해 1024 가 되면 다음 단위로 */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let v = n / 1024
+  let i = 0
+  while (i < units.length - 1 && Math.round(v * 10) / 10 >= 1024) {
+    v /= 1024
+    i++
+  }
+  return `${Math.round(v * 10) / 10} ${units[i]}`
+}
+
+/** 이 길이까지는 나누지 않는다(넘쳐도 끝에서 말줄임) */
+const SPLIT_FROM = 16
+/** 끝에 남길 글자 수 — 확장자가 있으면 확장자 + 3 */
+const TAIL_MIN = 7
+const EXT_MAX = 10
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+/** 보이는 글자 단위 — 서로게이트 짝·이어 붙인 이모지(ZWJ)·결합 문자를 쪼개지 않는다 */
+const glyphs = (s: string) => Array.from(graphemes.segment(s), g => g.segment)
+
+/**
+ * 가운데 줄임 — [앞, 끝]. 앞은 칸이 모자라면 CSS 로 말줄임(…), 끝(확장자와 그 앞 몇 글자)은 늘 보인다.
+ * 그래서 '2026-11-04 매우 긴 기획서 최…최종본.pdf' 처럼 종류와 끝이 남는다. 보이는 글자는 쪼개지 않는다
+ */
+export function splitName(name: string): [string, string] {
+  const chars = glyphs(name)
+  if (chars.length <= SPLIT_FROM) return [name, '']
+  const dot = name.lastIndexOf('.')
+  const ext = dot > 0 ? glyphs(name.slice(dot)).length : 0
+  const keep = ext > 1 && ext <= EXT_MAX ? Math.max(TAIL_MIN, ext + 3) : TAIL_MIN
+  return [chars.slice(0, -keep).join(''), chars.slice(-keep).join('')]
+}
+
+/** 글 없는 입력의 한 줄 — '그림 2장' · '첨부 3개' · 둘 다면 '그림 1장 · 첨부 2개'(지난 대화 제목과 같은 꼴) */
+export function attachCount(images: number, files: number): string {
+  return [images > 0 ? `그림 ${images}장` : '', files > 0 ? `첨부 ${files}개` : ''].filter(Boolean).join(' · ')
+}
+
 /** 새 대화 확인 — 에이전트 메뉴의 '새 대화'와 입력창의 /clear 가 같은 말을 쓴다 */
 export const RENEW_CONFIRM = {
   title: '지금까지 대화를 접고 새로 시작할까요?',

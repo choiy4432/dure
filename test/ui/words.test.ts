@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ago, FRESH_WORD, MESSAGE_WORD, PHASE_WORD, QUESTION_LINK, STATUS_LINE, STATUS_WORD, TOUR, elapsed, fieldError, josa, lasting, localSummary, modelText, modelVersionName, nodeModelLabel, resetText, tokensText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
+import { ago, attachCount, FRESH_WORD, formatBytes, splitName, MESSAGE_WORD, PHASE_WORD, QUESTION_LINK, STATUS_LINE, STATUS_WORD, TOUR, elapsed, fieldError, josa, lasting, localSummary, modelText, modelVersionName, nodeModelLabel, resetText, tokensText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
 
 describe('fieldError — 엔진 오류를 칸 아래 안내로', () => {
   it('이름 겹침은 해요체로, 다음 할 일까지 — 받침 따라 이라는/라는, 모르면 (이)라는', () => {
@@ -11,6 +11,54 @@ describe('fieldError — 엔진 오류를 칸 아래 안내로', () => {
   it('다른 오류는 그대로', () => {
     expect(fieldError('폴더를 찾을 수 없습니다: C:\\gone')).toBe('폴더를 찾을 수 없습니다: C:\\gone')
     expect(fieldError('이름을 입력하세요')).toBe('이름을 입력하세요')
+  })
+})
+
+describe('formatBytes — 파일 크기(1024 단위, 소수 한 자리, .0 은 뗀다)', () => {
+  it('512 B · 1.2 KB · 3.4 MB', () => {
+    expect(formatBytes(0)).toBe('0 B')
+    expect(formatBytes(512)).toBe('512 B')
+    expect(formatBytes(1023)).toBe('1023 B')
+    expect(formatBytes(1024)).toBe('1 KB')
+    expect(formatBytes(1229)).toBe('1.2 KB')
+    expect(formatBytes(Math.round(3.4 * 1024 * 1024))).toBe('3.4 MB')
+    expect(formatBytes(100 * 1024 * 1024)).toBe('100 MB')
+    expect(formatBytes(100 * 1024 * 1024 + 1)).toBe('100 MB')
+    expect(formatBytes(3 * 1024 ** 3)).toBe('3 GB')
+  })
+
+  it('반올림하면 1024 가 되는 값은 다음 단위로', () => {
+    expect(formatBytes(1024 * 1024 - 1)).toBe('1 MB')
+    expect(formatBytes(1024 ** 3 - 1)).toBe('1 GB')
+  })
+})
+
+describe('splitName — 가운데 줄임용(앞은 말줄임, 끝은 남김)', () => {
+  it('짧으면 나누지 않는다', () => {
+    expect(splitName('a.pdf')).toEqual(['a.pdf', ''])
+    expect(splitName('report-v2.pdf')).toEqual(['report-v2.pdf', ''])
+  })
+
+  it('길면 확장자와 그 앞 몇 글자를 끝에 둔다', () => {
+    expect(splitName('2026-11-04 매우 긴 기획서 최종본.pdf')).toEqual(['2026-11-04 매우 긴 기획서 ', '최종본.pdf'])
+    expect(splitName('very-long-file-name-without-extension')).toEqual(['very-long-file-name-without-ex', 'tension'])
+  })
+
+  it('글자(서로게이트 짝)를 쪼개지 않는다', () => {
+    const [head, tail] = splitName('그림 모음 😀😀😀😀😀😀😀.zip')
+    expect(head + tail).toBe('그림 모음 😀😀😀😀😀😀😀.zip')
+    expect(tail).toBe('😀😀😀.zip')
+    // 이어 붙인 이모지(ZWJ)도 한 글자
+    expect(splitName('abcdefghijklmnopq👨‍👩‍👧.zip')).toEqual(['abcdefghijklmno', 'pq👨‍👩‍👧.zip'])
+  })
+})
+
+describe('attachCount — 글 없는 입력의 그림·첨부 수', () => {
+  it('그림만 · 첨부만 · 둘 다', () => {
+    expect(attachCount(2, 0)).toBe('그림 2장')
+    expect(attachCount(0, 3)).toBe('첨부 3개')
+    expect(attachCount(1, 2)).toBe('그림 1장 · 첨부 2개')
+    expect(attachCount(0, 0)).toBe('')
   })
 })
 

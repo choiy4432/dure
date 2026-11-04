@@ -670,6 +670,18 @@ describe('붙잡기 카드', () => {
     expect(rows[3].querySelector('.hd-from')!.textContent).toBe('다른 에이전트에게서')
   })
 
+  it('붙잡기 카드 — 글 없이 첨부만이면 첨부 N개, 그림도 있으면 그림 N장 · 첨부 N개(그림 0장이 아니라)', async () => {
+    const items = [
+      { id: 'f1', source: 'human' as const, from: null, text: '', images: 0, files: 2 },
+      { id: 'f2', source: 'human' as const, from: null, text: '', images: 1, files: 2 },
+      { id: 'f3', source: 'human' as const, from: null, text: '이것도 읽어 줘', images: 0, files: 1 },
+    ]
+    snapshot.agents[0] = agent('p', { name: '기획', role: '기획서 · 문구', hold: { since: Date.now() - 2 * MIN, items } })
+    await renderPanel('p')
+    const rows = Array.from(card('멈췄어요 · 기다리는 입력 3개').querySelectorAll('.hd-text')).map(e => e.textContent)
+    expect(rows).toEqual(['첨부 2개', '그림 1장 · 첨부 2개', '이것도 읽어 줘'])
+  })
+
   it('빼기·이어서 보내기·모두 버리기가 엔진을 부른다', async () => {
     snapshot.agents[0] = agent('p', { name: '기획', role: '기획서 · 문구', hold: HOLD })
     await renderPanel('p')

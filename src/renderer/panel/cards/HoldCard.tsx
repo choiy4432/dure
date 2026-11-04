@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import type { AgentId, Hold } from '../../../engine/types'
-import { ago } from '../../lib/words'
+import { ago, attachCount } from '../../lib/words'
 import { useCall } from './useCall'
 import { useMotion, MotionDiv, PresenceList } from '../../lib/presence'
 import { MOTION } from '../../lib/motion'
@@ -37,7 +37,8 @@ export function HoldCard({ agent, hold, nameOf, now }: Props) {
             return (
               <MotionDiv key={it.id} motion={MOTION.line} className="hd-row">
                 <span className="hd-from">{from}</span>
-                <span className="hd-text">{it.text !== '' ? it.text : `그림 ${it.images}장`}</span>
+                {/* 글 없는 입력은 그림·첨부 수 — 첨부만이면 '그림 0장'이 아니라 '첨부 2개' */}
+                <span className="hd-text">{it.text !== '' ? it.text : attachCount(it.images, it.files ?? 0)}</span>
                 <button
                   type="button"
                   className="lk"

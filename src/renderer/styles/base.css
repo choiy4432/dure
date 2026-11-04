@@ -2968,15 +2968,51 @@ code {
   margin: 0;
 }
 
-/* 내 말의 그림 — 작은 썸네일 줄, 누르면 크게(.iv-bd) */
-.me-ims {
+/* 내 말의 첨부 — 그림 썸네일 다음에 파일 칩, 한 줄로 흐르고 넘치면 다음 줄. 누르면 그림은 크게(.iv-bd), 파일은 연다 */
+.me-atts {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+  white-space: normal;
 }
 
-.me-ims + p {
+/* 그림 묶음은 따로 줄을 만들지 않고 파일 칩과 같은 줄에 */
+.me-atts > .me-ims {
+  display: contents;
+}
+
+.me-atts + p {
   margin-top: 8px;
+}
+
+/* 보낸 파일 칩 — 썸네일(48px)과 같은 높이, 말풍선 바탕 위 흰 칸 */
+.me-file {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(260px, 100%);
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  text-align: left;
+}
+
+.me-file:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+/* 못 엶 — 칩 줄 아래 한 줄 */
+.me-ferr {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--danger-text);
 }
 
 .me-th {
@@ -3758,7 +3794,7 @@ code {
   box-shadow: var(--ring-soft);
 }
 
-/* 이미지를 끌어 오는 중 */
+/* 파일을 끌어 오는 중 */
 .box.drop {
   border-color: var(--primary);
   border-style: dashed;
@@ -3796,6 +3832,27 @@ code {
   flex: 1;
 }
 
+/* 첨부를 보내는 중(사본·서버 올리기) — 큰 파일은 몇 분. 글은 그대로 읽히게 두고 앞의 점만 숨 쉬듯 옅어졌다 돌아온다 */
+.cmp-sending {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.cmp-sending::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-dot);
+  background: var(--primary);
+  animation: att-wait 1.2s ease-in-out infinite alternate;
+}
+
 /* 보낼 차례를 기다리는 입력 N개 */
 .held-in {
   min-width: 0;
@@ -3830,12 +3887,28 @@ code {
   box-shadow: none;
 }
 
-/* 붙인 이미지 미리보기 칩 */
+/* 붙인 그림·파일 칩 — 많이 붙여도 두 줄 반까지만 늘고 그 뒤로는 안에서 스크롤(대화를 밀어내지 않게).
+   위·오른쪽 여백은 칩 밖으로 걸친 빼기(×)가 잘리지 않을 자리 — 그만큼 margin 으로 되돌려 자리는 그대로 */
 .atts {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  margin: 2px 0 10px;
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 8px 8px 0 0;
+  margin: -6px -8px 10px 0;
+}
+
+/* 칩 칸 스크롤 막대 — 고정 카드 자리와 같은 얇은 손잡이 */
+.atts::-webkit-scrollbar {
+  width: 10px;
+}
+
+.atts::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-box);
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }
 
 .att {
@@ -3896,6 +3969,81 @@ code {
 .att-x:hover {
   color: var(--text);
   border-color: var(--border-strong);
+}
+
+/* 보내는 중 — 이미 가는 칩은 뺄 수 없다(빼기를 감춘다) */
+.att-x:disabled {
+  display: none;
+}
+
+/* 붙인 파일 칩 — 그림 칩과 같은 높이·바탕, 아이콘 + 이름(가운데 줄임)/크기 두 줄. 빼기(×)는 그림 칩과 같은 자리 */
+.att-file {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(240px, 100%);
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  background: var(--subtle);
+}
+
+/* 100MB 넘음 — 크기 자리에 까닭(두 줄까지), 보내기는 막힌다 */
+.att-file.bad {
+  max-width: min(300px, 100%);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+
+/* 파일 칩 속(입력창 · 내 말 같이) — 이름 한 줄(앞은 말줄임, 확장자 쪽 끝은 늘 보임) + 크기 */
+.af-i {
+  color: var(--muted);
+}
+
+.af-tx {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.af-n {
+  display: flex;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.af-h {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.af-t {
+  flex: none;
+}
+
+.af-m {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.att-file.bad .af-i,
+.att-file.bad .af-m {
+  color: var(--danger-text);
+}
+
+.att-file.bad .af-m {
+  white-space: normal;
 }
 
 /* 계획 먼저 — 이미지 단추 옆 알약(시안 f-composer: 꺼짐 = border 테두리 · text-3 글, 켬 = Blue Wash). 켜면 상자에 고리만(테두리는 그대로) */
@@ -4011,7 +4159,8 @@ code {
 
 @media (prefers-reduced-motion: reduce) {
   .caret,
-  .att.wait {
+  .att.wait,
+  .cmp-sending::before {
     animation: none;
   }
 

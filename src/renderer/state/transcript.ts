@@ -27,9 +27,16 @@ export type ClaudePart =
   // 이어서 맡긴 서브에이전트 — 대화엔 요약 한 조각만(안쪽 일은 '서브에이전트' 탭). description 은 하나일 때만
   | { type: 'subagents'; key: string; ids: string[]; description: string | null; counts: { running: number; done: number; bad: number } }
 
+/** 내 말의 첨부 파일 — 이름·크기(바이트)·첨부 폴더 안 사본 이름(누르면 openAttachment). 서버 경로는 Claude 용이라 싣지 않는다 */
+export interface SentFile {
+  name: string
+  bytes: number
+  file: string
+}
+
 export type ChatLine =
-  /** images = 붙인 그림의 저장 이름 차례대로(저장하기 전에 보낸 그림은 null) */
-  | { kind: 'me'; text: string; images: (string | null)[]; at: number }
+  /** images = 붙인 그림의 저장 이름 차례대로(저장하기 전에 보낸 그림은 null) · files = 첨부 파일 차례대로 */
+  | { kind: 'me'; text: string; images: (string | null)[]; files: SentFile[]; at: number }
   | { kind: 'relay'; from: string; text: string; at: number; messageId?: string }
   | { kind: 'claude'; text: string; actions: ActionLine[]; parts: ClaudePart[]; at: number }
   | { kind: 'notice'; text: string; at: number }
@@ -156,9 +163,10 @@ export function buildTranscript(
         flush()
         const text = userText(it)
         const images = it.parts.flatMap((p) => (p.type === 'image' ? [p.file ?? null] : []))
+        const files = it.parts.flatMap((p) => (p.type === 'file' ? [{ name: p.name, bytes: p.bytes, file: p.file }] : []))
         const relay = it.source === 'relay' ? stripRelay(text) : null
         if (relay) all.push({ kind: 'relay', from: relay.from, text: relay.body, at: it.t, ...(it.messageId ? { messageId: it.messageId } : {}) })
-        else all.push({ kind: 'me', text, images, at: it.t })
+        else all.push({ kind: 'me', text, images, files, at: it.t })
         break
       }
       case 'notice':
