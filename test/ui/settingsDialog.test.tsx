@@ -468,3 +468,48 @@ describe('SettingsDialog — 업데이트 · 안내 · claude 최신으로', () 
     expect(setPrefsApi).toHaveBeenCalledWith({ claudeAutoUpdate: false })
   })
 })
+
+describe('SettingsDialog — 투어 카드의 닫기 요청(cancelRequest)', () => {
+  async function mountDialog() {
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { SettingsDialog } = await import('../../src/renderer/shell/SettingsDialog')
+    await act(async () => { await getStore().init() })
+    const onClose = vi.fn()
+    const onAskAllow = vi.fn()
+    const ui = (n: number) => <SettingsDialog onClose={onClose} onAskAllow={onAskAllow} onReplayTour={() => {}} cancelRequest={n} />
+    const r = render(ui(0))
+    return { r, ui, onClose, onAskAllow, store: getStore() }
+  }
+
+  it('열릴 때 값으로는 닫지 않고, 요청이 늘면 취소처럼 닫는다 — 바꿔 본 테마는 열 때 값으로 되돌림', async () => {
+    snapshot = { ...snapshot, theme: 'light' }
+    const { r, ui, onClose, store } = await mountDialog()
+    const dlg = screen.getByRole('dialog', { name: '설정' })
+    expect(onClose).not.toHaveBeenCalled()
+    await act(async () => { fireEvent.click(within(within(dlg).getByRole('radiogroup', { name: '화면 테마' })).getByRole('radio', { name: '다크' })) })
+    await settle()
+    await act(async () => { r.rerender(ui(1)) })
+    await settle()
+    expect(setTheme.mock.calls).toEqual([['dark'], ['light']])
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(store.getState().theme).toBe('light')
+  })
+
+  it('저장 중(busy)이면 요청을 무시한다 — 저장이 끝나며 한 번만 닫는다', async () => {
+    let release!: () => void
+    setAutoChainLimit.mockImplementationOnce(() => new Promise<void>(res => { release = () => { snapshot = { ...snapshot, autoChainLimit: 5 }; res() } }))
+    const { r, ui, onClose, onAskAllow } = await mountDialog()
+    const dlg = screen.getByRole('dialog', { name: '설정' })
+    fireEvent.change(within(dlg).getByRole('spinbutton', { name: '자동 전달 상한' }), { target: { value: '5' } })
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '저장' })) })
+    expect(setAutoChainLimit).toHaveBeenCalledWith(5)
+    await act(async () => { r.rerender(ui(1)) })
+    await settle()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(setTheme).not.toHaveBeenCalled()
+    await act(async () => { release() })
+    await settle()
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onAskAllow).not.toHaveBeenCalled()
+  })
+})

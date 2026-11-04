@@ -39,6 +39,8 @@ export function App() {
   const [dialog, setDialog] = useState<Dialog>(null)
   const [askAllow, setAskAllow] = useState(false)
   const close = () => setDialog(null)
+  /** 투어 카드가 설정 창을 닫을 때마다 +1 — 창이 스스로 취소한다(바꿔 본 테마 되돌림 · 저장 중엔 기다림) */
+  const [settingsCancel, setSettingsCancel] = useState(0)
   const setupPhase = effectiveSetup(v.setup, v.claudeMissing, v.setupLoadFailed).phase
   const preparing = setupPhase === 'needs' || setupPhase === 'relaunching'
   const blocked = v.loadError !== null || preparing || setupPhase === 'checking' || v.claudeMissing
@@ -101,6 +103,7 @@ export function App() {
         <Presence show={dialog === 'settings'}>
           <SettingsDialog
             onClose={close}
+            cancelRequest={settingsCancel}
             onAskAllow={() => setAskAllow(true)}
             onReplayTour={() => {
               close()
@@ -121,7 +124,7 @@ export function App() {
           onCancel={() => setAskAllow(false)}
         />
         {/* 안내 투어·승인 한 번 — 대화상자 위 겹. 열린 창을 보고 단계를 넘기고, 새 방·에이전트 추가 창이 떠 있는 동안은 숨는다 */}
-        <TourLayer dialog={dialog} onCloseDialog={close} />
+        <TourLayer dialog={dialog} onCloseDialog={() => (dialog === 'settings' ? setSettingsCancel(n => n + 1) : close())} />
       </div>
     </LucideProvider>
   )

@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { SLEEP_CHOICES, type ThemePref } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { workingCount } from '../state/selectors'
@@ -29,7 +29,18 @@ function parseLimit(text: string): number | null {
  * 화면 테마는 누르는 즉시 바꿔 뒤 화면으로 비교하게 한다 — 저장 없이 닫으면(취소·Esc·바깥) 열 때의 테마로 되돌린다.
  * 허용을 켜고 저장하면 설정 창을 닫은 뒤 onAskAllow 로 확인 창을 부른다(두 창을 겹쳐 띄우지 않는다).
  */
-export function SettingsDialog({ onClose, onAskAllow, onReplayTour }: { onClose: () => void; onAskAllow: () => void; onReplayTour: () => void }) {
+export function SettingsDialog({
+  onClose,
+  onAskAllow,
+  onReplayTour,
+  cancelRequest = 0,
+}: {
+  onClose: () => void
+  onAskAllow: () => void
+  onReplayTour: () => void
+  /** 바깥(투어 카드)이 "취소해 줘" 할 때마다 1 씩 커지는 수 — 바뀌면 스스로 취소한다(저장 중이면 저장이 끝나며 닫으니 기다린다) */
+  cancelRequest?: number
+}) {
   const limit = useDure(s => s.autoChainLimit)
   const allowed = useDure(s => s.allowBypass)
   const notified = useDure(s => s.notify)
@@ -105,6 +116,16 @@ export function SettingsDialog({ onClose, onAskAllow, onReplayTour }: { onClose:
     }
     onClose()
   }
+
+  // 바깥의 취소 요청 — 열릴 때의 값은 건너뛰고, 바뀔 때만. 저장 중(busy)이면 진행 중인 submit 이 끝나며 닫는다
+  const seenCancel = useRef(cancelRequest)
+  const latest = useRef({ cancel, busy })
+  latest.current = { cancel, busy }
+  useEffect(() => {
+    if (cancelRequest === seenCancel.current) return
+    seenCancel.current = cancelRequest
+    if (!latest.current.busy) latest.current.cancel()
+  }, [cancelRequest])
 
   /** 업데이트 단추는 저장과 따로 바로 — 못 해도 결과 줄(사건)이 말해 준다 */
   const act = (call: () => Promise<unknown>) => () => void call().catch(() => {})
