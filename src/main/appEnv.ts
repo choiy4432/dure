@@ -23,6 +23,11 @@ export function appEnv(env: NodeJS.ProcessEnv, packaged: boolean): NodeJS.Proces
   return copy
 }
 
+/** 작업표시줄 아이콘 파일 — 설치본의 resources 는 app.asar 안이라 셸이 못 읽는다. exe 가 아이콘을 품고 있으니 그걸 가리킨다. */
+export function appIconFor(packaged: boolean, execPath: string, devIcon: string): { appIconPath: string; appIconIndex: number } {
+  return { appIconPath: packaged ? execPath : devIcon, appIconIndex: 0 }
+}
+
 /** 설치본은 고정 id(바로가기·알림이 같은 앱으로 묶인다), 개발 실행은 execPath. */
 export function appUserModelId(packaged: boolean, execPath: string): string {
   return packaged ? APP_ID : execPath

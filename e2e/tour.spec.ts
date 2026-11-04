@@ -41,8 +41,26 @@ test('안내 투어 — 끝까지 · 다시 켜면 없음 · 다시 보기는 �
     const title = (t: string) => expect(card.locator('.tour-t')).toHaveText(t)
     const ok = () => card.getByRole('button', { name: '확인했어요' }).click()
 
+    // 창 단추 띠 색 — main 의 setTitleBarOverlay 호출을 엿본다(스크린샷엔 Windows 단추가 안 찍힌다)
+    await app.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows()[0]
+      const g = globalThis as unknown as { overlays: { color: string }[] }
+      g.overlays = []
+      const orig = w.setTitleBarOverlay.bind(w)
+      w.setTitleBarOverlay = (o: any) => { g.overlays.push(o); orig(o) }
+    })
+    const lastOverlay = () =>
+      app.evaluate(() => {
+        const g = globalThis as unknown as { overlays: { color: string }[] }
+        return g.overlays[g.overlays.length - 1]?.color
+      })
+    const dark = await app.evaluate(({ nativeTheme }) => nativeTheme.shouldUseDarkColors)
+    const BG = dark ? '#111827' : '#FFFFFF'
+    const VEILED = dark ? '#0B1121' : '#CFD1D4'
+
     await test.step('환영 → 시작하기', async () => {
       await title('두레에 오신 걸 환영해요')
+      await expect.poll(lastOverlay).toBe(VEILED) // 막이 떠 있으면 창 단추 띠도 막 색
       await card.getByRole('button', { name: '시작하기' }).click()
     })
     await test.step('방 만들기', async () => {
@@ -86,16 +104,18 @@ test('안내 투어 — 끝까지 · 다시 켜면 없음 · 다시 보기는 �
       const dlg = page.getByRole('dialog', { name: '설정', exact: true })
       await expect(dlg).toBeVisible()
       await title('설정 안에는')
-      await ok()
-      await expect(card).toBeHidden()
-      await dlg.getByRole('button', { name: '취소' }).click()
+      await expect.poll(lastOverlay).toBe(BG) // 설정 안 카드엔 막이 없다
+      await ok() // [확인했어요] 가 설정 창을 닫고 끝 카드로 넘어간다
       await expect(dlg).toBeHidden()
     })
     await test.step('끝', async () => {
       await title('준비됐어요')
+      await expect(card.getByRole('button', { name: '시작하기' })).toBeVisible()
+      await expect.poll(lastOverlay).toBe(VEILED)
       await expect(card.locator('.tour-n')).toHaveText('8 / 8')
       await page.keyboard.press('Escape') // 카드에 초점이 있으면 Esc 로 끝낸다
       await expect(card).toBeHidden()
+      await expect.poll(lastOverlay).toBe(BG) // 막이 사라지면 원래 색
     })
 
     await test.step('받은 답 — 가짜 claude 가 받았다', async () => {

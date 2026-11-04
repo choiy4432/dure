@@ -107,6 +107,7 @@ function fakeApp() {
     installClaude: vi.fn(async () => {}),
     loginClaude: vi.fn(async () => {}),
     openSetupGuide: vi.fn(async () => {}),
+    setTourVeil: vi.fn(async () => {}),
     claudeUpdateState: vi.fn(async () => 'running' as const),
     updateState: vi.fn(async () => ({ kind: 'dev' as const })),
     checkUpdate: vi.fn(async () => ({ kind: 'none' as const })),
@@ -253,10 +254,10 @@ describe('registerIpc', () => {
     }
   })
 
-  it('APP_METHODS 13개 · 엔진 메서드와 겹치지 않는다 · BEFORE_START 는 엔진 메서드 중에서 · 앱 사건 이름 셋', () => {
+  it('APP_METHODS 14개 · 엔진 메서드와 겹치지 않는다 · BEFORE_START 는 엔진 메서드 중에서 · 앱 사건 이름 셋', () => {
     expect([...APP_METHODS].sort()).toEqual([
       'appInfo', 'checkUpdate', 'claudeUpdateState', 'downloadUpdate', 'installClaude', 'installUpdate', 'loginClaude',
-      'openReleasePage', 'openSetupGuide', 'prefs', 'setPrefs', 'setupState', 'updateState',
+      'openReleasePage', 'openSetupGuide', 'prefs', 'setPrefs', 'setTourVeil', 'setupState', 'updateState',
     ])
     for (const m of APP_METHODS) expect(METHODS as readonly string[], m).not.toContain(m)
     expect([...BEFORE_START].sort()).toEqual([
@@ -290,6 +291,16 @@ describe('registerIpc', () => {
     const { call, deps } = setup(false)
     deps.app.installClaude.mockRejectedValueOnce(new Error('설치하지 못했어요'))
     expect(await call('installClaude')).toEqual({ ok: false, error: '설치하지 못했어요' })
+  })
+
+  it('setTourVeil — 불리언 true 만 true 로 본다(그 밖은 false)', async () => {
+    const { call, deps } = setup(false)
+    await call('setTourVeil', true)
+    expect(deps.app.setTourVeil).toHaveBeenLastCalledWith(true)
+    for (const bad of ['true', 1, null, {}]) {
+      await call('setTourVeil', bad)
+      expect(deps.app.setTourVeil, String(bad)).toHaveBeenLastCalledWith(false)
+    }
   })
 
   it("setPrefs — 아는 칸의 불리언만 deps.app 으로, 그 밖({tourDone:'x'}·모르는 칸·객체 아님)은 무시", async () => {

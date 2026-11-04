@@ -211,6 +211,7 @@ const APP_HANDLERS: Record<AppMethod, (app: AppHost, ...a: unknown[]) => unknown
   downloadUpdate: (a) => a.downloadUpdate(),
   installUpdate: (a) => a.installUpdate(),
   openReleasePage: (a) => a.openReleasePage(),
+  setTourVeil: (a, on) => a.setTourVeil(on === true),
 }
 
 const STARTS_NOW: ReadonlySet<string> = new Set(BEFORE_START)

@@ -73,8 +73,11 @@ async function mount(dialog: Dialog = null) {
   const { TourLayer } = await import('../../src/renderer/tour/TourLayer')
   await act(async () => { await getStore().init() })
   await act(async () => { await new Promise(r => setTimeout(r, 0)) }) // 앱 상태(설정·준비)까지
-  const r = render(<TourLayer dialog={dialog} />)
-  return { ...r, store: getStore(), show: (d: Dialog) => r.rerender(<TourLayer dialog={d} />) }
+  // App 이 하듯 onCloseDialog 는 열린 창을 닫는다(dialog=null 로 다시 그린다)
+  const closeDialog = vi.fn(() => show(null))
+  const r = render(<TourLayer dialog={dialog} onCloseDialog={closeDialog} />)
+  const show = (d: Dialog) => r.rerender(<TourLayer dialog={d} onCloseDialog={closeDialog} />)
+  return { ...r, store: getStore(), show, closeDialog }
 }
 const at = (step: TourStepId, base: Partial<NonNullable<TourState>['base']> = {}, replay = false): NonNullable<TourState> => ({
   step, replay, base: { rooms: 0, agents: 0, sent: 0, ...base },
@@ -320,13 +323,13 @@ describe('TourLayer — 진행', () => {
     expect(veils()).toHaveLength(0)
   })
 
-  it('settings 단계 — 막 없이 설정 창 오른쪽에 카드만, [확인했어요]는 카드만 닫고 창을 닫으면 끝으로', async () => {
+  it('settings 단계 — 막 없이 설정 창 오른쪽에 카드만, [확인했어요]는 설정 창을 닫아 끝으로', async () => {
     withAgent()
     const dlg = place('settings-dialog', { left: 300, top: 100, width: 420, height: 500 }, { tag: 'div' })
     dlg.textContent = ''
     const input = document.createElement('input')
     dlg.appendChild(input)
-    const { store, show } = await mount('settings')
+    const { store, closeDialog } = await mount('settings')
     act(() => store.setTour(at('settings', { rooms: 1, agents: 1 })))
     expect(veils()).toHaveLength(0)
     expect(spot()).toBeNull()
@@ -334,13 +337,14 @@ describe('TourLayer — 진행', () => {
     const c = screen.getByRole('dialog', { name: '설정 안에는' })
     expect(c.style.left).toBe('736px') // 창 오른쪽 + 16px
     expect(c.style.top).toBe('100px')
-    expect(within(c).getAllByRole('listitem')).toHaveLength(6)
+    expect(within(c).getAllByRole('listitem')).toHaveLength(5)
+    expect(within(c).queryByText(/켤 때 claude 최신으로/)).toBeNull()
+    expect(within(c).getByText(/켜면 에이전트마다 승인 없이 실행하게/)).toBeTruthy()
+    expect(within(c).getByText(/Windows 알림으로 알려 줘요/)).toBeTruthy()
     expect(within(c).getByText('7 / 8')).toBeTruthy()
     fireEvent.click(within(c).getByRole('button', { name: '확인했어요' }))
-    expect(card()).toBeNull()
-    expect(store.getState().tour?.step).toBe('settings')
-    expect(document.activeElement).toBe(input) // 초점은 설정 창으로
-    show(null)
+    expect(closeDialog).toHaveBeenCalledTimes(1) // 설정 창을 닫는다 → 끝 단계로
+    expect(store.getState().tour?.step).toBe('done')
     const done = screen.getByRole('dialog', { name: '준비됐어요' })
     expect(within(done).getByText('8 / 8')).toBeTruthy()
     expect(within(done).queryByRole('button', { name: '투어 끝내기' })).toBeNull()

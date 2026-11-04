@@ -155,6 +155,8 @@ export interface DureApi {
   /** 다시 켜서 새 버전으로 */
   installUpdate(): Promise<void>
   openReleasePage(): Promise<void>
+  /** 투어 막이 떠 있는 동안 창 단추 띠를 막 색으로 물들인다(Windows 가 웹 화면 위에 그리는 단추는 막이 못 덮는다) */
+  setTourVeil(on: boolean): Promise<void>
 
   /** 해제 함수를 돌려준다 */
   on<K extends keyof DureEventMap>(k: K, fn: (p: DureEventMap[K]) => void): () => void
@@ -167,7 +169,7 @@ type ApiMethod = Exclude<keyof DureApi, 'on'>
 /** 앱 쪽 메서드 — 엔진이 없어도(claude 가 없어도)·엔진 시작 전에도 main 의 AppHost 로 간다 */
 export const APP_METHODS = [
   'appInfo', 'prefs', 'setPrefs', 'setupState', 'installClaude', 'loginClaude', 'openSetupGuide',
-  'claudeUpdateState', 'updateState', 'checkUpdate', 'downloadUpdate', 'installUpdate', 'openReleasePage',
+  'claudeUpdateState', 'updateState', 'checkUpdate', 'downloadUpdate', 'installUpdate', 'openReleasePage', 'setTourVeil',
 ] as const satisfies readonly ApiMethod[]
 
 /** invoke 로 부를 수 있는 엔진 쪽 이름 — DureApi 의 메서드 중 on(preload 안에서 처리)과 APP_METHODS 가 빠진다 */

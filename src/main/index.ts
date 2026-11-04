@@ -7,7 +7,7 @@ import { killTree } from '../engine/killTree'
 import { authStatus, claudeVersion, createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
 import type { AppEventMap, ClaudeUpdateState } from '../shared/appTypes'
-import { appEnv, appUserModelId } from './appEnv'
+import { appEnv, appIconFor, appUserModelId } from './appEnv'
 import { initAppPrefsSafe, writeAppPrefs } from './appPrefs'
 import { resolveClaudeCommand, resolveSshCommand, type ClaudeCommand } from './claudeCommand'
 import { cmdArgs, startWaitLine } from './cmdLine'
@@ -18,7 +18,7 @@ import { createSetupFlow, type SetupFlow } from './setupFlow'
 import { runStartup } from './startup'
 import { logEngineErrors, registerIpc, type AppHost } from './ipc'
 import { appPageMatcher, focusExisting, guardNavigation } from './window'
-import { TITLE_BAR_HEIGHT, windowColors } from './windowTheme'
+import { TITLE_BAR_HEIGHT, veiledColor, windowColors } from './windowTheme'
 
 let mainWindow: BrowserWindow | null = null
 let engine: Engine | null = null
@@ -145,11 +145,14 @@ const appIcon = join(__dirname, '../../resources/icon.ico')
 const isAppPage = appPageMatcher({ devUrl: env.ELECTRON_RENDERER_URL, indexFile })
 
 /** 창 바탕·창 단추를 지금 테마로 — 테마를 바꾸거나 Windows 가 바꾸면(Windows 따라감) 다시 칠한다 */
+let tourVeil = false
 function paintWindow(win: BrowserWindow): void {
   if (win.isDestroyed()) return
-  const c = windowColors(nativeTheme.shouldUseDarkColors)
+  const dark = nativeTheme.shouldUseDarkColors
+  const c = windowColors(dark)
   win.setBackgroundColor(c.bg)
-  win.setTitleBarOverlay({ color: c.bg, symbolColor: c.symbol, height: TITLE_BAR_HEIGHT })
+  // 투어 막이 떠 있으면 창 단추 띠도 막 색으로(Windows 가 웹 화면 위에 그려 막이 못 덮는다)
+  win.setTitleBarOverlay({ color: tourVeil ? veiledColor(dark) : c.bg, symbolColor: c.symbol, height: TITLE_BAR_HEIGHT })
 }
 
 function createWindow(): BrowserWindow {
@@ -178,7 +181,7 @@ function createWindow(): BrowserWindow {
   if (process.platform === 'win32') {
     win.setAppDetails({
       appId: appUserModelId(app.isPackaged, process.execPath),
-      appIconPath: appIcon,
+      ...appIconFor(app.isPackaged, process.execPath, appIcon),
       relaunchCommand: process.argv.map(a => `"${a}"`).join(' '),
       relaunchDisplayName: '두레',
     })
@@ -317,6 +320,10 @@ if (!app.requestSingleInstanceLock()) {
         },
         async installUpdate() {
           await updater.install()
+        },
+        async setTourVeil(on) {
+          tourVeil = on
+          if (mainWindow) paintWindow(mainWindow)
         },
         async openReleasePage() {
           const s = updater.state()

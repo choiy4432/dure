@@ -152,7 +152,7 @@ function listItem(text: string) {
   return at < 0 ? <b>{text}</b> : <><b>{text.slice(0, at)}</b>{text.slice(at)}</>
 }
 
-export function TourLayer({ dialog }: { dialog: Dialog }) {
+export function TourLayer({ dialog, onCloseDialog }: { dialog: Dialog; onCloseDialog: () => void }) {
   const v = useDure(s => ({
     tour: s.tour,
     // tourAdvance 가 읽는 것 — 바뀌면 다시 판정한다
@@ -291,10 +291,10 @@ export function TourLayer({ dialog }: { dialog: Dialog }) {
     setTipDone(true)
     void getStore().setPrefs({ approvalTipSeen: true }).catch(() => {})
   }
-  const hideBeside = () => {
+  // 설정 안 카드의 [확인했어요] — 설정 창을 닫는다(저장 안 한 바뀜은 취소처럼 버린다). 창이 닫히면 tourAdvance 가 끝 단계로 넘긴다
+  const closeSettings = () => {
     setHiddenTour(v.tour)
-    const dlg = document.querySelector<HTMLElement>('[data-tour="settings-dialog"]')
-    ;(dlg?.querySelector<HTMLElement>('input:not(:disabled)') ?? dlg)?.focus()
+    onCloseDialog()
   }
 
   // 초점 — 카드가 바뀌면 주 단추(do 단계는 카드 자체)로. 겹이 사라질 때 초점이 갈 곳을 잃었으면 처음 겹을 띄울 때의 자리로
@@ -358,6 +358,13 @@ export function TourLayer({ dialog }: { dialog: Dialog }) {
   const titleId = useId()
   const bodyId = useId()
   const still = useMedia('(prefers-reduced-motion: reduce)')
+  // 창 단추 띠 물들이기 — 막이 보이는 동안만(Windows 가 단추를 웹 화면 위에 그려 막이 못 덮는다)
+  const veilOn = mode !== null && mode !== 'beside'
+  useEffect(() => {
+    void window.dure?.setTourVeil?.(veilOn)?.catch?.(() => {})
+  }, [veilOn])
+  useEffect(() => () => void window.dure?.setTourVeil?.(false)?.catch?.(() => {}), [])
+
   if (mode === null) return null
 
   const content =
@@ -372,7 +379,7 @@ export function TourLayer({ dialog }: { dialog: Dialog }) {
       : mode === 'intro'
         ? { label: TOUR.start, run: () => getStore().tourNext() }
         : mode === 'beside'
-          ? { label: TOUR.ok, run: hideBeside }
+          ? { label: TOUR.ok, run: closeSettings }
           : mode === 'ok'
             ? { label: TOUR.ok, run: () => getStore().tourNext() }
             : null
