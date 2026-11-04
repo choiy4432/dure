@@ -13,6 +13,13 @@ export const hasPdfHead = (buf: Buffer): boolean => buf.subarray(0, HEAD.length)
  * 문서 블록에 드는 PDF 는 10MiB 까지라 보통 PDF 의 객체 스트림(쪽·글꼴 사전 등 뼈대)은 이보다 한참 작다 — 압축 폭탄은 여기서 멈춘다
  */
 export const PDF_INFLATE_MAX = 32 * 1024 * 1024;
+/**
+ * 객체 스트림 수 상한 — 넘으면 풀지 않고 모른다(null). 하나씩 풀면(스레드 왕복) 작은 것 수만 개가 보내기를 몇 초 늦춘다.
+ * 보통 PDF 의 객체 스트림은 수십 개 안쪽이다(한 스트림에 객체 100~200개)
+ */
+export const PDF_OBJSTM_MAX = 4096;
+/** 사전(<< >>) 겹 상한 — 넘으면 모른다(null). 닫히지 않는 `<<` 이 끝없이 겹치면(푼 객체 스트림엔 endobj 도 없다) 메모리가 끝없이 든다 */
+const DICT_DEPTH_MAX = 64;
 
 /** 바이트 표(0~255) — 그 바이트가 고른 글자 가운데 하나인가(Set 보다 빠르다 — 바이트마다 본다) */
 const table = (bytes: number[]): Uint8Array => {
@@ -52,7 +59,10 @@ interface ObjStm {
   end: number;
   filter: Dict['filter'];
 }
-/** 훑은 결과 — 보이는 쪽 객체 수 · 쪽 나무의 가장 큰 /Count · 암호 · 풀 객체 스트림 · 넘으면 그만 훑을 쪽수(over)와 넘었나(full) */
+/**
+ * 훑은 결과 — 보이는 쪽 객체 수 · 쪽 나무의 가장 큰 /Count · 암호 · 풀 객체 스트림 · 넘으면 그만 훑을 쪽수(over)와 넘었나(full) ·
+ * 모른다(unknown — 그만 훑고 null: 사전이 너무 겹침 · 객체 스트림이 너무 많음 · 객체 스트림의 바이트를 못 찾음)
+ */
 interface Tally {
   pages: number;
   tree: number | null;
@@ -60,6 +70,7 @@ interface Tally {
   objStms: ObjStm[];
   over: number;
   full: boolean;
+  unknown: boolean;
 }
 
 /** i 부터 w 바이트 그대로인가 */
@@ -83,6 +94,19 @@ const nameEnd = (buf: Buffer, i: number): number => {
 };
 /** '/' 가 i 에 있고 끝이 j 인 이름이 w 인가 */
 const isName = (buf: Buffer, i: number, j: number, w: Buffer): boolean => j - i - 1 === w.length && at(buf, i + 1, w);
+/**
+ * i 의 `stream` 낱말 다음 스트림 바이트가 시작하는 자리 — 낱말 뒤 빈칸·탭은 건너뛰고 줄 끝(\r\n·\n·\r)이 와야 한다. 아니면 -1
+ * (스트림으로 알아보지 않는다)
+ */
+function streamData(buf: Buffer, i: number): number {
+  if (!wordAt(buf, i, STREAM)) return -1;
+  let j = i + STREAM.length;
+  while (buf[j] === 0x20 || buf[j] === 0x09) j++;
+  if (buf[j] !== CR && buf[j] !== LF) return -1;
+  if (buf[j] === CR) j++;
+  if (buf[j] === LF) j++;
+  return j;
+}
 
 /**
  * 바이트를 한 번 훑는다(정규식 없이 — 10MiB 도 금방). 글(문자열 `(…)`·`<…>`)·주석·스트림 바이트는 건너뛰고(그 안의 글자는 PDF 뼈대가
@@ -90,17 +114,21 @@ const isName = (buf: Buffer, i: number, j: number, w: Buffer): boolean => j - i 
  * - `/Type /Page`(뒤가 이름 끝 — /Pages·/PageLabel 아님) 수
  * - 쪽 나무 마디(/Kids 나 /Type /Pages 가 있는 사전)의 /Count — 목차(/Outlines·목차 항목)의 /Count 는 치지 않는다
  * - /Encrypt(끝 사전·교차 참조 스트림) · 객체 스트림(/Type /ObjStm)의 바이트 자리(objStms 가 있을 때만 — 푼 바이트 안엔 스트림이 없다)
+ * 모르면(t.unknown) 그만 훑는다: 사전이 DICT_DEPTH_MAX 겹을 넘음 · 객체 스트림이 PDF_OBJSTM_MAX 개를 넘음 · 객체 스트림 사전 뒤에
+ * 알아볼 stream 이 없음(그 바이트를 못 찾는다 — 푼 바이트 안의 객체 스트림 사전도) · 객체 스트림에 endstream 이 없음(잘린 파일)
  */
 function scan(buf: Buffer, t: Tally, objStms: ObjStm[] | null): void {
   const stack: Dict[] = [];
   let closed: Dict | null = null; // 방금 닫힌 사전 — 바로 뒤에 stream 이 오면 그 스트림의 사전
   let closedAt = -1;
-  const close = (d: Dict) => {
+  /** 사전이 닫힌다 — next: `>>` 다음 자리(endobj·끝에서 억지로 닫으면 null — 그 뒤에 stream 이 없다) */
+  const close = (d: Dict, next: number | null) => {
     if ((d.kids || d.pages) && d.count !== null) t.tree = Math.max(t.tree ?? 0, d.count);
     if ((t.tree ?? 0) > t.over) t.full = true;
+    if (d.objStm && (next === null || !objStms || streamData(buf, skipSpace(buf, next)) < 0)) t.unknown = true;
   };
   let i = 0;
-  while (i < buf.length && !t.full) {
+  while (i < buf.length && !t.full && !t.unknown) {
     const c = buf[i];
     if (c === PERCENT) {
       // 주석 — 줄 끝까지
@@ -118,6 +146,10 @@ function scan(buf: Buffer, t: Tally, objStms: ObjStm[] | null): void {
       }
     } else if (c === LT) {
       if (buf[i + 1] === LT) {
+        if (stack.length >= DICT_DEPTH_MAX) {
+          t.unknown = true;
+          break;
+        }
         stack.push({ kids: false, pages: false, objStm: false, filter: 'none', parms: false, count: null });
         i += 2;
       } else {
@@ -129,7 +161,7 @@ function scan(buf: Buffer, t: Tally, objStms: ObjStm[] | null): void {
       if (buf[i + 1] === GT) {
         const d = stack.pop();
         if (d) {
-          close(d);
+          close(d, i + 2);
           closed = d;
           closedAt = i + 2;
         }
@@ -190,23 +222,29 @@ function scan(buf: Buffer, t: Tally, objStms: ObjStm[] | null): void {
       } else if (isName(buf, name, j, ENCRYPT)) {
         t.encrypted = true;
       }
-    } else if (c === 0x73 /* s */ && wordAt(buf, i, STREAM) && (buf[i + STREAM.length] === CR || buf[i + STREAM.length] === LF)) {
-      // 스트림 — 줄 끝(\r\n·\n·\r) 다음부터 endstream 앞까지. 그 사전이 객체 스트림이면 자리를 적고, 아니면(내용·그림·글꼴) 건너뛴다
-      let start = i + STREAM.length;
-      if (buf[start] === CR) start++;
-      if (buf[start] === LF) start++;
+    } else if (c === 0x73 /* s */ && streamData(buf, i) >= 0) {
+      // 스트림 — 줄 끝 다음부터 endstream 앞까지. 그 사전이 객체 스트림이면 자리를 적고, 아니면(내용·그림·글꼴) 건너뛴다
+      const start = streamData(buf, i);
       const e = buf.indexOf(ENDSTREAM, start);
       const end = e < 0 ? buf.length : e;
       const own = closed && skipSpace(buf, closedAt) === i ? closed : null;
-      if (objStms && own?.objStm) objStms.push({ start, end, filter: own.parms ? 'other' : own.filter });
+      if (objStms && own?.objStm) {
+        // 잘렸거나(endstream 없음) 너무 많다 — 그 안의 쪽을 다 못 센다
+        if (e < 0 || objStms.length >= PDF_OBJSTM_MAX) {
+          t.unknown = true;
+          break;
+        }
+        objStms.push({ start, end, filter: own.parms ? 'other' : own.filter });
+      }
       i = e < 0 ? buf.length : e + ENDSTREAM.length;
     } else if (c === 0x65 /* e */ && wordAt(buf, i, ENDOBJ)) {
       // 객체 끝 — 짝이 안 맞은 사전이 다음 객체로 번지지 않게
-      while (stack.length) close(stack.pop()!);
+      while (stack.length) close(stack.pop()!, null);
       i += ENDOBJ.length;
     } else i++;
   }
-  while (stack.length) close(stack.pop()!);
+  if (t.unknown || t.full) return; // 그만 훑었다 — 열린 사전을 닫아 셀 것이 없다
+  while (stack.length) close(stack.pop()!, null);
 }
 
 /** 압축을 푼다(libuv 스레드에서 — main 을 막지 않는다). 잘린 끝은 풀린 데까지(Z_SYNC_FLUSH) · max 를 넘으면 던진다 */
@@ -221,15 +259,17 @@ function inflate(data: Buffer, max: number): Promise<Buffer> {
  * 쪽 객체·쪽 나무가 압축된 객체 스트림(/Type /ObjStm — PDF 1.5+ 의 흔한 꼴: pdfTeX·LuaTeX·XeTeX·Ghostscript·Acrobat 최적화·qpdf)에
  * 있으면 그 스트림만 풀어(FlateDecode, 합 PDF_INFLATE_MAX 까지) 같이 센다 — 내용·그림 스트림은 풀지 않는다.
  * 모르면 null(엔진은 경로 줄만 — 큰 PDF 가 문서 블록으로 가지 않게): 아무것도 안 보임 · 객체 스트림을 못 풂(깨짐·다른 필터·예측기·상한) ·
- * 암호(/Encrypt — 객체 스트림도 암호라 못 풀고, Claude 의 문서 블록은 암호 건 PDF 를 읽지 못한다).
+ * 암호(/Encrypt — 객체 스트림도 암호라 못 풀고, Claude 의 문서 블록은 암호 건 PDF 를 읽지 못한다) · 이상한 꼴(사전 64 겹 넘음 ·
+ * 객체 스트림 4096 개 넘음 · 객체 스트림 사전 뒤에 알아볼 stream 이 없음 · 객체 스트림에 endstream 이 없음 — 잘린 파일).
  * 더 많게 세는 일(고쳐 저장한 PDF 의 옛 쪽·옛 쪽 나무)은 그대로 둔다 — 경로 줄만 갈 뿐이다. signal 이 끊기면 그 까닭(AbortError)으로 던진다.
  * over: 그보다 많은 것을 알면 거기서 그만 훑고 그 수를 돌려준다(정확한 쪽수가 아니라 'over 보다 많다' — 큰 PDF 를 끝까지 훑지 않게)
  */
 export async function pdfPageCount(buf: Buffer, signal?: AbortSignal, over = Infinity): Promise<number | null> {
   signal?.throwIfAborted();
-  const t: Tally = { pages: 0, tree: null, encrypted: false, objStms: [], over, full: false };
+  const t: Tally = { pages: 0, tree: null, encrypted: false, objStms: [], over, full: false, unknown: false };
   const known = () => Math.max(t.pages, t.tree ?? 0);
   scan(buf, t, t.objStms);
+  if (t.unknown) return null;
   if (t.full) return known();
   if (t.encrypted) return null;
   let room = PDF_INFLATE_MAX;
@@ -248,6 +288,7 @@ export async function pdfPageCount(buf: Buffer, signal?: AbortSignal, over = Inf
       room -= data.length;
     }
     scan(data, t, null);
+    if (t.unknown) return null;
     if (t.full) return known();
   }
   if (t.encrypted) return null;

@@ -382,6 +382,8 @@ const SEEN_WAIT_MS = 2000;
 const AUTO_TURN_GRACE_MS = 1500;
 /** 차례 도중에 보낸 말이 안 읽힌 채 차례가 끝났을 때 그 말의 차례를 기다리는 시간 — 멈추면 곧바로 열린다(probe17) */
 const MID_GRACE_MS = 5000;
+/** 갈래 첨부를 복사하는 중에 그 갈래를 지우면 그 복사가 그만두고 치울 때까지 기다리는 상한 — 큰 첨부 하나를 복사하는 중이어도 지우기가 오래 안 걸리게 */
+const FORK_COPY_WAIT_MS = 5000;
 /** 미리 띄웠지만 아무 줄도 안 받은 세션 — 고르지 않게 된 뒤 이만큼 지나면 끈다(둘러보기만 한 에이전트의 프로세스가 쌓이지 않게) */
 const PREWARM_IDLE_MS = 5 * 60_000;
 /** 재우기 시간을 재는 '1분' — 살아 있는 세션은 이만큼마다 훑는다(probe18: 재웠다 --resume 으로 깨워도 토큰 손해가 없고 띄우는 시간만 든다) */
@@ -608,6 +610,9 @@ class EngineImpl extends EventEmitter implements Engine {
   private shown = new Map<AgentId, { status: AgentStatus; errorText: string | null; issue: RemoteIssue | null }>();
   private described = new WeakMap<ClaudeSession, Promise<AgentDescription>>();
   private inFlight = new WeakMap<ClaudeSession, InFlight[]>();
+  // 쉴 때 쓴 줄의 되돌림 몫 — 그 줄은 init 으로 읽혔다고 보지만 되돌림은 init 뒤에 온다. 끼운 말보다 먼저 맞춘다(noteRead — 그림만 둘처럼
+  // 되돌림 꼴이 같으면 앞 말의 되돌림이 끼운 말을 읽힌 것으로 만들지 않게). 그 차례가 끝나면(result) 비운다 — 되돌리지 않는 줄(슬래시 명령 등)
+  private echoOwed = new WeakMap<ClaudeSession, InFlight[]>();
   // 차례 도중에 보낸 말이 안 읽힌 채 차례가 끝났다 — 그 말의 차례를 기다리는 타이머(MID_GRACE_MS)
   private midGrace = new WeakMap<ClaudeSession, NodeJS.Timeout>();
   private removing = new Set<AgentId>();
@@ -706,6 +711,8 @@ class EngineImpl extends EventEmitter implements Engine {
   private uploads = new Map<AgentId, Set<AbortController>>();
   // 끼운 말을 돌려받으며 멈추는 중(stopRetracting) — 그사이 준비를 마친 입력은 이 끝을 기다렸다 붙잡힌다(붙잡기 목록이 보낸 차례대로)
   private retracting = new Map<AgentId, Promise<void>>();
+  // 갈래의 첨부 사본을 복사하는 중(forkAttachments — 갈래 에이전트마다) — 지우기가 그 끝을 기다렸다 폴더를 지운다(복사가 연 임시 파일에 막혀 잘못 알리지 않게)
+  private forkCopies = new Map<AgentId, Promise<void>>();
 
   constructor(private o: EngineOptions, private store: Store, private log: MessageLog, private hist: History) {
     super();
@@ -1338,8 +1345,16 @@ class EngineImpl extends EventEmitter implements Engine {
       if (remote) this.queueAttachmentsCleanup(id, remote.host);
       this.hist.remove(id);
       this.images.remove(id);
-      // 첨부 사본도 — 다른 프로그램이 연 채 잠가 못 지워도 지우기는 끝낸다(남은 것은 알리고, 다음에 켤 때 다시 지운다)
-      this.removeAttachments(id);
+      // 첨부 사본도 — 다른 프로그램이 연 채 잠가 못 지워도 지우기는 끝낸다(남은 것은 알리고, 다음에 켤 때 다시 지운다).
+      // 갈래 첨부를 복사하는 중이면 그 끝을 기다린다 — 복사가 연 임시 파일에 막힌 것은 잠긴 것이 아니다(복사가 그만두며 치운다).
+      // 상한까지도 복사 중이면 알리지 않고 해 보기만 한다(끝나면 복사가 치우고, 남으면 다음에 켤 때)
+      if (await this.forkCopied(id)) {
+        try {
+          this.attachments.remove(id);
+        } catch {
+          // 위 — 복사가 끝나면 치운다
+        }
+      } else this.removeAttachments(id);
     } finally {
       this.removing.delete(id);
       this.shown.delete(id);
@@ -2234,9 +2249,34 @@ class EngineImpl extends EventEmitter implements Engine {
       if (it.kind === 'user') for (const p of it.parts) if (p.type === 'file') files.push(p.file);
     }
     this.guard(agent.id, () => this.hist.append(agent.id, { t: Date.now(), kind: 'notice', text: forkedNotice(src.name, target.at) }));
-    // 첨부 사본은 그 뒤에(비동기) — 복사가 끝날 때까지 그 칩은 '찾을 수 없어요'
-    await this.forkAttachments(i.from, agent.id, files);
+    // 첨부 사본은 그 뒤에(비동기) — 복사가 끝날 때까지 그 칩은 '찾을 수 없어요'. 그새 지우면 지우기가 이 끝을 기다린다(forkCopied)
+    const copying = this.forkAttachments(i.from, agent.id, files);
+    this.forkCopies.set(agent.id, copying);
+    try {
+      await copying;
+    } finally {
+      if (this.forkCopies.get(agent.id) === copying) this.forkCopies.delete(agent.id);
+    }
     return agent;
+  }
+
+  /**
+   * 그 갈래의 첨부 복사가 끝날 때까지(FORK_COPY_WAIT_MS 까지) — 지우는 중이면 복사는 지금 사본을 마치고 그만두며 폴더를 치운다.
+   * 상한까지도 안 끝났으면 true(아직 복사 중 — 끝나면 forkAttachments 가 치운다)
+   */
+  private async forkCopied(id: AgentId): Promise<boolean> {
+    const copying = this.forkCopies.get(id);
+    if (!copying) return false;
+    let timer: NodeJS.Timeout | undefined;
+    const limit = new Promise<boolean>((r) => {
+      timer = setTimeout(() => r(true), FORK_COPY_WAIT_MS);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([copying.then(() => false, () => false), limit]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -2670,9 +2710,12 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * 보낸 줄을 읽었나 — 차례 도중에 보낸 말은 그 되돌림(replay — 너그럽게 맞춘다, replayMatches)으로만, 쉴 때 보낸 줄은 Claude 의 첫 줄로
-   * (그 줄의 init 이 되돌림보다 먼저 온다). 읽은 줄을 목록에서 뺀다
+   * (그 줄의 init 이 되돌림보다 먼저 온다). 읽은 줄을 목록에서 뺀다. 쉴 때 보낸 줄의 되돌림은 그 몫(echoOwed)이 먼저 가져간다 —
+   * 되돌림은 Claude 가 읽은 차례대로 오고, 쉴 때 쓴 줄은 그 뒤에 끼운 말보다 먼저 쓰였다
    */
   private noteRead(s: ClaudeSession, ev: StreamEvent): boolean {
+    if (ev.kind === 'replay' && this.payEcho(s, ev.text)) return false;
+    if (ev.kind === 'result') this.echoOwed.delete(s);
     const list = this.inFlight.get(s);
     if (!list?.length) return false;
     if (ev.kind === 'replay') {
@@ -2684,6 +2727,15 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     if (!readsInput(ev) || list[0].mid) return false;
     list.shift();
+    return true;
+  }
+
+  /** 쉴 때 쓴 줄의 되돌림인가 — 맞는 몫을 가져간다(그 앞의 몫은 되돌림이 안 온 것 — 함께 버린다). 맞으면 true */
+  private payEcho(s: ClaudeSession, replay: string): boolean {
+    const owed = this.echoOwed.get(s);
+    const i = owed?.findIndex((x) => replayMatches(x.kind === 'human' ? x.input.parts : x.text, replay)) ?? -1;
+    if (i < 0) return false;
+    owed!.splice(0, i + 1);
     return true;
   }
 
@@ -2825,6 +2877,11 @@ class EngineImpl extends EventEmitter implements Engine {
     const list = this.inFlight.get(s) ?? [];
     list.push(item);
     this.inFlight.set(s, list);
+    if (!item.mid) {
+      const owed = this.echoOwed.get(s) ?? [];
+      owed.push(item);
+      this.echoOwed.set(s, owed);
+    }
     this.prewarmed.delete(s); // 일을 받은 세션 — 고르지 않게 돼도 끄지 않는다(앱을 끌 때까지)
   }
 

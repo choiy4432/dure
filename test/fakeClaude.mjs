@@ -544,6 +544,11 @@ async function turn(text, pending = []) {
   await init();
   await echo(text);
   if (text.startsWith('SLOW')) return; // interrupt 가 올 때까지 대기
+  // FAKE_SLOW_BLANK=1 — 글 없는 말(그림만)의 차례도 SLOW 처럼: 되돌림 뒤 한 줄('그림 받음')을 내고 interrupt 가 올 때까지 대기
+  if (text === '' && process.env.FAKE_SLOW_BLANK === '1') {
+    await assistant([{ type: 'text', text: '그림 받음' }]);
+    return;
+  }
   if (text.startsWith('CRASH')) {
     process.stderr.write('fake crash\n');
     process.exit(3);

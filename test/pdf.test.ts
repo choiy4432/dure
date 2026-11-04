@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest';
 import zlib from 'node:zlib';
-import { hasPdfHead, isPdfName, PDF_INFLATE_MAX, pdfPageCount } from '../src/engine/pdf';
+import { hasPdfHead, isPdfName, PDF_INFLATE_MAX, PDF_OBJSTM_MAX, pdfPageCount } from '../src/engine/pdf';
 import { objStm, packedPdf, pageDict, pagesDict, pdfOf } from './pdfFixtures';
 
 const of = (s: string | Buffer) => pdfPageCount(typeof s === 'string' ? Buffer.from(s, 'latin1') : s);
@@ -101,6 +101,74 @@ test('over — 그보다 많은 것을 알면 그만 훑는다(남은 객체 스
   } finally {
     inflate.mockRestore();
   }
+});
+
+// 닫히지 않는 사전 `<<` 이 끝없이 겹치면 훑는 데 메모리가 끝없이 든다(푼 객체 스트림엔 endobj 도 없다) — 64 겹을 넘으면 모른다
+test('사전이 64 겹을 넘게 겹치면 모른다(null) — 날 바이트 10MiB · 객체 스트림 안 31MiB 의 `<` 도 금방, 메모리도 조금', async () => {
+  const nest = (n: number) => `${'<< /A '.repeat(n)}1${' >>'.repeat(n)}`;
+  const tree = (inner: string) => `%PDF-1.7\n<< /Type /Pages /Kids [3 0 R] /Count 3 /X ${inner} >> << /Type /Page >>`;
+  expect(await of(tree(nest(63)))).toBe(3); // 쪽 나무 사전까지 64 겹
+  expect(await of(tree(nest(64)))).toBeNull();
+  const raw = pdfOf('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n', Buffer.alloc(10 * MiB, 0x3c));
+  const packed = pdfOf('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n', objStm(50, [], { data: zlib.deflateSync(Buffer.alloc(31 * MiB, 0x3c)) }));
+  const heap = process.memoryUsage().heapUsed;
+  const t0 = performance.now();
+  expect(await of(raw)).toBeNull();
+  expect(await of(packed)).toBeNull();
+  expect(performance.now() - t0).toBeLessThan(1000);
+  expect(process.memoryUsage().heapUsed - heap).toBeLessThan(128 * MiB);
+}, 30_000);
+
+// 작은 객체 스트림 수만 개 — 하나씩 풀면(스레드 왕복) 보내기가 몇 초 늦는다. 4096 개를 넘으면 풀지 않고 모른다
+test('객체 스트림이 PDF_OBJSTM_MAX(4096) 개를 넘으면 모른다(null) — 10만 개도 금방', async () => {
+  const blank = zlib.deflateSync(Buffer.from('<< /Foo 1 >>\n', 'latin1'));
+  const many = (n: number) => pdfOf('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 5 >>\nendobj\n', ...Array.from({ length: n }, (_, i) => objStm(1000 + i, [], { data: blank })));
+  expect(await of(many(4096))).toBe(5);
+  expect(await of(many(4097))).toBeNull();
+  const lots = many(100_000);
+  const inflate = vi.spyOn(zlib, 'inflate');
+  try {
+    const t0 = performance.now();
+    expect(await of(lots)).toBeNull();
+    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(inflate).not.toHaveBeenCalled(); // 세다 넘은 것을 알면 하나도 풀지 않는다
+  } finally {
+    inflate.mockRestore();
+  }
+  expect(PDF_OBJSTM_MAX).toBe(4096);
+}, 60_000);
+
+// 객체 스트림 사전 뒤에 알아볼 stream 이 없으면 그 바이트를 못 찾는다 — 그 안에 쪽이 숨어 있을 수 있다(보이는 1쪽만 세면 문서 블록으로 간다)
+test('객체 스트림 사전 뒤에 알아볼 stream 이 없으면 모른다(null) · 줄 끝 앞 빈칸·탭은 받는다', async () => {
+  const visible = '3 0 obj\n<< /Type /Page /Parent 2 0 R >>\nendobj\n';
+  const hidden = objStm(50, [pagesDict(300), ...Array.from({ length: 299 }, () => pageDict)]);
+  const after = (eol: string) => Buffer.from(hidden.toString('latin1').replace('>>\nstream\r\n', `>>\n${eol}`), 'latin1');
+  expect(await of(pdfOf(visible, hidden))).toBe(300);
+  expect(await of(pdfOf(visible, after('stream \r\n')))).toBe(300);
+  expect(await of(pdfOf(visible, after('stream\t \n')))).toBe(300);
+  // 줄 끝이 아닌 것 · 주석 · 다른 낱말 · stream 없이 endobj · 파일 끝
+  expect(await of(pdfOf(visible, after('stream x')))).toBeNull();
+  expect(await of(pdfOf(visible, after('% note\nstream\r\n')))).toBeNull();
+  expect(await of(pdfOf(visible, after('streams\r\n')))).toBeNull();
+  expect(await of(pdfOf(visible, '50 0 obj\n<< /Type /ObjStm /N 1 /First 4 >>\nendobj\n'))).toBeNull();
+  expect(await of(`%PDF-1.5\n${visible}50 0 obj\n<< /Type /ObjStm /N 1 /First 4 >>`)).toBeNull();
+});
+
+// 잘린 파일 — 객체 스트림이 endstream 없이 끝난다. 풀린 데까지 세면 적게 센다(백 쪽 안쪽으로 보이면 큰 PDF 가 문서 블록으로 간다)
+test('객체 스트림에 endstream 이 없으면(잘린 파일) 모른다(null)', async () => {
+  const pages = [...Array.from({ length: 300 }, () => pageDict), pagesDict(300)]; // 쪽 나무는 맨 뒤
+  const head = Buffer.from('%PDF-1.5\n', 'latin1');
+  const whole = objStm(50, pages);
+  const at = whole.indexOf('stream\r\n') + 'stream\r\n'.length;
+  const end = whole.indexOf('\r\nendstream');
+  // 압축 — 90% 에서 자르면 풀린 데까지 240쪽이 보인다(쪽 나무는 잘려 없다)
+  expect(await of(Buffer.concat([head, whole.subarray(0, at + Math.floor((end - at) * 0.9))]))).toBeNull();
+  // 압축 안 한 객체 스트림 — 4KiB 에서 자르면 11쪽
+  const plain = objStm(50, pages, { filter: '' });
+  const plainAt = plain.indexOf('stream\r\n') + 'stream\r\n'.length;
+  expect(await of(Buffer.concat([head, plain.subarray(0, plainAt + 4096)]))).toBeNull();
+  // endstream 이 있으면 그대로 센다
+  expect(await of(pdfOf(whole))).toBe(300);
 });
 
 test('끊으면(signal) AbortError — 객체 스트림을 푸는 사이에도', async () => {

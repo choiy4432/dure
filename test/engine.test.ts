@@ -6822,6 +6822,30 @@ test('차례 도중 그림만 — 글 없는 되돌림으로 읽은 것을 맞�
   expect(e.history(a.id).filter((x) => x.kind === 'user')).toHaveLength(2);
 });
 
+// 쉴 때 보낸 줄은 init 으로 읽히지만 그 되돌림은 init 뒤에 온다(첫 말은 init 뒤) — 그 사이 끼운 말이 같은 되돌림 꼴이면(그림만 둘 — 둘 다 글 없는
+// 되돌림) 앞 말의 되돌림을 끼운 말이 읽힌 것으로 치면 안 된다: 끼운 말은 안 읽힌 채라 멈추면 돌려받아 붙잡아야 한다(아니면 멈춘 뒤 그 말로 새 차례)
+test('쉴 때 그림만 보내고 그 되돌림 전에 그림만 끼우면 — 앞 말의 되돌림은 앞 말의 몫, 끼운 말은 멈추면 돌려받는다', async () => {
+  const e = await start({ FAKE_SLOW_BLANK: '1' }, false, { midGraceMs: 60_000 });
+  const { a } = setup(e);
+  const image = (n: number): UserPart[] => [{ type: 'image', mediaType: 'image/png', base64: Buffer.alloc(64, n).toString('base64') }];
+  const said = waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === a.id && x.event.kind === 'assistant');
+  await e.sendUser(a.id, image(1)); // 쉴 때 — 차례를 연다
+  await e.sendUser(a.id, image(2)); // 그 되돌림이 오기 전에 끼운다
+  expect(e.heldInput(a.id)).toBe(0); // 줄에 서지 않고 바로 나갔다
+  await said; // init · 첫 말의 되돌림(글 없음)이 지나갔다 — 끼운 말은 가짜가 아직 안 읽었다
+  expect(e.status(a.id)).toBe('working');
+  const first = spawnsOf('A')[0].pid;
+  await e.interrupt(a.id);
+  expect(e.hold(a.id)?.items).toEqual([expect.objectContaining({ source: 'human', text: '', images: 1 })]); // 끼운 말을 돌려받아 붙잡았다
+  expect(e.history(a.id).some((x) => x.kind === 'notice' && x.text === '멈췄어요 — Claude 가 아직 읽지 않은 말 1개는 붙잡았어요')).toBe(true);
+  await until('A 가 꺼짐', () => !isAlive(first));
+  await until('다시 띄움', () => spawnsOf('A').length === 2);
+  await until('쉼', () => e.status(a.id) === 'idle');
+  await sleep(300);
+  expect(userContents()).toHaveLength(2); // 새 claude 엔 아무것도 안 갔다
+  expect(e.history(a.id).filter((x) => x.kind === 'user')).toHaveLength(2);
+});
+
 // ── PDF 첨부 — 경로 줄에 더해 문서 블록(base64)으로도(설계 §4.5 · probe29) ──
 const MiB = 1024 * 1024;
 /**
@@ -7157,8 +7181,10 @@ test('갈래 — 기록 먼저, 첨부 사본은 그 뒤(그새 보낸 말은 �
     const forking = e.forkAgent({ from: a.id, key: s1, name: 'A 3', role: '기획' });
     await until('갈래가 보임', () => e.agents().length > before.length && g.spy.mock.calls.length > 0);
     const made = e.agents().find((x) => !before.includes(x.id))!;
-    await e.removeAgent(made.id);
+    const removing = e.removeAgent(made.id); // 지우기는 복사가 그만두고 치울 때까지 기다린다
+    await sleep(100);
     g.open();
+    await removing;
     await forking;
     expect(g.spy).toHaveBeenCalledTimes(1); // 둘째 첨부는 복사하지 않았다
     expect(fs.existsSync(attDir(made.id))).toBe(false);
@@ -7167,6 +7193,55 @@ test('갈래 — 기록 먼저, 첨부 사본은 그 뒤(그새 보낸 말은 �
   } finally {
     g.open();
     g.spy.mockRestore();
+  }
+});
+
+// 갈래 복사 중(CopyFileW 가 임시 파일을 혼자 연 채)에 지우면 폴더 지우기가 막힌다(EBUSY·EPERM) — 곧 복사가 끝나 forkAttachments 가 치우는데
+// '첨부 폴더를 다 지우지 못했어요' 를 잘못 알리지 않게, 지우기는 그 복사를 기다렸다(상한 있음) 치운다
+test.skipIf(process.platform !== 'win32')('갈래 복사 중에 지우면 — 복사를 기다렸다 치우고, 다 못 지웠다고 알리지 않는다', async () => {
+  const { e } = await startConv();
+  const { a } = setup(e);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(original('하나.md', '# 하나'))]);
+  await done;
+  const s1 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  const errors: string[] = [];
+  e.on('engine-error', (x: { message: string }) => errors.push(x.message));
+
+  // copyFile 안에서 붙잡는다 — CopyFileW 처럼 임시 파일을 혼자(나눠 쓰기 없이 — libuv UV_FS_O_EXLOCK) 연 채, open() 을 부를 때까지
+  const EXLOCK = 0x10000000;
+  let open!: () => void;
+  const shut = new Promise<void>((r) => (open = r));
+  let inside = false;
+  const real = fs.promises.copyFile;
+  const spy = vi.spyOn(fs.promises, 'copyFile').mockImplementation(async (src, dest, mode) => {
+    const h = await fs.promises.open(dest, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | EXLOCK);
+    inside = true;
+    try {
+      await shut;
+    } finally {
+      await h.close();
+    }
+    return real(src, dest, mode);
+  });
+  try {
+    const before = e.agents().map((x) => x.id);
+    const forking = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+    await until('복사 중', () => inside);
+    const made = e.agents().find((x) => !before.includes(x.id))!;
+    expect(() => fs.rmSync(attDir(made.id), { recursive: true, force: true })).toThrow(); // 잠겨 지금은 못 지운다
+    const removing = e.removeAgent(made.id);
+    await sleep(300); // 지우기가 폴더를 지우려 들 틈
+    open();
+    await removing;
+    await forking;
+    expect(errors).toEqual([]);
+    expect(fs.existsSync(attDir(made.id))).toBe(false);
+    expect(attFiles(a.id)).toHaveLength(1); // 원래 것 그대로
+  } finally {
+    open();
+    spy.mockRestore();
   }
 });
 
