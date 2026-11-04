@@ -23,6 +23,13 @@ const RUNNABLE_EXT = new Set([
   'ops', 'osd', 'pcd', 'pif', 'pl', 'plg', 'prf', 'prg', 'printerexport', 'ps1', 'ps1xml', 'ps2', 'ps2xml', 'psc1', 'psc2', 'psd1', 'psdm1',
   'psm1', 'pssc', 'py', 'pyc', 'pyo', 'pyw', 'pyz', 'pyzw', 'reg', 'scf', 'scr', 'sct', 'search-ms', 'settingcontent-ms', 'shb', 'shs',
   'theme', 'url', 'vb', 'vbe', 'vbp', 'vbs', 'vhd', 'vhdx', 'vsmacros', 'vsw', 'webpnp', 'website', 'ws', 'wsc', 'wsf', 'wsh', 'xbap', 'xll', 'xnk',
+  // Git for Windows 가 Bash 에 잇는 스크립트(Claude Code 가 쓰는 PC 엔 거의 늘 있다) · 그 밖의 스크립트 실행기
+  'sh', 'bash', 'zsh', 'rb', 'rbw', 'ahk', 'au3',
+  // 바로 접속·마법사·진단·테마 묶음·검색 연결·설치기·인증서 가져오기 — 이 PC 의 기본 연결로 확인(2026-11-04 검토)
+  'rdp', 'themepack', 'deskthemepack', 'diagcfg', 'diagpkg', 'wcx', 'searchconnector-ms', 'appcontent-ms', 'appinstaller',
+  'pfx', 'p12', 'p7b', 'p7c', 'spc', 'sst', 'crl',
+  // MSHTML(iexplore)로 열린다
+  'mht', 'mhtml',
 ]);
 
 /** 기본 앱으로 열어도 되는 문서·그림인가 — 실행되는 종류이거나 확장자가 없으면 false(탐색기에서 보이기) */

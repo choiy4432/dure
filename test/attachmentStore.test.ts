@@ -65,6 +65,22 @@ test('안전한 사본 이름 · 같은 이름 — 숫자 붙임', async () => {
   expect(Buffer.byteLength(long)).toBeLessThanOrEqual(100);
 });
 
+test('resolve — 링크를 따라가지 않는다(에이전트 폴더 자리의 junction)', async () => {
+  const s = open();
+  const { file } = await s.copyIn('a1', source('a.txt'), 'a.txt');
+  // 다른 곳에 같은 이름의 파일을 두고, 에이전트 폴더 자리를 그곳을 가리키는 junction 으로 바꾼다
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'dure-outside-'));
+  try {
+    fs.writeFileSync(path.join(outside, file), '밖');
+    fs.symlinkSync(outside, path.join(dir, 'attachments', 'a2'), 'junction');
+    expect(s.resolve('a2', file)).toBeNull();
+    expect(s.resolve('a1', file)).not.toBeNull(); // 진짜 폴더는 그대로
+  } finally {
+    fs.rmSync(path.join(dir, 'attachments', 'a2'), { force: true, recursive: false });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test('resolve — 폴더 밖 거절', async () => {
   const s = open();
   const { file, abs } = await s.copyIn('a1', source('a.txt'), 'a.txt');

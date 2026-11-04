@@ -180,7 +180,11 @@ export function openAttachmentStore(dataDir: string, o: { now?: () => Date } = {
       const abs = inside(agentId, file);
       if (!abs) return null;
       try {
-        return fs.statSync(abs).isFile() ? abs : null;
+        // 링크는 따라가지 않는다 — 파일 링크·폴더 자리의 junction 이 첨부 폴더 밖을 가리키면 그 밖이 열린다
+        if (!fs.lstatSync(abs).isFile()) return null;
+        const dir = path.dirname(abs);
+        if (fs.realpathSync.native(dir) !== path.join(fs.realpathSync.native(root), path.basename(dir))) return null;
+        return abs;
       } catch {
         return null;
       }

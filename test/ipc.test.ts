@@ -522,7 +522,10 @@ describe('registerIpc', () => {
       ;(engine as any).attachmentPath = (id: string, f: string) => store.resolve(id, f)
       const src = path.join(dir, 'x')
       fs.writeFileSync(src, 'echo')
-      for (const name of ['run.bat', 'SETUP.EXE', '바로 가기.lnk', 'a.ps1', 'a.cmd', 'a.vbs', 'a.js', 'a.msi', 'a.reg', 'a.hta', 'a.scr', 'a.url', '확장자없음']) {
+      for (const name of [
+        'run.bat', 'SETUP.EXE', '바로 가기.lnk', 'a.ps1', 'a.cmd', 'a.vbs', 'a.js', 'a.msi', 'a.reg', 'a.hta', 'a.scr', 'a.url', '확장자없음',
+        'cleanup.sh', 'a.pdf.exe', '\u202Efdp.exe', 'a.rdp', 'a.themepack', 'a.diagcfg', 'a.pfx', 'a.mht', 'a.appinstaller',
+      ]) {
         const { file, abs } = await store.copyIn('a1', src, name)
         deps.openPath.mockClear()
         deps.showInFolder.mockClear()
@@ -557,6 +560,12 @@ describe('registerIpc', () => {
       ['sendUser', ['a1', [text, good, image, empty], undefined]],
       ['sendUser', ['a1', [good], { plan: true }]],
     ])
+    // 네트워크 공유·빗금 꼴·긴 경로 꼴도 절대 경로다 — 검증을 조이다가 막히지 않게
+    calls.length = 0
+    for (const p of ['\\\\server\\share\\a.pdf', 'C:/x/a.pdf', '\\\\?\\C:\\x\\a.pdf']) {
+      expect(await call('sendUser', 'a1', [{ ...good, path: p }]), p).toEqual({ ok: true, value: null })
+    }
+    expect(calls).toHaveLength(3)
     const BAD = { ok: false, error: '파일을 보내지 못했어요 — 첨부 정보가 올바르지 않아요' }
     const { path: _p, ...noPath } = good
     const { name: _n, ...noName } = good
@@ -581,7 +590,7 @@ describe('registerIpc', () => {
     for (const parts of [undefined, null, 'hi', 5, text, { 0: good, length: 1 }]) {
       expect(await call('sendUser', 'a1', parts), JSON.stringify(parts)).toEqual({ ok: false, error: '보낼 내용이 올바르지 않아요' })
     }
-    expect(calls).toHaveLength(2)
+    expect(calls).toHaveLength(3) // 위의 정상 경로 셋 — 틀린 꼴은 하나도 엔진에 닿지 않았다
   })
 
   it('setAllowBypass · setBypass 는 인자 그대로 엔진으로 가고 엔진 오류 문구가 그대로 돌아온다', async () => {
