@@ -28,7 +28,7 @@ export interface IpcDeps {
   openFolder(path: string): Promise<void>
   /** 기본 앱으로 파일 열기(shell.openPath) — 못 열면 던진다. 엔진이 첨부 폴더 안으로 푼 경로만 온다(openAttachment) */
   openPath(path: string): Promise<void>
-  /** 탐색기에서 그 파일을 골라 보인다(shell.showItemInFolder) — 실행되는 종류의 첨부는 열지 않고 이것으로 */
+  /** 탐색기에서 그 파일을 골라 보인다(shell.showItemInFolder) — 허용 목록 밖 종류의 첨부는 열지 않고 이것으로 */
   showInFolder(path: string): void
   /** 기본 앱으로 주소 열기(VS Code 원격 창) — 못 열면 던진다 */
   openExternal(url: string): Promise<void>
@@ -193,7 +193,8 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
     if (typeof id !== 'string' || typeof file !== 'string') throw new Error(ATTACH_NOT_FOUND)
     const abs = e.attachmentPath(id, file)
     if (!abs) throw new Error(ATTACH_NOT_FOUND)
-    // 실행되는 종류(.bat·.exe·.lnk …·확장자 없음)는 누르기 한 번으로 돌지 않게 — 열지 않고 탐색기에서 보인다
+    // 허용 목록(문서·그림·소리·영상·zip)만 연다 — 그 밖(실행·스크립트·프로젝트·디스크 이미지·확장자 없음 …)은 누르기 한 번으로 돌지 않게
+    // 열지 않고 탐색기에서 보인다
     if (!opensAsDocument(abs)) {
       d.showInFolder(abs)
       return

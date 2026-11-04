@@ -12,30 +12,27 @@ export const ATTACH_NOT_FOUND = '첨부 파일을 찾을 수 없어요';
 export const ATTACH_OPEN_FAILED = '첨부 파일을 열지 못했어요';
 
 /**
- * 기본 앱으로 열면 **실행되는** 종류(프로그램·스크립트·바로 가기·설치 파일·레지스트리 등 — Windows 첨부 파일 관리자의 위험 종류 바탕).
- * 칩을 누르면 이것들은 열지 않고 탐색기에서 그 파일을 보인다(Claude 도 첨부 폴더를 읽고 쓸 수 있다 — 누르기 한 번으로 돌지 않게)
+ * 기본 앱으로 열어도 되는 종류 — **허용 목록**(문서·그림·소리·영상·zip). 칩을 누르면 이것만 열고, 그 밖(프로그램·스크립트·바로 가기·
+ * 프로젝트 파일·디스크 이미지·웹 페이지·svg·xml·확장자 없음 …)은 열지 않고 탐색기에서 그 파일을 보인다 — Claude 도 첨부 폴더를 읽고 쓸 수
+ * 있고, 실행되는 종류는 다 꼽을 수 없다(연결은 PC 마다 다르다). 그래서 막을 것을 꼽지 않고 열 것만 꼽는다.
+ * 빼 둔 것: svg·html(브라우저에서 스크립트가 돈다) · xml(엉뚱한 처리기에 연결되기도 한다) · 7z·rar(처리기가 PC 마다 다르다 — zip 은 탐색기가 연다)
  */
-const RUNNABLE_EXT = new Set([
-  'ade', 'adp', 'app', 'appref-ms', 'application', 'appx', 'appxbundle', 'asp', 'aspx', 'bas', 'bat', 'bgi', 'cer', 'chm', 'cmd', 'cnt', 'com',
-  'cpl', 'crt', 'csh', 'der', 'diagcab', 'exe', 'fxp', 'gadget', 'grp', 'hlp', 'hpj', 'hta', 'htc', 'inf', 'ins', 'isp', 'its', 'jar', 'jnlp',
-  'js', 'jse', 'ksh', 'library-ms', 'lnk', 'mad', 'maf', 'mag', 'mam', 'maq', 'mar', 'mas', 'mat', 'mau', 'mav', 'maw', 'mcf', 'mda', 'mdb',
-  'mde', 'mdt', 'mdw', 'mdz', 'msc', 'msh', 'msh1', 'msh2', 'mshxml', 'msh1xml', 'msh2xml', 'msi', 'msix', 'msixbundle', 'msp', 'mst', 'msu',
-  'ops', 'osd', 'pcd', 'pif', 'pl', 'plg', 'prf', 'prg', 'printerexport', 'ps1', 'ps1xml', 'ps2', 'ps2xml', 'psc1', 'psc2', 'psd1', 'psdm1',
-  'psm1', 'pssc', 'py', 'pyc', 'pyo', 'pyw', 'pyz', 'pyzw', 'reg', 'scf', 'scr', 'sct', 'search-ms', 'settingcontent-ms', 'shb', 'shs',
-  'theme', 'url', 'vb', 'vbe', 'vbp', 'vbs', 'vhd', 'vhdx', 'vsmacros', 'vsw', 'webpnp', 'website', 'ws', 'wsc', 'wsf', 'wsh', 'xbap', 'xll', 'xnk',
-  // Git for Windows 가 Bash 에 잇는 스크립트(Claude Code 가 쓰는 PC 엔 거의 늘 있다) · 그 밖의 스크립트 실행기
-  'sh', 'bash', 'zsh', 'rb', 'rbw', 'ahk', 'au3',
-  // 바로 접속·마법사·진단·테마 묶음·검색 연결·설치기·인증서 가져오기 — 이 PC 의 기본 연결로 확인(2026-11-04 검토)
-  'rdp', 'themepack', 'deskthemepack', 'diagcfg', 'diagpkg', 'wcx', 'searchconnector-ms', 'appcontent-ms', 'appinstaller',
-  'pfx', 'p12', 'p7b', 'p7c', 'spc', 'sst', 'crl',
-  // MSHTML(iexplore)로 열린다
-  'mht', 'mhtml',
+const DOCUMENT_EXT: ReadonlySet<string> = new Set([
+  // 글·표·문서
+  'pdf', 'txt', 'md', 'markdown', 'csv', 'tsv', 'log', 'json', 'yaml', 'yml', 'rtf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+  'odt', 'ods', 'odp', 'hwp', 'hwpx',
+  // 그림
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'heic', 'heif',
+  // 소리·영상
+  'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'wmv',
+  // 묶음 — 탐색기가 연다
+  'zip',
 ]);
 
-/** 기본 앱으로 열어도 되는 문서·그림인가 — 실행되는 종류이거나 확장자가 없으면 false(탐색기에서 보이기) */
+/** 기본 앱으로 열어도 되는 문서·그림 등인가 — 허용 목록(DOCUMENT_EXT)의 확장자일 때만 true. 그 밖·확장자 없음은 false(탐색기에서 보이기) */
 export function opensAsDocument(fileName: string): boolean {
   const base = fileName.split(/[\\/]/).pop() ?? '';
   const dot = base.lastIndexOf('.');
   if (dot <= 0 || dot === base.length - 1) return false;
-  return !RUNNABLE_EXT.has(base.slice(dot + 1).toLowerCase());
+  return DOCUMENT_EXT.has(base.slice(dot + 1).toLowerCase());
 }

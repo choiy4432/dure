@@ -445,10 +445,33 @@ async function effortCommand(arg) {
   await result(said, { total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
 }
 
+/** 받은 사람 말의 글 블록들(이은 글 → 블록) — 되돌림 꼴 바꾸기(FAKE_REPLAY_SHAPE)용 */
+const blocksOf = new Map();
+
+/**
+ * 되돌림의 내용 — 보통은 받은 글 블록을 줄바꿈으로 이은 블록 하나. FAKE_REPLAY_SHAPE 로 꼴을 바꾼다(진짜 claude 가 다르게 이어 붙일 때를 흉내):
+ * crlf(줄 끝 \r\n · 끝 공백) · nosep(블록을 구분 없이 한 블록으로) · para(빈 줄로 한 블록으로) · lead(앞에 그림 자리 표시 블록)
+ */
+function replayContent(text) {
+  const blocks = blocksOf.get(text) ?? [text];
+  switch (process.env.FAKE_REPLAY_SHAPE) {
+    case 'crlf':
+      return [{ type: 'text', text: `${text.replace(/\n/g, ' \r\n')} \r\n` }];
+    case 'nosep':
+      return [{ type: 'text', text: blocks.join('') }];
+    case 'para':
+      return [{ type: 'text', text: blocks.join('\n\n') }];
+    case 'lead':
+      return [{ type: 'text', text: '[Image #1]' }, ...blocks.map((t) => ({ type: 'text', text: t }))];
+    default:
+      return [{ type: 'text', text }];
+  }
+}
+
 /** 읽은 사람 말을 되돌린다(--replay-user-messages) */
 async function echo(text) {
   // FAKE_REPLAY_OFF=1 — 옵션이 있어도 되돌리지 않는다(엔진이 되돌림을 못 맞출 때를 흉내)
-  if (replayUser && process.env.FAKE_REPLAY_OFF !== '1') await emit({ type: 'user', isReplay: true, message: { role: 'user', content: [{ type: 'text', text }] }, session_id: sessionId, parent_tool_use_id: null });
+  if (replayUser && process.env.FAKE_REPLAY_OFF !== '1') await emit({ type: 'user', isReplay: true, message: { role: 'user', content: replayContent(text) }, session_id: sessionId, parent_tool_use_id: null });
 }
 
 /** pending — 이 차례 안에서 읽을 줄(멈춘 차례 도중에 쌓인 둘째 줄부터 — 진짜처럼 하나씩 되돌린다) */
@@ -887,10 +910,11 @@ if (missing) {
     if (msg.type === 'control_request') void control(msg);
     else if (msg.type === 'user' && !mute && !muted()) {
       const content = msg.message?.content ?? [];
-      const text = (Array.isArray(content) ? content : [{ type: 'text', text: String(content) }])
+      const blocks = (Array.isArray(content) ? content : [{ type: 'text', text: String(content) }])
         .filter((c) => c.type === 'text')
-        .map((c) => c.text)
-        .join('\n');
+        .map((c) => c.text);
+      const text = blocks.join('\n');
+      blocksOf.set(text, blocks);
       // 차례 도중에 온 말 — 새 차례를 열지 않고 지금 차례에 붙는다(probe17). 차례가 끝날 때 읽거나, 멈추면 새 차례로
       if (current && !current.ended && current.queue) current.queue.push(text);
       else void turn(text);

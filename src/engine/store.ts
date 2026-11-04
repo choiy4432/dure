@@ -45,6 +45,11 @@ export interface Store {
   pendingAttachmentCleanups(): PendingAttachmentCleanup[];
   /** 그 에이전트의 서버 첨부 폴더를 목록에서 뺀다(지웠다) — 없으면 아무것도 안 한다 */
   dropPendingAttachmentCleanup(agentId: AgentId): void;
+  /**
+   * 열 때 state.json 이 깨졌거나 읽지 못해 `state.json.broken-<시각>` 으로 옮기고 빈 상태로 시작했다(파일이 없던 처음은 false).
+   * 이번 판의 가게가 비었을 뿐 주인이 없는 게 아니다 — 엔진은 이때 '주인 없는' 첨부 폴더를 지우지 않는다(되살리면 그 첨부가 있어야 한다)
+   */
+  readonly recovered: boolean;
 }
 
 interface State {
@@ -155,13 +160,14 @@ export const REMOTE_FOLDER_ABSOLUTE = '서버 폴더는 / 로 시작하는 전�
 /** 줄바꿈 같은 제어 문자 — 이름·역할·서버 폴더에 쓰지 않는다(서버 폴더는 셸 명령에 들어간다) */
 export const CONTROL_CHAR = /[\p{Cc}\u2028\u2029]/u;
 
-function load(file: string): State {
+/** recovered: 깨졌거나 못 읽어 옮기고 빈 상태로 시작했다(Store.recovered) */
+function load(file: string): { state: State; recovered: boolean } {
   const empty: State = { version: 1, rooms: [], agents: [], pendingCleanups: [], pendingAttachmentCleanups: [] };
-  if (!fs.existsSync(file)) return empty;
+  if (!fs.existsSync(file)) return { state: empty, recovered: false };
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!raw || !Array.isArray(raw.rooms) || !Array.isArray(raw.agents)) throw new Error('bad shape');
-    return {
+    const state: State = {
       version: 1,
       rooms: raw.rooms.map((r: Room) => ({ ...r, remote: savedRemote(r.remote) })),
       agents: raw.agents.map((a: Agent) => ({
@@ -171,16 +177,17 @@ function load(file: string): State {
       pendingCleanups: savedPending(raw.pendingCleanups), // 옛 파일엔 없다 → []
       pendingAttachmentCleanups: savedPendingAttachments(raw.pendingAttachmentCleanups), // 옛 파일엔 없다 → []
     };
+    return { state, recovered: false };
   } catch {
     renameRetrying(file, `${file}.broken-${Date.now()}`);
-    return empty;
+    return { state: empty, recovered: true };
   }
 }
 
 export function openStore(dataDir: string): Store {
   fs.mkdirSync(dataDir, { recursive: true });
   const file = path.join(dataDir, 'state.json');
-  const state = load(file);
+  const { state, recovered } = load(file);
 
   const save = () => {
     const tmp = `${file}.tmp`;
@@ -311,5 +318,6 @@ export function openStore(dataDir: string): Store {
       state.pendingAttachmentCleanups = rest;
       save();
     },
+    recovered,
   };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { encodeControl, encodeUser, parseLine, sentText } from '../src/engine/streamProtocol.js';
+import { encodeControl, encodeUser, parseLine, replayMatches, sentText } from '../src/engine/streamProtocol.js';
 import type { ReadyPart } from '../src/engine/types.js';
 
 describe('parseLine', () => {
@@ -336,6 +336,52 @@ describe('encode', () => {
     expect(JSON.parse(encodeUser(only)).message.content).toEqual([{ type: 'text', text: '\n\n첨부 파일:\n- C:\\data\\attachments\\x\\20261104-090507-a.txt' }]);
     // 첨부가 없으면 지금 그대로
     expect(sentText([{ type: 'text', text: '하나' }, { type: 'image', mediaType: 'image/png', base64: 'AA==' }, { type: 'text', text: '둘' }])).toBe('하나\n둘');
+  });
+
+  test('replayMatches: 되돌림 글이 조금 달라도(줄 끝·블록 잇기·끝 공백·앞뒤 끼움) 같은 말로 — 다른 말·다른 첨부는 아니다', () => {
+    const a = 'C:\\data\\attachments\\x\\20261104-090507-a b.txt';
+    const b = '/home/a/.dure/attachments/x/20261104-090507-b.pdf';
+    const parts: ReadyPart[] = [
+      { type: 'image', mediaType: 'image/png', base64: 'AA==' },
+      { type: 'text', text: '읽어 줘\n두 줄' },
+      { type: 'file', name: 'a b.txt', bytes: 3, file: '20261104-090507-a b.txt', sendPath: a },
+      { type: 'file', name: 'b.pdf', bytes: 9, file: '20261104-090507-b.pdf', sendPath: b, remotePath: b },
+    ];
+    const human = '읽어 줘\n두 줄';
+    const lines = `\n\n첨부 파일:\n- ${a}\n- ${b}`;
+    // 보낸 블록 그대로 · 줄바꿈으로 이음(replayText) — 지금 꼴
+    expect(replayMatches(parts, sentText(parts))).toBe(true);
+    for (const [why, replay] of [
+      ['\\r\\n', `${human}\n${lines}`.replace(/\n/g, '\r\n')],
+      ['빈 줄로 이음', `${human}\n\n${lines}`],
+      ['구분 없이 이음', `${human}${lines}`],
+      ['줄 끝 공백 · 앞뒤 공백', `  ${human.replace(/\n/g, ' \n')}\t${lines.replace(/\n/g, '  \n')} \n`],
+      ['앞뒤를 자름', `${human}\n${lines}`.trim()],
+      ['그림 자리 표시가 앞에', `[Image #1]\n${human}${lines}`],
+      ['사람 글과 경로 줄 사이에 끼움', `${human}\n[Image #1]\n${lines}`],
+    ] as const) {
+      expect(replayMatches(parts, replay), why).toBe(true);
+    }
+    // 다른 말
+    expect(replayMatches(parts, `다른 말${lines}`)).toBe(false);
+    expect(replayMatches(parts, human)).toBe(false); // 경로 줄이 없다
+    expect(replayMatches(parts, `${human}\n\n첨부 파일:\n- ${a}`)).toBe(false); // 첨부 하나가 빠졌다
+    expect(replayMatches(parts, `${human}\n\n첨부 파일:\n- ${a.replace('090507', '090508')}\n- ${b}`)).toBe(false); // 다른 사본
+    expect(replayMatches(parts, '')).toBe(false);
+    // 첨부만 — 사람 글이 없다
+    const only: ReadyPart[] = [parts[2]];
+    expect(replayMatches(only, `첨부 파일:\r\n- ${a}`)).toBe(true);
+    expect(replayMatches(only, `첨부 파일:\n- ${b}`)).toBe(false);
+    // 첨부 없는 말 · 받은 메시지(글 그대로) — 같은 고르기로 견준다
+    const texts: ReadyPart[] = [{ type: 'text', text: '하나' }, { type: 'image', mediaType: 'image/png', base64: 'AA==' }, { type: 'text', text: '둘' }];
+    expect(replayMatches(texts, '하나\n둘')).toBe(true);
+    expect(replayMatches(texts, '하나둘')).toBe(true);
+    expect(replayMatches(texts, '하나\r\n\r\n둘 ')).toBe(true);
+    expect(replayMatches(texts, '하나\n셋')).toBe(false);
+    const delivery = '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n셋째';
+    expect(replayMatches(delivery, delivery)).toBe(true);
+    expect(replayMatches(delivery, `${delivery.replace('\n', '\r\n')}\n`)).toBe(true);
+    expect(replayMatches(delivery, '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n넷째')).toBe(false);
   });
 
   test('encodeUser: U+2028·U+2029 는 이스케이프해 한 줄로 — 받는 쪽이 줄 끝으로 읽어 쪼개지 않게', () => {

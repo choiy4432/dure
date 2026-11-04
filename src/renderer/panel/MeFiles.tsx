@@ -25,7 +25,7 @@ export function FileName({ name }: { name: string }) {
 
 /**
  * 내 말풍선의 첨부 파일 — 그림 썸네일 옆에 칩(이름 · 크기). 누르면 그 에이전트 첨부 폴더의 이 PC 사본을 연다(서버 방도 이 PC 사본).
- * 실행되는 종류(.bat·.exe …·확장자 없음)는 main 이 열지 않고 탐색기에서 보인다 — 읽는 이름도 그 말로.
+ * 허용 목록(문서·그림·소리·영상·zip) 밖의 종류(.bat·.exe·프로젝트 파일 …·확장자 없음)는 main 이 열지 않고 탐색기에서 보인다 — 읽는 이름도 그 말로.
  * 못 열면(지워짐·연결된 프로그램 없음) 그 글을 칩 줄 아래에
  */
 export function MeFiles({ agentId, files }: { agentId?: AgentId; files: SentFile[] }) {

@@ -1,5 +1,7 @@
+import { once } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import type { AgentId } from './types';
 
 // 사람이 보낸 첨부 파일 — 원본은 읽기만 하고 에이전트마다 한 폴더(attachments/<에이전트>/)에 사본을 둔다.
@@ -24,14 +26,18 @@ export interface AttachmentStore {
   dir(agentId: AgentId): string;
   /**
    * 원본을 그 에이전트 폴더로 복사한다 — 이름 = `<YYYYMMDD-HHmmss>-<안전한 이름>`, 겹치면 확장자 앞에 -2·-3….
-   * 원본은 읽기만 한다. 실패하면 반쯤 쓴 사본을 지우고 던진다.
-   * 비동기 — 엔진은 Electron main 에서 돈다. 큰 파일·느린 원본(온라인 전용 OneDrive·USB·네트워크 공유)을 복사하는 동안 앱·MCP 가 멈추지 않게
+   * 원본은 읽기로만 연다. 실패하면 반쯤 쓴 사본을 지우고 던진다.
+   * 비동기 스트림 — 엔진은 Electron main 에서 돈다. 큰 파일·느린 원본(온라인 전용 OneDrive·USB·네트워크 공유)을 복사하는 동안 앱·MCP 가
+   * 멈추지 않게. signal 이 끊기면 원본 읽기를 기다리지 않고 바로 그 까닭(AbortError)으로 던진다(반쯤 쓴 사본은 지운다 · 이미 끊겼으면 폴더도 안 만든다)
    */
-  copyIn(agentId: AgentId, srcPath: string, name: string): Promise<{ file: string; abs: string }>;
+  copyIn(agentId: AgentId, srcPath: string, name: string, signal?: AbortSignal): Promise<{ file: string; abs: string }>;
   /** 사본 하나를 지운다 — 모양이 틀린 이름·없는 파일은 조용히 */
   removeFile(agentId: AgentId, file: string): void;
-  /** 사본 하나를 다른 에이전트 폴더로 같은 이름에 복사한다 — 이름·폴더 모양이 틀리거나 원본이 없으면 false(이미 있으면 그대로 true) */
-  copy(from: AgentId, to: AgentId, file: string): boolean;
+  /**
+   * 사본 하나를 다른 에이전트 폴더로 같은 이름에 복사한다 — 이름·폴더 모양이 틀리거나 원본이 없으면 false(이미 있으면 그대로 true).
+   * 쓰다 끊기면 임시 파일을 지우고 던진다. 비동기 — 갈래 칠 때 큰 첨부가 많아도 main 을 막지 않는다
+   */
+  copy(from: AgentId, to: AgentId, file: string): Promise<boolean>;
   /** 사본의 절대 경로 — 첨부 폴더 밖(`..`·절대 경로·다른 모양)이거나 없으면 null */
   resolve(agentId: AgentId, file: string): string | null;
   /** 그 에이전트의 첨부 폴더를 통째로 지운다 */
@@ -86,11 +92,55 @@ function safeName(name: string): string {
 }
 
 const codeOf = (e: unknown) => (e as NodeJS.ErrnoException | null)?.code;
+
+/**
+ * realpath 가 이 까닭으로 실패하면 그 파일은 없거나 못 쓰는 것이다(보내기 거절 · 칩은 못 찾음). 그 밖(EISDIR·EINVAL·UNKNOWN …)은
+ * 진짜 경로를 못 푸는 볼륨(RAM 디스크·일부 가상 FS)이라 보고 realpath 없이 넘어간다 — 엔진의 보내기와 resolve 가 같이 쓴다
+ */
+export const REALPATH_FATAL: ReadonlySet<string> = new Set(['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'EBUSY']);
 /**
  * 지우기 — 막 만든 파일은 백신(Defender) 등이 잠깐 잡아 EBUSY·EPERM 이 난다: 몇 번 다시 시도한다.
  * maxRetries 는 recursive 일 때만 듣는다(보통 파일에도 그대로 된다)
  */
 const RM = { force: true, recursive: true, maxRetries: 3, retryDelay: 50 } as const;
+
+/** 있나(따라간 뒤) — 못 재면 없음으로 */
+const exists = (p: string) => fs.promises.access(p).then(() => true, () => false);
+
+/** 복사 스트림 조각 크기 — 100MB 도 조각 수가 적게 */
+const COPY_CHUNK = 1024 * 1024;
+
+/** 쓰는 스트림을 닫고(이미 닫혔으면 바로) 닫힘을 기다린다 — 열린 파일은 지워도 이름이 남는다 */
+function closed(s: fs.WriteStream): Promise<void> {
+  if (s.closed) return Promise.resolve();
+  return new Promise((resolve) => {
+    s.once('close', () => resolve());
+    s.destroy();
+  });
+}
+
+/**
+ * p 를 기다리되 signal 이 끊기면 그 까닭(signal.reason — AbortError)으로 바로 던진다. p 는 뒤에서 끝나게 두고 그 거절은 삼킨다 —
+ * 끊을 수 없는 느린 일(끊긴 공유 폴더의 realpath·stat·읽기)을 보내기가 기다리지 않게
+ */
+export function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  p.catch(() => {}); // 끊긴 뒤에 온 거절이 처리 안 된 거절로 남지 않게
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(signal.reason);
+    signal.addEventListener('abort', stop, { once: true });
+    p.then(
+      (v) => {
+        signal.removeEventListener('abort', stop);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener('abort', stop);
+        reject(e);
+      },
+    );
+  });
+}
 
 export function openAttachmentStore(dataDir: string, o: { now?: () => Date } = {}): AttachmentStore {
   const root = path.join(dataDir, 'attachments');
@@ -119,29 +169,37 @@ export function openAttachmentStore(dataDir: string, o: { now?: () => Date } = {
 
   return {
     dir: needDir,
-    async copyIn(agentId, srcPath, name) {
+    async copyIn(agentId, srcPath, name, signal) {
       const dir = needDir(agentId);
+      signal?.throwIfAborted(); // 이미 끊겼으면 폴더도 만들지 않는다(지운 에이전트의 폴더를 되살리지 않게)
       await fs.promises.mkdir(dir, { recursive: true });
       const { base, ext } = splitExt(safeName(name));
       const stamp = stampOf(now());
       for (let n = 1; ; n++) {
         const file = `${stamp}-${n === 1 ? base : `${base}-${n}`}${ext}`;
         const abs = path.join(dir, file);
+        // 이름을 먼저 차지한다('wx' — 같은 이름이 있으면 EEXIST, 덮지 않는다). 차지한 뒤의 실패는 이 사본뿐이라 지워도 된다
+        const out = fs.createWriteStream(abs, { flags: 'wx' });
         try {
-          // 이름을 차지하며 복사 — 같은 이름이 있으면 EEXIST(덮지 않는다)
-          await fs.promises.copyFile(srcPath, abs, fs.constants.COPYFILE_EXCL);
+          await once(out, 'open');
         } catch (e) {
           if (codeOf(e) === 'EEXIST') continue;
-          // 반쯤 쓴 사본이 남지 않게 — EXCL 이라 원래 있던 파일은 아니다. 지우기 실패가 원래 까닭을 가리지 않게 삼킨다
+          throw e;
+        }
+        try {
+          // 스트림이라 끊을 수 있다(signal) — 끊기면 느린 원본(온라인 전용 OneDrive·끊긴 공유 폴더)의 읽기가 돌아오길 기다리지 않는다
+          const copying = pipeline(fs.createReadStream(srcPath, { flags: 'r', highWaterMark: COPY_CHUNK }), out, signal ? { signal } : {});
+          await (signal ? abortable(copying, signal) : copying);
+        } catch (e) {
+          // 반쯤 쓴 사본이 남지 않게 — 쓰는 쪽을 닫은 뒤 지운다. 지우기 실패가 원래 까닭을 가리지 않게 삼킨다
           try {
-            writable(abs);
+            await closed(out);
             await fs.promises.rm(abs, RM);
           } catch {
             // 남은 조각은 에이전트를 지울 때 폴더째 지워진다
           }
           throw e;
         }
-        writable(abs);
         return { file, abs };
       }
     },
@@ -151,23 +209,23 @@ export function openAttachmentStore(dataDir: string, o: { now?: () => Date } = {
       writable(abs);
       fs.rmSync(abs, RM);
     },
-    copy(from, to, file) {
+    async copy(from, to, file) {
       const source = inside(from, file);
       const full = inside(to, file);
-      if (!source || !full || !fs.existsSync(source)) return false;
-      if (!fs.existsSync(full)) {
-        fs.mkdirSync(path.dirname(full), { recursive: true });
+      if (!source || !full || !(await exists(source))) return false;
+      if (!(await exists(full))) {
+        await fs.promises.mkdir(path.dirname(full), { recursive: true });
         // 그림 칸과 같이 — 다 쓴 뒤 이름을 바꾼다
         const tmp = `${full}.${process.pid}.tmp`;
         try {
-          fs.copyFileSync(source, tmp);
+          await fs.promises.copyFile(source, tmp);
           writable(tmp);
-          fs.renameSync(tmp, full);
+          await fs.promises.rename(tmp, full);
         } catch (e) {
           // 쓰다 끊긴 임시 파일이 남지 않게 — 지우기 실패가 원래 까닭을 가리지 않게 삼킨다
           try {
             writable(tmp);
-            fs.rmSync(tmp, RM);
+            await fs.promises.rm(tmp, RM);
           } catch {
             // 남은 조각은 에이전트를 지울 때 폴더째 지워진다
           }
@@ -183,8 +241,16 @@ export function openAttachmentStore(dataDir: string, o: { now?: () => Date } = {
         // 링크는 따라가지 않는다 — 파일 링크·폴더 자리의 junction 이 첨부 폴더 밖을 가리키면 그 밖이 열린다
         if (!fs.lstatSync(abs).isFile()) return null;
         const dir = path.dirname(abs);
-        if (fs.realpathSync.native(dir) !== path.join(fs.realpathSync.native(root), path.basename(dir))) return null;
-        return abs;
+        let real: { dir: string; root: string } | null = null;
+        try {
+          real = { dir: fs.realpathSync.native(dir), root: fs.realpathSync.native(root) };
+        } catch (e) {
+          if (REALPATH_FATAL.has(codeOf(e) ?? '')) return null;
+          // 진짜 경로를 못 푸는 볼륨(RAM 디스크 등 — 보낼 때도 이름 검사만으로 받아들였다): 모양·폴더 안은 inside 가 봤다 —
+          // 에이전트 폴더·첨부 폴더가 링크(junction 포함)가 아닌지만 본다
+          return fs.lstatSync(dir).isSymbolicLink() || fs.lstatSync(root).isSymbolicLink() ? null : abs;
+        }
+        return real.dir === path.join(real.root, path.basename(dir)) ? abs : null;
       } catch {
         return null;
       }

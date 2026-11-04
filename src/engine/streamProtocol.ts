@@ -65,6 +65,7 @@ function parseUser(obj: any): StreamEvent {
   return ignored('user');
 }
 
+/** 되돌림의 글 — 글 블록만 줄바꿈으로 이은 것(sentText 와 같은 꼴). 보낸 말과는 replayMatches 로 맞춘다 */
 function replayText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -219,9 +220,37 @@ function contentOf(parts: ReadyPart[]): Block[] {
   return blocks;
 }
 
-/** 보낸 줄의 글 — 글 블록을 줄바꿈으로 이은 것(경로 줄 포함). Claude 의 되돌림(replay)과 같은 꼴이라 차례 도중에 보낸 말을 맞출 때 쓴다 */
+/** 보낸 줄의 글 — 글 블록을 줄바꿈으로 이은 것(경로 줄 포함). Claude 의 되돌림(replay)을 읽는 replayText 와 같은 꼴 */
 export function sentText(parts: ReadyPart[]): string {
   return contentOf(parts).flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
+}
+
+/**
+ * 되돌림 맞추기의 고르기 — 공백 글자(줄 끝 \r\n·\r·\n, 공백 덩어리, 앞뒤 공백)를 모두 뺀다. 그래서 Claude 가 글 블록을 어떤 구분
+ * (\n · 빈 줄 · 없음)으로 잇든, 블록을 나눠 돌려주든, 줄 끝을 바꾸든, 끝 공백을 떼거나 붙이든 같은 글로 본다.
+ * 공백만 다른 두 말은 같은 글이 되지만, 맞추는 상대는 아직 안 읽힌 끼운 말 몇 개뿐이고 앞에서부터(보낸 차례 = Claude 가 읽는 차례) 맞춘다
+ */
+const squash = (s: string) => s.replace(/\s+/gu, '');
+
+/**
+ * 차례 도중에 보낸 줄을 Claude 가 읽었나 — 그 되돌림(replay, replayText 꼴)의 글과 보낸 글(sent: 준비된 사람 입력이면 sentText,
+ * 받은 메시지 등은 보낸 글 그대로)을 squash 해 견준다. 진짜 claude 의 되돌림 꼴은 첨부(경로 줄)를 끼운 말로는 실측 전이라 너그럽게 —
+ * 못 맞추면 읽은 말을 안 읽었다고 보고, 멈출 때 돌려받아 다시 보낸다(두 번 감 · 기록 두 줄).
+ * 그대로 같지 않아도 첨부가 있으면 — 되돌림에 이번 경로 줄 블록(attachmentLines)이 있고 그 앞에 사람 글(글 칸들)이 있으면 그 말로 본다.
+ * 사이·앞에 무엇이 끼어도(그림 자리 표시 등) 된다 — 경로 줄은 보낼 때마다 새 사본 이름이라 다른 말의 되돌림과 헷갈리지 않는다.
+ * 여기 한 곳에서만 맞춘다(엔진의 noteRead) — 보내는 꼴(contentOf)을 바꾸면 여기도 함께 본다
+ */
+export function replayMatches(sent: ReadyPart[] | string, replay: string): boolean {
+  const got = squash(replay);
+  if (!got) return false;
+  if (typeof sent === 'string') return squash(sent) === got;
+  if (squash(sentText(sent)) === got) return true;
+  const paths = sent.flatMap((p) => (p.type === 'file' ? [p.sendPath] : []));
+  if (!paths.length) return false;
+  const at = got.lastIndexOf(squash(attachmentLines(paths)));
+  if (at < 0) return false;
+  const human = squash(sent.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('\n'));
+  return got.slice(0, at).includes(human);
 }
 
 export function encodeUser(parts: ReadyPart[]): string {

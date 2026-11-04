@@ -18,9 +18,9 @@ import { capPatch, lastN, openHistory, patchFromInput, trimToolInput, type Histo
 import { conversationFacts, splitConversations, type Conversation } from './conversations';
 import { claudeDirOf, existingSessions } from './claudeSessions';
 import { openImageStore, type ImageStore } from './imageStore';
-import { openAttachmentStore, type AttachmentStore } from './attachmentStore';
+import { abortable, openAttachmentStore, REALPATH_FATAL, type AttachmentStore } from './attachmentStore';
 import { ATTACH_FAILED, ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../shared/attachments';
-import { sentText } from './streamProtocol';
+import { replayMatches, sentText } from './streamProtocol';
 import { buildArgs, buildMcpConfig, buildUsageArgs, CREATE_AGENT_TOOL, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
 import { ClaudeSession } from './claudeSession';
@@ -88,6 +88,8 @@ export interface EngineOptions {
   remotePorts?: { from: number; to: number; random?: () => number };
   /** 서버 방 첨부 하나를 올리는 ssh 의 상한(ms) — 없으면 UPLOAD_MS(10분). 시험용 */
   uploadTimeoutMs?: number;
+  /** 첨부 하나의 이 PC 쪽 준비(진짜 경로·재기·복사)의 상한(ms) — 없으면 LOCAL_COPY_MS(10분). 시험용 */
+  copyTimeoutMs?: number;
 }
 
 // 이벤트:
@@ -411,6 +413,11 @@ interface UploadRun extends SshRun {
 }
 /** 서버 방 첨부 하나를 올리는 ssh 의 상한 — 100MB(ATTACH_MAX_BYTES) 기준 넉넉히. 넘으면 끄고 실패 */
 const UPLOAD_MS = 600_000;
+/**
+ * 첨부 하나의 이 PC 쪽 준비(진짜 경로·재기·사본 복사)의 상한 — 넘으면 끊고 실패. 온라인 전용 OneDrive·끊긴 공유 폴더에 보내기가 묶여
+ * 입력창이 '보내는 중…'에 남고 /compact·돌아가기가 막히지 않게
+ */
+const LOCAL_COPY_MS = 10 * 60_000;
 /** 올리기 ssh 의 stdout·stderr 에서 남길 끝부분 — DURE_HOME 줄은 맨 끝에 온다 */
 const UPLOAD_OUT_KEEP = 64 * 1024;
 /** 서버 방 원격 포트(-R) 범위 — 띄울 때마다 이 PC 의 다른 서버 세션이 쓰지 않는 것 하나 */
@@ -478,6 +485,10 @@ const ATTACH_BAD_PATH = '파일 경로가 올바르지 않아요';
 const ATTACH_UPLOAD_STOPPED = '서버로 올리는 중에 그만뒀어요';
 /** 서버 방 — 올리기가 상한(UPLOAD_MS)을 넘었다 */
 const ATTACH_UPLOAD_SLOW = '서버로 올리는 데 너무 오래 걸려 그만뒀어요';
+/** 이 PC 방 — 사본을 만드는 중(또는 만들기 전) 멈춤·지우기·끄기로 끊었다(그 입력은 붙잡지 않고 실패로). 서버 방은 ATTACH_UPLOAD_STOPPED */
+const ATTACH_COPY_STOPPED = '복사하는 중에 그만뒀어요';
+/** 이 PC 쪽 준비(진짜 경로·재기·복사)가 상한(LOCAL_COPY_MS)을 넘었다 — 방 종류와 상관없이 */
+const ATTACH_COPY_SLOW = '파일을 복사하는 데 너무 오래 걸려요';
 /** 서버 방 — 올렸다는데 서버가 $HOME 을 알리지 않았다(DURE_HOME 줄 없음) */
 const ATTACH_UPLOAD_NO_HOME = '서버에 올린 파일의 경로를 알 수 없어요';
 /** 서버 방 — ssh 를 띄우지 못했다(없음 ENOENT 은 NO_SSH). 오류 원문엔 내 PC 의 ssh 경로가 실린다 — 코드만 */
@@ -796,8 +807,9 @@ class EngineImpl extends EventEmitter implements Engine {
     for (const p of this.store.pendingAttachmentCleanups()) {
       if (!this.store.agent(p.agentId)) this.guard(null, () => this.queueAttachmentsCleanup(p.agentId, p.host));
     }
-    // 지운 에이전트의 첨부 폴더가 잠겨 남았던 것 — 주인(에이전트)이 없는 폴더만 조용히 지운다. 기다리지 않는다(끌 때는 기다린다)
-    this.pruning = this.attachments.prune((id) => !!this.store.agent(id));
+    // 지운 에이전트의 첨부 폴더가 잠겨 남았던 것 — 주인(에이전트)이 없는 폴더만 조용히 지운다. 기다리지 않는다(끌 때는 기다린다).
+    // state.json 이 깨져 빈 상태로 시작한 판엔 하지 않는다 — 가게가 비었을 뿐이다(지우면 .broken 을 되살려도 첨부가 모두 없다)
+    if (!this.store.recovered) this.pruning = this.attachments.prune((id) => !!this.store.agent(id));
     this.router.flushAll();
     this.watcher?.start();
     this.sweepTimer = setInterval(() => this.guard(null, () => this.sweep()), this.o.sleepSweepMs ?? this.minuteMs());
@@ -1305,7 +1317,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     this.removing.add(id);
     this.disarmCool(id);
-    this.cancelUploads(id); // 올리는 중인 첨부 — ssh 를 끈다(그 보내기는 실패로 끝난다, 서버 폴더는 아래에서 통째로)
+    this.cancelUploads(id); // 보내는 중인 첨부 — 복사·올리기(ssh)를 끊는다(그 보내기는 실패로 끝난다, 첨부 폴더는 아래에서 통째로)
     if (this.selected === id) this.selected = null;
     // 붙잡기도 같이 — 아래에서 버리는 메시지가 목록에서 하나씩 빠지며 알리지 않게 먼저 지운다(풀림은 끝에 한 번)
     const hadHold = this.holds.delete(id);
@@ -1618,14 +1630,14 @@ class EngineImpl extends EventEmitter implements Engine {
     let done!: () => void;
     const mine = new Promise<void>((r) => (done = r));
     this.sending.set(id, mine);
-    // 첨부가 든 보내기는 끊을 수 있게 — 앞 차례를 기다리는 동안 끊겨도(서버 방이면 올리기 전에) 실패로 끝난다
+    // 첨부가 든 보내기는 끊을 수 있게 — 앞 차례를 기다리는 동안 끊겨도(복사·올리기 전에) 실패로 끝난다
     const cut = noFiles(parts) ? null : new AbortController();
     if (cut) this.uploadsOf(id).add(cut);
     try {
       await before;
       const ready: ReadyPart[] = noFiles(parts) ? parts : await this.prepareParts(id, parts, cut!.signal);
-      // 준비하는(또는 앞을 기다리는) 사이 멈췄다 — 멈출 때 기다리던 입력처럼 붙잡는다. 멈춤이 끼운 말을 아직 돌려받는 중이면 그 끝을
-      // 기다린다 — 돌려받은 말·기다리던 말이 먼저 붙잡혀야 붙잡기 목록이 보낸 차례대로다
+      // 앞을 기다리는 사이(글만인 보내기) 또는 준비를 막 마친 뒤 멈췄다 — 멈출 때 기다리던 입력처럼 붙잡는다(준비 중에 멈췄으면 위에서 실패로
+      // 끝났다). 멈춤이 끼운 말을 아직 돌려받는 중이면 그 끝을 기다린다 — 돌려받은 말·기다리던 말이 먼저 붙잡혀야 붙잡기 목록이 보낸 차례대로다
       const stopped = (this.stops.get(id) ?? 0) !== stopsAt;
       if (stopped) await this.retracting.get(id);
       this.deliverUser(id, ready, o, stopped);
@@ -1642,7 +1654,10 @@ class EngineImpl extends EventEmitter implements Engine {
     return set;
   }
 
-  /** 그 에이전트의 첨부 보내기를 끊는다 — 서버 방이면 올리는 ssh 를 끄고 그 보내기는 실패로(되돌림). 이 PC 방 복사는 그대로 끝난다 */
+  /**
+   * 그 에이전트의 첨부 보내기를 끊는다 — 이 PC 쪽 준비(진짜 경로·재기·사본 복사)도, 서버 방이면 올리는 ssh 도 끊고 그 보내기는 실패로
+   * (만든 사본·서버 파일 되돌림). 멈춤·지우기·끄기가 부른다 — 새 대화는 서버 방에서만(이 PC 방 복사는 마치고 새 대화로)
+   */
   private cancelUploads(id: AgentId): void {
     const set = this.uploads.get(id);
     if (!set) return;
@@ -1724,38 +1739,49 @@ class EngineImpl extends EventEmitter implements Engine {
   private async prepareFile(id: AgentId, p: FileInput, remote: { host: string } | null, signal: AbortSignal): Promise<FileReady> {
     const shown = typeof p.name === 'string' ? firstLine(p.name) : '';
     const fail = (why: string) => new Error(`${ATTACH_FAILED} — ${shown ? `${shown}: ` : ''}${why}`);
-    // 서버 방에서 이미 끊겼으면(앞 차례를 기다리는 사이 멈춤 등) 사본도 만들지 않는다
-    if (remote && signal.aborted) throw fail(ATTACH_UPLOAD_STOPPED);
+    /** 끊긴 보내기의 까닭 — 방 종류로(사용자에겐 서버 방은 '서버로 올리기'다) */
+    const stopped = remote ? ATTACH_UPLOAD_STOPPED : ATTACH_COPY_STOPPED;
+    // 이미 끊겼으면(앞 차례를 기다리는 사이 멈춤 등) 사본도 만들지 않는다
+    if (signal.aborted) throw fail(stopped);
     if (typeof p.path !== 'string' || !path.isAbsolute(p.path)) throw fail(ATTACH_BAD_PATH);
     // 대체 데이터 스트림(`파일:스트림`, `파일::$DATA`)은 보내지 않는다 — 드라이브 글자(C:) 뒤의 ':' 는 이것뿐이고, 이름 검사도 비껴간다
     if (p.path.replace(/^[A-Za-z]:/, '').includes(':')) throw fail(ATTACH_BAD_PATH);
     // 자격 증명 파일은 읽지도 옮기지도 않는다(약관 경계) — 사용자가 골라도
     if (isCredentials(p.path)) throw fail(ATTACH_CREDENTIALS);
-    // 짧은 이름(8.3)·링크로 가린 자격 증명 파일도 — 진짜 경로의 이름으로 다시 본다(fs.promises.realpath 는 realpath.native 와 같은 뜻)
-    // 진짜 경로를 못 푸는 볼륨(RAM 디스크·일부 가상 FS)도 있다 — 없음·권한·잠김이 아니면 이름 검사만으로 넘어가 stat 으로 간다
-    // (자격 증명 파일은 시스템 드라이브에 있어 realpath 가 늘 된다)
-    let real: string | null = null;
-    try {
-      real = await fs.promises.realpath(p.path);
-    } catch (e) {
-      if (REALPATH_FATAL.has((e as NodeJS.ErrnoException | null)?.code ?? '')) throw fail(fileErrorText(e));
-    }
-    if (real !== null && isCredentials(real)) throw fail(ATTACH_CREDENTIALS);
-    let st: fs.Stats;
-    try {
-      st = await fs.promises.stat(p.path);
-    } catch (e) {
-      throw fail(fileErrorText(e));
-    }
-    if (st.isDirectory()) throw fail(ATTACH_FOLDER);
-    if (!st.isFile()) throw fail(ATTACH_NOT_FILE);
-    if (st.size > ATTACH_MAX_BYTES) throw fail(ATTACH_TOO_BIG);
-    const name = shown || path.basename(p.path);
+    // 이 PC 쪽 준비(진짜 경로·재기·복사)는 끊을 수 있고(멈춤·지우기·끄기 — signal) 상한(LOCAL_COPY_MS)이 있다 — 온라인 전용 OneDrive·끊긴
+    // 공유 폴더가 보내기를 붙잡지 않게. 끊기면 그 느린 일을 기다리지 않고 바로 실패한다(뒤에서 끝나게 둔다 — 반쯤 쓴 사본은 copyIn 이 지운다)
+    const local = localCut(signal, this.o.copyTimeoutMs ?? LOCAL_COPY_MS);
+    const why = (e: unknown) => local.why(e, stopped);
     let copy: { file: string; abs: string };
+    let name: string;
     try {
-      copy = await this.attachments.copyIn(id, p.path, name); // 비동기 — 큰·느린 원본을 복사하는 동안 main 을 막지 않는다
-    } catch (e) {
-      throw fail(fileErrorText(e));
+      // 짧은 이름(8.3)·링크로 가린 자격 증명 파일도 — 진짜 경로의 이름으로 다시 본다(fs.promises.realpath 는 realpath.native 와 같은 뜻)
+      // 진짜 경로를 못 푸는 볼륨(RAM 디스크·일부 가상 FS)도 있다 — 없음·권한·잠김이 아니면 이름 검사만으로 넘어가 stat 으로 간다
+      // (자격 증명 파일은 시스템 드라이브에 있어 realpath 가 늘 된다)
+      let real: string | null = null;
+      try {
+        real = await abortable(fs.promises.realpath(p.path), local.signal);
+      } catch (e) {
+        if (local.signal.aborted || REALPATH_FATAL.has((e as NodeJS.ErrnoException | null)?.code ?? '')) throw fail(why(e));
+      }
+      if (real !== null && isCredentials(real)) throw fail(ATTACH_CREDENTIALS);
+      let st: fs.Stats;
+      try {
+        st = await abortable(fs.promises.stat(p.path), local.signal);
+      } catch (e) {
+        throw fail(why(e));
+      }
+      if (st.isDirectory()) throw fail(ATTACH_FOLDER);
+      if (!st.isFile()) throw fail(ATTACH_NOT_FILE);
+      if (st.size > ATTACH_MAX_BYTES) throw fail(ATTACH_TOO_BIG);
+      name = shown || path.basename(p.path);
+      try {
+        copy = await this.attachments.copyIn(id, p.path, name, local.signal); // 비동기 스트림 — 복사하는 동안 main 을 막지 않는다
+      } catch (e) {
+        throw fail(why(e));
+      }
+    } finally {
+      local.done();
     }
     // 잰 뒤 복사하는 사이 원본이 커졌을 수 있다 — 상한·기록의 크기는 사본으로
     let bytes: number;
@@ -2004,8 +2030,8 @@ class EngineImpl extends EventEmitter implements Engine {
 
   async interrupt(id: AgentId) {
     this.need(id);
-    // 첨부를 준비하는(또는 그 뒤에 기다리는) 보내기는 멈춘 뒤에 줄에 서지 않고 붙잡힌다(sendUser 가 이 수를 견준다).
-    // 서버 방에서 아직 다 올리지 못한 보내기는 올리기를 끊고 실패로 끝낸다(몇 분짜리 올리기를 멈춤이 기다리지 않는다 — 되돌림)
+    // 첨부를 준비하는 보내기는 복사·올리기를 끊고 실패로 끝낸다(몇 분짜리 복사·올리기를 멈춤이 기다리지 않는다 — 되돌림, 방 종류와 상관없이).
+    // 그 뒤에서 차례를 기다리던 글만인 보내기(와 준비를 막 마친 보내기)는 멈춘 뒤에 줄에 서지 않고 붙잡힌다(sendUser 가 이 수를 견준다)
     this.stops.set(id, (this.stops.get(id) ?? 0) + 1);
     this.cancelUploads(id);
     // 계획 모드 답을 기다리며 쥔 입력도 기다리던 것 — 줄 맨 앞으로 돌려놓아 아래에서 함께 붙잡는다(늦게 온 답이 쓰지 않게)
@@ -2117,8 +2143,9 @@ class EngineImpl extends EventEmitter implements Engine {
 
   async newConversation(id: AgentId) {
     const agent = this.need(id);
-    // 서버로 올리는 중인 첨부 — 멈춤처럼 끊고 되돌린다(준비 중이던 입력이 새 대화로 흘러가지 않게)
-    this.cancelUploads(id);
+    // 서버로 올리는 중인 첨부 — 멈춤처럼 끊고 되돌린다(준비 중이던 입력이 새 대화로 흘러가지 않게).
+    // 이 PC 방 복사는 끊지 않는다 — 마치면 그 입력은 새 대화로 간다(기다리던 입력과 같은 규칙 · 복사는 상한 LOCAL_COPY_MS 안)
+    if (this.remoteOf(agent)) this.cancelUploads(id);
     // 새 대화는 계획 모드를 끈 채로 — 끝내는 세션의 모드는 세션과 함께 사라진다(세션 끝 정리가 알린다)
     this.wantPlan(id, false);
     this.handSlept.delete(id); // 사람이 새 대화를 골랐다 — 손으로 재운 표를 풀어 고른 에이전트면 새 대화로 미리 띄운다
@@ -2175,8 +2202,11 @@ class EngineImpl extends EventEmitter implements Engine {
     const added = this.store.addAgent({ roomId: src.roomId, name: i.name, role: i.role, folder: src.folder });
     // 자동·묻지 않음·늘 허용은 새 에이전트 기본값(addAgent) 그대로
     const agent = this.store.updateAgent(added.id, { model: src.model, effort: src.effort, forkOf: conv.sessionId });
-    // 기록은 쓰기만 — 사건은 없다(화면이 더한 에이전트와 같다). 줄은 시각 그대로, 경계 없이
-    for (const it of conv.items) this.guard(agent.id, () => this.hist.append(agent.id, this.forkedItem(i.from, agent.id, it)));
+    // 기록은 쓰기만 — 사건은 없다(화면이 더한 에이전트와 같다). 줄은 시각 그대로, 경계 없이.
+    // 첨부 사본 복사(비동기)를 다 마친 뒤 한 번에 쓴다 — 복사하는 동안 기록이 반쯤 쓰인 갈래가 보이지 않게
+    const items: HistoryItem[] = [];
+    for (const it of conv.items) items.push(await this.forkedItem(i.from, agent.id, it));
+    for (const it of items) this.guard(agent.id, () => this.hist.append(agent.id, it));
     this.guard(agent.id, () => this.hist.append(agent.id, { t: Date.now(), kind: 'notice', text: forkedNotice(src.name, target.at) }));
     return agent;
   }
@@ -2186,17 +2216,18 @@ class EngineImpl extends EventEmitter implements Engine {
    * 첨부도 이 PC 사본을 새 에이전트 첨부 폴더로 같은 이름에 복사한다 — 기록의 file 은 이제 새 폴더의 사본(못 하면 칩은 남고 열 때 없다고 한다).
    * 서버 파일은 다시 올리지 않는다(remotePath 그대로 — Claude 의 기억 속 경로는 원래 에이전트의 첨부)
    */
-  private forkedItem(from: AgentId, to: AgentId, it: HistoryItem): HistoryItem {
+  private async forkedItem(from: AgentId, to: AgentId, it: HistoryItem): Promise<HistoryItem> {
     if (it.kind !== 'user' || !it.parts.some((p) => (p.type === 'image' && p.file) || p.type === 'file')) return it;
-    const parts = it.parts.map((p): HistoryPart => {
-      if (p.type === 'file') {
-        try {
-          this.attachments.copy(from, to, p.file);
-        } catch {
-          // 디스크가 막혀도 갈래는 만든다 — 그 첨부만 다시 열 수 없다
-        }
-        return p;
+    // 첨부 사본 — 기록의 file 은 그대로(같은 이름). 비동기라 큰 첨부가 많아도 main 을 막지 않는다
+    for (const p of it.parts) {
+      if (p.type !== 'file') continue;
+      try {
+        await this.attachments.copy(from, to, p.file);
+      } catch {
+        // 디스크가 막혀도 갈래는 만든다 — 그 첨부만 다시 열 수 없다
       }
+    }
+    const parts = it.parts.map((p): HistoryPart => {
       if (p.type !== 'image' || !p.file) return p;
       try {
         if (this.images.copy(from, to, p.file)) return p;
@@ -2416,7 +2447,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.sweepTimer = null;
       const ids = [...this.sessions.keys()];
       for (const r of this.perms.pending()) this.perms.cancelForAgent(r.agentId, EXITED);
-      // 올리는 중인 첨부 — ssh 를 끈다(앱이 닫힌 뒤 떠돌지 않게). 그 보내기들이 되돌리기(서버 파일 지우기)를 줄에 세울 때까지 상한 안에서 기다린다
+      // 보내는 중인 첨부 — 복사를 끊고 ssh 를 끈다(앱이 닫힌 뒤 떠돌지 않게). 그 보내기들이 되돌리기(사본·서버 파일 지우기)를 마치거나 줄에 세울 때까지 상한 안에서 기다린다
       for (const id of [...this.uploads.keys()]) this.cancelUploads(id);
       const sends = this.waitWithin([...this.sending.values()]);
       // 맵에서 이미 빠진 채 끄는 중인 세션(다시 띄우기·새 대화)도 기다린다 — 각각 STOP_LIMIT_MS 상한
@@ -2597,14 +2628,14 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /**
-   * 보낸 줄을 읽었나 — 차례 도중에 보낸 말은 그 되돌림(replay, 같은 글)으로만, 쉴 때 보낸 줄은 Claude 의 첫 줄로
+   * 보낸 줄을 읽었나 — 차례 도중에 보낸 말은 그 되돌림(replay — 너그럽게 맞춘다, replayMatches)으로만, 쉴 때 보낸 줄은 Claude 의 첫 줄로
    * (그 줄의 init 이 되돌림보다 먼저 온다). 읽은 줄을 목록에서 뺀다
    */
   private noteRead(s: ClaudeSession, ev: StreamEvent): boolean {
     const list = this.inFlight.get(s);
     if (!list?.length) return false;
     if (ev.kind === 'replay') {
-      const i = list.findIndex((x) => x.mid && (x.kind === 'human' ? inputText(x.input.parts) : x.text) === ev.text);
+      const i = list.findIndex((x) => x.mid && replayMatches(x.kind === 'human' ? x.input.parts : x.text, ev.text));
       if (i < 0) return false;
       list.splice(i, 1);
       if (!this.midUnread(s)) this.clearMidGrace(s);
@@ -3932,7 +3963,7 @@ function sameFlags(x: Flags, y: Flags): boolean {
  * 보낸 줄과 상관없이 온다(부모 차례가 끝난 뒤에도 서브에이전트는 돈다). 생각 신호(thinking)·API 상태(api-status)도 치지 않는다 —
  * 늘 그 차례의 init 뒤에 오니 읽은 표시는 init 이 이미 했다
  */
-/** 보낸 말의 글 — 되돌림(replay)과 맞출 때. 쓴 글 블록만 줄바꿈으로(첨부의 경로 줄 블록 포함 — 되돌림도 같은 꼴) */
+/** 보낸 말의 글 — 쓴 글 블록만 줄바꿈으로(첨부의 경로 줄 블록 포함). 슬래시 명령인지 볼 때(되돌림 맞추기는 replayMatches) */
 function inputText(parts: ReadyPart[]): string {
   return sentText(parts);
 }
@@ -3981,6 +4012,30 @@ function errCode(e: unknown): string | null {
   return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? code : null;
 }
 
+/**
+ * 첨부 하나의 이 PC 쪽 준비를 끊는 signal — 바깥 signal(멈춤·지우기·끄기)이 끊기거나 ms 가 지나면 끊긴다. 다 쓰면 done()(타이머·리스너를 치운다).
+ * why(e, stopped): 그 단계의 오류 글 — 끊겼으면 그 까닭(바깥이 끊겼으면 stopped, 상한이면 ATTACH_COPY_SLOW), 아니면 그 오류의 쉬운 글
+ */
+function localCut(outer: AbortSignal, ms: number) {
+  const c = new AbortController();
+  let slow = false;
+  const cut = () => c.abort();
+  outer.addEventListener('abort', cut, { once: true });
+  const timer = setTimeout(() => {
+    slow = true;
+    c.abort();
+  }, ms);
+  timer.unref?.();
+  return {
+    signal: c.signal,
+    why: (e: unknown, stopped: string) => (!c.signal.aborted ? fileErrorText(e) : slow && !outer.aborted ? ATTACH_COPY_SLOW : stopped),
+    done: () => {
+      clearTimeout(timer);
+      outer.removeEventListener('abort', cut);
+    },
+  };
+}
+
 /** p 가 끝나거나 signal 이 끊길 때까지 — 끊기면 p 를 기다리지 않는다(p 가 없거나 이미 끊겼으면 바로). p 의 거절은 삼킨다 */
 function untilAborted(p: Promise<unknown> | undefined, signal: AbortSignal): Promise<void> {
   if (!p || signal.aborted) return Promise.resolve();
@@ -3993,9 +4048,6 @@ function untilAborted(p: Promise<unknown> | undefined, signal: AbortSignal): Pro
     void p.then(done, done);
   });
 }
-
-/** realpath 가 이 까닭으로 실패하면 보내지 않는다 — 그 밖(EINVAL·UNKNOWN …)은 이름 검사만으로 넘어간다 */
-const REALPATH_FATAL = new Set(['ENOENT', 'ENOTDIR', 'EACCES', 'EPERM', 'EBUSY']);
 
 function readsInput(ev: StreamEvent): boolean {
   if (

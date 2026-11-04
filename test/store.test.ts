@@ -107,6 +107,25 @@ test('state.json 이 깨져 있으면 state.json.broken-<시각> 으로 옮기�
   expect(openStore(dir).rooms()).toHaveLength(1);
 });
 
+test('recovered — 깨지거나 못 읽은 state.json 으로 빈 상태로 시작했을 때만 true(파일 없음·보통 파일은 false)', () => {
+  expect(openStore(dir).recovered).toBe(false); // 처음 — 파일 없음
+  openStore(dir).addRoom('R');
+  expect(openStore(dir).recovered).toBe(false); // 보통 파일
+  fs.writeFileSync(path.join(dir, 'state.json'), '{ not json');
+  expect(openStore(dir).recovered).toBe(true);
+  expect(openStore(dir).recovered).toBe(false); // 옮긴 뒤엔 파일 없음 — 새로 시작
+  // 모양이 틀린 파일 · 읽기 실패(잠김 등)도 같다
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ version: 1, rooms: 'x', agents: [] }));
+  expect(openStore(dir).recovered).toBe(true);
+  fs.writeFileSync(path.join(dir, 'state.json'), JSON.stringify({ version: 1, rooms: [], agents: [] }));
+  const realRead = fs.readFileSync;
+  vi.spyOn(fs, 'readFileSync').mockImplementation(((p: fs.PathOrFileDescriptor, o?: any) => {
+    if (p === path.join(dir, 'state.json')) throw fsError('EBUSY');
+    return realRead(p, o);
+  }) as any);
+  expect(openStore(dir).recovered).toBe(true);
+});
+
 test('윈도우 잠금(EPERM·EACCES·EBUSY)으로 이름 바꾸기가 두 번 실패해도 다시 시도해 저장한다', () => {
   for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
     const s = openStore(dir);

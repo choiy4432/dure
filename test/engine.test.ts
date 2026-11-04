@@ -6784,6 +6784,23 @@ test('차례 도중 첨부 — 지금 차례에 끼우고, 되돌림으로 읽�
   expect(userContents().at(-1)).toEqual([{ type: 'text', text: '이것도' }, { type: 'text', text: `\n\n첨부 파일:\n- ${path.join(attDir(a.id), file)}` }]);
 });
 
+// 진짜 claude 의 되돌림이 글 블록을 조금 다르게 이어 붙여도 읽은 것으로 맞춘다 — 못 맞추면 읽은 말을 안 읽었다고 보고, 멈출 때 돌려받아
+// 다시 보낸다(두 번 감 · 기록 두 줄). crlf: 줄 끝 \r\n·끝 공백 · nosep: 구분 없이 한 블록 · para: 빈 줄로 한 블록 · lead: 앞에 그림 자리 표시
+test.each(['crlf', 'nosep', 'para', 'lead'])('차례 도중 첨부 — 되돌림 꼴이 달라도(%s) 읽은 것으로 맞춰 바로 쉬고, 멈춰도 돌려받지 않는다', async (shape) => {
+  const e = await start({ FAKE_REPLAY_SHAPE: shape }, false, { midGraceMs: 60_000 }); // 못 맞추면 오래 작업 중으로 남는다
+  const { a } = setup(e);
+  const slow = resultOf(e, a.id);
+  await e.sendUser(a.id, text('THINK 생각'));
+  await e.sendUser(a.id, [{ type: 'text', text: '이것도\n둘째 줄' }, fileOf(original('끼움.txt'))]);
+  expect(e.heldInput(a.id)).toBe(0); // 차례 도중에 끼웠다
+  await slow;
+  await until('쉼', () => e.status(a.id) === 'idle', 2000);
+  await e.interrupt(a.id);
+  expect(e.hold(a.id)).toBeNull(); // 돌려받아 붙잡은 것이 없다
+  expect(userContents()).toHaveLength(2); // 다시 보내지 않았다
+  expect(e.history(a.id).filter((x) => x.kind === 'user')).toHaveLength(2);
+});
+
 test('갈래 — 사본 복사·기록 file 새 이름', async () => {
   const { e } = await startConv();
   const { a } = setup(e);
@@ -7305,14 +7322,14 @@ describe('서버 방 첨부', () => {
   }, 60_000);
 });
 
-test('멈춤과 준비 완료가 겹쳐도 붙잡기 순서는 보낸 순서', async () => {
+test('멈춤과 보내기 차례가 겹쳐도 붙잡기 순서는 보낸 순서 — 준비하던 첨부 보내기는 실패, 그 뒤에서 기다리던 말은 돌려받은 말 다음에', async () => {
   const e = await start();
   const { a } = setup(e);
   await slowTurn(e, a.id);
   await e.sendUser(a.id, text('echo 끼움')); // 차례 도중 끼운 말 — Claude 가 아직 안 읽었다(멈추면 claude 를 내려 돌려받는다)
   const src = original('메모.txt');
   const gate = holdStat(src);
-  // claude 를 내리는 동안(stopRetracting 의 endSession)을 붙잡아 둔다 — 그사이 첨부 준비가 끝나게
+  // claude 를 내리는 동안(stopRetracting 의 endSession)을 붙잡아 둔다 — 그사이 뒤에서 기다리던 말이 차례를 받게
   let release!: () => void;
   const stopGate = new Promise<void>((r) => (release = r));
   let stopReached = false;
@@ -7324,20 +7341,23 @@ test('멈춤과 준비 완료가 겹쳐도 붙잡기 순서는 보낸 순서', a
   });
   try {
     const sending = e.sendUser(a.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(src)]);
+    const failed = expect(sending).rejects.toThrow(`${ATTACH_FAIL}메모.txt: ${COPY_STOPPED}`);
     await until('준비 중', gate.reached);
+    const behind = e.sendUser(a.id, text('echo 둘')); // 앞 보내기(첨부 준비)를 기다리는 말
     const stopping = e.interrupt(a.id);
     await until('내리는 중', () => stopReached);
-    gate.open();
-    await until('사본', () => attFiles(a.id).length === 1);
-    await sleep(150); // 준비를 마친 첨부 입력이 붙잡힐 틈 — 고치기 전엔 여기서 돌려받은 말보다 먼저 붙잡혔다
+    await failed;
+    await sleep(150); // 기다리던 말이 붙잡힐 틈 — 돌려받는 끝을 기다리지 않으면 여기서 돌려받은 말보다 먼저 붙잡힌다
     release();
     await stopping;
-    await sending;
+    await behind;
   } finally {
+    gate.open();
     gate.restore();
     stopSpy.mockRestore();
   }
-  expect(e.hold(a.id)?.items.map((x) => x.text)).toEqual(['echo 끼움', 'echo 첨부']);
+  expect(e.hold(a.id)?.items.map((x) => x.text)).toEqual(['echo 끼움', 'echo 둘']);
+  expect(attFiles(a.id)).toEqual([]);
 });
 
 test('보내는 중(느린 복사)엔 지난 대화로 돌아가지 않는다 — 복사가 끝나면 지금 대화로 가고, 그 뒤엔 돌아갈 수 있다', async () => {
@@ -7411,7 +7431,7 @@ test('보내기 차례 — 첨부를 준비하는 동안 온 말·/compact 는 �
   expect(e.heldInput(a.id)).toBe(1);
 });
 
-test('첨부를 준비하는 사이 멈추면 그 입력은 붙잡는다 — 멈춘 뒤에 친 말은 그대로 나간다', async () => {
+test('첨부를 준비하는 사이(느린 원본 재기) 멈추면 기다리지 않고 그 보내기는 실패 — 붙잡지 않고 사본도 안 남긴다 · 멈춘 뒤에 친 말은 그대로 나간다', async () => {
   const e = await start();
   const { a } = setup(e);
   const src = original('메모.txt', '멈춘 첨부');
@@ -7419,27 +7439,161 @@ test('첨부를 준비하는 사이 멈추면 그 입력은 붙잡는다 — 멈
   const gate = holdStat(src);
   try {
     const sending = e.sendUser(a.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(src)]);
+    const failed = expect(sending).rejects.toThrow(`${ATTACH_FAIL}메모.txt: ${COPY_STOPPED}`);
     await until('준비 중', gate.reached);
     await e.interrupt(a.id);
-    gate.open();
-    await sending;
+    await failed; // 붙잡힌 재기가 끝나길 기다리지 않았다
   } finally {
+    gate.open();
     gate.restore();
   }
-  expect(e.hold(a.id)?.items.map((x) => [x.source, x.text, x.files ?? 0])).toEqual([['human', 'echo 첨부', 1]]);
+  expect(e.hold(a.id)).toBeNull();
   expect(e.heldInput(a.id)).toBe(0);
-  expect(attFiles(a.id)).toHaveLength(1);
   await until('쉼', () => e.status(a.id) === 'idle');
   await sleep(200);
+  expect(attFiles(a.id)).toEqual([]);
   expect(userTexts()).toEqual(['SLOW']); // 멈춘 뒤에 나가지 않았다
   // 멈춘 뒤에 친 말은 붙잡기를 거치지 않는다
   await talk(e, a.id, 'echo 뒤');
   expect(userTexts()).toEqual(['SLOW', 'echo 뒤']);
-  // 이어서 보내면 그 첨부도 간다
+});
+
+/** 이 PC 첨부 준비를 멈춤·지우기·끄기로 끊었다 — 그 보내기의 까닭 */
+const COPY_STOPPED = '복사하는 중에 그만뒀어요';
+
+/**
+ * 원본 읽기(fs.createReadStream)를 그 경로에서 붙잡는다 — 앞 조각만 내고 끝나지 않는다(온라인 전용 OneDrive·끊긴 공유 폴더 흉내).
+ * finish() 하면 나머지를 내고 끝낸다
+ */
+function stuckRead(target: string, head = '앞 조각 ', rest = '뒤 조각') {
+  const real = fs.createReadStream;
+  let stream: Readable | null = null;
+  const spy = vi.spyOn(fs, 'createReadStream').mockImplementation(((p: fs.PathLike, o?: any) => {
+    if (p !== target) return real(p, o);
+    stream = new Readable({ read() {} });
+    stream.push(head);
+    return stream;
+  }) as any);
+  return {
+    reading: () => stream !== null,
+    finish: () => {
+      stream?.push(rest);
+      stream?.push(null);
+    },
+    restore: () => spy.mockRestore(),
+  };
+}
+
+test('이 PC 복사 중 멈춤 — 끝나지 않는 원본도 기다리지 않고 실패·반쯤 쓴 사본 되돌림, 붙잡지 않는다 · 다음 말은 그대로', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const src = original('큰 영상.mp4', '원본');
+  const read = stuckRead(src);
+  try {
+    const sending = e.sendUser(a.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(original('먼저.txt')), fileOf(src)]);
+    const failed = expect(sending).rejects.toThrow(`${ATTACH_FAIL}큰 영상.mp4: ${COPY_STOPPED}`);
+    await until('복사 중', () => read.reading() && attFiles(a.id).length === 2);
+    const t0 = Date.now();
+    await e.interrupt(a.id);
+    await failed;
+    expect(Date.now() - t0).toBeLessThan(2000); // 원본은 영영 안 끝난다 — 멈춤이 그것을 기다리지 않았다
+  } finally {
+    read.restore();
+  }
+  expect(attFiles(a.id)).toEqual([]); // 반쯤 쓴 것·다 만든 것 둘 다 되돌림
+  expect(e.hold(a.id)).toBeNull(); // 붙잡지 않았다 — 실패로 끝났다(입력창에 글·칩이 남는다)
+  expect(e.heldInput(a.id)).toBe(0);
+  expect(e.history(a.id)).toEqual([]);
+  expect(spawns()).toEqual([]);
+  expect(fs.readFileSync(src, 'utf8')).toBe('원본');
+  await talk(e, a.id, 'echo 뒤');
+  expect(userTexts()).toEqual(['echo 뒤']);
+});
+
+test('이 PC 준비 상한(copyTimeoutMs) — 복사·원본 재기가 넘으면 실패·되돌림', async () => {
+  const e = await start({}, false, { copyTimeoutMs: 300 });
+  const { a } = setup(e);
+  const src = original('느린.bin', '원본');
+  const read = stuckRead(src);
+  try {
+    await expect(e.sendUser(a.id, [fileOf(src)])).rejects.toThrow(`${ATTACH_FAIL}느린.bin: 파일을 복사하는 데 너무 오래 걸려요`);
+  } finally {
+    read.restore();
+  }
+  expect(attFiles(a.id)).toEqual([]);
+  // 원본 재기에서 붙잡혀도(끊긴 공유 폴더) 같은 상한
+  const gate = holdStat(src);
+  try {
+    await expect(e.sendUser(a.id, [fileOf(src)])).rejects.toThrow(`${ATTACH_FAIL}느린.bin: 파일을 복사하는 데 너무 오래 걸려요`);
+  } finally {
+    gate.open();
+    gate.restore();
+  }
+  expect(attFiles(a.id)).toEqual([]);
+  expect(spawns()).toEqual([]);
+  expect(e.hold(a.id)).toBeNull();
+  // 상한 안이면 그대로 간다
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 됨' }, fileOf(src)]);
+  await done;
+  expect(attFiles(a.id)).toHaveLength(1);
+});
+
+test('이 PC 복사 중 새 대화 — 복사는 끊지 않고, 마치면 그 입력은 새 대화로 간다(기다리던 입력과 같은 규칙)', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  const src = original('메모.txt', '원본');
+  const read = stuckRead(src, '앞 ', '뒤');
+  try {
+    const sending = e.sendUser(a.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(src)]);
+    await until('복사 중', () => read.reading() && attFiles(a.id).length === 1);
+    await e.newConversation(a.id);
+    await sleep(200);
+    expect(attFiles(a.id)).toHaveLength(1); // 끊지 않았다
+    const done = resultOf(e, a.id);
+    read.finish();
+    await sending;
+    await done;
+  } finally {
+    read.restore();
+  }
+  const s2 = agentOf(e, a.id).sessionId;
+  expect(s2).not.toBe(s1);
+  expect(flagValue(lastSpawnOf('A').argv, '--session-id')).toBe(s2); // 새 대화의 세션이 받았다
   const [file] = attFiles(a.id);
-  const got = resultTextIs(e, a.id, `받음: echo 첨부\n\n\n첨부 파일:\n- ${path.join(attDir(a.id), file)}`);
-  e.resumeHold(a.id);
-  await got;
+  expect(fs.readFileSync(path.join(attDir(a.id), file), 'utf8')).toBe('앞 뒤');
+  expect(userTexts()).toEqual(['echo 하나', `echo 첨부\n\n\n첨부 파일:\n- ${path.join(attDir(a.id), file)}`]);
+});
+
+test('이 PC 복사 중 앱 끄기 — 복사를 끊어 기다리지 않고, 떠도는 거절이 없다', async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (r: unknown) => unhandled.push(r);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const e = await start();
+    const { a } = setup(e);
+    const src = original('큰.bin', '원본');
+    const read = stuckRead(src);
+    try {
+      const sending = e.sendUser(a.id, [fileOf(src)]);
+      const failed = expect(sending).rejects.toThrow(`${ATTACH_FAIL}큰.bin: ${COPY_STOPPED}`);
+      await until('복사 중', () => read.reading() && attFiles(a.id).length === 1);
+      const t0 = Date.now();
+      await e.shutdown();
+      await failed;
+      expect(Date.now() - t0).toBeLessThan(3000);
+    } finally {
+      read.restore();
+    }
+    expect(attFiles(a.id)).toEqual([]);
+    expect(spawns()).toEqual([]);
+    await sleep(100);
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
 });
 
 test('붙잡은 내 입력을 버리면 그 첨부 사본도 지운다 — 돌려받은 말(이미 기록에 있다)의 사본은 둔다', async () => {
@@ -7506,6 +7660,32 @@ test('에이전트 지우기 — 첨부 폴더가 잠겨 못 지우면 쉬운 �
   expect(e2.agents().map((x) => x.id)).toEqual([b.id]);
 });
 
+test('켤 때 state.json 이 깨져 빈 상태로 시작했으면 첨부 폴더를 지우지 않는다 — .broken 을 되살리면 그 에이전트들의 첨부가 있어야 한다', async () => {
+  const e1 = await start();
+  const { a } = setup(e1);
+  const done = resultOf(e1, a.id);
+  await e1.sendUser(a.id, [{ type: 'text', text: 'echo' }, fileOf(original('x.txt'))]);
+  await done;
+  await e1.shutdown();
+  const [file] = attFiles(a.id);
+  const stateFile = path.join(dataDir, 'state.json');
+  const good = fs.readFileSync(stateFile, 'utf8');
+  fs.writeFileSync(stateFile, good.slice(0, 40)); // 쓰다 끊긴 꼴
+
+  const e2 = await start();
+  expect(e2.agents()).toEqual([]); // 빈 상태로 시작했다
+  expect(fs.readdirSync(dataDir).filter((f) => f.startsWith('state.json.broken-'))).toHaveLength(1);
+  await (e2 as any).pruning; // 켤 때의 정리가 끝날 때까지
+  expect(attFiles(a.id)).toEqual([file]);
+  await e2.shutdown();
+
+  // 사용자가 되살리면(백업 등) 그대로 — 칩이 그 사본을 연다
+  fs.writeFileSync(stateFile, good);
+  const e3 = await start();
+  await (e3 as any).pruning;
+  expect(e3.attachmentPath(a.id, file)).toBe(path.join(attDir(a.id), file));
+});
+
 test('자격 증명 파일은 다른 이름으로도 보내지 않는다 — 대체 데이터 스트림(:)·짧은 이름(8.3)', async () => {
   const e = await start();
   const { a } = setup(e);
@@ -7559,18 +7739,19 @@ test('진짜 경로를 못 푸는 볼륨 — 이름 검사만으로 보낸다 ·
   }
 });
 
-test('준비하는 사이 에이전트를 지우면 아무것도 안 보내고, 지운 뒤에 만든 사본·첨부 폴더도 남기지 않는다', async () => {
+test('준비하는 사이 에이전트를 지우면 준비를 끊고 아무것도 안 보내며, 사본·첨부 폴더도 남기지 않는다', async () => {
   const e = await start();
   const { a } = setup(e);
   const src = original('x.txt');
   const gate = holdStat(src);
   try {
     const sending = e.sendUser(a.id, [{ type: 'text', text: 'echo' }, fileOf(src)]);
-    const failed = expect(sending).rejects.toThrow(`에이전트를 찾을 수 없습니다: ${a.id}`);
+    const failed = expect(sending).rejects.toThrow(`${ATTACH_FAIL}x.txt: ${COPY_STOPPED}`);
     await until('준비 중', gate.reached);
     await e.removeAgent(a.id);
-    gate.open(); // 이제 복사한다 — 첨부 폴더를 다시 만든다
-    await failed;
+    await failed; // 붙잡힌 재기를 기다리지 않았다
+    gate.open(); // 이제 재기가 끝난다 — 끊긴 준비는 복사하지 않는다(첨부 폴더를 다시 만들지 않는다)
+    await sleep(100);
   } finally {
     gate.restore();
   }

@@ -514,7 +514,7 @@ describe('registerIpc', () => {
     }
   })
 
-  it('openAttachment — 실행되는 종류(.bat·.exe·.lnk·.ps1 …·확장자 없음)는 열지 않고 탐색기에서 그 파일을 보인다', async () => {
+  it('openAttachment — 허용 목록(문서·그림·소리·영상·zip)에 없는 종류(실행·스크립트·프로젝트·디스크 이미지·확장자 없음 …)는 열지 않고 탐색기에서 그 파일을 보인다', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dure-ipc-attach-'))
     try {
       const store = openAttachmentStore(dir)
@@ -525,6 +525,8 @@ describe('registerIpc', () => {
       for (const name of [
         'run.bat', 'SETUP.EXE', '바로 가기.lnk', 'a.ps1', 'a.cmd', 'a.vbs', 'a.js', 'a.msi', 'a.reg', 'a.hta', 'a.scr', 'a.url', '확장자없음',
         'cleanup.sh', 'a.pdf.exe', '\u202Efdp.exe', 'a.rdp', 'a.themepack', 'a.diagcfg', 'a.pfx', 'a.mht', 'a.appinstaller',
+        // \uD5C8\uC6A9 \uBAA9\uB85D \uBC16 \u2014 \uAE30\uBCF8 \uC5F0\uACB0\uC774 \uBE4C\uB4DC\u00B7\uB9C8\uC6B4\uD2B8\u00B7\uC2A4\uD06C\uB9BD\uD2B8\uB97C \uB3CC\uB9B4 \uC218 \uC788\uB2E4
+        'App.sln', 'App.csproj', 'disk.iso', 'disk.img', 'addin.vsto', 'tool.py', 'index.ts', 'page.html', 'logo.svg', 'data.xml', 'a.7z', '.env',
       ]) {
         const { file, abs } = await store.copyIn('a1', src, name)
         deps.openPath.mockClear()
@@ -534,7 +536,7 @@ describe('registerIpc', () => {
         expect(deps.showInFolder, name).toHaveBeenCalledWith(abs)
       }
       // 문서·그림은 그대로 연다
-      for (const name of ['보고서.pdf', 'notes.md', 'a.txt', 'shot.png', 'data.xlsx']) {
+      for (const name of ['보고서.pdf', 'notes.md', 'a.txt', 'shot.png', 'data.xlsx', '기획서.hwp', 'clip.MP4', 'memo.m4a', 'bundle.zip']) {
         const { file, abs } = await store.copyIn('a1', src, name)
         deps.openPath.mockClear()
         deps.showInFolder.mockClear()
