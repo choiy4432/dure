@@ -5,15 +5,18 @@ export const ATTACH_MAX_BYTES = 100 * 1024 * 1024;
 /** 상한을 넘는 파일 */
 export const ATTACH_TOO_BIG = '100MB 보다 큰 파일은 보낼 수 없어요';
 
-/**
- * PDF 를 문서 블록(base64)으로도 넘기는 상한 — 한 메시지의 문서 블록 PDF 원본 크기 합(정확히 10MiB 는 넣는다). 앞에서부터 넣고, 넣으면 합이
- * 넘는 PDF 는 경로 줄만(뒤의 PDF 가 남은 자리에 들면 넣는다). 근거(probe29): Claude CLI 는 요청마다 대화 전체의 문서·그림 base64 합이
- * 24MiB 를 넘으면 오래된 것부터 오류 없이 빼서 14MiB 아래로 맞춘다 — 10MiB(base64 ~13.3MiB)면 앞 차례의 것이 있어도 새 PDF 는 남는다
- */
+/** PDF 하나를 문서 블록(base64)으로도 넘기는 크기 상한 — 원본 바이트(정확히 10MiB 는 넣는다). 넘으면 경로 줄만 */
 export const PDF_INLINE_MAX_BYTES = 10 * 1024 * 1024;
 /**
- * 문서 블록으로 넘길 PDF 의 쪽수 상한 — 셀 수 있을 때만(못 세면 크기 상한만). 쪽당 ~1.1–1.6k 토큰(probe29) → 100쪽 ≈ 155k 토큰,
- * 그 뒤 모든 차례가 그만큼 읽는다. API 상한(이 모델 600쪽)을 넘으면 CLI 가 그 문서만 빼고 이어 간다(세션은 멀쩡)
+ * 한 메시지의 미디어 상한 — 그림 블록 + 문서 블록의 base64 글자 수 합(≈ 10MiB PDF 하나). 그림은 먼저 센다(이미 받은 것 — 빼지 않는다),
+ * PDF 는 남은 자리에 드는 것만 앞에서부터 넣고(넣으면 넘는 PDF 는 경로 줄만, 뒤의 PDF 가 남은 자리에 들면 넣는다).
+ * 근거(probe29): Claude CLI 는 요청마다 대화 전체의 그림·문서 base64 합이 24MiB 를 넘으면 오래된 것부터 오류 없이 빼서 14MiB 아래로
+ * 맞춘다 — 한 메시지가 그 아래면 앞 차례의 것이 있어도 이번 것은 남는다
+ */
+export const MEDIA_INLINE_MAX_B64 = 13.5 * 1024 * 1024;
+/**
+ * 문서 블록으로 넘길 PDF 의 쪽수 상한 — 쪽수를 알 때만 넣는다(못 세면 경로 줄만 — pdfPageCount). 쪽당 ~1.1–1.6k 토큰(probe29) →
+ * 100쪽 ≈ 155k 토큰, 그 뒤 모든 차례가 그만큼 읽는다. API 상한(이 모델 600쪽)을 넘으면 CLI 가 그 문서만 빼고 이어 간다(세션은 멀쩡)
  */
 export const PDF_INLINE_MAX_PAGES = 100;
 /** 보내기 실패의 머리 — 뒤에 ' — <이유 첫 줄>' */
@@ -34,7 +37,7 @@ const DOCUMENT_EXT: ReadonlySet<string> = new Set([
   'pdf', 'txt', 'md', 'markdown', 'csv', 'tsv', 'log', 'json', 'yaml', 'yml', 'rtf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
   'odt', 'ods', 'odp', 'hwp', 'hwpx',
   // 그림
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'heic', 'heif',
+  'png', 'jpg', 'jpeg', 'jfif', 'gif', 'webp', 'avif', 'bmp', 'tif', 'tiff', 'heic', 'heif',
   // 소리·영상
   'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'wmv',
   // 묶음 — 탐색기가 연다

@@ -536,7 +536,7 @@ describe('registerIpc', () => {
         expect(deps.showInFolder, name).toHaveBeenCalledWith(abs)
       }
       // 문서·그림은 그대로 연다
-      for (const name of ['보고서.pdf', 'notes.md', 'a.txt', 'shot.png', 'data.xlsx', '기획서.hwp', 'clip.MP4', 'memo.m4a', 'bundle.zip']) {
+      for (const name of ['보고서.pdf', 'notes.md', 'a.txt', 'shot.png', 'data.xlsx', '기획서.hwp', 'clip.MP4', 'memo.m4a', 'bundle.zip', 'photo.jfif', 'shot.AVIF']) {
         const { file, abs } = await store.copyIn('a1', src, name)
         deps.openPath.mockClear()
         deps.showInFolder.mockClear()

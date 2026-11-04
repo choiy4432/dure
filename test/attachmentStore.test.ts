@@ -175,6 +175,28 @@ test('copy — 비동기 복사(갈래 칠 때 큰 첨부가 많아도 main 을 
   }
 });
 
+// 인터넷에서 받은 파일의 표시(Mark-of-the-Web — 대체 데이터 스트림 Zone.Identifier). 사본에 없으면 칩으로 연 .doc·.xls 가 보호된 보기·
+// 매크로 막기 없이 열린다. 스트림 복사(createReadStream)는 본 스트림만 옮긴다 — copyFile(CopyFileW)은 대체 스트림도 옮긴다
+const ZONE = '[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://example.com/a.doc\r\n';
+test.skipIf(process.platform !== 'win32')('인터넷 표시(Zone.Identifier)도 사본에 — copyIn(스트림 복사 뒤 따로) · copy(갈래)', async () => {
+  const s = open();
+  const src = source('받은 문서.doc', '매크로');
+  fs.writeFileSync(`${src}:Zone.Identifier`, ZONE);
+  const { file, abs } = await s.copyIn('a1', src, '받은 문서.doc');
+  expect(fs.readFileSync(abs, 'utf8')).toBe('매크로');
+  expect(fs.readFileSync(`${abs}:Zone.Identifier`, 'utf8')).toBe(ZONE);
+  // 끊을 수 있는 보내기(signal)도 같다
+  const cut = await s.copyIn('a1', src, '받은 문서.doc', new AbortController().signal);
+  expect(fs.readFileSync(`${cut.abs}:Zone.Identifier`, 'utf8')).toBe(ZONE);
+  // 갈래 복사도 표시째
+  expect(await s.copy('a1', 'a2', file)).toBe(true);
+  expect(fs.readFileSync(`${s.resolve('a2', file)}:Zone.Identifier`, 'utf8')).toBe(ZONE);
+  // 표시 없는 원본의 사본엔 없다 · 원본은 그대로
+  const plain = await s.copyIn('a1', source('a.txt'), 'a.txt');
+  expect(() => fs.readFileSync(`${plain.abs}:Zone.Identifier`)).toThrow();
+  expect(fs.readFileSync(`${src}:Zone.Identifier`, 'utf8')).toBe(ZONE);
+});
+
 test('remove', async () => {
   const s = open();
   const src = source('a.txt');

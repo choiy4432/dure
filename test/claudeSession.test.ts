@@ -185,8 +185,14 @@ const CHUNK = 64 * 1024;
 function reader() {
   const s = new ClaudeSession({ command: process.execPath, args: [], cwd: dir, env: {} });
   const events: any[] = [];
+  const lines: string[] = []; // onLine 이 받은 줄(줄 끝을 뗀 뒤)
+  const onLine = (s as any).onLine.bind(s);
+  (s as any).onLine = (l: string) => {
+    lines.push(l);
+    onLine(l);
+  };
   s.on('event', (e) => events.push(e));
-  return { feed: (chunk: string) => (s as any).onStdout(chunk), events };
+  return { feed: (chunk: string) => (s as any).onStdout(chunk), events, lines };
 }
 const resultLine = (t: string) => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: t });
 const resultEvent = (t: string) => ({ kind: 'result', ok: true, subtype: 'success', text: t, denials: [] });
@@ -228,6 +234,50 @@ test('STDOUT_LINE_MAX(글자 수)까지의 줄은 읽고, 넘는 줄은 줄바�
   line(resultLine('하나 넘침'), STDOUT_LINE_MAX + 1);
   feed(`${resultLine('다음')}\n`);
   expect(events).toEqual([resultEvent('딱 상한'), resultEvent('다음')]);
+});
+
+test('줄 끝 \\r\\n 이 조각 사이에서 갈려도(\\r 은 앞 조각 끝 · \\n 은 다음 조각 맨 앞) 한 줄로 — \\r 은 줄에 남지 않는다', () => {
+  const { feed, events, lines } = reader();
+  feed(`${resultLine('하나')}\r`);
+  expect(lines).toEqual([]); // 줄바꿈이 아직 안 왔다
+  feed(`\n${resultLine('둘')}\r\n\r`);
+  feed('\n');
+  expect(lines).toEqual([resultLine('하나'), resultLine('둘'), '']);
+  expect(events).toEqual([resultEvent('하나'), resultEvent('둘')]);
+});
+
+// 시험의 가짜 claude 가 진짜(probe29 P3)처럼 되돌리는지 — 엔진의 끼운 말 맞추기 시험이 이 꼴에 기댄다
+test('가짜 claude 되돌림 — 보낸 내용 그대로: 문서 블록이 있으면 그림 블록도 data 째 · 그림만이면 글 블록 없이', async () => {
+  const s = make();
+  const replays: any[] = [];
+  const onLine = (s as any).onLine.bind(s);
+  (s as any).onLine = (l: string) => {
+    const o = JSON.parse(l);
+    if (o.type === 'user' && o.isReplay) replays.push(o.message.content);
+    onLine(l);
+  };
+  s.start();
+  const image = { type: 'image' as const, mediaType: 'image/png', base64: 'iVBORw0KGgo=' };
+  const pdf = {
+    type: 'file' as const, name: 'a.pdf', bytes: 3, file: '20261104-090507-a.pdf', sendPath: 'C:\\x\\20261104-090507-a.pdf',
+    inline: { mediaType: 'application/pdf' as const, base64: 'UERG' },
+  };
+  const img = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } };
+  let done = waitFor<any>(s, 'event', (e) => e.kind === 'result');
+  s.send([{ type: 'text', text: '봐 줘' }, image, pdf]);
+  await done;
+  done = waitFor<any>(s, 'event', (e) => e.kind === 'result');
+  s.send([image]);
+  await done;
+  expect(replays).toEqual([
+    [
+      { type: 'text', text: '봐 줘' },
+      img,
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'UERG' } },
+      { type: 'text', text: '\n\n첨부 파일:\n- C:\\x\\20261104-090507-a.pdf' },
+    ],
+    [img],
+  ]);
 });
 
 test('request: 프로세스가 종료되면 대기 중 요청은 reject', async () => {

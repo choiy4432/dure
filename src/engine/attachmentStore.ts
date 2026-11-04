@@ -26,7 +26,7 @@ export interface AttachmentStore {
   dir(agentId: AgentId): string;
   /**
    * 원본을 그 에이전트 폴더로 복사한다 — 이름 = `<YYYYMMDD-HHmmss>-<안전한 이름>`, 겹치면 확장자 앞에 -2·-3….
-   * 원본은 읽기로만 연다. 실패하면 반쯤 쓴 사본을 지우고 던진다.
+   * 원본은 읽기로만 연다. 실패하면 반쯤 쓴 사본을 지우고 던진다. 원본의 인터넷 표시(Zone.Identifier)도 사본에 옮긴다(윈도 · 되는 만큼).
    * 비동기 스트림 — 엔진은 Electron main 에서 돈다. 큰 파일·느린 원본(온라인 전용 OneDrive·USB·네트워크 공유)을 복사하는 동안 앱·MCP 가
    * 멈추지 않게. signal 이 끊기면 원본 읽기를 기다리지 않고 바로 그 까닭(AbortError)으로 던진다(반쯤 쓴 사본은 지운다 · 이미 끊겼으면 폴더도 안 만든다)
    */
@@ -35,7 +35,8 @@ export interface AttachmentStore {
   removeFile(agentId: AgentId, file: string): void;
   /**
    * 사본 하나를 다른 에이전트 폴더로 같은 이름에 복사한다 — 이름·폴더 모양이 틀리거나 원본이 없으면 false(이미 있으면 그대로 true).
-   * 쓰다 끊기면 임시 파일을 지우고 던진다. 비동기 — 갈래 칠 때 큰 첨부가 많아도 main 을 막지 않는다
+   * 쓰다 끊기면 임시 파일을 지우고 던진다. 비동기 — 갈래 칠 때 큰 첨부가 많아도 main 을 막지 않는다.
+   * copyFile(윈도 CopyFileW)이라 인터넷 표시(Zone.Identifier) 같은 대체 데이터 스트림도 따라온다(이름 바꾸기도 그대로 둔다)
    */
   copy(from: AgentId, to: AgentId, file: string): Promise<boolean>;
   /** 사본의 절대 경로 — 첨부 폴더 밖(`..`·절대 경로·다른 모양)이거나 없으면 null */
@@ -109,6 +110,39 @@ const exists = (p: string) => fs.promises.access(p).then(() => true, () => false
 
 /** 복사 스트림 조각 크기 — 100MB 도 조각 수가 적게 */
 const COPY_CHUNK = 1024 * 1024;
+
+/**
+ * 인터넷에서 받은 파일의 표시(Mark-of-the-Web) — 윈도가 대체 데이터 스트림 `<파일>:Zone.Identifier` 에 둔다. 사본에 없으면 칩으로 연
+ * .doc·.xls·.ppt 가 보호된 보기·매크로 막기 없이 열린다. copyFile(CopyFileW)은 대체 스트림도 옮기지만 스트림 복사는 본 스트림만 옮긴다
+ */
+const ZONE_STREAM = ':Zone.Identifier';
+/** 표시를 읽을 상한 — 보통 수백 바이트(ZoneId · 받은 주소) */
+const ZONE_MAX = 64 * 1024;
+
+/** 원본의 인터넷 표시 — 윈도만 · 없거나 못 읽으면 null(던지지 않는다 — 표시 없는 원본·FAT 볼륨·네트워크 공유) */
+async function readZone(src: string): Promise<Buffer | null> {
+  if (process.platform !== 'win32') return null;
+  let h: fs.promises.FileHandle | undefined;
+  try {
+    h = await fs.promises.open(`${src}${ZONE_STREAM}`, 'r');
+    const buf = Buffer.alloc(ZONE_MAX);
+    const { bytesRead } = await h.read(buf, 0, ZONE_MAX, 0);
+    return bytesRead > 0 ? buf.subarray(0, bytesRead) : null;
+  } catch {
+    return null;
+  } finally {
+    await h?.close().catch(() => {});
+  }
+}
+
+/** 사본에 인터넷 표시를 — 되는 만큼(던지지 않는다 — 대체 스트림이 없는 볼륨 등) */
+async function writeZone(abs: string, zone: Buffer): Promise<void> {
+  try {
+    await fs.promises.writeFile(`${abs}${ZONE_STREAM}`, zone);
+  } catch {
+    // 표시를 못 옮겨도 사본은 쓴다
+  }
+}
 
 /** 쓰는 스트림을 닫고(이미 닫혔으면 바로) 닫힘을 기다린다 — 열린 파일은 지워도 이름이 남는다 */
 function closed(s: fs.WriteStream): Promise<void> {
@@ -190,6 +224,11 @@ export function openAttachmentStore(dataDir: string, o: { now?: () => Date } = {
           // 스트림이라 끊을 수 있다(signal) — 끊기면 느린 원본(온라인 전용 OneDrive·끊긴 공유 폴더)의 읽기가 돌아오길 기다리지 않는다
           const copying = pipeline(fs.createReadStream(srcPath, { flags: 'r', highWaterMark: COPY_CHUNK }), out, signal ? { signal } : {});
           await (signal ? abortable(copying, signal) : copying);
+          // 인터넷 표시도 — 스트림 복사는 본 스트림만 옮긴다. 읽기도 끊을 수 있게(원본 쪽), 쓰기는 이 PC 사본이라 기다린다
+          // (끊긴 뒤 늦게 쓰면 지운 사본 자리에 빈 파일이 다시 생긴다)
+          const reading = readZone(srcPath);
+          const zone = await (signal ? abortable(reading, signal) : reading);
+          if (zone) await writeZone(abs, zone);
         } catch (e) {
           // 반쯤 쓴 사본이 남지 않게 — 쓰는 쪽을 닫은 뒤 지운다. 지우기 실패가 원래 까닭을 가리지 않게 삼킨다
           try {

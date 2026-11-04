@@ -19,7 +19,7 @@ import { conversationFacts, splitConversations, type Conversation } from './conv
 import { claudeDirOf, existingSessions } from './claudeSessions';
 import { openImageStore, type ImageStore } from './imageStore';
 import { abortable, openAttachmentStore, REALPATH_FATAL, type AttachmentStore } from './attachmentStore';
-import { ATTACH_FAILED, ATTACH_MAX_BYTES, ATTACH_TOO_BIG, PDF_INLINE_MAX_BYTES, PDF_INLINE_MAX_PAGES } from '../shared/attachments';
+import { ATTACH_FAILED, ATTACH_MAX_BYTES, ATTACH_TOO_BIG, MEDIA_INLINE_MAX_B64, PDF_INLINE_MAX_BYTES, PDF_INLINE_MAX_PAGES } from '../shared/attachments';
 import { hasPdfHead, isPdfName, pdfPageCount } from './pdf';
 import { replayMatches, sentText } from './streamProtocol';
 import { buildArgs, buildMcpConfig, buildUsageArgs, CREATE_AGENT_TOOL, SPAWN_ENV_EXTRA } from './claudeArgs';
@@ -1717,7 +1717,8 @@ class EngineImpl extends EventEmitter implements Engine {
   /**
    * 첨부를 보낼 꼴로 — 글·그림은 그대로, 파일은 차례대로 하나씩 준비한다(prepareFile — 서버 방이면 올리기까지). 하나라도 실패하면 이번에
    * 만든 사본·서버 파일을 지우고 그 파일의 오류('파일을 보내지 못했어요 — <이름>: <이유>')를 던진다. signal: 끊으면(멈춤 등) 서버 방은 실패로.
-   * PDF 의 문서 블록은 이 메시지에서 원본 크기 합 PDF_INLINE_MAX_BYTES 까지 — 앞에서부터 남은 자리(room)에 드는 것만(넘는 것은 경로 줄만)
+   * PDF 의 문서 블록은 이 메시지의 미디어 상한(MEDIA_INLINE_MAX_B64 — 그림·문서 블록 base64 합) 안에서만: 그림을 먼저 센다(그림은 그대로
+   * 간다), PDF 는 앞에서부터 남은 자리(room)에 드는 것만(넘는 것은 경로 줄만)
    */
   private async prepareParts(id: AgentId, parts: UserPart[], signal: AbortSignal): Promise<ReadyPart[]> {
     const agent = this.need(id);
@@ -1725,7 +1726,7 @@ class EngineImpl extends EventEmitter implements Engine {
     // 서버 방인데 ssh 가 없다 — 사본을 만들기 전에
     if (remote && !this.sshAvailable()) throw new Error(`${ATTACH_FAILED} — ${NO_SSH}`);
     const out: ReadyPart[] = [];
-    let room = PDF_INLINE_MAX_BYTES;
+    let room = MEDIA_INLINE_MAX_B64 - parts.reduce((n, p) => n + (p.type === 'image' ? p.base64.length : 0), 0);
     try {
       for (const p of parts) {
         if (p.type !== 'file') {
@@ -1733,7 +1734,7 @@ class EngineImpl extends EventEmitter implements Engine {
           continue;
         }
         const ready = await this.prepareFile(id, p, remote, signal, room);
-        if (ready.inline) room -= ready.bytes;
+        if (ready.inline) room -= ready.inline.base64.length;
         out.push(ready);
       }
     } catch (e) {
@@ -1747,7 +1748,7 @@ class EngineImpl extends EventEmitter implements Engine {
    * 첨부 하나 — 원본이 보통 파일이고 ATTACH_MAX_BYTES 이하인지 엔진이 다시 잰 뒤(화면이 준 bytes 는 믿지 않는다) 그 에이전트의
    * 첨부 폴더로 복사한다. 원본은 읽기만 한다. Claude 에게는 사본의 절대 경로가 간다.
    * 서버 방이면 이 PC 사본(칩이 연다)을 만든 뒤 그 사본을 서버로 올린다(uploadFile) — Claude 에게는 서버의 절대 경로가 간다.
-   * PDF 면 사본을 읽어 문서 블록으로도 넘긴다(pdfInline — pdfRoom: 이 메시지에 남은 문서 블록 자리, 방 종류와 상관없이 같은 블록)
+   * PDF 면 사본을 읽어 문서 블록으로도 넘긴다(pdfInline — pdfRoom: 이 메시지에 남은 미디어 자리(base64 글자 수), 방 종류와 상관없이 같은 블록)
    */
   private async prepareFile(id: AgentId, p: FileInput, remote: { host: string } | null, signal: AbortSignal, pdfRoom: number): Promise<FileReady> {
     const shown = typeof p.name === 'string' ? firstLine(p.name) : '';
@@ -2225,30 +2226,26 @@ class EngineImpl extends EventEmitter implements Engine {
     // 자동·묻지 않음·늘 허용은 새 에이전트 기본값(addAgent) 그대로
     const agent = this.store.updateAgent(added.id, { model: src.model, effort: src.effort, forkOf: conv.sessionId });
     // 기록은 쓰기만 — 사건은 없다(화면이 더한 에이전트와 같다). 줄은 시각 그대로, 경계 없이.
-    // 첨부 사본 복사(비동기)를 다 마친 뒤 한 번에 쓴다 — 복사하는 동안 기록이 반쯤 쓰인 갈래가 보이지 않게
-    const items: HistoryItem[] = [];
-    for (const it of conv.items) items.push(await this.forkedItem(i.from, agent.id, it));
-    for (const it of items) this.guard(agent.id, () => this.hist.append(agent.id, it));
+    // 기다리지 않고 먼저 쓴다 — 갈래가 보이는 순간 기록이 다 있고, 곧바로 보낸 말도 옮긴 줄 뒤에 붙는다
+    const files: string[] = [];
+    for (const it of conv.items) {
+      const item = this.forkedItem(i.from, agent.id, it);
+      this.guard(agent.id, () => this.hist.append(agent.id, item));
+      if (it.kind === 'user') for (const p of it.parts) if (p.type === 'file') files.push(p.file);
+    }
     this.guard(agent.id, () => this.hist.append(agent.id, { t: Date.now(), kind: 'notice', text: forkedNotice(src.name, target.at) }));
+    // 첨부 사본은 그 뒤에(비동기) — 복사가 끝날 때까지 그 칩은 '찾을 수 없어요'
+    await this.forkAttachments(i.from, agent.id, files);
     return agent;
   }
 
   /**
    * 갈래로 옮길 기록 한 줄 — 사람이 보낸 그림은 새 에이전트 칸으로 복사, 복사 못 한 그림은 file 을 뺀다(크기·형식은 그대로).
-   * 첨부도 이 PC 사본을 새 에이전트 첨부 폴더로 같은 이름에 복사한다 — 기록의 file 은 이제 새 폴더의 사본(못 하면 칩은 남고 열 때 없다고 한다).
+   * 첨부 칩은 그대로(같은 사본 이름 — 사본은 forkAttachments 가 새 에이전트 첨부 폴더로 복사한다. 못 하면 칩은 남고 열 때 없다고 한다).
    * 서버 파일은 다시 올리지 않는다(remotePath 그대로 — Claude 의 기억 속 경로는 원래 에이전트의 첨부)
    */
-  private async forkedItem(from: AgentId, to: AgentId, it: HistoryItem): Promise<HistoryItem> {
-    if (it.kind !== 'user' || !it.parts.some((p) => (p.type === 'image' && p.file) || p.type === 'file')) return it;
-    // 첨부 사본 — 기록의 file 은 그대로(같은 이름). 비동기라 큰 첨부가 많아도 main 을 막지 않는다
-    for (const p of it.parts) {
-      if (p.type !== 'file') continue;
-      try {
-        await this.attachments.copy(from, to, p.file);
-      } catch {
-        // 디스크가 막혀도 갈래는 만든다 — 그 첨부만 다시 열 수 없다
-      }
-    }
+  private forkedItem(from: AgentId, to: AgentId, it: HistoryItem): HistoryItem {
+    if (it.kind !== 'user' || !it.parts.some((p) => p.type === 'image' && p.file)) return it;
     const parts = it.parts.map((p): HistoryPart => {
       if (p.type !== 'image' || !p.file) return p;
       try {
@@ -2260,6 +2257,28 @@ class EngineImpl extends EventEmitter implements Engine {
       return rest;
     });
     return { ...it, parts };
+  }
+
+  /**
+   * 갈래의 첨부 사본 — 원래 에이전트 첨부 폴더에서 같은 이름으로 하나씩 복사한다(비동기 — 큰 첨부가 많아도 main 을 막지 않는다).
+   * 그새 갈래를 지웠으면(지우는 중 포함) 그만 복사하고, 복사가 되살린 폴더를 지운다(지우기가 먼저 폴더를 치웠어도 늦게 끝난 복사가 다시 만든다)
+   */
+  private async forkAttachments(from: AgentId, to: AgentId, files: string[]): Promise<void> {
+    const gone = () => this.removing.has(to) || !this.store.agent(to);
+    for (const file of new Set(files)) {
+      if (gone()) break;
+      try {
+        await this.attachments.copy(from, to, file);
+      } catch {
+        // 디스크가 막혀도 갈래는 만든다 — 그 첨부만 다시 열 수 없다
+      }
+    }
+    if (!gone()) return;
+    try {
+      this.attachments.remove(to);
+    } catch {
+      // 잠겨 남은 것은 다음에 켤 때 주인 없는 폴더로 지운다(prune)
+    }
   }
 
   /**
@@ -4005,14 +4024,17 @@ function uploadedOf(parts: ReadyPart[]): string[] {
   return parts.flatMap((p) => (p.type === 'file' && p.remotePath ? [p.file] : []));
 }
 
+/** n 바이트의 base64 글자 수 */
+const base64Length = (n: number) => 4 * Math.ceil(n / 3);
+
 /**
- * PDF 첨부를 문서 블록으로도 넘길 내용(설계 §4.5 · probe29) — 이름이 .pdf(대소문자 없이)이고, 크기가 room(이 메시지에 남은 자리 —
- * PDF_INLINE_MAX_BYTES 안) 안이고, 사본이 `%PDF-` 로 시작하고, 쪽수를 셀 수 있으면 PDF_INLINE_MAX_PAGES 쪽 안일 때만. 아니면 undefined
- * (경로 줄만). 첨부 폴더의 사본을 읽는다(원본은 다시 읽지 않는다 — 이 PC 디스크라 빠르다). 사본을 못 읽어도 경로 줄만(보내기는 막지 않는다) ·
- * 읽는 사이 끊기면(signal) 던진다. 바이트 버퍼는 base64 로 바꾼 뒤 버린다
+ * PDF 첨부를 문서 블록으로도 넘길 내용(설계 §4.5 · probe29) — 이름이 .pdf(대소문자 없이)이고, PDF_INLINE_MAX_BYTES 안이고, base64 가
+ * room(이 메시지에 남은 미디어 자리 — 글자 수) 안이고, 사본이 `%PDF-` 로 시작하고, 쪽수를 알고(pdfPageCount — 모르면 큰 PDF 일 수 있다)
+ * PDF_INLINE_MAX_PAGES 쪽 안일 때만. 아니면 undefined(경로 줄만). 첨부 폴더의 사본을 읽는다(원본은 다시 읽지 않는다 — 이 PC 디스크라
+ * 빠르다). 사본을 못 읽어도 경로 줄만(보내기는 막지 않는다) · 읽거나 세는 사이 끊기면(signal) 던진다. 바이트 버퍼는 base64 로 바꾼 뒤 버린다
  */
 async function pdfInline(abs: string, name: string, bytes: number, room: number, signal: AbortSignal): Promise<FileReady['inline']> {
-  if (!isPdfName(name) || bytes > Math.min(room, PDF_INLINE_MAX_BYTES)) return undefined;
+  if (!isPdfName(name) || bytes > PDF_INLINE_MAX_BYTES || base64Length(bytes) > room) return undefined;
   let buf: Buffer;
   try {
     buf = await fs.promises.readFile(abs, { signal });
@@ -4022,8 +4044,8 @@ async function pdfInline(abs: string, name: string, bytes: number, room: number,
   }
   // 잰 크기와 다르면(그새 바뀜) 넣지 않는다 — 이 메시지의 합은 잰 크기로 센다
   if (buf.length !== bytes || !hasPdfHead(buf)) return undefined;
-  const pages = pdfPageCount(buf);
-  if (pages !== null && pages > PDF_INLINE_MAX_PAGES) return undefined;
+  const pages = await pdfPageCount(buf, signal, PDF_INLINE_MAX_PAGES);
+  if (pages === null || pages > PDF_INLINE_MAX_PAGES) return undefined;
   return { mediaType: 'application/pdf', base64: buf.toString('base64') };
 }
 

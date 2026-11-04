@@ -384,6 +384,46 @@ describe('encode', () => {
     expect(replayMatches(delivery, '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n넷째')).toBe(false);
   });
 
+  // 글 없이 그림만 보낸 말(스크린숏 붙여 넣기) — 되돌림엔 글 블록이 없다(보낸 그대로). 빈 되돌림은 글도 첨부도 없는 말과만 맞는다
+  test('replayMatches: 그림만 보낸 말은 글 없는 되돌림과 맞다 — 글·첨부가 있는 말은 아니다', () => {
+    const image: ReadyPart = { type: 'image', mediaType: 'image/png', base64: 'AA==' };
+    expect(replayMatches([image], '')).toBe(true);
+    expect(replayMatches([image, image], '')).toBe(true);
+    expect(replayMatches([image], '\n')).toBe(true);
+    expect(replayMatches([image, { type: 'text', text: '봐' }], '')).toBe(false);
+    expect(replayMatches([image, { type: 'file', name: 'a.txt', bytes: 1, file: '20261104-090507-a.txt', sendPath: 'C:\\x\\20261104-090507-a.txt' }], '')).toBe(false);
+    expect(replayMatches([image], '다른 말')).toBe(false);
+  });
+
+  // 경로 줄은 줄째로 맞춘다 — 공백을 다 빼고 이어 찾으면 이름 끝·사이가 다른 사본(x 와 x-2, a.md 와 a.mdx, 'a b' 와 'ab')도 맞았다
+  test('replayMatches: 경로 줄은 줄마다 통째로(줄 안 공백 덩어리·앞뒤 공백만 고른다) — 이름이 조금 다른 사본은 아니다', () => {
+    const dir = 'C:\\data\\attachments\\x\\20261104-090507-';
+    const fileAt = (p: string): ReadyPart => ({ type: 'file', name: 'n', bytes: 1, file: p.slice(p.lastIndexOf('\\') + 1), sendPath: p });
+    const replayOf = (...paths: string[]) => `봐\n\n첨부 파일:\n${paths.map((p) => `- ${p}`).join('\n')}`;
+    for (const [sent, other] of [
+      [`${dir}x`, `${dir}x-2`],
+      [`${dir}a.md`, `${dir}a.mdx`],
+      [`${dir}a b.txt`, `${dir}ab.txt`],
+      [`${dir}ab.txt`, `${dir}a b.txt`],
+      ['/home/a/.dure/attachments/x/20261104-090507-r', '/home/a/.dure/attachments/x/20261104-090507-r (1)'],
+    ]) {
+      const parts: ReadyPart[] = [{ type: 'text', text: '봐' }, fileAt(sent)];
+      expect(replayMatches(parts, replayOf(other)), `${sent} ≠ ${other}`).toBe(false);
+      expect(replayMatches(parts, replayOf(sent)), sent).toBe(true);
+    }
+    // 여럿 — 줄마다 다 맞아야
+    const two: ReadyPart[] = [{ type: 'text', text: '봐' }, fileAt(`${dir}x`), fileAt(`${dir}y`)];
+    expect(replayMatches(two, replayOf(`${dir}x`, `${dir}y`))).toBe(true);
+    expect(replayMatches(two, replayOf(`${dir}x-2`, `${dir}y`))).toBe(false);
+    expect(replayMatches(two, replayOf(`${dir}x`, `${dir}y-2`))).toBe(false);
+    expect(replayMatches(two, replayOf(`${dir}x`))).toBe(false);
+    // 줄 안의 공백 덩어리·탭·앞뒤 공백은 같게 본다(빼지는 않는다)
+    const spaced: ReadyPart[] = [{ type: 'text', text: '봐' }, fileAt(`${dir}a b.txt`)];
+    expect(replayMatches(spaced, `봐\n\n 첨부  파일: \n -\t${dir}a  b.txt  `)).toBe(true);
+    // 경로 줄이 한 줄로 뭉개지면(줄바꿈이 사라짐) 맞지 않는다 — 줄째로 본다
+    expect(replayMatches(spaced, `봐 첨부 파일: - ${dir}a b.txt`)).toBe(false);
+  });
+
   test('PDF 문서 블록 — 경로 줄 앞에', () => {
     const a = 'C:\\data\\attachments\\x\\20261104-090507-보고서.pdf';
     const b = 'C:\\data\\attachments\\x\\20261104-090507-b.txt';

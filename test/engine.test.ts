@@ -10,8 +10,8 @@ import { openMessageLog } from '../src/engine/messageLog';
 import { joinDeliveries } from '../src/engine/router';
 import { openStore } from '../src/engine/store';
 import { DENY } from '../src/shared/denyTexts';
-import { ATTACH_MAX_BYTES, PDF_INLINE_MAX_BYTES, PDF_INLINE_MAX_PAGES } from '../src/shared/attachments';
-import { pdfPageCount } from '../src/engine/pdf';
+import { ATTACH_MAX_BYTES, MEDIA_INLINE_MAX_B64, PDF_INLINE_MAX_BYTES, PDF_INLINE_MAX_PAGES } from '../src/shared/attachments';
+import { packedPdf, pdfOf } from './pdfFixtures';
 import type { ReadyPart } from '../src/engine/types';
 import { attachmentsCleanupScript, uploadScript } from '../src/engine/remote';
 import { ClaudeSession } from '../src/engine/claudeSession';
@@ -6803,6 +6803,25 @@ test.each(['crlf', 'nosep', 'para', 'lead'])('차례 도중 첨부 — 되돌림
   expect(e.history(a.id).filter((x) => x.kind === 'user')).toHaveLength(2);
 });
 
+// 글 없이 그림만 끼운 말(스크린숏 붙여 넣기) — 되돌림엔 글 블록이 없다(보낸 그대로 그림만). 못 맞추면 멈출 때 읽힌 그림을 돌려받아
+// 다시 보낸다(두 번 감 · 기록 두 줄)
+test('차례 도중 그림만 — 글 없는 되돌림으로 읽은 것을 맞춰 바로 쉬고, 멈춰도 돌려받지 않는다', async () => {
+  const e = await start({}, false, { midGraceMs: 60_000 }); // 못 맞추면 오래 작업 중으로 남는다
+  const { a } = setup(e);
+  const png = Buffer.alloc(64, 3).toString('base64');
+  const slow = resultOf(e, a.id);
+  await e.sendUser(a.id, text('THINK 생각'));
+  await e.sendUser(a.id, [{ type: 'image', mediaType: 'image/png', base64: png }]);
+  expect(e.heldInput(a.id)).toBe(0); // 차례 도중에 끼웠다
+  await slow;
+  await until('쉼', () => e.status(a.id) === 'idle', 2000);
+  await e.interrupt(a.id);
+  expect(e.hold(a.id)).toBeNull(); // 돌려받아 붙잡은 것이 없다
+  expect(userContents()).toHaveLength(2); // 다시 보내지 않았다
+  expect(userContents()[1]).toEqual([{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } }]);
+  expect(e.history(a.id).filter((x) => x.kind === 'user')).toHaveLength(2);
+});
+
 // ── PDF 첨부 — 경로 줄에 더해 문서 블록(base64)으로도(설계 §4.5 · probe29) ──
 const MiB = 1024 * 1024;
 /**
@@ -6899,7 +6918,7 @@ test('10MiB 넘는 PDF·합이 넘는 둘째 PDF — 경로 줄만', async () =>
   await done;
   const abs = (name: string) => path.join(attDir(a.id), attFiles(a.id).find((f) => f.endsWith(name))!);
   expect(userContents()[0]).toEqual([{ type: 'text', text: 'echo 하나' }, docOf(edge), pathLines(abs('넘침.pdf'), abs('딱.pdf'))]);
-  // 합: 한 메시지의 문서 블록 PDF 원본 합 10MiB 까지 — 앞에서부터, 넣으면 넘는 PDF 는 경로 줄만(뒤의 것이 남은 자리에 들면 들어간다)
+  // 합: 한 메시지의 그림·문서 블록 base64 합 MEDIA_INLINE_MAX_B64(13.5Mi 글자) 까지 — 앞에서부터, 넣으면 넘는 PDF 는 경로 줄만(뒤의 것이 남은 자리에 들면 들어간다)
   const six = pdf(1, 6 * MiB);
   const five = pdf(1, 5 * MiB);
   const four = pdf(1, 4 * MiB);
@@ -6914,18 +6933,57 @@ test('10MiB 넘는 PDF·합이 넘는 둘째 PDF — 경로 줄만', async () =>
   expect(userContents()[2]).toEqual([{ type: 'text', text: 'echo 다음' }, docOf(five), pathLines(abs('오2.pdf'))]);
 }, 30_000);
 
-test('PDF 쪽수 세기 — 압축 안 한 /Type /Page 개수(/Pages 아님), 없으면 맨 큰 /Count, 둘 다 없으면 못 셈(null)', () => {
-  const of = (s: string) => pdfPageCount(Buffer.from(s, 'latin1'));
-  expect(of(pdf(1).toString('latin1'))).toBe(1);
-  expect(of(pdf(37).toString('latin1'))).toBe(37);
-  // 이름 토큰이 끝나야 /Page — /Pages · /PageLabel 은 아니다. 공백 없이 붙어도 · 줄바꿈·NUL 으로 끝나도
-  expect(of('%PDF-1.7 /Type/Page/Parent 2 0 R /Type /Pages /Type /PageLabel /Type /Page\n /Type\r\n/Page>> /Type /Page\0')).toBe(4);
-  // 쪽 객체가 객체 스트림 안에 압축돼 안 보이면 쪽 나무의 /Count — 여럿이면 가장 큰 것(목차 /Count 는 보통 더 작다)
-  expect(of('%PDF-1.7 << /Type /Pages /Count 250 >> << /Type /Outlines /Count 3 >> << /Count -2 >>')).toBe(250);
-  // 아무것도 안 보이면 못 센다 — 크기 규칙만
-  expect(of('%PDF-1.7 stream x\x9c\x01\x02 endstream')).toBeNull();
+// 쪽수 세기 단위 시험은 test/pdf.test.ts — 여기는 엔진이 그 결과로 가르는 것
+test('압축 객체 스트림 PDF — 풀어 세어 100쪽 넘으면 경로 줄만 · 못 세면(풀리지 않음·암호·모름) 경로 줄만', async () => {
   expect(PDF_INLINE_MAX_PAGES).toBe(100);
+  const e = await start();
+  const { a } = setup(e);
+  const fifty = packedPdf(50);
+  const files: [string, Buffer][] = [
+    ['압축 150쪽.pdf', packedPdf(150)],
+    ['압축 50쪽.pdf', fifty],
+    ['보이는 1쪽 + 압축 499쪽.pdf', packedPdf(500, { plain: 1 })],
+    ['풀리지 않음.pdf', packedPdf(30, { data: Buffer.from('zlib 이 아니다') })],
+    ['암호.pdf', packedPdf(30, { encrypt: true })],
+    ['모름.pdf', pdfOf('')],
+  ];
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 압축' }, ...files.map(([n, b]) => fileOf(original(n, b)))]);
+  await done;
+  const abs = (name: string) => path.join(attDir(a.id), attFiles(a.id).find((f) => f.endsWith(name))!);
+  expect(userContents()).toEqual([[{ type: 'text', text: 'echo 압축' }, docOf(fifty), pathLines(...files.map(([n]) => abs(n)))]]);
 });
+
+// probe29: CLI 는 요청마다 대화의 그림·문서 base64 합을 본다(24MiB) — 한 메시지의 상한도 그림을 함께 센다
+test('한 메시지의 그림·문서 블록 base64 합 13.5MiB — 그림을 먼저 세고(그림은 그대로 간다) PDF 는 남은 자리에만', async () => {
+  expect(MEDIA_INLINE_MAX_B64).toBe(13.5 * MiB);
+  const e = await start();
+  const { a } = setup(e);
+  const img = Buffer.alloc(4 * MiB, 7).toString('base64'); // 5,592,408 자
+  const seven = pdf(1, 7 * MiB); // base64 9,786,712 자 — 그림과 합하면 넘는다
+  const three = pdf(1, 3 * MiB); // base64 4,194,304 자 — 남은 자리에 든다
+  let done = resultOf(e, a.id);
+  // 그림이 PDF 뒤에 있어도 먼저 센다
+  await e.sendUser(a.id, [
+    { type: 'text', text: 'echo 그림' },
+    fileOf(original('칠.pdf', seven)),
+    fileOf(original('삼.pdf', three)),
+    { type: 'image', mediaType: 'image/png', base64: img },
+  ]);
+  await done;
+  const abs = (name: string) => path.join(attDir(a.id), attFiles(a.id).find((f) => f.endsWith(name))!);
+  expect(userContents()[0]).toEqual([
+    { type: 'text', text: 'echo 그림' },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: img } },
+    docOf(three),
+    pathLines(abs('칠.pdf'), abs('삼.pdf')),
+  ]);
+  // 그림이 없으면 같은 PDF 가 든다
+  done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 그림 없이' }, fileOf(original('칠2.pdf', seven))]);
+  await done;
+  expect(userContents()[1]).toEqual([{ type: 'text', text: 'echo 그림 없이' }, docOf(seven), pathLines(abs('칠2.pdf'))]);
+}, 30_000);
 
 test('100쪽 넘는 PDF — 경로 줄만', async () => {
   const e = await start();
@@ -7041,6 +7099,75 @@ test('갈래 — 사본 복사·기록 file 새 이름', async () => {
   expect(q).toEqual({ type: 'file', name: '설계.md', bytes: p.bytes, file: p.file });
   expect(fs.readFileSync(path.join(attDir(made.id), q.file), 'utf8')).toBe('# 설계');
   expect(fs.readFileSync(path.join(attDir(a.id), p.file), 'utf8')).toBe('# 설계'); // 원래 것 그대로
+});
+
+// 갈래는 기록을 먼저 쓰고 첨부 사본은 그 뒤에 복사한다 — 복사하는 동안에도 갈래 카드에 기록이 있고, 그새 보낸 말은 옮긴 줄 뒤에 붙는다.
+// 그새 갈래를 지우면 복사를 그만두고 되살아난 폴더를 지운다(기록도 다시 만들지 않는다)
+test('갈래 — 기록 먼저, 첨부 사본은 그 뒤(그새 보낸 말은 옮긴 줄 뒤) · 복사 중에 지우면 그만두고 치운다', async () => {
+  const { e } = await startConv();
+  const { a } = setup(e);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(original('하나.md', '# 하나')), fileOf(original('둘.md', '# 둘'))]);
+  await done;
+  const s1 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+
+  /** 첨부 사본 복사를 붙잡는다 — open() 을 부를 때까지 */
+  const gate = () => {
+    let open!: () => void;
+    const shut = new Promise<void>((r) => (open = r));
+    const real = fs.promises.copyFile;
+    const spy = vi.spyOn(fs.promises, 'copyFile').mockImplementation(async (...args: Parameters<typeof real>) => {
+      await shut;
+      return real(...args);
+    });
+    return { open, spy };
+  };
+
+  // (1) 복사하는 동안에도 기록이 다 있다 · 그새 보낸 말은 옮긴 줄 뒤
+  let g = gate();
+  try {
+    const before = e.agents().map((x) => x.id);
+    const forking = e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+    await until('갈래가 보임', () => e.agents().length > before.length && g.spy.mock.calls.length > 0);
+    const made = e.agents().find((x) => !before.includes(x.id))!;
+    const copied = e.conversation(a.id, s1);
+    expect(e.history(made.id).slice(0, -1)).toEqual(copied); // 옮긴 줄이 벌써 다 있다
+    expect(e.history(made.id).at(-1)).toMatchObject({ kind: 'notice' });
+    expect(attFiles(made.id).filter((f) => !f.endsWith('.tmp'))).toEqual([]); // 칩은 잠깐 '찾을 수 없어요'
+    const reply = resultOf(e, made.id);
+    await e.sendUser(made.id, text('echo 갈래에서'));
+    await reply;
+    g.open();
+    expect((await forking).id).toBe(made.id);
+    const after = e.history(made.id);
+    expect(after.slice(0, copied.length)).toEqual(copied);
+    expect(after[copied.length]).toMatchObject({ kind: 'notice' });
+    expect(after.slice(copied.length + 1).find((x) => x.kind === 'user')).toMatchObject({ parts: [{ type: 'text', text: 'echo 갈래에서' }] });
+    expect(attFiles(made.id).sort()).toEqual(attFiles(a.id).sort()); // 복사가 끝나면 칩이 연다
+  } finally {
+    g.open();
+    g.spy.mockRestore();
+  }
+
+  // (2) 복사하는 사이 갈래를 지우면 — 그만 복사하고, 되살아난 폴더를 치운다. 기록 파일도 다시 생기지 않는다
+  g = gate();
+  try {
+    const before = e.agents().map((x) => x.id);
+    const forking = e.forkAgent({ from: a.id, key: s1, name: 'A 3', role: '기획' });
+    await until('갈래가 보임', () => e.agents().length > before.length && g.spy.mock.calls.length > 0);
+    const made = e.agents().find((x) => !before.includes(x.id))!;
+    await e.removeAgent(made.id);
+    g.open();
+    await forking;
+    expect(g.spy).toHaveBeenCalledTimes(1); // 둘째 첨부는 복사하지 않았다
+    expect(fs.existsSync(attDir(made.id))).toBe(false);
+    expect(fs.existsSync(path.join(dataDir, 'history', `${made.id}.jsonl`))).toBe(false);
+    expect(attFiles(a.id)).toHaveLength(2); // 원래 것 그대로
+  } finally {
+    g.open();
+    g.spy.mockRestore();
+  }
 });
 
 test('에이전트 지우기 — 첨부 폴더 지움', async () => {
@@ -7927,7 +8054,7 @@ test('켤 때 state.json 이 깨져 빈 상태로 시작했으면 첨부 폴더�
   expect(e3.attachmentPath(a.id, file)).toBe(path.join(attDir(a.id), file));
 });
 
-test('깨진 상태 파일이 남아 있으면 다음 시작에도 첨부를 지우지 않는다', async () => {
+test('깨진 상태 파일이 남아 있으면 다음 시작에도 첨부를 지우지 않는다 — 이름을 되돌려 되살리면 옛 에이전트와 그 첨부가 그대로', async () => {
   const e1 = await start();
   const { a } = setup(e1);
   const done = resultOf(e1, a.id);
@@ -7936,11 +8063,25 @@ test('깨진 상태 파일이 남아 있으면 다음 시작에도 첨부를 지
   await e1.shutdown();
   const [file] = attFiles(a.id);
   const stateFile = path.join(dataDir, 'state.json');
-  fs.writeFileSync(stateFile, fs.readFileSync(stateFile, 'utf8').slice(0, 40)); // 쓰다 끊긴 꼴 → 켤 때 state.json.broken-<시각> 으로 옮긴다
+  // 켤 때 잠깐 못 읽었다(백신·동기화 프로그램이 잡음 — EBUSY) → 내용은 멀쩡한 채 state.json.broken-<시각> 으로 옮기고 빈 상태로 시작한다
+  const realRead = fs.readFileSync;
+  const busy = vi.spyOn(fs, 'readFileSync').mockImplementation(((p: fs.PathOrFileDescriptor, o?: any) => {
+    if (p === stateFile) throw Object.assign(new Error('EBUSY: 가짜'), { code: 'EBUSY' });
+    return realRead(p, o);
+  }) as typeof fs.readFileSync);
+  let e2: Engine;
+  try {
+    e2 = await start();
+  } finally {
+    busy.mockRestore();
+  }
+  expect(e2.agents()).toEqual([]);
 
-  // 깨진 채 켜고 에이전트를 새로 만들면 새 state.json 이 생긴다 — 다음 판은 깨짐에서 되살린 판이 아니다
-  const e2 = await start();
+  // 그 판에 에이전트를 새로 만들면 새 state.json 이 생긴다 — 다음 판은 깨짐에서 되살린 판이 아니다
   const fresh = setup(e2).a;
+  const sent = resultOf(e2, fresh.id);
+  await e2.sendUser(fresh.id, [{ type: 'text', text: 'echo' }, fileOf(original('y.txt'))]);
+  await sent;
   await (e2 as any).pruning;
   await e2.shutdown();
   const broken = fs.readdirSync(dataDir).filter((f) => f.startsWith('state.json.broken-'));
@@ -7954,11 +8095,17 @@ test('깨진 상태 파일이 남아 있으면 다음 시작에도 첨부를 지
   expect(attFiles(a.id)).toEqual([file]);
   await e3.shutdown();
 
-  // 이름 꼴이 다른 파일(사용자가 이름을 바꿈 등)은 치지 않는다 — 옮겨 둔 것을 치우면 다시 지운다
-  fs.renameSync(path.join(dataDir, broken[0]), path.join(dataDir, `${broken[0]}.bak`));
+  // 사용자가 옮겨 둔 것을 되살리면(state.json 으로 이름을 되돌림) 옛 에이전트와 그 첨부가 그대로 — 칩이 그 사본을 연다
+  fs.renameSync(path.join(dataDir, broken[0]), stateFile);
+  // 이름 꼴이 다른 파일(사용자가 이름을 바꿈 등)은 치지 않는다 — 옮겨 둔 것이 없으니 다시 주인 없는 폴더를 지운다(그 판의 갈래 fresh)
+  fs.writeFileSync(path.join(dataDir, `${broken[0]}.bak`), '{');
   const e4 = await start();
+  expect(e4.agents().map((x) => x.id)).toContain(a.id);
+  expect(e4.agents().map((x) => x.id)).not.toContain(fresh.id);
   await (e4 as any).pruning;
-  expect(attFiles(a.id)).toEqual([]);
+  expect(attFiles(a.id)).toEqual([file]);
+  expect(e4.attachmentPath(a.id, file)).toBe(path.join(attDir(a.id), file));
+  expect(fs.existsSync(attDir(fresh.id))).toBe(false);
 });
 
 test('자격 증명 파일은 다른 이름으로도 보내지 않는다 — 대체 데이터 스트림(:)·짧은 이름(8.3)', async () => {

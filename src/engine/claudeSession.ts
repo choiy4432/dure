@@ -27,7 +27,8 @@ const STOP_TIMEOUT_MS = 3000;
 /**
  * stdout 한 줄의 상한(UTF-16 글자 수) — 넘는 줄은 줄바꿈까지 모으지 않고 버린다(그다음 줄부터 다시 읽는다). 상한이 없으면 V8 글 상한
  * (Electron 44 · Node 24: 536,870,888 글자)에서 이어 붙이기가 RangeError 로 던져 main 이 죽는다. 그림·PDF 를 실은 되돌림 줄(probe29 P3 —
- * 보낸 문서 블록이 data 째 온다)은 크다: 두레가 보내는 문서 블록 합 10MiB → ~14M 글자, 20MiB PDF 라도 ~28M 글자 — 넉넉히 받는다
+ * 보낸 문서 블록이 data 째 온다)은 크다: 두레는 문서 블록을 그림과 합해 한 메시지 MEDIA_INLINE_MAX_B64(~14M 글자) 안에만 싣고,
+ * 20MiB PDF 라도 ~28M 글자 — 넉넉히 받는다
  */
 export const STDOUT_LINE_MAX = 64 * 1024 * 1024;
 

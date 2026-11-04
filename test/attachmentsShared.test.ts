@@ -16,7 +16,7 @@ describe('opensAsDocument', () => {
   it('허용 목록(문서·그림·소리·영상·zip)만 기본 앱으로 연다 — 대소문자 없이', () => {
     const docs = [
       'pdf', 'txt', 'md', 'markdown', 'csv', 'tsv', 'log', 'json', 'yaml', 'yml', 'rtf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
-      'odt', 'ods', 'odp', 'hwp', 'hwpx', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'heic', 'heif',
+      'odt', 'ods', 'odp', 'hwp', 'hwpx', 'png', 'jpg', 'jpeg', 'jfif', 'gif', 'webp', 'avif', 'bmp', 'tif', 'tiff', 'heic', 'heif',
       'mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'wmv', 'zip',
     ]
     for (const ext of docs) {

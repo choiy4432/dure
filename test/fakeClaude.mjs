@@ -447,28 +447,41 @@ async function effortCommand(arg) {
 
 /** 받은 사람 말의 글 블록들(이은 글 → 블록) — 되돌림 꼴 바꾸기(FAKE_REPLAY_SHAPE)용 */
 const blocksOf = new Map();
-/** 문서 블록(PDF)이 든 사람 말의 글·문서 블록(받은 차례 그대로, data 째) — 되돌릴 때 한 번 쓰고 버린다 */
-const docsOf = new Map();
+/**
+ * 받은 사람 말의 내용 그대로(이은 글 → 받은 차례대로의 내용들 — 같은 글이 여럿이면 먼저 받은 것부터, data 째) — 되돌릴 때 하나씩 꺼내 쓰고 버린다.
+ * 글이 없는 말(그림만)은 이은 글이 '' 다
+ */
+const sentOf = new Map();
+
+/** 받은 내용을 되돌림용으로 둔다 — 되돌리지 않는 판(옵션 없음·FAKE_REPLAY_OFF)엔 두지 않는다 */
+function keepSent(text, content) {
+  if (!replayUser || process.env.FAKE_REPLAY_OFF === '1' || !Array.isArray(content)) return;
+  const q = sentOf.get(text) ?? [];
+  q.push(content);
+  sentOf.set(text, q);
+}
 
 /**
- * 되돌림의 내용 — 보통은 받은 글 블록을 줄바꿈으로 이은 블록 하나. FAKE_REPLAY_SHAPE 로 꼴을 바꾼다(진짜 claude 가 다르게 이어 붙일 때를 흉내):
- * crlf(줄 끝 \r\n · 끝 공백) · nosep(블록을 구분 없이 한 블록으로) · para(빈 줄로 한 블록으로) · lead(앞에 그림 자리 표시 블록).
- * 문서 블록이 있었으면 진짜(probe29 P3)처럼 보낸 그대로 싣는다 — data 째(큰 PDF 면 수십 MB 한 줄). 꼴을 바꾸면 그 앞에
+ * 되돌림의 내용 — 진짜(probe29 P3)처럼 보낸 내용 그대로: 글·그림·문서 블록을 받은 차례대로 data 째(큰 PDF·그림이면 수십 MB 한 줄),
+ * 글이 없던 말(그림만)엔 글 블록도 없다. FAKE_REPLAY_SHAPE 로 글 블록의 꼴을 바꾼다(진짜 claude 가 다르게 이어 붙일 때를 흉내 —
+ * 그림·문서 블록은 그 앞에): crlf(줄 끝 \r\n · 끝 공백) · nosep(블록을 구분 없이 한 블록으로) · para(빈 줄로 한 블록으로) ·
+ * lead(앞에 그림 자리 표시 블록)
  */
 function replayContent(text) {
   const blocks = blocksOf.get(text) ?? [text];
-  const sent = docsOf.get(text);
-  docsOf.delete(text);
-  const docs = sent ? sent.filter((c) => c.type === 'document') : [];
+  const q = sentOf.get(text);
+  const sent = q?.shift();
+  if (q && !q.length) sentOf.delete(text);
+  const media = sent ? sent.filter((c) => c?.type === 'image' || c?.type === 'document') : [];
   switch (process.env.FAKE_REPLAY_SHAPE) {
     case 'crlf':
-      return [...docs, { type: 'text', text: `${text.replace(/\n/g, ' \r\n')} \r\n` }];
+      return [...media, { type: 'text', text: `${text.replace(/\n/g, ' \r\n')} \r\n` }];
     case 'nosep':
-      return [...docs, { type: 'text', text: blocks.join('') }];
+      return [...media, { type: 'text', text: blocks.join('') }];
     case 'para':
-      return [...docs, { type: 'text', text: blocks.join('\n\n') }];
+      return [...media, { type: 'text', text: blocks.join('\n\n') }];
     case 'lead':
-      return [...docs, { type: 'text', text: '[Image #1]' }, ...blocks.map((t) => ({ type: 'text', text: t }))];
+      return [...media, { type: 'text', text: '[Image #1]' }, ...blocks.map((t) => ({ type: 'text', text: t }))];
     default:
       return sent ?? [{ type: 'text', text }];
   }
@@ -929,7 +942,7 @@ if (missing) {
         .map((c) => c.text);
       const text = blocks.join('\n');
       blocksOf.set(text, blocks);
-      if (Array.isArray(content) && content.some((c) => c?.type === 'document')) docsOf.set(text, content.filter((c) => c?.type === 'text' || c?.type === 'document'));
+      keepSent(text, content);
       // 차례 도중에 온 말 — 새 차례를 열지 않고 지금 차례에 붙는다(probe17). 차례가 끝날 때 읽거나, 멈추면 새 차례로
       if (current && !current.ended && current.queue) current.queue.push(text);
       else void turn(text);

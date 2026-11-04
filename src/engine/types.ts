@@ -116,7 +116,7 @@ export type FileInput = { type: 'file'; path: string; name: string; bytes: numbe
  * 엔진이 준비한 첨부(sendUser 에 들어온 순간 만든다 — 줄 세운·붙잡힌 입력도 이 꼴이라 원본이 사라져도 그대로 간다) —
  * file: 첨부 폴더 안 사본 이름 · bytes: 사본의 크기 · sendPath: Claude 에게 줄 절대 경로(이 PC 방은 사본, 서버 방은 remotePath) ·
  * remotePath: 서버 방이면 서버에 올린 경로 ·
- * inline: PDF 면 문서 블록으로도 넘길 사본의 내용(base64 — PDF_INLINE_MAX_BYTES·PDF_INLINE_MAX_PAGES 안일 때만). 메모리에만 —
+ * inline: PDF 면 문서 블록으로도 넘길 사본의 내용(base64 — PDF_INLINE_MAX_BYTES·MEDIA_INLINE_MAX_B64·PDF_INLINE_MAX_PAGES 안일 때만). 메모리에만 —
  * 기록·로그·붙잡기 목록(HoldItem)·화면엔 싣지 않는다(줄 선·붙잡힌 입력엔 실려 있다가 보낼 때 쓴다. 앱을 끄면 함께 사라진다)
  */
 export type FileReady = {
