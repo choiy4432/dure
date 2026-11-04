@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { ClaudeSession } from '../src/engine/claudeSession.js';
+import { ClaudeSession, STDOUT_LINE_MAX } from '../src/engine/claudeSession.js';
 import { buildArgs, buildMcpConfig } from '../src/engine/claudeArgs.js';
 import type { SessionStatus } from '../src/engine/types.js';
 
@@ -178,6 +178,56 @@ test('stdout 이 줄 중간에서 잘려 와도 한 줄로 합쳐 읽는다', as
   const done = waitFor<any>(s, 'event', (e) => e.kind === 'result');
   s.send(text('echo 가나다'));
   expect((await done).text).toBe('받음: echo 가나다');
+});
+
+// stdout 줄 읽기 — 띄우지 않은 세션에 조각을 바로 넣는다(파이프가 주는 64KB 조각처럼)
+const CHUNK = 64 * 1024;
+function reader() {
+  const s = new ClaudeSession({ command: process.execPath, args: [], cwd: dir, env: {} });
+  const events: any[] = [];
+  s.on('event', (e) => events.push(e));
+  return { feed: (chunk: string) => (s as any).onStdout(chunk), events };
+}
+const resultLine = (t: string) => JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: t });
+const resultEvent = (t: string) => ({ kind: 'result', ok: true, subtype: 'success', text: t, denials: [] });
+
+test('아주 긴 줄(20MiB PDF 의 되돌림 ~28MB)도 조각으로 받아 한 줄로 — 받은 조각만 훑는다(줄 길이에 비례)', () => {
+  const { feed, events } = reader();
+  // probe29 P3: 되돌림엔 보낸 문서 블록이 data 째 실려 온다. 한글 글이 섞여 두 바이트 글이 되는 꼴
+  const data = 'QUJD'.repeat(Math.ceil((20 * 1024 * 1024) / 3)); // 20MiB 의 base64(4 글자 = 3 바이트) — 27,962,028 글자
+  const human = '읽어 줘';
+  const lines = '\n\n첨부 파일:\n- C:\\data\\attachments\\x\\20261104-090507-큰.pdf';
+  const doc = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } };
+  const replay = JSON.stringify({ type: 'user', isReplay: true, message: { role: 'user', content: [{ type: 'text', text: human }, doc, { type: 'text', text: lines }] } });
+  expect(replay.length).toBeGreaterThan(27_962_028);
+  const all = `${replay}\r\n${resultLine('끝')}\n`;
+  const t = performance.now();
+  for (let i = 0; i < all.length; i += CHUNK) feed(all.slice(i, i + CHUNK));
+  const ms = performance.now() - t;
+  expect(events).toEqual([{ kind: 'replay', text: `${human}\n${lines}` }, resultEvent('끝')]);
+  // 조각마다 모은 줄 전체를 다시 훑고 이어 붙이면(옛 꼴) 이 PC 에서 2초 넘게 main 이 멈췄다 — 지금은 수십 ms
+  expect(ms).toBeLessThan(1000);
+});
+
+test('STDOUT_LINE_MAX(글자 수)까지의 줄은 읽고, 넘는 줄은 줄바꿈까지 버린 뒤 다음 줄을 읽는다 — V8 글 상한에 닿아 main 이 죽지 않게', () => {
+  // 두레가 보내는 가장 큰 되돌림(문서 블록 합 10MiB → base64 ~14M 글자)·20MiB PDF(~28M)보다 넉넉하고 V8 글 상한(536,870,888)보다 한참 아래
+  expect(STDOUT_LINE_MAX).toBe(64 * 1024 * 1024);
+  const { feed, events } = reader();
+  const blank = ' '.repeat(CHUNK); // 같은 조각을 되풀이해 넣는다(시험 메모리를 아끼려고) — JSON 뒤 공백은 그대로 읽힌다
+  /** head 로 시작하고 공백으로 total 글자를 채운 한 줄 */
+  const line = (head: string, total: number) => {
+    feed(head);
+    let n = head.length;
+    while (n + CHUNK <= total) {
+      feed(blank);
+      n += CHUNK;
+    }
+    feed(`${' '.repeat(total - n)}\n`);
+  };
+  line(resultLine('딱 상한'), STDOUT_LINE_MAX);
+  line(resultLine('하나 넘침'), STDOUT_LINE_MAX + 1);
+  feed(`${resultLine('다음')}\n`);
+  expect(events).toEqual([resultEvent('딱 상한'), resultEvent('다음')]);
 });
 
 test('request: 프로세스가 종료되면 대기 중 요청은 reject', async () => {

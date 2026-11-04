@@ -24,6 +24,12 @@ export interface SessionOptions {
 
 const STDERR_KEEP = 2048;
 const STOP_TIMEOUT_MS = 3000;
+/**
+ * stdout 한 줄의 상한(UTF-16 글자 수) — 넘는 줄은 줄바꿈까지 모으지 않고 버린다(그다음 줄부터 다시 읽는다). 상한이 없으면 V8 글 상한
+ * (Electron 44 · Node 24: 536,870,888 글자)에서 이어 붙이기가 RangeError 로 던져 main 이 죽는다. 그림·PDF 를 실은 되돌림 줄(probe29 P3 —
+ * 보낸 문서 블록이 data 째 온다)은 크다: 두레가 보내는 문서 블록 합 10MiB → ~14M 글자, 20MiB PDF 라도 ~28M 글자 — 넉넉히 받는다
+ */
+export const STDOUT_LINE_MAX = 64 * 1024 * 1024;
 
 interface Pending {
   resolve: (v: any) => void;
@@ -39,7 +45,8 @@ export class ClaudeSession extends EventEmitter {
   private running = false;
   private stopping = false;
   private quietTurn = false; // send(quiet) 로 연 차례 — 그 result 까지 init 이 와도 작업 중으로 바꾸지 않는다
-  private buf = '';
+  private buf = ''; // 아직 줄바꿈이 안 온 줄의 앞부분
+  private skipping = false; // STDOUT_LINE_MAX 를 넘은 줄 — 다음 줄바꿈까지 버린다
   private stderrTail = '';
   private pending = new Map<string, Pending>();
   private exited: Promise<void> = Promise.resolve();
@@ -155,33 +162,57 @@ export class ClaudeSession extends EventEmitter {
     });
   }
 
+  /**
+   * stdout 조각 — 줄바꿈은 새로 온 조각에서만 찾고, 줄의 앞부분은 이어 붙여 둔다(줄 끝이 올 때 한 번만 합친다). 모은 줄 전체를 조각마다
+   * 다시 훑으면 큰 줄(수십 MB 되돌림)에 줄 길이의 제곱만큼 걸려 main 이 멈췄다(28MB 줄 → 이 PC 2초 넘게).
+   * 남겨 두는 앞부분은 늘 새 조각의 조각이다 — 다 읽은 큰 줄을 붙들지 않는다(처리한 뒤 바로 버린다)
+   */
   private onStdout(chunk: string): void {
-    this.buf += chunk;
-    let i: number;
-    while ((i = this.buf.indexOf('\n')) >= 0) {
-      const line = this.buf.slice(0, i).replace(/\r$/, '');
-      this.buf = this.buf.slice(i + 1);
-      const ev = parseLine(line);
-      if (!ev || ev.kind === 'ignored') continue;
-      if (ev.kind === 'control-response') {
-        const p = this.pending.get(ev.requestId);
-        if (p) {
-          this.pending.delete(ev.requestId);
-          clearTimeout(p.timer);
-          if (ev.ok) p.resolve(ev.payload);
-          else p.reject(new Error('요청이 거부되었습니다'));
+    let from = 0;
+    for (;;) {
+      const nl = chunk.indexOf('\n', from);
+      const piece = nl < 0 ? chunk.slice(from) : chunk.slice(from, nl);
+      if (!this.skipping) {
+        if (this.buf.length + piece.length > STDOUT_LINE_MAX) {
+          this.buf = '';
+          this.skipping = true;
+        } else {
+          this.buf += piece;
         }
       }
-      // 쉬는 중에 온 init — 보낸 줄 없이 Claude 가 스스로 시작한 차례(서브에이전트가 끝난 뒤, probe13)도 작업 중이다.
-      // 몰래 보낸 줄(send quiet)의 차례는 그 result 까지 상태를 바꾸지 않는다
-      if (ev.kind === 'init' && this._status === 'idle' && !this.quietTurn) this.setStatus('working');
-      if (ev.kind === 'result') {
-        const quiet = this.quietTurn;
-        this.quietTurn = false;
-        if (!quiet && this._status === 'working') this.setStatus('idle');
+      if (nl < 0) return;
+      from = nl + 1;
+      const line = this.buf;
+      this.buf = '';
+      if (this.skipping) {
+        this.skipping = false;
+        continue;
       }
-      this.emit('event', ev);
+      this.onLine(line.endsWith('\r') ? line.slice(0, -1) : line);
     }
+  }
+
+  private onLine(line: string): void {
+    const ev = parseLine(line);
+    if (!ev || ev.kind === 'ignored') return;
+    if (ev.kind === 'control-response') {
+      const p = this.pending.get(ev.requestId);
+      if (p) {
+        this.pending.delete(ev.requestId);
+        clearTimeout(p.timer);
+        if (ev.ok) p.resolve(ev.payload);
+        else p.reject(new Error('요청이 거부되었습니다'));
+      }
+    }
+    // 쉬는 중에 온 init — 보낸 줄 없이 Claude 가 스스로 시작한 차례(서브에이전트가 끝난 뒤, probe13)도 작업 중이다.
+    // 몰래 보낸 줄(send quiet)의 차례는 그 result 까지 상태를 바꾸지 않는다
+    if (ev.kind === 'init' && this._status === 'idle' && !this.quietTurn) this.setStatus('working');
+    if (ev.kind === 'result') {
+      const quiet = this.quietTurn;
+      this.quietTurn = false;
+      if (!quiet && this._status === 'working') this.setStatus('idle');
+    }
+    this.emit('event', ev);
   }
 
   private onExit(code: number | null): void {

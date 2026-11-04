@@ -384,6 +384,39 @@ describe('encode', () => {
     expect(replayMatches(delivery, '[두레 메시지 — 보낸 쪽: B(웹 화면)]\n넷째')).toBe(false);
   });
 
+  test('PDF 문서 블록 — 경로 줄 앞에', () => {
+    const a = 'C:\\data\\attachments\\x\\20261104-090507-보고서.pdf';
+    const b = 'C:\\data\\attachments\\x\\20261104-090507-b.txt';
+    const c = 'C:\\data\\attachments\\x\\20261104-090507-큰.pdf';
+    const d = 'C:\\data\\attachments\\x\\20261104-090507-둘째.pdf';
+    const parts: ReadyPart[] = [
+      { type: 'text', text: '읽어 줘' },
+      { type: 'file', name: '보고서.pdf', bytes: 3, file: '20261104-090507-보고서.pdf', sendPath: a, inline: { mediaType: 'application/pdf', base64: 'UERG' } },
+      { type: 'image', mediaType: 'image/png', base64: 'AA==' },
+      { type: 'file', name: 'b.txt', bytes: 3, file: '20261104-090507-b.txt', sendPath: b },
+      { type: 'file', name: '큰.pdf', bytes: 9, file: '20261104-090507-큰.pdf', sendPath: c }, // 상한을 넘어 경로 줄만
+      { type: 'file', name: '둘째.pdf', bytes: 3, file: '20261104-090507-둘째.pdf', sendPath: d, inline: { mediaType: 'application/pdf', base64: 'MjIy' } },
+    ];
+    const lines = `\n\n첨부 파일:\n- ${a}\n- ${b}\n- ${c}\n- ${d}`;
+    const doc = (data: string) => ({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } });
+    const decoded = JSON.parse(encodeUser(parts));
+    // 그림·글은 차례대로, 문서 블록(첨부 차례대로)은 경로 줄 글 블록 바로 앞 — 경로 줄은 문서 블록이 있어도 모든 첨부에 그대로
+    expect(decoded.message.content).toEqual([
+      { type: 'text', text: '읽어 줘' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } },
+      doc('UERG'),
+      doc('MjIy'),
+      { type: 'text', text: lines },
+    ]);
+    // 보낸 글(sentText)은 글 블록만 — 문서 블록은 글이 아니다. 되돌림(probe29 P3: 보낸 그대로, data 째)도 같은 글로 맞춘다
+    expect(sentText(parts)).toBe(`읽어 줘\n${lines}`);
+    const replay = JSON.stringify({ type: 'user', isReplay: true, message: decoded.message, session_id: 's', parent_tool_use_id: null });
+    expect(parseLine(replay)).toEqual({ kind: 'replay', text: sentText(parts) });
+    expect(replayMatches(parts, sentText(parts))).toBe(true);
+    // 문서 블록뿐인 첨부 하나 — 문서 블록 → 경로 줄
+    expect(JSON.parse(encodeUser([parts[1]])).message.content).toEqual([doc('UERG'), { type: 'text', text: `\n\n첨부 파일:\n- ${a}` }]);
+  });
+
   test('encodeUser: U+2028·U+2029 는 이스케이프해 한 줄로 — 받는 쪽이 줄 끝으로 읽어 쪼개지 않게', () => {
     const text = '앞\u2028가운데\u2029뒤';
     const s = encodeUser([{ type: 'text', text }]);

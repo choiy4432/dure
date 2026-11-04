@@ -205,22 +205,35 @@ function escapeSeparators(json: string): string {
   return json.replace(LINE_SEPARATORS, (c) => `\\u${c.charCodeAt(0).toString(16)}`);
 }
 
-type Block = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+type Block =
+  | { type: 'text'; text: string }
+  | { type: 'image' | 'document'; source: { type: 'base64'; media_type: string; data: string } };
 
-/** Claude 에게 가는 내용 블록 — 글·그림은 차례대로, 첨부는 모아 맨 끝에 글 블록 하나(경로 줄 — Claude 가 자기 도구로 읽는다) */
+/**
+ * Claude 에게 가는 내용 블록 — 글·그림은 차례대로, 첨부는 모아 맨 끝에 글 블록 하나(경로 줄 — Claude 가 자기 도구로 읽는다).
+ * 문서 블록(PDF 사본의 base64 — inline 이 있는 첨부만, 첨부 차례대로)은 그 경로 줄 바로 앞. 경로 줄은 문서 블록이 있어도 모든 첨부에
+ */
 function contentOf(parts: ReadyPart[]): Block[] {
   const blocks: Block[] = [];
+  const docs: Block[] = [];
   const paths: string[] = [];
   for (const p of parts) {
     if (p.type === 'text') blocks.push({ type: 'text', text: p.text });
     else if (p.type === 'image') blocks.push({ type: 'image', source: { type: 'base64', media_type: p.mediaType, data: p.base64 } });
-    else paths.push(p.sendPath);
+    else {
+      if (p.inline) docs.push({ type: 'document', source: { type: 'base64', media_type: p.inline.mediaType, data: p.inline.base64 } });
+      paths.push(p.sendPath);
+    }
   }
+  blocks.push(...docs);
   if (paths.length) blocks.push({ type: 'text', text: attachmentLines(paths) });
   return blocks;
 }
 
-/** 보낸 줄의 글 — 글 블록을 줄바꿈으로 이은 것(경로 줄 포함). Claude 의 되돌림(replay)을 읽는 replayText 와 같은 꼴 */
+/**
+ * 보낸 줄의 글 — 글 블록을 줄바꿈으로 이은 것(경로 줄 포함 · 그림·문서 블록은 글이 아니라 빠진다). Claude 의 되돌림(replay)을 읽는
+ * replayText 와 같은 꼴 — 되돌림엔 보낸 문서 블록이 data 째 실려 오지만(probe29 P3) 글 블록만 이으면 이것과 같다
+ */
 export function sentText(parts: ReadyPart[]): string {
   return contentOf(parts).flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
 }

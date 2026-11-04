@@ -10,7 +10,9 @@ import { openMessageLog } from '../src/engine/messageLog';
 import { joinDeliveries } from '../src/engine/router';
 import { openStore } from '../src/engine/store';
 import { DENY } from '../src/shared/denyTexts';
-import { ATTACH_MAX_BYTES } from '../src/shared/attachments';
+import { ATTACH_MAX_BYTES, PDF_INLINE_MAX_BYTES, PDF_INLINE_MAX_PAGES } from '../src/shared/attachments';
+import { pdfPageCount } from '../src/engine/pdf';
+import type { ReadyPart } from '../src/engine/types';
 import { attachmentsCleanupScript, uploadScript } from '../src/engine/remote';
 import { ClaudeSession } from '../src/engine/claudeSession';
 import { Readable } from 'node:stream';
@@ -6640,7 +6642,7 @@ const ATTACH_FAIL = '파일을 보내지 못했어요 — ';
 const attDir = (id: string) => path.join(dataDir, 'attachments', id);
 const attFiles = (id: string): string[] => (fs.existsSync(attDir(id)) ? fs.readdirSync(attDir(id)) : []);
 /** 사용자가 고른 원본 — 시험 폴더 안에만 만든다 */
-function original(name: string, body = '첨부 내용'): string {
+function original(name: string, body: string | Buffer = '첨부 내용'): string {
   const d = path.join(dir, 'originals');
   fs.mkdirSync(d, { recursive: true });
   const p = path.join(d, name);
@@ -6801,6 +6803,226 @@ test.each(['crlf', 'nosep', 'para', 'lead'])('차례 도중 첨부 — 되돌림
   expect(e.history(a.id).filter((x) => x.kind === 'user')).toHaveLength(2);
 });
 
+// ── PDF 첨부 — 경로 줄에 더해 문서 블록(base64)으로도(설계 §4.5 · probe29) ──
+const MiB = 1024 * 1024;
+/**
+ * 시험 PDF — 쪽마다 압축 안 한 `/Type /Page` 객체 · 쪽 나무 `/Count`. size 를 주면 끝에 주석 줄을 덧대 꼭 그 바이트로.
+ * 가짜 claude 는 읽지 않는다(바이트·크기만 본다) — 진짜 확인은 따로
+ */
+function pdf(pages = 1, size?: number): Buffer {
+  const kids = Array.from({ length: pages }, (_, i) => `${i + 3} 0 R`).join(' ');
+  let s = `%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${pages} >>\nendobj\n`;
+  for (let i = 0; i < pages; i++) s += `${i + 3} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\n`;
+  s += 'trailer\n<< /Root 1 0 R >>\n%%EOF\n';
+  if (size !== undefined) s += `%${'x'.repeat(size - s.length - 2)}\n`;
+  const buf = Buffer.from(s, 'latin1');
+  if (size !== undefined) expect(buf.length).toBe(size);
+  return buf;
+}
+/** 가짜 claude 기록의 문서 블록 — 내용(base64) 없이 크기만 남긴다 */
+const docOf = (body: Buffer) => ({ type: 'document', bytes: body.length });
+const pathLines = (...abs: string[]) => ({ type: 'text', text: `\n\n첨부 파일:\n${abs.map((p) => `- ${p}`).join('\n')}` });
+/** 보낸 줄마다 준비된 입력(ClaudeSession.send 에 들어간 것) — 문서 블록의 base64 가 그 사본의 바이트인지 본다 */
+function sentParts(): { sent: ReadyPart[][]; restore: () => void } {
+  const sent: ReadyPart[][] = [];
+  const real = ClaudeSession.prototype.send;
+  const spy = vi.spyOn(ClaudeSession.prototype, 'send').mockImplementation(function (this: ClaudeSession, parts: ReadyPart[], o?: { quiet?: boolean }) {
+    sent.push(parts);
+    return real.call(this, parts, o);
+  });
+  return { sent, restore: () => spy.mockRestore() };
+}
+
+test('PDF 첨부 — 문서 블록 + 경로 줄, 기록엔 칩만(base64 없음)', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const body = pdf(2);
+  const b64 = body.toString('base64');
+  const src = original('보고서 최종.pdf', body);
+  const items: HistoryItem[] = [];
+  e.on('history', (x: { agentId: string; item: HistoryItem }) => x.agentId === a.id && items.push(x.item));
+  const events: AgentEvent[] = [];
+  e.on('agent-event', (x: AgentEvent) => events.push(x));
+  const { sent, restore } = sentParts();
+  try {
+    const done = resultOf(e, a.id);
+    await e.sendUser(a.id, [{ type: 'text', text: '읽어 줘' }, fileOf(src)]);
+    expect(await resultText(done)).toBe(`받음: 읽어 줘\n\n\n첨부 파일:\n- ${path.join(attDir(a.id), attFiles(a.id)[0])}`);
+  } finally {
+    restore();
+  }
+  const [file] = attFiles(a.id);
+  const abs = path.join(attDir(a.id), file);
+  // 사람 글 → 문서 블록 → 경로 줄(문서 블록이 있어도 그대로 — Claude 가 그 파일을 자기 도구로도 다룬다)
+  expect(userContents()).toEqual([[{ type: 'text', text: '읽어 줘' }, docOf(body), pathLines(abs)]]);
+  // 문서 블록은 그 사본의 바이트 그대로(base64)
+  expect(sent).toHaveLength(1);
+  expect(sent[0][1]).toEqual({ type: 'file', name: '보고서 최종.pdf', bytes: body.length, file, sendPath: abs, inline: { mediaType: 'application/pdf', base64: b64 } });
+  // 기록엔 칩만 — 이름·크기·사본 이름. base64 는 기록 파일·기록 사건·화면 사건·가짜 claude 기록 어디에도 없다
+  const chip = { type: 'file', name: '보고서 최종.pdf', bytes: body.length, file };
+  expect(e.history(a.id)[0]).toEqual({ t: expect.any(Number), kind: 'user', source: 'human', parts: [{ type: 'text', text: '읽어 줘' }, chip] });
+  expect(items[0]).toEqual(e.history(a.id)[0]);
+  expect(fs.readFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), 'utf8')).not.toContain(b64);
+  expect(JSON.stringify(items)).not.toContain(b64);
+  expect(JSON.stringify(events)).not.toContain(b64);
+  expect(fs.readFileSync(logFile, 'utf8')).not.toContain(b64);
+  expect(fs.readFileSync(abs)).toEqual(body); // 사본은 바이트 그대로
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('%PDF- 아닌 .pdf — 경로 줄만', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const body = pdf(1);
+  const fake = original('가짜.pdf', '이름만 PDF');
+  const late = original('늦은 머리.pdf', Buffer.concat([Buffer.from(' '), body])); // 머리가 맨 앞이 아니다
+  const named = original('진짜지만.txt', body); // 바이트는 PDF 지만 이름이 .pdf 가 아니다
+  const upper = original('대문자.PDF', body); // 확장자는 대소문자 없이
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 넷' }, fileOf(fake), fileOf(late), fileOf(named), fileOf(upper)]);
+  await done;
+  const abs = (name: string) => path.join(attDir(a.id), attFiles(a.id).find((f) => f.endsWith(name))!);
+  expect(userContents()).toEqual([
+    [{ type: 'text', text: 'echo 넷' }, docOf(body), pathLines(abs('가짜.pdf'), abs('늦은 머리.pdf'), abs('진짜지만.txt'), abs('대문자.PDF'))],
+  ]);
+});
+
+test('10MiB 넘는 PDF·합이 넘는 둘째 PDF — 경로 줄만', async () => {
+  expect(PDF_INLINE_MAX_BYTES).toBe(10 * MiB);
+  const e = await start();
+  const { a } = setup(e);
+  // 하나: 10MiB+1 은 경로 줄만 · 딱 10MiB 는 문서 블록(넘는 것은 합에 치지 않는다)
+  const over = pdf(1, 10 * MiB + 1);
+  const edge = pdf(1, 10 * MiB);
+  let done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 하나' }, fileOf(original('넘침.pdf', over)), fileOf(original('딱.pdf', edge))]);
+  await done;
+  const abs = (name: string) => path.join(attDir(a.id), attFiles(a.id).find((f) => f.endsWith(name))!);
+  expect(userContents()[0]).toEqual([{ type: 'text', text: 'echo 하나' }, docOf(edge), pathLines(abs('넘침.pdf'), abs('딱.pdf'))]);
+  // 합: 한 메시지의 문서 블록 PDF 원본 합 10MiB 까지 — 앞에서부터, 넣으면 넘는 PDF 는 경로 줄만(뒤의 것이 남은 자리에 들면 들어간다)
+  const six = pdf(1, 6 * MiB);
+  const five = pdf(1, 5 * MiB);
+  const four = pdf(1, 4 * MiB);
+  done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 합' }, fileOf(original('육.pdf', six)), fileOf(original('오.pdf', five)), fileOf(original('사.pdf', four))]);
+  await done;
+  expect(userContents()[1]).toEqual([{ type: 'text', text: 'echo 합' }, docOf(six), docOf(four), pathLines(abs('육.pdf'), abs('오.pdf'), abs('사.pdf'))]);
+  // 다음 메시지는 다시 10MiB 부터
+  done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 다음' }, fileOf(original('오2.pdf', five))]);
+  await done;
+  expect(userContents()[2]).toEqual([{ type: 'text', text: 'echo 다음' }, docOf(five), pathLines(abs('오2.pdf'))]);
+}, 30_000);
+
+test('PDF 쪽수 세기 — 압축 안 한 /Type /Page 개수(/Pages 아님), 없으면 맨 큰 /Count, 둘 다 없으면 못 셈(null)', () => {
+  const of = (s: string) => pdfPageCount(Buffer.from(s, 'latin1'));
+  expect(of(pdf(1).toString('latin1'))).toBe(1);
+  expect(of(pdf(37).toString('latin1'))).toBe(37);
+  // 이름 토큰이 끝나야 /Page — /Pages · /PageLabel 은 아니다. 공백 없이 붙어도 · 줄바꿈·NUL 으로 끝나도
+  expect(of('%PDF-1.7 /Type/Page/Parent 2 0 R /Type /Pages /Type /PageLabel /Type /Page\n /Type\r\n/Page>> /Type /Page\0')).toBe(4);
+  // 쪽 객체가 객체 스트림 안에 압축돼 안 보이면 쪽 나무의 /Count — 여럿이면 가장 큰 것(목차 /Count 는 보통 더 작다)
+  expect(of('%PDF-1.7 << /Type /Pages /Count 250 >> << /Type /Outlines /Count 3 >> << /Count -2 >>')).toBe(250);
+  // 아무것도 안 보이면 못 센다 — 크기 규칙만
+  expect(of('%PDF-1.7 stream x\x9c\x01\x02 endstream')).toBeNull();
+  expect(PDF_INLINE_MAX_PAGES).toBe(100);
+});
+
+test('100쪽 넘는 PDF — 경로 줄만', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const hundred = pdf(100);
+  const over = pdf(101);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 쪽' }, fileOf(original('백한쪽.pdf', over)), fileOf(original('백쪽.pdf', hundred))]);
+  await done;
+  const abs = (name: string) => path.join(attDir(a.id), attFiles(a.id).find((f) => f.endsWith(name))!);
+  expect(userContents()).toEqual([[{ type: 'text', text: 'echo 쪽' }, docOf(hundred), pathLines(abs('백한쪽.pdf'), abs('백쪽.pdf'))]]);
+});
+
+test('붙잡힌 PDF 입력도 문서 블록째 감', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const body = pdf(3);
+  const b64 = body.toString('base64');
+  const src = original('붙잡힌.pdf', body);
+  const holds: unknown[] = [];
+  e.on('hold', (x: unknown) => holds.push(x));
+  await slowTurn(e, a.id);
+  await e.sendUser(a.id, text('/대기')); // 줄에 서는 입력 — 뒤의 PDF 도 줄에 선다
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo PDF' }, fileOf(src)]);
+  expect(e.heldInput(a.id)).toBe(2);
+  await e.interrupt(a.id);
+  // 붙잡기 목록·그 사건엔 수만 — base64 는 화면에 가지 않는다
+  expect(e.hold(a.id)?.items.map((x) => [x.text, x.images, x.files ?? 0])).toEqual([['/대기', 0, 0], ['echo PDF', 0, 1]]);
+  expect(JSON.stringify(e.hold(a.id))).not.toContain(b64);
+  expect(holds.length).toBeGreaterThan(0);
+  expect(JSON.stringify(holds)).not.toContain(b64);
+  fs.rmSync(src); // 원본이 사라져도 준비된 꼴(사본 + 문서 블록)로 간다
+  const [file] = attFiles(a.id);
+  const abs = path.join(attDir(a.id), file);
+  const got = resultTextIs(e, a.id, `받음: echo PDF\n\n\n첨부 파일:\n- ${abs}`);
+  e.resumeHold(a.id);
+  await got;
+  expect(userContents().at(-1)).toEqual([{ type: 'text', text: 'echo PDF' }, docOf(body), pathLines(abs)]);
+  expect(e.history(a.id).filter((x) => x.kind === 'user').at(-1)).toEqual({
+    t: expect.any(Number), kind: 'user', source: 'human', parts: [{ type: 'text', text: 'echo PDF' }, { type: 'file', name: '붙잡힌.pdf', bytes: body.length, file }],
+  });
+  expect(fs.readFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), 'utf8')).not.toContain(b64);
+});
+
+test('PDF 사본을 읽는 사이 멈추면 — 그 보내기는 실패하고 사본을 되돌린다(복사 중 멈춤과 같다) · 다음 말은 그대로', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const src = original('읽는 중.pdf', pdf(1));
+  const real = fs.promises.readFile.bind(fs.promises);
+  let reached = false;
+  // 첨부 폴더의 사본 읽기만 붙잡는다 — 끊길(signal) 때까지 끝나지 않는다
+  const spy = vi.spyOn(fs.promises, 'readFile').mockImplementation((async (p: fs.PathLike, o?: any) => {
+    if (typeof p === 'string' && p.startsWith(attDir(a.id))) {
+      reached = true;
+      return new Promise((_, reject) => o.signal.addEventListener('abort', () => reject(o.signal.reason), { once: true }));
+    }
+    return real(p, o);
+  }) as any);
+  try {
+    const sending = e.sendUser(a.id, [{ type: 'text', text: 'echo PDF' }, fileOf(src)]);
+    const failed = expect(sending).rejects.toThrow(`${ATTACH_FAIL}읽는 중.pdf: ${COPY_STOPPED}`);
+    await until('사본 읽는 중', () => reached);
+    await e.interrupt(a.id);
+    await failed;
+  } finally {
+    spy.mockRestore();
+  }
+  expect(attFiles(a.id)).toEqual([]); // 만든 사본은 되돌렸다
+  expect(e.hold(a.id)).toBeNull(); // 붙잡지 않았다
+  expect(e.history(a.id)).toEqual([]);
+  expect(userContents()).toEqual([]);
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('echo 다음'));
+  expect(await resultText(done)).toBe('받음: echo 다음');
+});
+
+// probe29 P3 — 되돌림 줄엔 보낸 문서 블록이 data 째 실려 온다(10MiB PDF → ~14MB 한 줄). 그 줄도 읽어 끼운 말을 읽은 것으로 맞춰야
+// 바로 쉬고, 멈춰도 돌려받아 두 번 보내지 않는다
+test('큰 되돌림 줄(문서 블록 실림)도 끼운 말 맞추기 됨', async () => {
+  const e = await start({ FAKE_THINK_MS: '150' }, false, { midGraceMs: 60_000 }); // 못 맞추면 오래 작업 중으로 남는다
+  const { a } = setup(e);
+  const body = pdf(1, PDF_INLINE_MAX_BYTES); // 문서 블록에 드는 가장 큰 PDF
+  const slow = resultOf(e, a.id);
+  await e.sendUser(a.id, text('THINK 생각'));
+  await e.sendUser(a.id, [{ type: 'text', text: '이것도' }, fileOf(original('큰.pdf', body))]);
+  expect(e.heldInput(a.id)).toBe(0); // 차례 도중에 끼웠다
+  await slow;
+  await until('쉼', () => e.status(a.id) === 'idle', 3000);
+  const [file] = attFiles(a.id);
+  expect(userContents().at(-1)).toEqual([{ type: 'text', text: '이것도' }, docOf(body), pathLines(path.join(attDir(a.id), file))]);
+  // 같은 차례에서 읽었다(가짜는 끼운 말을 '이어서 받음' 으로 답한다)
+  expect(e.history(a.id).some((x) => x.kind === 'assistant' && x.blocks.some((b) => b.type === 'text' && b.text.startsWith('이어서 받음: 이것도')))).toBe(true);
+  await e.interrupt(a.id);
+  expect(e.hold(a.id)).toBeNull(); // 돌려받아 붙잡은 것이 없다
+  expect(userContents()).toHaveLength(2); // 다시 보내지 않았다
+}, 30_000);
+
 test('갈래 — 사본 복사·기록 file 새 이름', async () => {
   const { e } = await startConv();
   const { a } = setup(e);
@@ -6946,6 +7168,25 @@ describe('서버 방 첨부', () => {
     const launch = calls().find((c) => c.kind === 'launch');
     expect(launch.script).toContain(`'--add-dir' "$HOME/.dure/attachments/${web.id}"`);
     expect(flagValue(lastSpawnOf('web').argv, '--add-dir')).toBe(path.join(root, 'home', 'a', '.dure', 'attachments', web.id));
+  }, 30_000);
+
+  test('서버 방 PDF — 문서 블록 + 서버 경로', async () => {
+    const { e, web, served } = await attachRoom();
+    const body = pdf(2);
+    const src = original('서버 보고서.pdf', body);
+    const done = resultOf(e, web.id);
+    await e.sendUser(web.id, [{ type: 'text', text: 'echo PDF' }, fileOf(src)]);
+    await done;
+    const [file] = attFiles(web.id);
+    const remotePath = `/home/a/.dure/attachments/${web.id}/${file}`;
+    // 서버 claude 에도 같은 문서 블록(stdin 으로 간다) + 서버 경로 줄 — 올리기는 그대로
+    expect(userContents().at(-1)).toEqual([{ type: 'text', text: 'echo PDF' }, docOf(body), pathLines(remotePath)]);
+    expect(fs.readFileSync(served(file))).toEqual(body);
+    expect(e.history(web.id).find((x) => x.kind === 'user')).toEqual({
+      t: expect.any(Number), kind: 'user', source: 'human',
+      parts: [{ type: 'text', text: 'echo PDF' }, { type: 'file', name: '서버 보고서.pdf', bytes: body.length, file, remotePath }],
+    });
+    expect(fs.readFileSync(path.join(dataDir, 'history', `${web.id}.jsonl`), 'utf8')).not.toContain(body.toString('base64'));
   }, 30_000);
 
   test('큰 파일인데 서버가 stdin 을 안 읽고 끝남 — 사본 읽기 실패가 아니라 진짜 까닭 · 접속 실패면 서버를 지우러 가지 않는다', async () => {
@@ -7684,6 +7925,40 @@ test('켤 때 state.json 이 깨져 빈 상태로 시작했으면 첨부 폴더�
   const e3 = await start();
   await (e3 as any).pruning;
   expect(e3.attachmentPath(a.id, file)).toBe(path.join(attDir(a.id), file));
+});
+
+test('깨진 상태 파일이 남아 있으면 다음 시작에도 첨부를 지우지 않는다', async () => {
+  const e1 = await start();
+  const { a } = setup(e1);
+  const done = resultOf(e1, a.id);
+  await e1.sendUser(a.id, [{ type: 'text', text: 'echo' }, fileOf(original('x.txt'))]);
+  await done;
+  await e1.shutdown();
+  const [file] = attFiles(a.id);
+  const stateFile = path.join(dataDir, 'state.json');
+  fs.writeFileSync(stateFile, fs.readFileSync(stateFile, 'utf8').slice(0, 40)); // 쓰다 끊긴 꼴 → 켤 때 state.json.broken-<시각> 으로 옮긴다
+
+  // 깨진 채 켜고 에이전트를 새로 만들면 새 state.json 이 생긴다 — 다음 판은 깨짐에서 되살린 판이 아니다
+  const e2 = await start();
+  const fresh = setup(e2).a;
+  await (e2 as any).pruning;
+  await e2.shutdown();
+  const broken = fs.readdirSync(dataDir).filter((f) => f.startsWith('state.json.broken-'));
+  expect(broken).toHaveLength(1);
+
+  // .broken-* 가 남아 있는 동안은 주인 없는 첨부 폴더도 지우지 않는다(사용자가 되살릴 수 있다)
+  const e3 = await start();
+  expect(e3.agents().map((x) => x.id)).toContain(fresh.id); // 보통 판 — 옛 에이전트(a)는 가게에 없다
+  expect(e3.agents().map((x) => x.id)).not.toContain(a.id);
+  await (e3 as any).pruning;
+  expect(attFiles(a.id)).toEqual([file]);
+  await e3.shutdown();
+
+  // 이름 꼴이 다른 파일(사용자가 이름을 바꿈 등)은 치지 않는다 — 옮겨 둔 것을 치우면 다시 지운다
+  fs.renameSync(path.join(dataDir, broken[0]), path.join(dataDir, `${broken[0]}.bak`));
+  const e4 = await start();
+  await (e4 as any).pruning;
+  expect(attFiles(a.id)).toEqual([]);
 });
 
 test('자격 증명 파일은 다른 이름으로도 보내지 않는다 — 대체 데이터 스트림(:)·짧은 이름(8.3)', async () => {

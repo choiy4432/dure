@@ -160,6 +160,24 @@ export const REMOTE_FOLDER_ABSOLUTE = '서버 폴더는 / 로 시작하는 전�
 /** 줄바꿈 같은 제어 문자 — 이름·역할·서버 폴더에 쓰지 않는다(서버 폴더는 셸 명령에 들어간다) */
 export const CONTROL_CHAR = /[\p{Cc}\u2028\u2029]/u;
 
+/** 상태 파일 이름(dataDir 안) · 깨진 것을 옮겨 둔 이름 — `state.json.broken-<Date.now()>`(load 가 만든다) */
+const STATE_FILE = 'state.json';
+const brokenName = (file: string) => `${file}.broken-${Date.now()}`;
+const BROKEN_RE = /^state\.json\.broken-\d+$/;
+
+/**
+ * dataDir 에 옮겨 둔 깨진 상태 파일(load 가 만든 이름 꼴 그대로)이 하나라도 남아 있나 — 있으면 엔진은 '주인 없는' 첨부 폴더를 지우지 않는다
+ * (깨진 채 켠 뒤 에이전트를 새로 만들면 새 state.json 이 생겨 그다음 판은 recovered 가 아니다 — 사용자가 그 .broken 을 되살릴 수 있다).
+ * 폴더를 못 읽으면 남아 있다고 본다(지우지 않는 쪽)
+ */
+export function brokenStateLeft(dataDir: string): boolean {
+  try {
+    return fs.readdirSync(dataDir).some((f) => BROKEN_RE.test(f));
+  } catch {
+    return true;
+  }
+}
+
 /** recovered: 깨졌거나 못 읽어 옮기고 빈 상태로 시작했다(Store.recovered) */
 function load(file: string): { state: State; recovered: boolean } {
   const empty: State = { version: 1, rooms: [], agents: [], pendingCleanups: [], pendingAttachmentCleanups: [] };
@@ -179,14 +197,14 @@ function load(file: string): { state: State; recovered: boolean } {
     };
     return { state, recovered: false };
   } catch {
-    renameRetrying(file, `${file}.broken-${Date.now()}`);
+    renameRetrying(file, brokenName(file));
     return { state: empty, recovered: true };
   }
 }
 
 export function openStore(dataDir: string): Store {
   fs.mkdirSync(dataDir, { recursive: true });
-  const file = path.join(dataDir, 'state.json');
+  const file = path.join(dataDir, STATE_FILE);
   const { state, recovered } = load(file);
 
   const save = () => {

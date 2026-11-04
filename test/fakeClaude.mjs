@@ -447,25 +447,39 @@ async function effortCommand(arg) {
 
 /** 받은 사람 말의 글 블록들(이은 글 → 블록) — 되돌림 꼴 바꾸기(FAKE_REPLAY_SHAPE)용 */
 const blocksOf = new Map();
+/** 문서 블록(PDF)이 든 사람 말의 글·문서 블록(받은 차례 그대로, data 째) — 되돌릴 때 한 번 쓰고 버린다 */
+const docsOf = new Map();
 
 /**
  * 되돌림의 내용 — 보통은 받은 글 블록을 줄바꿈으로 이은 블록 하나. FAKE_REPLAY_SHAPE 로 꼴을 바꾼다(진짜 claude 가 다르게 이어 붙일 때를 흉내):
- * crlf(줄 끝 \r\n · 끝 공백) · nosep(블록을 구분 없이 한 블록으로) · para(빈 줄로 한 블록으로) · lead(앞에 그림 자리 표시 블록)
+ * crlf(줄 끝 \r\n · 끝 공백) · nosep(블록을 구분 없이 한 블록으로) · para(빈 줄로 한 블록으로) · lead(앞에 그림 자리 표시 블록).
+ * 문서 블록이 있었으면 진짜(probe29 P3)처럼 보낸 그대로 싣는다 — data 째(큰 PDF 면 수십 MB 한 줄). 꼴을 바꾸면 그 앞에
  */
 function replayContent(text) {
   const blocks = blocksOf.get(text) ?? [text];
+  const sent = docsOf.get(text);
+  docsOf.delete(text);
+  const docs = sent ? sent.filter((c) => c.type === 'document') : [];
   switch (process.env.FAKE_REPLAY_SHAPE) {
     case 'crlf':
-      return [{ type: 'text', text: `${text.replace(/\n/g, ' \r\n')} \r\n` }];
+      return [...docs, { type: 'text', text: `${text.replace(/\n/g, ' \r\n')} \r\n` }];
     case 'nosep':
-      return [{ type: 'text', text: blocks.join('') }];
+      return [...docs, { type: 'text', text: blocks.join('') }];
     case 'para':
-      return [{ type: 'text', text: blocks.join('\n\n') }];
+      return [...docs, { type: 'text', text: blocks.join('\n\n') }];
     case 'lead':
-      return [{ type: 'text', text: '[Image #1]' }, ...blocks.map((t) => ({ type: 'text', text: t }))];
+      return [...docs, { type: 'text', text: '[Image #1]' }, ...blocks.map((t) => ({ type: 'text', text: t }))];
     default:
-      return [{ type: 'text', text }];
+      return sent ?? [{ type: 'text', text }];
   }
+}
+
+/** 기록에 남길 꼴 — 문서 블록은 {type:'document', bytes}(내용 base64 는 남기지 않는다 — 원본 크기만) */
+function forLog(msg) {
+  const content = msg.message?.content;
+  if (msg.type !== 'user' || !Array.isArray(content) || !content.some((c) => c?.type === 'document')) return msg;
+  const shown = content.map((c) => (c?.type === 'document' ? { type: 'document', bytes: Buffer.from(c.source?.data ?? '', 'base64').length } : c));
+  return { ...msg, message: { ...msg.message, content: shown } };
 }
 
 /** 읽은 사람 말을 되돌린다(--replay-user-messages) */
@@ -906,7 +920,7 @@ if (missing) {
       log(line);
       return;
     }
-    log(JSON.stringify({ ...msg, pid: process.pid })); // 어느 프로세스가 받은 줄인지(argv 줄의 pid 와 맞춘다)
+    log(JSON.stringify({ ...forLog(msg), pid: process.pid })); // 어느 프로세스가 받은 줄인지(argv 줄의 pid 와 맞춘다)
     if (msg.type === 'control_request') void control(msg);
     else if (msg.type === 'user' && !mute && !muted()) {
       const content = msg.message?.content ?? [];
@@ -915,6 +929,7 @@ if (missing) {
         .map((c) => c.text);
       const text = blocks.join('\n');
       blocksOf.set(text, blocks);
+      if (Array.isArray(content) && content.some((c) => c?.type === 'document')) docsOf.set(text, content.filter((c) => c?.type === 'text' || c?.type === 'document'));
       // 차례 도중에 온 말 — 새 차례를 열지 않고 지금 차례에 붙는다(probe17). 차례가 끝날 때 읽거나, 멈추면 새 차례로
       if (current && !current.ended && current.queue) current.queue.push(text);
       else void turn(text);

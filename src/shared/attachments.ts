@@ -4,6 +4,18 @@
 export const ATTACH_MAX_BYTES = 100 * 1024 * 1024;
 /** 상한을 넘는 파일 */
 export const ATTACH_TOO_BIG = '100MB 보다 큰 파일은 보낼 수 없어요';
+
+/**
+ * PDF 를 문서 블록(base64)으로도 넘기는 상한 — 한 메시지의 문서 블록 PDF 원본 크기 합(정확히 10MiB 는 넣는다). 앞에서부터 넣고, 넣으면 합이
+ * 넘는 PDF 는 경로 줄만(뒤의 PDF 가 남은 자리에 들면 넣는다). 근거(probe29): Claude CLI 는 요청마다 대화 전체의 문서·그림 base64 합이
+ * 24MiB 를 넘으면 오래된 것부터 오류 없이 빼서 14MiB 아래로 맞춘다 — 10MiB(base64 ~13.3MiB)면 앞 차례의 것이 있어도 새 PDF 는 남는다
+ */
+export const PDF_INLINE_MAX_BYTES = 10 * 1024 * 1024;
+/**
+ * 문서 블록으로 넘길 PDF 의 쪽수 상한 — 셀 수 있을 때만(못 세면 크기 상한만). 쪽당 ~1.1–1.6k 토큰(probe29) → 100쪽 ≈ 155k 토큰,
+ * 그 뒤 모든 차례가 그만큼 읽는다. API 상한(이 모델 600쪽)을 넘으면 CLI 가 그 문서만 빼고 이어 간다(세션은 멀쩡)
+ */
+export const PDF_INLINE_MAX_PAGES = 100;
 /** 보내기 실패의 머리 — 뒤에 ' — <이유 첫 줄>' */
 export const ATTACH_FAILED = '파일을 보내지 못했어요';
 /** 기록의 칩을 눌렀는데 그 에이전트 첨부 폴더에 그 사본이 없다(이름이 틀림·폴더 밖·지워짐) — openAttachment */

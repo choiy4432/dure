@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream';
-import { CONTROL_CHAR, openStore, renameRetrying, REMOTE_FOLDER_ABSOLUTE, type Store } from './store';
+import { brokenStateLeft, CONTROL_CHAR, openStore, renameRetrying, REMOTE_FOLDER_ABSOLUTE, type Store } from './store';
 import {
   attachmentRemoveScript, attachmentsCleanupScript, checkScript, classifyExit, classifyUploadExit, cleanupScript, hostArgs, isLoginFailure, launchArgs,
   launchPreamble, parseCheckOutput, parsePid, parseUploadHome, posixJoin, remoteAttachDir, remoteLaunchScript, remoteRunFiles, runArgs, sshErrorLines,
@@ -19,7 +19,8 @@ import { conversationFacts, splitConversations, type Conversation } from './conv
 import { claudeDirOf, existingSessions } from './claudeSessions';
 import { openImageStore, type ImageStore } from './imageStore';
 import { abortable, openAttachmentStore, REALPATH_FATAL, type AttachmentStore } from './attachmentStore';
-import { ATTACH_FAILED, ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../shared/attachments';
+import { ATTACH_FAILED, ATTACH_MAX_BYTES, ATTACH_TOO_BIG, PDF_INLINE_MAX_BYTES, PDF_INLINE_MAX_PAGES } from '../shared/attachments';
+import { hasPdfHead, isPdfName, pdfPageCount } from './pdf';
 import { replayMatches, sentText } from './streamProtocol';
 import { buildArgs, buildMcpConfig, buildUsageArgs, CREATE_AGENT_TOOL, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
@@ -808,8 +809,9 @@ class EngineImpl extends EventEmitter implements Engine {
       if (!this.store.agent(p.agentId)) this.guard(null, () => this.queueAttachmentsCleanup(p.agentId, p.host));
     }
     // 지운 에이전트의 첨부 폴더가 잠겨 남았던 것 — 주인(에이전트)이 없는 폴더만 조용히 지운다. 기다리지 않는다(끌 때는 기다린다).
-    // state.json 이 깨져 빈 상태로 시작한 판엔 하지 않는다 — 가게가 비었을 뿐이다(지우면 .broken 을 되살려도 첨부가 모두 없다)
-    if (!this.store.recovered) this.pruning = this.attachments.prune((id) => !!this.store.agent(id));
+    // state.json 이 깨져 빈 상태로 시작한 판엔 하지 않는다 — 가게가 비었을 뿐이다(지우면 .broken 을 되살려도 첨부가 모두 없다).
+    // 옮겨 둔 .broken-* 가 남아 있는 동안도 — 그 판에 새로 만든 에이전트로 state.json 이 다시 생겨도 옛 에이전트들은 그 파일에 있다
+    if (!this.store.recovered && !brokenStateLeft(this.o.dataDir)) this.pruning = this.attachments.prune((id) => !!this.store.agent(id));
     this.router.flushAll();
     this.watcher?.start();
     this.sweepTimer = setInterval(() => this.guard(null, () => this.sweep()), this.o.sleepSweepMs ?? this.minuteMs());
@@ -1714,7 +1716,8 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * 첨부를 보낼 꼴로 — 글·그림은 그대로, 파일은 차례대로 하나씩 준비한다(prepareFile — 서버 방이면 올리기까지). 하나라도 실패하면 이번에
-   * 만든 사본·서버 파일을 지우고 그 파일의 오류('파일을 보내지 못했어요 — <이름>: <이유>')를 던진다. signal: 끊으면(멈춤 등) 서버 방은 실패로
+   * 만든 사본·서버 파일을 지우고 그 파일의 오류('파일을 보내지 못했어요 — <이름>: <이유>')를 던진다. signal: 끊으면(멈춤 등) 서버 방은 실패로.
+   * PDF 의 문서 블록은 이 메시지에서 원본 크기 합 PDF_INLINE_MAX_BYTES 까지 — 앞에서부터 남은 자리(room)에 드는 것만(넘는 것은 경로 줄만)
    */
   private async prepareParts(id: AgentId, parts: UserPart[], signal: AbortSignal): Promise<ReadyPart[]> {
     const agent = this.need(id);
@@ -1722,8 +1725,17 @@ class EngineImpl extends EventEmitter implements Engine {
     // 서버 방인데 ssh 가 없다 — 사본을 만들기 전에
     if (remote && !this.sshAvailable()) throw new Error(`${ATTACH_FAILED} — ${NO_SSH}`);
     const out: ReadyPart[] = [];
+    let room = PDF_INLINE_MAX_BYTES;
     try {
-      for (const p of parts) out.push(p.type === 'file' ? await this.prepareFile(id, p, remote, signal) : p);
+      for (const p of parts) {
+        if (p.type !== 'file') {
+          out.push(p);
+          continue;
+        }
+        const ready = await this.prepareFile(id, p, remote, signal, room);
+        if (ready.inline) room -= ready.bytes;
+        out.push(ready);
+      }
     } catch (e) {
       this.dropPrepared(id, out);
       throw e;
@@ -1734,9 +1746,10 @@ class EngineImpl extends EventEmitter implements Engine {
   /**
    * 첨부 하나 — 원본이 보통 파일이고 ATTACH_MAX_BYTES 이하인지 엔진이 다시 잰 뒤(화면이 준 bytes 는 믿지 않는다) 그 에이전트의
    * 첨부 폴더로 복사한다. 원본은 읽기만 한다. Claude 에게는 사본의 절대 경로가 간다.
-   * 서버 방이면 이 PC 사본(칩이 연다)을 만든 뒤 그 사본을 서버로 올린다(uploadFile) — Claude 에게는 서버의 절대 경로가 간다
+   * 서버 방이면 이 PC 사본(칩이 연다)을 만든 뒤 그 사본을 서버로 올린다(uploadFile) — Claude 에게는 서버의 절대 경로가 간다.
+   * PDF 면 사본을 읽어 문서 블록으로도 넘긴다(pdfInline — pdfRoom: 이 메시지에 남은 문서 블록 자리, 방 종류와 상관없이 같은 블록)
    */
-  private async prepareFile(id: AgentId, p: FileInput, remote: { host: string } | null, signal: AbortSignal): Promise<FileReady> {
+  private async prepareFile(id: AgentId, p: FileInput, remote: { host: string } | null, signal: AbortSignal, pdfRoom: number): Promise<FileReady> {
     const shown = typeof p.name === 'string' ? firstLine(p.name) : '';
     const fail = (why: string) => new Error(`${ATTACH_FAILED} — ${shown ? `${shown}: ` : ''}${why}`);
     /** 끊긴 보내기의 까닭 — 방 종류로(사용자에겐 서버 방은 '서버로 올리기'다) */
@@ -1795,7 +1808,16 @@ class EngineImpl extends EventEmitter implements Engine {
       this.dropFile(id, copy.file);
       throw fail(ATTACH_TOO_BIG);
     }
-    if (!remote) return { type: 'file', name, bytes, file: copy.file, sendPath: copy.abs };
+    let inline: FileReady['inline'];
+    try {
+      inline = await pdfInline(copy.abs, name, bytes, pdfRoom, signal);
+    } catch {
+      // 사본을 읽는 사이 끊겼다(멈춤·지우기·끄기) — 복사 중에 끊긴 것과 같다
+      this.dropFile(id, copy.file);
+      throw fail(stopped);
+    }
+    const doc = inline ? { inline } : {};
+    if (!remote) return { type: 'file', name, bytes, file: copy.file, sendPath: copy.abs, ...doc };
     // 서버 방 — 사본을 서버로 올린다. 실패하면 이 사본을 지우고(서버에 반쯤 쓴 것도 uploadFile 이 되돌린다) 던진다
     let remotePath: string;
     try {
@@ -1804,7 +1826,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.dropFile(id, copy.file);
       throw fail(e instanceof Error ? e.message : String(e));
     }
-    return { type: 'file', name, bytes, file: copy.file, sendPath: remotePath, remotePath };
+    return { type: 'file', name, bytes, file: copy.file, sendPath: remotePath, remotePath, ...doc };
   }
 
   /**
@@ -3981,6 +4003,28 @@ function noFiles(parts: UserPart[]): parts is Exclude<UserPart, FileInput>[] {
 /** 서버에 올린 첨부의 사본 이름들(서버 방 — remotePath 가 있는 것) */
 function uploadedOf(parts: ReadyPart[]): string[] {
   return parts.flatMap((p) => (p.type === 'file' && p.remotePath ? [p.file] : []));
+}
+
+/**
+ * PDF 첨부를 문서 블록으로도 넘길 내용(설계 §4.5 · probe29) — 이름이 .pdf(대소문자 없이)이고, 크기가 room(이 메시지에 남은 자리 —
+ * PDF_INLINE_MAX_BYTES 안) 안이고, 사본이 `%PDF-` 로 시작하고, 쪽수를 셀 수 있으면 PDF_INLINE_MAX_PAGES 쪽 안일 때만. 아니면 undefined
+ * (경로 줄만). 첨부 폴더의 사본을 읽는다(원본은 다시 읽지 않는다 — 이 PC 디스크라 빠르다). 사본을 못 읽어도 경로 줄만(보내기는 막지 않는다) ·
+ * 읽는 사이 끊기면(signal) 던진다. 바이트 버퍼는 base64 로 바꾼 뒤 버린다
+ */
+async function pdfInline(abs: string, name: string, bytes: number, room: number, signal: AbortSignal): Promise<FileReady['inline']> {
+  if (!isPdfName(name) || bytes > Math.min(room, PDF_INLINE_MAX_BYTES)) return undefined;
+  let buf: Buffer;
+  try {
+    buf = await fs.promises.readFile(abs, { signal });
+  } catch (e) {
+    if (signal.aborted) throw e;
+    return undefined;
+  }
+  // 잰 크기와 다르면(그새 바뀜) 넣지 않는다 — 이 메시지의 합은 잰 크기로 센다
+  if (buf.length !== bytes || !hasPdfHead(buf)) return undefined;
+  const pages = pdfPageCount(buf);
+  if (pages !== null && pages > PDF_INLINE_MAX_PAGES) return undefined;
+  return { mediaType: 'application/pdf', base64: buf.toString('base64') };
 }
 
 /** 첨부를 읽거나 복사하지 못한 까닭 — 흔한 것은 쉬운 말로, 그 밖은 오류의 첫 줄 */
