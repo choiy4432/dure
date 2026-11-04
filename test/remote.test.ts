@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import {
   hostArgs, SSH_OPTIONS, shq, remoteRunDir, remoteRunFiles, remoteLaunchScript, launchArgs, launchPreamble,
   cleanupScript, checkScript, updateScript, transcriptCheckScript, classifyExit, parsePid, isLoginFailure, posixJoin, parseCheckOutput, sshErrorLines, isSafeId,
-  runArgs, forwardFailed,
+  runArgs, forwardFailed, remoteAttachDir, uploadScript, parseUploadHome, attachmentsCleanupScript, attachmentRemoveScript, classifyUploadExit,
 } from '../src/engine/remote';
 import { SPAWN_ENV_EXTRA } from '../src/engine/claudeArgs';
 
@@ -573,5 +573,157 @@ describe('isSafeId', () => {
   it('셸·경로에 그대로 넣어도 되는 id 만', () => {
     expect(['abcd1234', 'a-b_c.d', 'x'].every(isSafeId)).toBe(true);
     expect(['', '.', '..', 'a..b', '../x', 'a/b', 'a b', "a'b", 'a;b'].some(isSafeId)).toBe(false);
+  });
+});
+
+// ── 서버 방 첨부 — 올리기(ssh stdin)·--add-dir·지우기 ──
+describe('서버 첨부 폴더', () => {
+  it('에이전트마다 $HOME 아래 — 셸이 펼친다 · 이상한 id 는 던진다', () => {
+    expect(remoteAttachDir('ag1')).toBe('$HOME/.dure/attachments/ag1');
+    for (const bad of ['', '.', '..', 'a b', 'a;b', '$(x)', 'a/b']) expect(() => remoteAttachDir(bad)).toThrow();
+  });
+});
+
+describe('uploadScript', () => {
+  // 공백·작은따옴표·$·;·& 가 든 사본 이름 — Windows 이름으로 쓸 수 있는 글자들(review focus 1)
+  const NAME = `20261104-101010-a b'$;&.txt`;
+  it('uploadScript — 위험한 이름도 한 인자', () => {
+    expect(uploadScript('ag1', NAME)).toBe(
+      `umask 077; d="$HOME/.dure/attachments/ag1"; mkdir -p "$d" && cat > "$d"/'20261104-101010-a b'\\''$;&.txt' && printf '\\nDURE_HOME=%s\\n' "$HOME"`,
+    );
+    // 토큰·포트 같은 비밀은 없다 — 파일 내용은 stdin 으로만
+    expect(uploadScript('ag1', 'x.txt')).not.toMatch(/Bearer|token|127\.0\.0\.1/i);
+  });
+  it('이상한 이름·id 는 던진다 — 빗금·제어 글자·빈 글·. ..', () => {
+    for (const bad of ['', '.', '..', 'a/b', '/x', 'a\nb', 'a\0b', 'a\tb']) expect(() => uploadScript('ag1', bad)).toThrow();
+    expect(() => uploadScript('a;b', 'x.txt')).toThrow();
+  });
+  it.skipIf(!hasBash)('bash 로 돌리면 stdin 바이트 그대로 그 이름에 · 끼어든 명령 없음 · 마지막 줄 DURE_HOME', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'dure-up-'));
+    try {
+      const home = join(tmp, 'home');
+      execFileSync('bash', ['-c', `mkdir -p ${shq(posix(home))}`]);
+      const bytes = Buffer.from([0, 1, 2, 255, 13, 10, 0x27, 0x24, 0x3b, 0x26, 10, 0xea, 0xb0, 0x80]);
+      // 큰따옴표는 사본 이름에 없다(윈도 금지 글자 — 사본 이름이 _ 로 바꾼다)
+      for (const name of [NAME, `20261104-101010-$(touch pwned) \`touch pwned2\` $HOME.txt`, '20261104-101010-보고서 최종.md']) {
+        const r = spawnSync('bash', ['-c', uploadScript('ag1', name)], { input: bytes, env: { ...process.env, HOME: posix(home) }, cwd: tmp });
+        expect(r.status).toBe(0);
+        expect(readFileSync(join(home, '.dure', 'attachments', 'ag1', name))).toEqual(bytes);
+        expect(parseUploadHome(r.stdout.toString('utf8'))).toBe(posix(home));
+      }
+      expect(existsSync(join(tmp, 'pwned'))).toBe(false);
+      expect(existsSync(join(tmp, 'pwned2'))).toBe(false);
+      expect(existsSync(join(home, 'pwned'))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('parseUploadHome', () => {
+  it('parseUploadHome — 마지막 줄·잡음', () => {
+    expect(parseUploadHome('\nDURE_HOME=/home/a\n')).toBe('/home/a');
+    // 셸 시작 파일이 찍은 잡음·CRLF — 마지막 DURE_HOME= 줄만
+    expect(parseUploadHome('Welcome!\r\nDURE_HOME=/fake\nmotd\r\n\nDURE_HOME=/home/my user\r\n')).toBe('/home/my user');
+    expect(parseUploadHome('noise without newline\nDURE_HOME=/root\n')).toBe('/root');
+  });
+  it('없거나 / 로 시작하지 않으면 null', () => {
+    expect(parseUploadHome('')).toBeNull();
+    expect(parseUploadHome('hello\n')).toBeNull();
+    expect(parseUploadHome('\nDURE_HOME=\n')).toBeNull();
+    expect(parseUploadHome('\nDURE_HOME=~/x\n')).toBeNull();
+    expect(parseUploadHome('\nDURE_HOME=/home/a\nDURE_HOME=relative\n')).toBeNull();
+  });
+});
+
+describe('attachmentsCleanupScript · attachmentRemoveScript', () => {
+  it('폴더째 · 파일 몇 개 — 이름은 한 인자씩', () => {
+    expect(attachmentsCleanupScript('ag1')).toBe('rm -rf "$HOME/.dure/attachments/ag1"');
+    expect(attachmentRemoveScript('ag1', ['20261104-101010-a.txt', `20261104-101010-a b'$;&.txt`])).toBe(
+      `d="$HOME/.dure/attachments/ag1"; rm -f "$d"/'20261104-101010-a.txt' "$d"/'20261104-101010-a b'\\''$;&.txt'`,
+    );
+  });
+  it('이상한 id·이름·빈 목록은 던진다', () => {
+    expect(() => attachmentsCleanupScript('..')).toThrow();
+    expect(() => attachmentRemoveScript('ag1', [])).toThrow();
+    expect(() => attachmentRemoveScript('ag1', ['../x'])).toThrow();
+    expect(() => attachmentRemoveScript('a b', ['x'])).toThrow();
+  });
+  it.skipIf(!hasBash)('bash 로 돌리면 그 파일만 · 그 에이전트 폴더만 지운다', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'dure-rm-'));
+    try {
+      const home = join(tmp, 'home');
+      const env = { ...process.env, HOME: posix(home) };
+      const a = join(home, '.dure', 'attachments', 'ag1');
+      const b = join(home, '.dure', 'attachments', 'ag2');
+      execFileSync('bash', ['-c', `mkdir -p ${shq(posix(a))} ${shq(posix(b))}`]);
+      const odd = `20261104-101010-a b'$;&.txt`;
+      for (const f of ['20261104-101010-keep.txt', odd]) writeFileSync(join(a, f), 'x');
+      writeFileSync(join(b, 'other.txt'), 'y');
+      expect(spawnSync('bash', ['-c', attachmentRemoveScript('ag1', [odd, '20261104-101010-없음.txt'])], { env }).status).toBe(0);
+      expect(existsSync(join(a, odd))).toBe(false);
+      expect(existsSync(join(a, '20261104-101010-keep.txt'))).toBe(true);
+      expect(spawnSync('bash', ['-c', attachmentsCleanupScript('ag1')], { env }).status).toBe(0);
+      expect(existsSync(a)).toBe(false);
+      expect(existsSync(join(b, 'other.txt'))).toBe(true);
+      expect(spawnSync('bash', ['-c', attachmentsCleanupScript('ag1')], { env }).status).toBe(0); // 없어도 0
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('원격 띄우기 — 첨부 폴더', () => {
+  const files = remoteRunFiles('ag1', 'ab12cd34');
+  const dir = remoteAttachDir('ag1');
+  const args = ['--mcp-config', files.mcp, '--add-dir', dir, '-n', dir.replace('ag1', 'other')];
+  it('원격 띄우기에 --add-dir "$HOME/…"', () => {
+    const s = remoteLaunchScript({ agentId: 'ag1', launchId: 'ab12cd34', folder: '/home/a/web', claudeArgs: args });
+    expect(s).toContain(`'--add-dir' "$HOME/.dure/attachments/ag1"`);
+    // 이 에이전트의 첨부 폴더만 펼친다 — 같은 꼴의 다른 글은 shq 그대로
+    expect(s).toContain(`'-n' '$HOME/.dure/attachments/other'`);
+    // 폴더는 띄우기가 만든다(umask 077 안에서 — 그 사용자만) · run 폴더 뒤 · claude 찾기 뒤
+    const at = (x: string) => s.indexOf(x);
+    expect(at('mkdir -p "$HOME/.dure/attachments/ag1"')).toBeGreaterThan(at('mkdir -p "$d"'));
+    expect(at('mkdir -p "$HOME/.dure/attachments/ag1"')).toBeLessThan(at('umask "$o"'));
+    expect(at('umask 077')).toBeLessThan(at('mkdir -p "$d"'));
+  });
+  it.skipIf(!hasBash)('bash 로 돌리면 claude 는 펼친 경로를 받고 폴더가 있다', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'dure-adddir-'));
+    try {
+      const home = join(tmp, 'home');
+      const bin = join(tmp, 'bin');
+      exe(join(bin, 'claude'), 'printf "[%s]\\n" "$@"\n');
+      execFileSync('bash', ['-c', `mkdir -p ${shq(posix(home))}`]);
+      const script = remoteLaunchScript({ agentId: 'ag1', launchId: 'ab12cd34', folder: posix(tmp), claudeArgs: args });
+      const r = spawnSync('bash', ['-c', `PATH=${shq(`${posix(bin)}:${BARE_PATH}`)}; ${script}`], {
+        input: launchPreamble('{}', 'p'), encoding: 'utf8', env: { ...process.env, HOME: posix(home) },
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout.split('\n')).toContain(`[${posix(home)}/.dure/attachments/ag1]`);
+      expect(r.stdout.split('\n')).toContain('[$HOME/.dure/attachments/other]');
+      expect(existsSync(join(home, '.dure', 'attachments', 'ag1'))).toBe(true);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('classifyUploadExit — 올리기 ssh 의 끝', () => {
+  const u = classifyUploadExit;
+  it('접속 전 실패는 classifyExit 그대로 — 키 거절·서버 키·접속 못 함(첫 줄)', () => {
+    expect(u(255, 'me@h: Permission denied (publickey).')).toEqual({ kind: 'denied', detail: null });
+    expect(u(255, 'Host key verification failed.')).toEqual({ kind: 'hostkey', detail: null });
+    expect(u(255, 'ssh: connect to host h port 22: Connection refused')).toEqual({ kind: 'unreachable', detail: 'ssh: connect to host h port 22: Connection refused' });
+  });
+  it('도중에 끊김 — 255·-1(윈도우)', () => {
+    for (const code of [255, -1, 4294967295]) {
+      for (const line of ['Connection to dev closed by remote host.', 'client_loop: send disconnect: Connection reset', 'Read from remote host dev: Connection reset by peer', 'Timeout, server dev not responding.']) {
+        expect(u(code, line)).toEqual({ kind: 'disconnected', detail: null });
+      }
+    }
+  });
+  it('서버 명령의 종료(1·3·127 — claude·폴더와 상관없다)·0·null 은 가르지 않는다', () => {
+    for (const code of [0, 1, 2, 3, 127, null]) expect(u(code, 'bash: line 1: claude: command not found')).toBeNull();
   });
 });

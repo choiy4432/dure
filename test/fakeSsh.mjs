@@ -2,8 +2,10 @@
 // 받는 인자는 진짜 ssh 그대로: SSH_OPTIONS(-T·-o …) · -R [127.0.0.1:]<원격>:127.0.0.1:<로컬> · -p <포트> · <호스트> · 'bash -lc|-c <스크립트>'(src/engine/remote.ts).
 // -o 중 흉내 내는 것: ExitOnForwardFailure(yes 면 전달 실패에 255, 아니면 경고 한 줄 뒤 계속) · ClearAllForwardings=yes(전달을 하나도 열지 않음 —
 // 명령줄 -R 까지) · RemoteCommand(설정 파일 흉내 FAKE_SSH_CONFIG_REMOTECOMMAND 가 있을 때 none 이 아니면 진짜처럼 255).
-// 셸을 흉내 내지 않는다 — remote.ts 가 만드는 스크립트 네 모양만 알아보고 그 결과를 낸다(모르는 모양은 code 2):
-//   띄우기(remoteLaunchScript) · 확인(checkScript) · 기록 확인(transcriptCheckScript) · 정리(cleanupScript). 빈 스크립트는 code 0.
+// 셸을 흉내 내지 않는다 — remote.ts 가 만드는 스크립트 모양만 정확히 알아보고 그 결과를 낸다(모르는 모양은 code 2):
+//   띄우기(remoteLaunchScript) · 확인(checkScript) · 기록 확인(transcriptCheckScript) · 정리(cleanupScript) · 업데이트(updateScript) ·
+//   첨부 올리기(uploadScript — stdin 바이트를 그 서버 경로에 쓰고 DURE_HOME=/home/a) · 첨부 지우기(attachmentRemoveScript — 그 파일들) ·
+//   첨부 폴더 지우기(attachmentsCleanupScript). 빈 스크립트는 code 0.
 // 실제 모양은 실측: docs/findings/2026-11-02-ssh-remote-probe.md (probe24·probe25).
 //
 // 서버 = 이 PC 의 폴더 하나:
@@ -18,7 +20,8 @@
 //   FAKE_SSH_CLAUDE      띄울 claude — JSON 배열 [명령, 앞 인자…](기본 [node, test/fakeClaude.mjs]). JSON 이 아니면 명령 하나
 //   FAKE_SSH_LOG         JSON 한 줄씩: 시작 {event:'start', argv, host, user, port, forwards, command, script, kind}
 //                        · {event:'launch', pid, marker, folder(서버 경로), cwd(이 PC 경로), args, runDir} · {event:'cleanup', pid, marker, killed, removed}
-//                        · {event:'drop'} · {event:'exit', code}
+//                        · {event:'upload', agentId, file, bytes} · {event:'attachment-remove', agentId, files, removed}
+//                        · {event:'attachments-cleanup', agentId, removed} · {event:'drop'} · {event:'exit', code}
 //   FAKE_SSH_MODE        refused | denied | hostkey   → 접속 전에 code 255(진짜 ssh 의 stderr 글 그대로)
 //                        noclaude                     → claude 없음: 찾기(FIND_CLAUDE)가 run 폴더보다 먼저인 띄우기·확인은 127(글 없음, DURE_PID·run 폴더 없음)
 //                        portclash-once               → 이 root 에서 -R 이 붙은 첫 호출만 전달 실패 — ExitOnForwardFailure=yes 면 255
@@ -30,6 +33,10 @@
 //   FAKE_SSH_MODE_FILE   그 파일이 있으면 FAKE_SSH_MODE 대신 그 내용(빈 파일 = 보통) — 엔진 환경을 못 바꾸는 시험이 도중에 모드를 바꾸게
 //   FAKE_SSH_UPDATE_CODE 업데이트(claude update) 명령의 종료 코드(기본 0) · FAKE_SSH_UPDATE_MS 그 명령이 끝나기 전에 더 기다린다(기본 0)
 //   FAKE_SSH_CLEANUP_MS  정리 명령이 끝나기 전에 더 기다린다(진짜는 sleep 2 — 기본 0, 정리 상한 시험용)
+//   FAKE_SSH_UPLOAD_CODE 첨부 올리기의 종료 코드(기본 0). 0 이 아니면 stdin 을 다 받은 뒤 반만 쓰고 DURE_HOME 없이 끝난다 —
+//                        255·-1 은 'Connection to <host> closed by remote host.'(도중 끊김), 그 밖은 'cat: write error: No space left on device'
+//   FAKE_SSH_UPLOAD_HOLD 올릴 사본 이름에 그 글자가 들어 있으면 다 쓴 뒤 끝내지 않는다(DURE_HOME 없이 — 끌 때까지, 안전 상한 60초 뒤 255).
+//                        느린·멈춘 올리기 흉내(멈춤·새 대화·시간 상한 시험). FAKE_SSH_LOG 에 {event:'upload', agentId, file, bytes[, partial]}
 //   FAKE_SSH_CONFIG_RFWD ~/.ssh/config 의 RemoteForward 흉내 — 그 원격 포트는 늘 실패(서버에서 다른 것이 쓰는 중). ClearAllForwardings=yes 면 없다
 //   FAKE_SSH_CONFIG_REMOTECOMMAND  ~/.ssh/config 의 RemoteCommand 흉내 — -o RemoteCommand=none 이 없으면 명령과 부딪혀 255
 // 서버 환경 = 이 프로세스의 환경 + 띄우기 스크립트의 export — CLAUDE_CONFIG_DIR·FAKE_TRANSCRIPTS·FAKE_CLAUDE_LOG 등이 가짜 claude 에 그대로 간다.
@@ -258,12 +265,18 @@ function classify(script) {
   }
   // claude 찾기(FIND_CLAUDE)의 끝 — `[ -n "$c" ] || exit 127`. 가짜는 늘 찾는다(noclaude 모드만 못 찾음)
   const found = cmds.findIndex((c) => same(c, ['[', '-n', '$c', ']', '||', 'exit', '127']));
-  // 띄우기(remoteLaunchScript) — cd <폴더> || exit 3 · claude 찾기 · d="…" · mkdir -p "$d" · export DURE_RUN=<표식> · export <이름>=<값>… · exec "$c" <인자…>
+  // 첨부 올리기·지우기 — 글자 하나까지 remote.ts 의 모양 그대로일 때만(따옴표가 빠져 ; 가 명령을 나누면 모양이 달라져 모른다)
+  const attach = attachKind(cmds);
+  if (attach) return attach;
+  // 띄우기(remoteLaunchScript) — cd <폴더> || exit 3 · claude 찾기 · d="…" · mkdir -p "$d" · mkdir -p "$HOME/…"(첨부 폴더) · export DURE_RUN=<표식> ·
+  // export <이름>=<값>… · exec "$c" <인자…>
   const exec = cmds.find((c) => c[0]?.value === 'exec' && c[1]?.value === '$c');
   if (exec) {
     const d = cmds.find((c) => c.length === 1 && c[0].value.startsWith('d='));
     const cd = cmds.find((c) => same(c, ['cd', null, '||', 'exit', '3']));
     const mkdir = cmds.find((c) => same(c, ['mkdir', '-p', null]));
+    // run 폴더 말고 셸이 $HOME 을 펼친 폴더(첨부 폴더) — 띄우기가 만든다
+    const mkdirs = cmds.filter((c) => c !== mkdir && same(c, ['mkdir', '-p', null]) && c[2].home).map((c) => c[2].value);
     const run = cmds.find((c) => c.length === 2 && c[0].value === 'export' && c[1].value.startsWith('DURE_RUN='));
     if (!d || !cd || !mkdir || !run || found < 0) return { kind: 'unknown' };
     // 그 밖의 export — 서버 셸이 claude 에 넘기는 환경(ssh 는 이 PC 의 환경을 넘기지 않는다)
@@ -276,6 +289,7 @@ function classify(script) {
     return {
       kind: 'launch',
       runDir: d[0].value.slice(2),
+      mkdirs,
       folder: cd[1].value,
       // 스크립트 차례 그대로 — cd·claude 찾기가 run 폴더보다 먼저면 폴더·claude 가 없을 때 아무것도 쓰지 않고 끝난다
       cdFirst: cmds.indexOf(cd) < cmds.indexOf(mkdir),
@@ -304,6 +318,48 @@ function classify(script) {
   const loop = cmds.find((c) => same(c.slice(0, 3), ['for', 'i', 'in']));
   if (loop && script.includes('${CLAUDE_CONFIG_DIR:-$HOME/.claude}')) return { kind: 'transcripts', ids: values(loop.slice(3)) };
   return { kind: 'unknown' };
+}
+
+/** 사본 이름 한 조각 — 빗금·빈 글·. .. 이 아니어야 한다 */
+const fileName = (s) => typeof s === 'string' && s !== '' && s !== '.' && s !== '..' && !s.includes('/');
+const ATTACH_D = new RegExp(`^d=${REMOTE_HOME}/\\.dure/attachments/(${SAFE})$`);
+const ATTACH_DIR = new RegExp(`^${REMOTE_HOME}/\\.dure/attachments/(${SAFE})$`);
+/** `d="$HOME/.dure/attachments/<에이전트>"` 한 명령이면 그 에이전트 */
+const attachD = (c) => (c?.length === 1 && c[0].home ? (ATTACH_D.exec(c[0].value)?.[1] ?? null) : null);
+/** `"$d"/'<이름>'` 한 단어면 그 이름 */
+const inD = (w) => (w && w.value.startsWith('$d/') && fileName(w.value.slice(3)) ? w.value.slice(3) : null);
+/**
+ * 첨부 스크립트 셋(remote.ts) — 올리기(uploadScript) · 파일 지우기(attachmentRemoveScript) · 폴더 지우기(attachmentsCleanupScript).
+ * 셋 다 아니면 null(다른 모양으로 넘긴다)
+ */
+function attachKind(cmds) {
+  // 올리기 — umask 077; d="$HOME/.dure/attachments/<에이전트>"; mkdir -p "$d" && cat > "$d"/'<이름>' && printf '\nDURE_HOME=%s\n' "$HOME"
+  if (same(cmds[0] ?? [], ['umask', '077'])) {
+    const agentId = attachD(cmds[1]);
+    const c = cmds[2];
+    const ok =
+      cmds.length === 3 &&
+      agentId &&
+      c &&
+      same(c, ['mkdir', '-p', '$d', '&&', 'cat', '>', null, '&&', 'printf', '\\nDURE_HOME=%s\\n', REMOTE_HOME]) &&
+      inD(c[6]) &&
+      c[10].home;
+    return ok ? { kind: 'upload', agentId, file: inD(c[6]) } : { kind: 'unknown' };
+  }
+  // 파일 지우기 — d="$HOME/.dure/attachments/<에이전트>"; rm -f "$d"/'<이름>' …
+  const agentId = attachD(cmds[0]);
+  if (agentId) {
+    const c = cmds[1];
+    const files = c ? c.slice(2).map(inD) : [];
+    const ok = cmds.length === 2 && c.length > 2 && same(c.slice(0, 2), ['rm', '-f']) && files.every(Boolean);
+    return ok ? { kind: 'attachment-remove', agentId, files } : { kind: 'unknown' };
+  }
+  // 폴더 지우기 — rm -rf "$HOME/.dure/attachments/<에이전트>"
+  if (cmds.length === 1 && same(cmds[0], ['rm', '-rf', null])) {
+    const m = cmds[0][2].home ? ATTACH_DIR.exec(cmds[0][2].value) : null;
+    return m ? { kind: 'attachments-cleanup', agentId: m[1] } : { kind: 'unknown' };
+  }
+  return null;
 }
 
 // ── ssh 인자 ──
@@ -446,6 +502,66 @@ async function runCleanup(spec) {
   finish(0);
 }
 
+/** stdin 을 끝까지(EOF 까지) 바이트 그대로 */
+function readAll() {
+  return new Promise((resolve) => {
+    const parts = [];
+    process.stdin.on('data', (d) => parts.push(d));
+    const done = () => resolve(Buffer.concat(parts));
+    process.stdin.on('end', done);
+    process.stdin.on('error', done);
+  });
+}
+
+const sshLevelCode = (code) => code === 255 || code === -1;
+const attachLocal = (agentId, file) => toLocal(`${REMOTE_HOME}/.dure/attachments/${agentId}${file === undefined ? '' : `/${file}`}`);
+
+/** 첨부 올리기 — umask 077 · mkdir -p · cat > 그 경로 · 새 줄 + DURE_HOME=$HOME(uploadScript 차례 그대로) */
+async function runUpload(spec, host) {
+  const data = await readAll();
+  const target = attachLocal(spec.agentId, spec.file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const code = Number(process.env.FAKE_SSH_UPLOAD_CODE ?? 0);
+  if (code !== 0) {
+    // 쓰다 끊김·디스크 가득 — 반쯤 쓴 파일이 남는다(진짜 cat 처럼)
+    const half = data.subarray(0, Math.floor(data.length / 2));
+    fs.writeFileSync(target, half);
+    log({ event: 'upload', agentId: spec.agentId, file: spec.file, bytes: half.length, partial: true });
+    return fail(code, sshLevelCode(code) ? `Connection to ${host} closed by remote host.` : 'bash: line 1: cat: write error: No space left on device');
+  }
+  fs.writeFileSync(target, data);
+  log({ event: 'upload', agentId: spec.agentId, file: spec.file, bytes: data.length });
+  const hold = process.env.FAKE_SSH_UPLOAD_HOLD;
+  if (hold && spec.file.includes(hold)) {
+    await sleep(60_000); // 끌 때까지 — 안전 상한
+    return fail(255, `Timeout, server ${host} not responding.`);
+  }
+  process.stdout.write(`\nDURE_HOME=${REMOTE_HOME}\n`);
+  finish(0);
+}
+
+/** 첨부 지우기 — 그 에이전트 서버 첨부 폴더의 그 파일들(없으면 그대로, rm -f) */
+function runAttachmentRemove(spec) {
+  const removed = [];
+  for (const f of spec.files) {
+    const p = attachLocal(spec.agentId, f);
+    if (kindOf(p) !== 'file') continue;
+    fs.rmSync(p, { force: true });
+    removed.push(f);
+  }
+  log({ event: 'attachment-remove', agentId: spec.agentId, files: spec.files, removed });
+  finish(0);
+}
+
+/** 첨부 폴더 지우기 — 그 에이전트 서버 첨부 폴더째(rm -rf) */
+function runAttachmentsCleanup(spec) {
+  const dir = attachLocal(spec.agentId);
+  const removed = kindOf(dir) !== null;
+  fs.rmSync(dir, { recursive: true, force: true });
+  log({ event: 'attachments-cleanup', agentId: spec.agentId, removed });
+  finish(0);
+}
+
 /** stdin — 머리말 두 줄을 줄 단위로 읽고, 나머지는 claude 가 뜨면 그대로 넘긴다 */
 function stdinReader() {
   let buf = Buffer.alloc(0);
@@ -511,6 +627,7 @@ async function runLaunch(spec, mode, host) {
   if (spec.findFirst && mode === 'noclaude') return finish(127); // 찾기가 말없이 실패 — run 폴더·머리말 파일 전
   const runDir = toLocal(spec.runDir);
   fs.mkdirSync(runDir, { recursive: true });
+  for (const d of spec.mkdirs) fs.mkdirSync(toLocal(d), { recursive: true }); // 첨부 폴더
   const input = stdinReader();
   const a = await input.line();
   const b = await input.line();
@@ -748,6 +865,9 @@ async function main() {
   if (spec.kind === 'update') return runUpdate(mode);
   if (spec.kind === 'transcripts') return runTranscripts(spec);
   if (spec.kind === 'cleanup') return runCleanup(spec);
+  if (spec.kind === 'upload') return runUpload(spec, hostname);
+  if (spec.kind === 'attachment-remove') return runAttachmentRemove(spec);
+  if (spec.kind === 'attachments-cleanup') return runAttachmentsCleanup(spec);
   if (spec.kind === 'launch') return runLaunch(spec, mode, hostname);
   fail(2, 'fakeSsh: 모르는 서버 명령 — src/engine/remote.ts 가 만드는 스크립트만 흉내 낸다');
 }

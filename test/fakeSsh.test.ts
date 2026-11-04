@@ -8,7 +8,8 @@ import path from 'node:path';
 import { buildArgs } from '../src/engine/claudeArgs';
 import {
   checkScript, updateScript, classifyExit, cleanupScript, forwardFailed, launchArgs, launchPreamble, parseCheckOutput, parsePid, remoteLaunchScript,
-  remoteRunFiles, runArgs, shq, transcriptCheckScript,
+  remoteRunFiles, runArgs, shq, transcriptCheckScript, uploadScript, parseUploadHome, classifyUploadExit, attachmentsCleanupScript, attachmentRemoveScript,
+  remoteAttachDir,
 } from '../src/engine/remote';
 
 // 가짜 ssh(test/fakeSsh.mjs) — 서버 방 시험이 진짜 ssh·서버 없이 돌게 한다. 명령 모양은 src/engine/remote.ts 그대로 만든다
@@ -79,7 +80,7 @@ function ssh(args: string[], extra: Record<string, string> = {}): Run {
   const exit = new Promise<number | null>((r) => child.on('close', (code) => r(code)));
   return { child, out: () => out, err: () => err, exit };
 }
-async function sshDone(args: string[], extra: Record<string, string> = {}, input = '') {
+async function sshDone(args: string[], extra: Record<string, string> = {}, input: string | Buffer = '') {
   const r = ssh(args, extra);
   r.child.stdin!.end(input);
   const code = await r.exit;
@@ -127,13 +128,16 @@ const results = (out: string) =>
   out.split('\n').filter((l) => l.startsWith('{')).map((l) => JSON.parse(l)).filter((m) => m.type === 'result').map((m) => m.result as string);
 
 /** 서버에서 claude 띄우기 — 엔진이 보낼 인자·스크립트 그대로(buildArgs 의 MCP·안내문 경로는 서버 run 폴더) */
-async function launch(o: { launchId?: string; folder?: string; env?: Record<string, string>; remotePort?: number; localPort?: number; sessionId?: string } = {}) {
+async function launch(
+  o: { launchId?: string; folder?: string; env?: Record<string, string>; remotePort?: number; localPort?: number; sessionId?: string; addDir?: boolean } = {},
+) {
   const launchId = o.launchId ?? LAUNCH;
   const files = remoteRunFiles(AGENT, launchId);
   const remotePort = o.remotePort ?? (await freePort());
   const localPort = o.localPort ?? (await freePort());
   const claudeArgs = buildArgs({
     sessionId: o.sessionId ?? 'sess-1', resume: false, mcpConfigPath: files.mcp, promptPath: files.prompt, model: 'haiku', name: 'A', allowBypass: false,
+    ...(o.addDir ? { addDirs: [remoteAttachDir(AGENT)] } : {}),
   });
   const script = remoteLaunchScript({ agentId: AGENT, launchId, folder: o.folder ?? '/home/a/web', claudeArgs });
   const run = ssh(launchArgs({ host: 'dev', remotePort, localPort, script }), o.env);
@@ -440,5 +444,107 @@ describe('끊김·정리', () => {
     expect(alive(pid)).toBe(true);
     expect(fs.existsSync(l.runDir)).toBe(true);
     expect(logLines().find((x) => x.event === 'cleanup')).toMatchObject({ pid, killed: [] });
+  }, 20000);
+});
+
+describe('첨부 — 올리기·지우기·--add-dir', () => {
+  // 공백·작은따옴표·$·;·& 가 든 사본 이름(review focus 1)
+  const FILE = `20261104-101010-a b'$;&.txt`;
+  /** 엔진이 보낼 올리기 ssh 그대로 — 전달 없음, bash -c */
+  const up = (file = FILE) => runArgs({ host: 'dev', script: uploadScript(AGENT, file), login: false });
+  const served = (file = FILE, agent = AGENT) => path.join(home, '.dure', 'attachments', agent, file);
+  const BYTES = Buffer.from([0, 1, 2, 13, 10, 255, 0xea, 0xb0, 0x80, 0x27, 0x24, 0x3b, 0x26, 0, 10]);
+
+  it('upload — 바이트 그대로', async () => {
+    const r = await sshDone(up(), {}, BYTES);
+    expect(r.code).toBe(0);
+    expect(fs.readFileSync(served())).toEqual(BYTES);
+    expect(r.stdout).toBe('\nDURE_HOME=/home/a\n');
+    expect(parseUploadHome(r.stdout)).toBe('/home/a');
+    const [start, done] = logLines();
+    expect(start).toMatchObject({ event: 'start', kind: 'upload', forwards: [] });
+    expect(start.script).toBe(uploadScript(AGENT, FILE));
+    expect(done).toMatchObject({ event: 'upload', agentId: AGENT, file: FILE, bytes: BYTES.length });
+    // 여러 조각으로 오는 큰 stdin 도
+    const big = Buffer.alloc(3 * 1024 * 1024 + 7, 0);
+    for (let i = 0; i < big.length; i++) big[i] = (i * 31 + 7) & 0xff;
+    const r2 = await sshDone(up('20261104-101010-큰.bin'), {}, big);
+    expect(r2.code).toBe(0);
+    expect(fs.readFileSync(served('20261104-101010-큰.bin')).equals(big)).toBe(true);
+  }, 20000);
+
+  it('FAKE_SSH_UPLOAD_CODE — 255 는 반쯤 쓰고 끊김 줄 · 그 밖은 서버 명령 오류 · 어느 쪽도 DURE_HOME 없음', async () => {
+    const r = await sshDone(up(), { FAKE_SSH_UPLOAD_CODE: '255' }, BYTES);
+    expect(r.code).toBe(255);
+    expect(r.stdout).not.toContain('DURE_HOME=');
+    expect(r.stderr).toContain('Connection to dev closed by remote host.');
+    expect(classifyUploadExit(r.code, r.stderr)).toEqual({ kind: 'disconnected', detail: null });
+    expect(fs.readFileSync(served())).toEqual(BYTES.subarray(0, Math.floor(BYTES.length / 2)));
+    const w = await sshDone(up('20261104-101010-b.txt'), { FAKE_SSH_UPLOAD_CODE: '1' }, BYTES);
+    expect(w.code).toBe(1);
+    expect(w.stderr).toContain('No space left on device');
+    expect(classifyUploadExit(w.code, w.stderr)).toBeNull();
+    // 접속 단계 흉내는 그대로 — 아무것도 쓰지 않는다
+    const refused = await sshDone(up('20261104-101010-c.txt'), { FAKE_SSH_MODE: 'refused' }, BYTES);
+    expect(refused.code).toBe(255);
+    expect(fs.existsSync(served('20261104-101010-c.txt'))).toBe(false);
+  }, 20000);
+
+  it('FAKE_SSH_UPLOAD_HOLD — 이름에 그 글자가 든 올리기는 다 쓴 뒤 끝내지 않는다(끌 때까지)', async () => {
+    const r = ssh(up('20261104-101010-느린.txt'), { FAKE_SSH_UPLOAD_HOLD: '느린' });
+    r.child.stdin!.end(BYTES);
+    await until(() => logLines().some((x) => x.event === 'upload'), 8000, '올림');
+    expect(fs.readFileSync(served('20261104-101010-느린.txt'))).toEqual(BYTES);
+    await new Promise((res) => setTimeout(res, 300));
+    expect(r.child.exitCode).toBeNull();
+    r.child.kill();
+    await r.exit;
+    expect(r.out()).not.toContain('DURE_HOME=');
+    // 다른 이름은 그대로 끝난다
+    expect((await sshDone(up(), { FAKE_SSH_UPLOAD_HOLD: '느린' }, BYTES)).code).toBe(0);
+  }, 20000);
+
+  it('모양이 다르면 모른다(2) — 따옴표 없는 이름(끼어든 명령)·다른 폴더·빠진 표식', async () => {
+    const bad = [
+      `umask 077; d="$HOME/.dure/attachments/ag1"; mkdir -p "$d" && cat > "$d"/a;touch x && printf '\\nDURE_HOME=%s\\n' "$HOME"`,
+      `umask 077; d="$HOME/.dure/other/ag1"; mkdir -p "$d" && cat > "$d"/'a' && printf '\\nDURE_HOME=%s\\n' "$HOME"`,
+      `umask 077; d="$HOME/.dure/attachments/ag1"; mkdir -p "$d" && cat > "$d"/'a'`,
+      `d="$HOME/.dure/attachments/ag1"; rm -f "$d"/'a'/'..'`,
+      `rm -rf "$HOME/.dure/attachments"`,
+    ];
+    for (const script of bad) {
+      expect((await sshDone(runArgs({ host: 'dev', script, login: false }), {}, 'x')).code).toBe(2);
+    }
+    expect(fs.existsSync(path.join(home, '.dure'))).toBe(false);
+  }, 20000);
+
+  it('첨부 지우기 — 그 파일들만 · 지울 때는 그 에이전트 폴더째', async () => {
+    for (const f of [FILE, '20261104-101010-keep.txt']) await sshDone(up(f), {}, BYTES);
+    fs.mkdirSync(path.dirname(served('x', 'ag2')), { recursive: true });
+    fs.writeFileSync(served('x', 'ag2'), 'y');
+    const rm = await sshDone(runArgs({ host: 'dev', script: attachmentRemoveScript(AGENT, [FILE, '20261104-101010-없음.txt']), login: false }));
+    expect(rm.code).toBe(0);
+    expect(fs.existsSync(served())).toBe(false);
+    expect(fs.existsSync(served('20261104-101010-keep.txt'))).toBe(true);
+    expect(logLines().find((x) => x.event === 'attachment-remove')).toMatchObject({ agentId: AGENT, files: [FILE, '20261104-101010-없음.txt'], removed: [FILE] });
+    const all = await sshDone(runArgs({ host: 'dev', script: attachmentsCleanupScript(AGENT), login: false }));
+    expect(all.code).toBe(0);
+    expect(fs.existsSync(path.dirname(served()))).toBe(false);
+    expect(fs.existsSync(served('x', 'ag2'))).toBe(true); // 다른 에이전트 것은 그대로
+    expect(logLines().find((x) => x.event === 'attachments-cleanup')).toMatchObject({ agentId: AGENT, removed: true });
+    expect(logLines().filter((x) => x.event === 'start').map((x) => x.kind).slice(-2)).toEqual(['attachment-remove', 'attachments-cleanup']);
+  }, 20000);
+
+  it('띄우기 — 서버 첨부 폴더를 만들고 --add-dir 은 펼친 경로(이 PC 경로로 가짜 claude 에)', async () => {
+    const l = await launch({ addDir: true });
+    l.run.child.stdin!.write(launchPreamble(l.mcp, l.prompt));
+    const pid = await pidOf(l.run);
+    expect(fs.statSync(path.join(home, '.dure', 'attachments', AGENT)).isDirectory()).toBe(true);
+    const argvOf = () => (fs.existsSync(claudeLog) ? fs.readFileSync(claudeLog, 'utf8') : '').split('\n').filter(Boolean).map((x) => JSON.parse(x)).find((x) => x.argv);
+    await until(() => !!argvOf(), 8000, '가짜 claude 기록');
+    const argvLine = argvOf();
+    expect(argvLine.pid).toBe(pid);
+    const dir = argvLine.argv[argvLine.argv.indexOf('--add-dir') + 1];
+    expect(path.resolve(dir)).toBe(path.resolve(home, '.dure', 'attachments', AGENT));
   }, 20000);
 });

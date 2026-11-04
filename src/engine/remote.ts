@@ -53,6 +53,14 @@ export function remoteRunFiles(agentId: string, launchId: string): { mcp: string
   return { mcp: `${d}/mcp.json`, prompt: `${d}/prompt.md` };
 }
 
+/**
+ * 그 에이전트의 서버 첨부 폴더(셸이 $HOME 을 펼친다) — 올리기가 사본을 여기에 두고, 띄우기가 claude 에 --add-dir 로 미리 허용한다(probe27 A2).
+ * 띄우기 id 와 상관없이 에이전트마다 하나 — 에이전트를 지울 때 통째로 지운다
+ */
+export function remoteAttachDir(agentId: string): string {
+  return `$HOME/.dure/attachments/${safeId(agentId)}`;
+}
+
 const marker = (agentId: string, launchId: string) => `${safeId(agentId)}.${safeId(launchId)}`;
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -76,7 +84,10 @@ const FIND_CLAUDE = [
  */
 export function remoteLaunchScript(a: { agentId: string; launchId: string; folder: string; claudeArgs: string[] }): string {
   const files = remoteRunFiles(a.agentId, a.launchId);
-  const quoted = a.claudeArgs.map((x) => (x === files.mcp || x === files.prompt ? `"${x}"` : shq(x)));
+  const attach = remoteAttachDir(a.agentId);
+  // 셸이 $HOME 을 펼칠 인자는 이 셋뿐(우리가 만든 글 — 안전한 id 만 든다). 나머지는 shq 그대로
+  const expand = new Set([files.mcp, files.prompt, attach]);
+  const quoted = a.claudeArgs.map((x) => (expand.has(x) ? `"${x}"` : shq(x)));
   const env = Object.entries(SPAWN_ENV_EXTRA).map(([k, v]) => {
     if (!ENV_NAME.test(k)) throw new Error('올바르지 않은 환경 이름');
     return `export ${k}=${shq(v)}`;
@@ -88,6 +99,8 @@ export function remoteLaunchScript(a: { agentId: string; launchId: string; folde
     'umask 077',
     `d="${remoteRunDir(a.agentId, a.launchId)}"`,
     'mkdir -p "$d"',
+    // 첨부 폴더도 — --add-dir 로 넘기는 폴더가 없지 않게(첨부를 올리기 전에 띄울 수 있다). umask 077 안이라 그 사용자만 읽는다
+    `mkdir -p "${attach}"`,
     'IFS= read -r a',
     'IFS= read -r b',
     'printf %s "$a" | base64 -d > "$d/mcp.json"',
@@ -158,6 +171,42 @@ export function cleanupScript(a: { pid: number; agentId: string; launchId: strin
     'kill -KILL $l 2>/dev/null; for x in $ss; do pkill -KILL -s $x; done',
     `rm -rf "${dir}"; rmdir "$HOME/.dure/run/${safeId(a.agentId)}" 2>/dev/null; true`,
   ].join('; ');
+}
+
+/** 사본 이름 — 서버 경로 한 조각으로만(빗금·제어 글자·빈 글·`.`·`..` 은 받지 않는다). 나머지 글자(공백·한글·따옴표·$;&)는 shq 가 감싼다 */
+function safeFile(file: string): string {
+  if (typeof file !== 'string' || !file || file === '.' || file === '..' || /[/\p{Cc}]/u.test(file)) throw new Error('올바르지 않은 파일 이름');
+  return file;
+}
+
+/**
+ * 첨부 하나를 서버로 — 파일 바이트는 ssh stdin 으로 온다(명령 인자에 싣지 않는다). umask 077: 폴더·파일은 그 사용자만.
+ * 끝에 새 줄 + `DURE_HOME=<펼친 $HOME>` — 서버 절대 경로를 안다(parseUploadHome). 줄을 먼저 바꾼다 — 셸 시작 파일이 줄바꿈 없이 찍은 글이 붙지 않게
+ */
+export function uploadScript(agentId: string, file: string): string {
+  return `umask 077; d="${remoteAttachDir(agentId)}"; mkdir -p "$d" && cat > "$d"/${shq(safeFile(file))} && printf '\\nDURE_HOME=%s\\n' "$HOME"`;
+}
+
+/** uploadScript 의 출력 — 마지막 `DURE_HOME=` 줄(앞의 셸 잡음은 버린다), / 로 시작할 때만 */
+export function parseUploadHome(stdout: string): string | null {
+  const home = stdout
+    .split('\n')
+    .map((l) => l.replace(/\r$/, ''))
+    .filter((l) => l.startsWith('DURE_HOME='))
+    .at(-1)
+    ?.slice('DURE_HOME='.length);
+  return home?.startsWith('/') ? home : null;
+}
+
+/** 에이전트를 지울 때 — 그 에이전트의 서버 첨부 폴더를 통째로 */
+export function attachmentsCleanupScript(agentId: string): string {
+  return `rm -rf "${remoteAttachDir(agentId)}"`;
+}
+
+/** 보내지 못한 첨부를 되돌릴 때 — 그 에이전트 서버 첨부 폴더의 그 사본들만(없으면 그대로) */
+export function attachmentRemoveScript(agentId: string, files: string[]): string {
+  if (files.length === 0) throw new Error('지울 파일이 없어요');
+  return `d="${remoteAttachDir(agentId)}"; rm -f ${files.map((f) => `"$d"/${shq(safeFile(f))}`).join(' ')}`;
 }
 
 /** 서버의 claude 를 최신으로 — 확인·띄우기와 같은 자리에서 찾는다(FIND_CLAUDE, 없으면 127) 뒤 `claude update` */
@@ -232,6 +281,19 @@ export function classifyExit(a: { code: number | null; stderr: string; started: 
   if (code === 127 || /claude: (command )?not found/i.test(stderr)) return { kind: 'no-claude', detail: null };
   if (code === 3) return { kind: 'no-folder', detail: null };
   return null;
+}
+
+/** 맺은 연결이 도중에 끊긴 ssh 의 줄 — 서버가 닫음·연결 재설정·파이프 끊김·ServerAlive 응답 없음 */
+const DROPPED = /closed by remote host|Connection reset|Broken pipe|not responding|client_loop:/i;
+
+/**
+ * 올리기 ssh(uploadScript)가 끝난 까닭 — ssh 쪽 종료(255·-1)만 가른다: 도중에 끊긴 줄이면 끊김, 아니면 접속 전 실패(classifyExit — 키 거절·
+ * 서버 키·접속 못 함). 서버 명령의 종료(디스크 가득 등)는 null — 3·127 도 폴더·claude 와 상관없다
+ */
+export function classifyUploadExit(code: number | null, stderr: string): RemoteIssue | null {
+  if (!sshLevel(code)) return null;
+  if (DROPPED.test(stderr) && !/Permission denied|Host key verification failed/i.test(stderr)) return { kind: 'disconnected', detail: null };
+  return classifyExit({ code, stderr, started: false });
 }
 
 /** 띄운 셸이 stderr 로 알리는 `DURE_PID=<숫자>` — 정리 때 쓴다 */

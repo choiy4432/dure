@@ -1,12 +1,14 @@
 import { EventEmitter } from 'node:events';
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pipeline } from 'node:stream';
 import { CONTROL_CHAR, openStore, renameRetrying, REMOTE_FOLDER_ABSOLUTE, type Store } from './store';
 import {
-  checkScript, classifyExit, cleanupScript, hostArgs, isLoginFailure, launchArgs, launchPreamble, parseCheckOutput, parsePid, posixJoin,
-  remoteLaunchScript, remoteRunFiles, runArgs, sshErrorLines, transcriptCheckScript, updateScript, type RemoteIssueKind,
+  attachmentRemoveScript, attachmentsCleanupScript, checkScript, classifyExit, classifyUploadExit, cleanupScript, hostArgs, isLoginFailure, launchArgs,
+  launchPreamble, parseCheckOutput, parsePid, parseUploadHome, posixJoin, remoteAttachDir, remoteLaunchScript, remoteRunFiles, runArgs, sshErrorLines,
+  transcriptCheckScript, updateScript, uploadScript, type RemoteIssueKind,
 } from './remote';
 import { REMOTE_CLEANUP_FAILED, remoteIssueText, remotePortBlockedText } from '../shared/remoteTexts';
 import { readSshHosts, type SshHostEntry } from './sshConfig';
@@ -83,6 +85,8 @@ export interface EngineOptions {
    * 시험용(좁히고 시작 자리를 고정해 겹침 피하기를 본다)
    */
   remotePorts?: { from: number; to: number; random?: () => number };
+  /** 서버 방 첨부 하나를 올리는 ssh 의 상한(ms) — 없으면 UPLOAD_MS(10분). 시험용 */
+  uploadTimeoutMs?: number;
 }
 
 // 이벤트:
@@ -391,6 +395,10 @@ interface SshRun {
   stdout: string;
   stderr: string;
 }
+/** 서버 방 첨부 하나를 올리는 ssh 의 상한 — 100MB(ATTACH_MAX_BYTES) 기준 넉넉히. 넘으면 끄고 실패 */
+const UPLOAD_MS = 600_000;
+/** 올리기 ssh 의 stdout·stderr 에서 남길 끝부분 — DURE_HOME 줄은 맨 끝에 온다 */
+const UPLOAD_OUT_KEEP = 64 * 1024;
 /** 서버 방 원격 포트(-R) 범위 — 띄울 때마다 이 PC 의 다른 서버 세션이 쓰지 않는 것 하나 */
 const REMOTE_PORT_FROM = 40000;
 const REMOTE_PORT_TO = 49999;
@@ -451,8 +459,17 @@ const PLAN_ON_FAILED_STOPPED_NOTICE = '계획 모드로 바꾸지 못해 멈췄�
 const PLAN_OFF_FAILED = '계획 모드를 끄지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.';
 const PLAN_OFF_FAILED_NOTICE = '계획 모드를 끄지 못해 계획 모드 그대로예요';
 /** 첨부 보내기 실패의 까닭(ATTACH_FAILED 뒤 ' — <이름>: ' 다음) */
-const ATTACH_REMOTE_NOT_YET = '서버 방 첨부는 아직이에요';
 const ATTACH_BAD_PATH = '파일 경로가 올바르지 않아요';
+/** 서버 방 — 올리는 중(또는 올리기 전) 멈춤·새 대화·지우기·끄기로 올리기를 끊었다(그 입력은 붙잡지 않고 실패로) */
+const ATTACH_UPLOAD_STOPPED = '서버로 올리는 중에 그만뒀어요';
+/** 서버 방 — 올리기가 상한(UPLOAD_MS)을 넘었다 */
+const ATTACH_UPLOAD_SLOW = '서버로 올리는 데 너무 오래 걸려 그만뒀어요';
+/** 서버 방 — 올렸다는데 서버가 $HOME 을 알리지 않았다(DURE_HOME 줄 없음) */
+const ATTACH_UPLOAD_NO_HOME = '서버에 올린 파일의 경로를 알 수 없어요';
+/** 서버 방 — 서버 명령이 실패했다(디스크 가득·권한 등). 뒤에 서버 stderr 의 마지막 줄 */
+const ATTACH_UPLOAD_WRITE = '서버에 파일을 쓰지 못했어요';
+/** 서버 첨부(되돌리기·지운 에이전트의 폴더)를 못 지웠다 — 기록만(engine-error). 남는 건 그 사용자만 읽는 파일이고, 에이전트를 지울 때 폴더째 지운다 */
+const ATTACH_REMOTE_LEFT = '서버의 첨부 파일을 다 지우지 못했어요';
 const ATTACH_FOLDER = '폴더는 보낼 수 없어요';
 const ATTACH_NOT_FILE = '보통 파일이 아니에요';
 const ATTACH_CREDENTIALS = '자격 증명 파일은 보낼 수 없어요';
@@ -655,6 +672,10 @@ class EngineImpl extends EventEmitter implements Engine {
   private stops = new Map<AgentId, number>(); // 멈춤 횟수 — 준비하는(또는 그 뒤에 기다리던) 사이 멈췄으면 그 입력은 붙잡는다(메모리만)
   private written = new WeakSet<HeldInput>(); // Claude 에게 쓴 내 입력 — 기록에 남았다(붙잡혀 버려도 첨부 사본은 칩이 쓴다)
   private pruning: Promise<void> = Promise.resolve(); // 켤 때 주인 없는 첨부 폴더 지우기 — 끌 때 기다린다
+  // 첨부가 든 보내기마다 하나 — 멈춤·새 대화·지우기·끄기가 끊는다(서버 방이면 올리는 ssh 를 끄고 그 입력은 실패로 — 몇 분짜리 올리기를 기다리지 않는다)
+  private uploads = new Map<AgentId, Set<AbortController>>();
+  // 끼운 말을 돌려받으며 멈추는 중(stopRetracting) — 그사이 준비를 마친 입력은 이 끝을 기다렸다 붙잡힌다(붙잡기 목록이 보낸 차례대로)
+  private retracting = new Map<AgentId, Promise<void>>();
 
   constructor(private o: EngineOptions, private store: Store, private log: MessageLog, private hist: History) {
     super();
@@ -979,7 +1000,8 @@ class EngineImpl extends EventEmitter implements Engine {
   /**
    * 서버 방 세션 — ssh 로 서버에서 claude 를 띄운다(launchArgs, ssh 의 작업 폴더 = 이 PC 의 run 폴더). MCP 설정(url = 서버 쪽 원격 포트 —
    * -R 이 두레로 잇는다)·방 안내문은 stdin 머리말로 서버 run 폴더 파일에(토큰을 명령 인자에 싣지 않는다), claude 인자는 지금 그대로에서
-   * 그 두 경로만 서버 것으로. 저장된 옛 띄우기가 있으면 그 정리를 먼저 줄에 세우고, 그 에이전트의 정리 줄이 끝난 뒤에 띄운다(startAfter)
+   * 그 두 경로만 서버 것으로. 서버 첨부 폴더는 --add-dir "$HOME/…"(셸이 펼친다 — 띄우기가 만든다). 저장된 옛 띄우기가 있으면 그 정리를
+   * 먼저 줄에 세우고, 그 에이전트의 정리 줄이 끝난 뒤에 띄운다(startAfter)
    */
   private remoteSession(
     id: AgentId,
@@ -987,14 +1009,15 @@ class EngineImpl extends EventEmitter implements Engine {
     host: string,
     runDir: string,
     prompt: string,
-    argsWith: (mcpConfigPath: string, promptPath: string) => string[],
+    argsWith: (mcpConfigPath: string, promptPath: string, addDirs?: string[]) => string[],
   ): ClaudeSession {
     const ssh = this.o.ssh!;
     const launchId = Array.from(crypto.randomBytes(LAUNCH_ID_LEN), (b) => LAUNCH_ID_CHARS[b % LAUNCH_ID_CHARS.length]).join('');
     const port = this.pickRemotePort(id);
     const files = remoteRunFiles(id, launchId);
     void this.remoteUpdated(host); // 띄우기는 기다리지 않는다 — 시작만
-    const script = remoteLaunchScript({ agentId: id, launchId, folder: agent.folder, claudeArgs: argsWith(files.mcp, files.prompt) });
+    const claudeArgs = argsWith(files.mcp, files.prompt, [remoteAttachDir(id)]);
+    const script = remoteLaunchScript({ agentId: id, launchId, folder: agent.folder, claudeArgs });
     const mcpJson = JSON.stringify(buildMcpConfig({ port, token: this.mcp.token, agentId: id }));
     if (agent.remoteLaunch) void this.queueClean(id, host, agent.remoteLaunch); // 끊김·비정상 종료 뒤 남았을 수 있다
     const gate = this.remoteChain.get(id);
@@ -1229,11 +1252,17 @@ class EngineImpl extends EventEmitter implements Engine {
   /** 도는 서버 정리를 기다린다 — 상한 stopLimitMs(STOP_LIMIT_MS). 못 끝낸 띄우기는 저장돼 있어 다음에 켤 때 다시 정리한다 */
   private async waitRemoteWork(): Promise<void> {
     if (this.remoteWork.size === 0) return;
+    await this.waitWithin([...this.remoteWork]);
+  }
+
+  /** 다 끝날 때까지 — 상한 stopLimitMs(STOP_LIMIT_MS)까지만 */
+  private async waitWithin(ps: Promise<unknown>[]): Promise<void> {
+    if (ps.length === 0) return;
     let timer: NodeJS.Timeout | undefined;
     const limit = new Promise<void>((r) => {
       timer = setTimeout(r, this.o.stopLimitMs ?? STOP_LIMIT_MS);
     });
-    await Promise.race([Promise.all([...this.remoteWork]), limit]);
+    await Promise.race([Promise.all(ps), limit]);
     clearTimeout(timer);
   }
 
@@ -1254,6 +1283,7 @@ class EngineImpl extends EventEmitter implements Engine {
     this.need(id);
     this.removing.add(id);
     this.disarmCool(id);
+    this.cancelUploads(id); // 올리는 중인 첨부 — ssh 를 끈다(그 보내기는 실패로 끝난다, 서버 폴더는 아래에서 통째로)
     if (this.selected === id) this.selected = null;
     // 붙잡기도 같이 — 아래에서 버리는 메시지가 목록에서 하나씩 빠지며 알리지 않게 먼저 지운다(풀림은 끝에 한 번)
     const hadHold = this.holds.delete(id);
@@ -1264,6 +1294,8 @@ class EngineImpl extends EventEmitter implements Engine {
       const gone = this.store.agent(id);
       const remote = gone && this.remoteOf(gone);
       if (remote && gone.remoteLaunch) void this.queueClean(id, remote.host, gone.remoteLaunch);
+      // 서버 첨부 폴더도 통째로 — 한 번만 해 본다(실패는 기록만: 남는 건 그 사용자만 읽는 파일)
+      if (remote) this.queueRemoteAttachments(id, remote.host, attachmentsCleanupScript(id));
       for (const m of this.log.list({ states: ['pending', 'held', 'queued'] })) {
         if (m.to === id || m.from === id) this.router.dismiss(m.id);
       }
@@ -1564,15 +1596,36 @@ class EngineImpl extends EventEmitter implements Engine {
     let done!: () => void;
     const mine = new Promise<void>((r) => (done = r));
     this.sending.set(id, mine);
+    // 첨부가 든 보내기는 끊을 수 있게 — 앞 차례를 기다리는 동안 끊겨도(서버 방이면 올리기 전에) 실패로 끝난다
+    const cut = noFiles(parts) ? null : new AbortController();
+    if (cut) this.uploadsOf(id).add(cut);
     try {
       await before;
-      const ready: ReadyPart[] = noFiles(parts) ? parts : await this.prepareParts(id, parts);
-      // 준비하는(또는 앞을 기다리는) 사이 멈췄다 — 멈출 때 기다리던 입력처럼 붙잡는다
-      this.deliverUser(id, ready, o, (this.stops.get(id) ?? 0) !== stopsAt);
+      const ready: ReadyPart[] = noFiles(parts) ? parts : await this.prepareParts(id, parts, cut!.signal);
+      // 준비하는(또는 앞을 기다리는) 사이 멈췄다 — 멈출 때 기다리던 입력처럼 붙잡는다. 멈춤이 끼운 말을 아직 돌려받는 중이면 그 끝을
+      // 기다린다 — 돌려받은 말·기다리던 말이 먼저 붙잡혀야 붙잡기 목록이 보낸 차례대로다
+      const stopped = (this.stops.get(id) ?? 0) !== stopsAt;
+      if (stopped) await this.retracting.get(id);
+      this.deliverUser(id, ready, o, stopped);
     } finally {
+      if (cut) this.uploads.get(id)?.delete(cut);
       if (this.sending.get(id) === mine) this.sending.delete(id); // 마지막 차례면 빠진다 — 다음 보내기는 다시 그 자리에서
       done();
     }
+  }
+
+  private uploadsOf(id: AgentId): Set<AbortController> {
+    let set = this.uploads.get(id);
+    if (!set) this.uploads.set(id, (set = new Set()));
+    return set;
+  }
+
+  /** 그 에이전트의 첨부 보내기를 끊는다 — 서버 방이면 올리는 ssh 를 끄고 그 보내기는 실패로(되돌림). 이 PC 방 복사는 그대로 끝난다 */
+  private cancelUploads(id: AgentId): void {
+    const set = this.uploads.get(id);
+    if (!set) return;
+    this.uploads.delete(id);
+    for (const c of set) c.abort();
   }
 
   /**
@@ -1623,16 +1676,17 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /**
-   * 첨부를 보낼 꼴로 — 글·그림은 그대로, 파일은 차례대로 하나씩 준비한다(prepareFile). 하나라도 실패하면 이번에 만든 사본을 지우고
-   * 그 파일의 오류('파일을 보내지 못했어요 — <이름>: <이유>')를 던진다
+   * 첨부를 보낼 꼴로 — 글·그림은 그대로, 파일은 차례대로 하나씩 준비한다(prepareFile — 서버 방이면 올리기까지). 하나라도 실패하면 이번에
+   * 만든 사본·서버 파일을 지우고 그 파일의 오류('파일을 보내지 못했어요 — <이름>: <이유>')를 던진다. signal: 끊으면(멈춤 등) 서버 방은 실패로
    */
-  private async prepareParts(id: AgentId, parts: UserPart[]): Promise<ReadyPart[]> {
+  private async prepareParts(id: AgentId, parts: UserPart[], signal: AbortSignal): Promise<ReadyPart[]> {
     const agent = this.need(id);
-    // 서버 방 첨부(서버로 올리기)는 아직 — 반쯤 되는 일이 없게 아무것도 만들기 전에 거절한다. 올리기는 prepareFile 의 자리에 잇는다
-    if (this.remoteOf(agent)) throw new Error(`${ATTACH_FAILED} — ${ATTACH_REMOTE_NOT_YET}`);
+    const remote = this.remoteOf(agent);
+    // 서버 방인데 ssh 가 없다 — 사본을 만들기 전에
+    if (remote && !this.sshAvailable()) throw new Error(`${ATTACH_FAILED} — ${NO_SSH}`);
     const out: ReadyPart[] = [];
     try {
-      for (const p of parts) out.push(p.type === 'file' ? await this.prepareFile(id, p) : p);
+      for (const p of parts) out.push(p.type === 'file' ? await this.prepareFile(id, p, remote, signal) : p);
     } catch (e) {
       this.dropPrepared(id, out);
       throw e;
@@ -1642,11 +1696,14 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * 첨부 하나 — 원본이 보통 파일이고 ATTACH_MAX_BYTES 이하인지 엔진이 다시 잰 뒤(화면이 준 bytes 는 믿지 않는다) 그 에이전트의
-   * 첨부 폴더로 복사한다. 원본은 읽기만 한다. Claude 에게는 사본의 절대 경로가 간다
+   * 첨부 폴더로 복사한다. 원본은 읽기만 한다. Claude 에게는 사본의 절대 경로가 간다.
+   * 서버 방이면 이 PC 사본(칩이 연다)을 만든 뒤 그 사본을 서버로 올린다(uploadFile) — Claude 에게는 서버의 절대 경로가 간다
    */
-  private async prepareFile(id: AgentId, p: FileInput): Promise<FileReady> {
+  private async prepareFile(id: AgentId, p: FileInput, remote: { host: string } | null, signal: AbortSignal): Promise<FileReady> {
     const shown = typeof p.name === 'string' ? firstLine(p.name) : '';
     const fail = (why: string) => new Error(`${ATTACH_FAILED} — ${shown ? `${shown}: ` : ''}${why}`);
+    // 서버 방에서 이미 끊겼으면(앞 차례를 기다리는 사이 멈춤 등) 사본도 만들지 않는다
+    if (remote && signal.aborted) throw fail(ATTACH_UPLOAD_STOPPED);
     if (typeof p.path !== 'string' || !path.isAbsolute(p.path)) throw fail(ATTACH_BAD_PATH);
     // 대체 데이터 스트림(`파일:스트림`, `파일::$DATA`)은 보내지 않는다 — 드라이브 글자(C:) 뒤의 ':' 는 이것뿐이고, 이름 검사도 비껴간다
     if (p.path.replace(/^[A-Za-z]:/, '').includes(':')) throw fail(ATTACH_BAD_PATH);
@@ -1690,13 +1747,174 @@ class EngineImpl extends EventEmitter implements Engine {
       this.dropFile(id, copy.file);
       throw fail(ATTACH_TOO_BIG);
     }
-    // 서버 방이면 여기서 서버로 올린다(remotePath, sendPath = remotePath) — 실패하면 이 사본을 지우고 던진다
-    return { type: 'file', name, bytes, file: copy.file, sendPath: copy.abs };
+    if (!remote) return { type: 'file', name, bytes, file: copy.file, sendPath: copy.abs };
+    // 서버 방 — 사본을 서버로 올린다. 실패하면 이 사본을 지우고(서버에 반쯤 쓴 것도 uploadFile 이 되돌린다) 던진다
+    let remotePath: string;
+    try {
+      remotePath = await this.uploadFile(id, remote.host, copy, signal);
+    } catch (e) {
+      this.dropFile(id, copy.file);
+      throw fail(e instanceof Error ? e.message : String(e));
+    }
+    return { type: 'file', name, bytes, file: copy.file, sendPath: remotePath, remotePath };
   }
 
-  /** 준비한 첨부를 되돌린다(보내지도 줄에 서지도 못했다) — 이 PC 사본을 지운다. 그새 에이전트가 지워졌으면 첨부 폴더째 */
+  /**
+   * 이 PC 사본 하나를 서버 첨부 폴더로(uploadScript — 바이트는 ssh stdin, 상한 uploadTimeoutMs). 되면 서버 절대 경로
+   * (`<DURE_HOME>/.dure/attachments/<에이전트>/<사본 이름>`). 안 되면 쉬운 까닭으로 던진다 — 서버에 반쯤 썼을 수 있으면(끊김·끊음·시간 넘김·
+   * 서버 명령 실패) 그 파일 지우기를 그 에이전트의 서버 줄에 세운다(접속도 못 했으면 쓴 것이 없다)
+   */
+  private async uploadFile(id: AgentId, host: string, copy: { file: string; abs: string }, signal: AbortSignal): Promise<string> {
+    // 앞서 세운 되돌리기(서버 파일 지우기)가 끝난 뒤에 — 같은 이름으로 다시 올린 파일을 늦게 온 지우기가 지우지 않게
+    await this.remoteChain.get(id);
+    if (signal.aborted) throw new Error(ATTACH_UPLOAD_STOPPED);
+    const r = await this.sshUpload(host, uploadScript(id, copy.file), copy.abs, this.o.uploadTimeoutMs ?? UPLOAD_MS, signal);
+    const undo = () => this.dropRemote(id, [copy.file]);
+    if (signal.aborted) {
+      undo();
+      throw new Error(ATTACH_UPLOAD_STOPPED);
+    }
+    if (r.timedOut) {
+      undo();
+      throw new Error(ATTACH_UPLOAD_SLOW);
+    }
+    if (r.code !== 0) {
+      const issue = classifyUploadExit(r.code, r.stderr);
+      if (issue) {
+        if (issue.kind === 'disconnected') undo(); // 도중에 끊겼다 — 반쯤 쓴 파일이 남았을 수 있다
+        throw new Error(remoteIssueText(host, issue));
+      }
+      undo(); // 서버에서 명령이 돌았다(디스크 가득 등) — 반쯤 쓴 파일
+      const why = sshErrorLines(r.stderr).at(-1);
+      throw new Error(why ? `${ATTACH_UPLOAD_WRITE} — ${why}` : r.code === null ? ATTACH_UPLOAD_WRITE : `${ATTACH_UPLOAD_WRITE}(code ${r.code})`);
+    }
+    const home = parseUploadHome(r.stdout);
+    if (!home) {
+      undo();
+      throw new Error(ATTACH_UPLOAD_NO_HOME);
+    }
+    return `${home.replace(/\/+$/, '')}/.dure/attachments/${id}/${copy.file}`;
+  }
+
+  /**
+   * 올리기 ssh 한 번 — 확인·정리와 같은 옵션(runArgs: 전달 없음·BatchMode·RemoteCommand=none, bash -c — 셸 시작 파일을 읽지 않는다),
+   * 파일은 스트림으로 stdin 에(명령 인자에 싣지 않는다 — 크기와 상관없이 메모리에 다 올리지 않는다). 시간을 넘기거나 끊으면(signal) ssh 를
+   * 끄고 code null(timedOut 이면 시간 넘김). ssh 가 없으면 NO_SSH 로 던진다. 끝나기 전에 사본 읽기를 닫는다(되돌릴 때 지울 수 있게)
+   */
+  private sshUpload(
+    host: string,
+    script: string,
+    srcPath: string,
+    timeoutMs = UPLOAD_MS,
+    signal?: AbortSignal,
+  ): Promise<SshRun & { timedOut?: true }> {
+    const ssh = this.o.ssh;
+    if (!ssh || !this.sshAvailable()) return Promise.reject(new Error(NO_SSH));
+    const args = [...(ssh.argsPrefix ?? []), ...runArgs({ host, script, login: false })];
+    return new Promise((resolve, reject) => {
+      let child: ChildProcess;
+      try {
+        child = spawn(ssh.command, args, { windowsHide: true, env: { ...process.env, ...this.o.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+      } catch (e) {
+        resolve({ code: null, stdout: '', stderr: e instanceof Error ? e.message : String(e) });
+        return;
+      }
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+      let readFailed = false;
+      let settled = false;
+      const kill = () => {
+        try {
+          child.kill();
+        } catch {
+          // 이미 끝났다
+        }
+      };
+      const timer = setTimeout(() => {
+        timedOut = true;
+        kill();
+      }, timeoutMs);
+      const onAbort = () => kill();
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) kill();
+      child.stdout!.setEncoding('utf8').on('data', (d: string) => (stdout = (stdout + d).slice(-UPLOAD_OUT_KEEP)));
+      child.stderr!.setEncoding('utf8').on('data', (d: string) => (stderr = (stderr + d).slice(-UPLOAD_OUT_KEEP)));
+      const input = fs.createReadStream(srcPath);
+      const inputClosed = new Promise<void>((r) => input.once('close', () => r()));
+      // 사본을 못 읽으면 ssh 를 끈다 — stdin 이 닫히면 서버 cat 은 반쯤 받은 것으로 끝나 DURE_HOME 까지 찍는다(완성으로 치지 않게)
+      input.on('error', () => {
+        readFailed = true;
+        kill();
+      });
+      // ssh 가 먼저 끝나면(접속 실패 등) stdin 쓰기가 EPIPE·EOF(윈도우) — 오류는 버리고 종료 코드로 가른다
+      child.stdin!.on('error', () => {});
+      pipeline(input, child.stdin!, () => {});
+      /** 한 번만 — 사본 읽기를 닫은 뒤에 알린다(되돌릴 때 그 사본을 지울 수 있게) */
+      const settle = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+        input.destroy();
+        void inputClosed.then(fn);
+      };
+      // 띄우지도 못했다(pid 없음) — 'close' 가 오지 않을 수 있다
+      child.on('error', (e: NodeJS.ErrnoException) => {
+        if (child.pid !== undefined) return;
+        settle(() => (e.code === 'ENOENT' ? reject(new Error(NO_SSH)) : resolve({ code: null, stdout, stderr: e.message })));
+      });
+      child.on('close', (code) =>
+        settle(() =>
+          resolve({
+            code: timedOut || readFailed || signal?.aborted ? null : code,
+            stdout,
+            stderr,
+            ...(timedOut ? { timedOut: true as const } : {}),
+          }),
+        ),
+      );
+    });
+  }
+
+  /** 서버에 올린(또는 반쯤 쓴) 첨부를 지운다 — 그 에이전트의 서버 줄에(다음 올리기·띄우기가 기다린다). 실패는 기록만 */
+  private dropRemote(id: AgentId, files: string[]): void {
+    if (files.length === 0) return;
+    const agent = this.store.agent(id);
+    const remote = agent && this.remoteOf(agent);
+    if (!remote) return; // 지운 에이전트 — 서버 첨부 폴더째 지운다(removeAgent)
+    let script: string;
+    try {
+      script = attachmentRemoveScript(id, files);
+    } catch {
+      return; // 사본 이름 모양이 아니다 — 올리지도 않았다
+    }
+    this.queueRemoteAttachments(id, remote.host, script);
+  }
+
+  /**
+   * 서버 첨부 지우기 한 번(별도 ssh, bash -c, 상한 REMOTE_CHECK_MS) — 그 에이전트의 서버 줄 끝에(shutdown 이 상한 안에서 기다린다).
+   * 다시 하지 않는다 — 실패는 engine-error 로 기록만(남는 건 그 사용자만 읽는 파일, 에이전트를 지울 때 폴더째 지운다)
+   */
+  private queueRemoteAttachments(id: AgentId, host: string, script: string): void {
+    void this.queueRemote(id, async () => {
+      let r: SshRun | null = null;
+      try {
+        r = await this.sshRun(host, script, { login: false });
+      } catch {
+        /* ssh 없음 — 실패로 친다 */
+      }
+      if (r?.code !== 0) this.guard(id, () => this.emit('engine-error', { agentId: id, message: ATTACH_REMOTE_LEFT }));
+    });
+  }
+
+  /**
+   * 준비한 첨부를 되돌린다(보내지도 줄에 서지도 못했다) — 이 PC 사본과 서버에 올린 것을 지운다(서버는 줄에 세워 — 실패는 기록만).
+   * 그새 에이전트가 지워졌으면 이 PC 첨부 폴더째(서버 폴더는 지우기가 통째로)
+   */
   private dropPrepared(id: AgentId, parts: ReadyPart[]): void {
     for (const p of parts) if (p.type === 'file') this.dropFile(id, p.file);
+    this.dropRemote(id, uploadedOf(parts));
     if (!this.store.agent(id)) this.removeAttachments(id);
   }
 
@@ -1708,10 +1926,14 @@ class EngineImpl extends EventEmitter implements Engine {
     }
   }
 
-  /** 버린 내 입력의 첨부 사본 — Claude 에게 한 번도 쓰지 않은(기록에 없는) 입력만. 돌려받은 말은 이미 기록에 있다(칩이 그 사본을 쓴다) */
+  /**
+   * 버린 내 입력의 첨부 사본(서버 방이면 서버에 올린 것도) — Claude 에게 한 번도 쓰지 않은(기록에 없는) 입력만.
+   * 돌려받은 말은 이미 기록에 있다(칩이 그 사본을 쓰고, Claude 의 기억이 그 서버 경로를 안다)
+   */
   private dropUnsent(id: AgentId, input: HeldInput): void {
     if (this.written.has(input)) return;
     for (const p of input.parts) if (p.type === 'file') this.dropFile(id, p.file);
+    this.dropRemote(id, uploadedOf(input.parts));
   }
 
   /** 그 에이전트의 첨부 폴더를 지운다 — 못 지우면(잠김) 쉬운 말로 알린다(오류 원문엔 영어·내 PC 경로가 실린다). 남은 것은 켤 때 prune */
@@ -1725,13 +1947,27 @@ class EngineImpl extends EventEmitter implements Engine {
 
   async interrupt(id: AgentId) {
     this.need(id);
-    // 첨부를 준비하는(또는 그 뒤에 기다리는) 보내기는 멈춘 뒤에 줄에 서지 않고 붙잡힌다(sendUser 가 이 수를 견준다)
+    // 첨부를 준비하는(또는 그 뒤에 기다리는) 보내기는 멈춘 뒤에 줄에 서지 않고 붙잡힌다(sendUser 가 이 수를 견준다).
+    // 서버 방에서 아직 다 올리지 못한 보내기는 올리기를 끊고 실패로 끝낸다(몇 분짜리 올리기를 멈춤이 기다리지 않는다 — 되돌림)
     this.stops.set(id, (this.stops.get(id) ?? 0) + 1);
+    this.cancelUploads(id);
     // 계획 모드 답을 기다리며 쥔 입력도 기다리던 것 — 줄 맨 앞으로 돌려놓아 아래에서 함께 붙잡는다(늦게 온 답이 쓰지 않게)
     const gated = this.ungate(id, this.sessions.get(id));
     const live = this.sessions.get(id);
-    // 끼워 넣은 말을 Claude 가 아직 안 읽었다 — 그 말로 새 차례가 열리지 않게 돌려받아 붙잡는다
-    if (live && this.midUnread(live) && !this.effortTurn.has(live)) return this.stopRetracting(id, live);
+    // 끼워 넣은 말을 Claude 가 아직 안 읽었다 — 그 말로 새 차례가 열리지 않게 돌려받아 붙잡는다.
+    // 그동안 준비를 마친 첨부 입력은 이 끝을 기다렸다 붙잡힌다(sendUser — 붙잡기 목록이 보낸 차례대로)
+    if (live && this.midUnread(live) && !this.effortTurn.has(live)) {
+      const p = this.stopRetracting(id, live);
+      const settled = p.then(
+        () => undefined,
+        () => undefined,
+      );
+      this.retracting.set(id, settled);
+      void settled.then(() => {
+        if (this.retracting.get(id) === settled) this.retracting.delete(id);
+      });
+      return p;
+    }
     const hadInput = (this.held.get(id)?.length ?? 0) > 0; // 아래 /effort 다시 띄우기의 근거 — 붙잡으면 줄이 빈다
     // 멈춤 = 하던 일 끊기 + 대기열 붙잡기. 승인 카드를 치우기 전에 붙잡는다 — 치우면 pump 가 돌아 기다리던 것을 보낼 수 있다
     this.holdQueue(id);
@@ -1824,6 +2060,8 @@ class EngineImpl extends EventEmitter implements Engine {
 
   async newConversation(id: AgentId) {
     const agent = this.need(id);
+    // 서버로 올리는 중인 첨부 — 멈춤처럼 끊고 되돌린다(준비 중이던 입력이 새 대화로 흘러가지 않게)
+    this.cancelUploads(id);
     // 새 대화는 계획 모드를 끈 채로 — 끝내는 세션의 모드는 세션과 함께 사라진다(세션 끝 정리가 알린다)
     this.wantPlan(id, false);
     this.handSlept.delete(id); // 사람이 새 대화를 골랐다 — 손으로 재운 표를 풀어 고른 에이전트면 새 대화로 미리 띄운다
@@ -2112,8 +2350,11 @@ class EngineImpl extends EventEmitter implements Engine {
       this.sweepTimer = null;
       const ids = [...this.sessions.keys()];
       for (const r of this.perms.pending()) this.perms.cancelForAgent(r.agentId, EXITED);
+      // 올리는 중인 첨부 — ssh 를 끈다(앱이 닫힌 뒤 떠돌지 않게). 그 보내기들이 되돌리기(서버 파일 지우기)를 줄에 세울 때까지 상한 안에서 기다린다
+      for (const id of [...this.uploads.keys()]) this.cancelUploads(id);
+      const sends = this.waitWithin([...this.sending.values()]);
       // 맵에서 이미 빠진 채 끄는 중인 세션(다시 띄우기·새 대화)도 기다린다 — 각각 STOP_LIMIT_MS 상한
-      await Promise.all([this.stopWatcher(), ...ids.map((id) => this.endSession(id)), ...this.stopping, this.pruning]);
+      await Promise.all([this.stopWatcher(), ...ids.map((id) => this.endSession(id)), ...this.stopping, this.pruning, sends]);
       // 상한이 먼저 지나 아직 살아 있는 claude(바쁜 PC 에서 taskkill 이 늦음) — 앱이 닫힌 뒤 떠돌지 않게 직접 끈다.
       // 서버 방 정리(끄기·시작 때 것)도 함께 기다린다 — 상한 안에서만(못 끝낸 띄우기는 저장돼 있어 다음에 켤 때 다시)
       await Promise.all([this.waitRemoteWork(), ...[...this.unstopped].map((s) => s.forceKill(FORCE_KILL_WAIT_MS))]);
@@ -3638,6 +3879,11 @@ function isCredentials(p: string): boolean {
 /** 첨부가 하나도 없는 입력 — 준비 없이 그대로 보낼 꼴 */
 function noFiles(parts: UserPart[]): parts is Exclude<UserPart, FileInput>[] {
   return !parts.some((p) => p.type === 'file');
+}
+
+/** 서버에 올린 첨부의 사본 이름들(서버 방 — remotePath 가 있는 것) */
+function uploadedOf(parts: ReadyPart[]): string[] {
+  return parts.flatMap((p) => (p.type === 'file' && p.remotePath ? [p.file] : []));
 }
 
 /** 첨부를 읽거나 복사하지 못한 까닭 — 흔한 것은 쉬운 말로, 그 밖은 오류의 첫 줄 */
