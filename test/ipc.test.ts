@@ -124,7 +124,7 @@ function fakeApp() {
 /** 아무것도 하지 않는 deps — 각 시험이 필요한 칸만 갈아 낀다 */
 function quietDeps(): IpcDeps {
   return {
-    pickFolder: async () => null, openFolder: async () => {}, openPath: async () => {}, openExternal: async () => {}, isAppPage,
+    pickFolder: async () => null, openFolder: async () => {}, openPath: async () => {}, showInFolder: () => {}, openExternal: async () => {}, isAppPage,
     setTaskbar: async () => {}, flashWindow: async () => {}, focusWindow: async () => {}, applyTheme: () => {}, saveText: async () => null,
     app: fakeApp(), engineReady: Promise.resolve(), onAppEvent: () => {},
   }
@@ -138,7 +138,7 @@ function setup(withEngine = true, over: { engineReady?: Promise<void> } = {}) {
   const sent: [string, any][] = []
   let appEvent: AppEventFn | null = null
   const deps = {
-    pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), openPath: vi.fn(async (_p: string) => {}),
+    pickFolder: vi.fn(async () => 'C:/picked'), openFolder: vi.fn(async () => {}), openPath: vi.fn(async (_p: string) => {}), showInFolder: vi.fn((_p: string) => {}),
     openExternal: vi.fn(async (_url: string) => {}), isAppPage,
     setTaskbar: vi.fn(async () => {}), flashWindow: vi.fn(async () => {}), focusWindow: vi.fn(async () => {}),
     applyTheme: vi.fn(), saveText: vi.fn(async (name: string, _text: string) => `C:/docs/${name}`),
@@ -509,6 +509,36 @@ describe('registerIpc', () => {
       deps.openPath.mockRejectedValueOnce(new Error(`Failed to open path ${abs}`))
       expect(await call('openAttachment', 'a1', file)).toEqual({ ok: false, error: '첨부 파일을 열지 못했어요' })
       expect(fs.readFileSync(src, 'utf8')).toBe('내용') // 원본은 그대로
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('openAttachment — 실행되는 종류(.bat·.exe·.lnk·.ps1 …·확장자 없음)는 열지 않고 탐색기에서 그 파일을 보인다', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dure-ipc-attach-'))
+    try {
+      const store = openAttachmentStore(dir)
+      const { call, deps, engine } = setup()
+      ;(engine as any).attachmentPath = (id: string, f: string) => store.resolve(id, f)
+      const src = path.join(dir, 'x')
+      fs.writeFileSync(src, 'echo')
+      for (const name of ['run.bat', 'SETUP.EXE', '바로 가기.lnk', 'a.ps1', 'a.cmd', 'a.vbs', 'a.js', 'a.msi', 'a.reg', 'a.hta', 'a.scr', 'a.url', '확장자없음']) {
+        const { file, abs } = await store.copyIn('a1', src, name)
+        deps.openPath.mockClear()
+        deps.showInFolder.mockClear()
+        expect(await call('openAttachment', 'a1', file), name).toEqual({ ok: true, value: null })
+        expect(deps.openPath, name).not.toHaveBeenCalled()
+        expect(deps.showInFolder, name).toHaveBeenCalledWith(abs)
+      }
+      // 문서·그림은 그대로 연다
+      for (const name of ['보고서.pdf', 'notes.md', 'a.txt', 'shot.png', 'data.xlsx']) {
+        const { file, abs } = await store.copyIn('a1', src, name)
+        deps.openPath.mockClear()
+        deps.showInFolder.mockClear()
+        expect(await call('openAttachment', 'a1', file), name).toEqual({ ok: true, value: null })
+        expect(deps.openPath, name).toHaveBeenCalledWith(abs)
+        expect(deps.showInFolder, name).not.toHaveBeenCalled()
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

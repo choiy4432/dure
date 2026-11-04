@@ -362,6 +362,9 @@ if (!app.requestSingleInstanceLock()) {
             const err = await shell.openPath(path)
             if (err) throw new Error(err)
           },
+          showInFolder(path) {
+            shell.showItemInFolder(path)
+          },
           async openExternal(url) {
             await shell.openExternal(url)
           },
