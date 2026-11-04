@@ -22,6 +22,8 @@ export interface Draft {
    * 그동안 같은 입력을 또 보내지 않는다
    */
   sending?: 'text' | 'files'
+  /** 보내는 중인 칩의 열쇠 — 이 칩들만 빼기를 막는다(보내는 사이 새로 붙인 칩은 뺄 수 있다) */
+  sent?: number[]
   /** 입력창 아래 오류 줄 — 보내는 사이 다른 카드로 갔어도 돌아오면 보인다 */
   error?: string
 }

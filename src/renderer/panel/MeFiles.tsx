@@ -5,12 +5,19 @@ import type { SentFile } from '../state/transcript'
 import { opensAsDocument } from '../../shared/attachments'
 import { errorMessage, formatBytes, splitName } from '../lib/words'
 
-/** 파일 이름 — 가운데 줄임(앞은 칸이 모자라면 말줄임, 확장자와 그 앞 몇 글자는 늘 보인다). 입력창 칩과 내 말 칩이 같이 쓴다 */
+/** 줄 끝에서도 지워지지 않는 빈칸(nbsp) */
+const NBSP = String.fromCharCode(0xa0)
+
+/**
+ * 파일 이름 — 가운데 줄임(앞은 칸이 모자라면 말줄임, 확장자와 그 앞 몇 글자는 늘 보인다). 입력창 칩과 내 말 칩이 같이 쓴다.
+ * 나눈 자리에 빈칸이 있었으면 앞 조각 끝에 nbsp 한 칸 — 보통 빈칸은 줄 끝이라 그려지지 않고, 말줄임이면 말줄임이 같이 가린다
+ */
 export function FileName({ name }: { name: string }) {
   const [head, tail] = splitName(name)
+  const gap = tail !== '' && head.length + tail.length < name.length ? NBSP : ''
   return (
     <span className="af-n">
-      <span className="af-h">{head}</span>
+      <span className="af-h">{head + gap}</span>
       {tail && <span className="af-t">{tail}</span>}
     </span>
   )

@@ -39,13 +39,13 @@ describe('promptText', () => {
   })
 
   it('글 없이 그림만 보냈으면 그림 수', () => {
-    expect(promptText({ kind: 'me', text: '', images: ['a.png', null], files: [], at: 1 })).toBe('이미지 2장')
+    expect(promptText({ kind: 'me', text: '', images: ['a.png', null], files: [], at: 1 })).toBe('그림 2장')
   })
 
   it('글 없이 첨부만이면 첨부 수 — 그림도 있으면 같이', () => {
     const f = { name: 'a.pdf', bytes: 1, file: '20261104-101010-a.pdf' }
     expect(promptText({ kind: 'me', text: '', images: [], files: [f, f], at: 1 })).toBe('첨부 2개')
-    expect(promptText({ kind: 'me', text: '', images: [null], files: [f], at: 1 })).toBe('이미지 1장 · 첨부 1개')
+    expect(promptText({ kind: 'me', text: '', images: [null], files: [f], at: 1 })).toBe('그림 1장 · 첨부 1개')
   })
 
   it('전달된 메시지는 마크다운 기호를 뗀 첫 줄', () => {

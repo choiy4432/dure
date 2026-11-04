@@ -3888,15 +3888,17 @@ code {
 }
 
 /* 붙인 그림·파일 칩 — 많이 붙여도 두 줄 반까지만 늘고 그 뒤로는 안에서 스크롤(대화를 밀어내지 않게).
-   위·오른쪽 여백은 칩 밖으로 걸친 빼기(×)가 잘리지 않을 자리 — 그만큼 margin 으로 되돌려 자리는 그대로 */
+   네 쪽 여백은 스크롤 칸에 잘리지 않을 자리 — 위·오른쪽 11px 는 칩 밖으로 걸친 빼기(×, -7px)의 초점 고리(밖으로 4px),
+   왼쪽·아래 4px 는 그림 칩 크게 보기의 초점 고리(칩 밖으로 3px). 그만큼 margin 으로 되돌려 칩 자리는 그대로(위 2px · 아래 10px).
+   최대 높이도 늘린 여백(+7px)만큼 — 보이는 칩은 두 줄 반 그대로 */
 .atts {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  max-height: 160px;
+  max-height: 167px;
   overflow-y: auto;
-  padding: 8px 8px 0 0;
-  margin: -6px -8px 10px 0;
+  padding: 11px 11px 4px 4px;
+  margin: -9px -11px 6px -4px;
 }
 
 /* 칩 칸 스크롤 막대 — 고정 카드 자리와 같은 얇은 손잡이 */

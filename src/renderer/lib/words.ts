@@ -81,7 +81,9 @@ export const IMAGE_GONE = '그림을 찾을 수 없어요'
 /** 파일 첨부 — 단추·고르기 창의 이름 */
 export const ATTACH_WORD = '파일 첨부'
 /** 경로를 모르는 파일(디스크 파일이 아닌 것 — 붙여 넣은 내용 등)은 사본을 만들 수 없다 */
-export const ATTACH_NO_PATH = '이 파일은 붙일 수 없어요 — 파일 첨부 단추로 골라 주세요'
+export const ATTACH_NO_PATH = '이 파일은 붙일 수 없어요 — 저장한 뒤 파일 첨부 단추로 골라 주세요'
+/** 끌어다 놓은 것에 폴더가 섞임 — 폴더는 칩을 만들지 않는다(파일만) */
+export const ATTACH_FOLDER = '폴더는 보낼 수 없어요'
 /** 첨부가 든 보내기(사본·서버 올리기) — 큰 파일은 몇 분 걸릴 수 있다 */
 export const ATTACH_SENDING = '보내는 중…'
 
@@ -110,7 +112,8 @@ const glyphs = (s: string) => Array.from(graphemes.segment(s), g => g.segment)
 
 /**
  * 가운데 줄임 — [앞, 끝]. 앞은 칸이 모자라면 CSS 로 말줄임(…), 끝(확장자와 그 앞 몇 글자)은 늘 보인다.
- * 그래서 '2026-11-04 매우 긴 기획서 최…최종본.pdf' 처럼 종류와 끝이 남는다. 보이는 글자는 쪼개지 않는다
+ * 그래서 '2026-11-04 매우 긴 기획서 최…최종본.pdf' 처럼 종류와 끝이 남는다. 보이는 글자는 쪼개지 않는다.
+ * 나눈 자리의 빈칸은 뗀다(앞 조각 끝 · 끝 조각 앞) — 말줄임 뒤에 빈칸이 겹쳐 보이지 않게. 그 자리의 한 칸은 FileName 이 둔다
  */
 export function splitName(name: string): [string, string] {
   const chars = glyphs(name)
@@ -118,7 +121,7 @@ export function splitName(name: string): [string, string] {
   const dot = name.lastIndexOf('.')
   const ext = dot > 0 ? glyphs(name.slice(dot)).length : 0
   const keep = ext > 1 && ext <= EXT_MAX ? Math.max(TAIL_MIN, ext + 3) : TAIL_MIN
-  return [chars.slice(0, -keep).join(''), chars.slice(-keep).join('')]
+  return [chars.slice(0, -keep).join('').trimEnd(), chars.slice(-keep).join('').trimStart()]
 }
 
 /** 글 없는 입력의 한 줄 — '그림 2장' · '첨부 3개' · 둘 다면 '그림 1장 · 첨부 2개'(지난 대화 제목과 같은 꼴) */

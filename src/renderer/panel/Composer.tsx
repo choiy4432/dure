@@ -8,7 +8,7 @@ import { ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../../shared/attachments'
 import { getStore, useDure } from '../state/store'
 import { displayStatus } from '../state/selectors'
 import { ContextRing } from './ContextRing'
-import { ATTACH_NO_PATH, ATTACH_SENDING, ATTACH_WORD, errorMessage, formatBytes, RENEW_CONFIRM } from '../lib/words'
+import { ATTACH_FOLDER, ATTACH_NO_PATH, ATTACH_SENDING, ATTACH_WORD, errorMessage, formatBytes, RENEW_CONFIRM } from '../lib/words'
 import { isImageType, prepareImage } from '../lib/image'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
 import type { Described } from './ModelPicker'
@@ -40,6 +40,18 @@ interface Props {
 
 const hasFiles = (types: ArrayLike<string> | undefined) => Array.from(types ?? []).includes('Files')
 
+/**
+ * 끌어다 놓은 파일 — 폴더는 뺀다. 폴더도 files 에 크기 0 의 File 로 끼어 오고(0 B 칩이 된다), items 의 같은 차례(kind 'file')에서
+ * webkitGetAsEntry 로 폴더인지 안다(놓는 동안에만 읽힌다). items 를 못 읽으면 files 그대로
+ */
+function droppedFiles(dt: DataTransfer | null): { files: File[]; folders: number } {
+  const files = Array.from(dt?.files ?? [])
+  const entries = Array.from(dt?.items ?? []).filter(i => i.kind === 'file')
+  if (entries.length !== files.length) return { files, folders: 0 }
+  const folder = entries.map(i => i.webkitGetAsEntry?.()?.isDirectory === true)
+  return { files: files.filter((_, i) => !folder[i]), folders: folder.filter(Boolean).length }
+}
+
 type FileChip = Extract<Attached, { state: 'file' }>
 
 /**
@@ -68,11 +80,15 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     return d === 'working' || d === 'awaiting'
   })
   const planMode = useDure(s => s.agents.find(a => a.id === agentId)?.planMode ?? false)
-  const { text, attached, plan, sending, error: draftError } = useDraft(agentId)
+  const { text, attached, plan, sending, sent: inFlight, error: draftError } = useDraft(agentId)
   // 켬 = 에이전트가 이미 계획 모드이거나 다음 한 번을 계획부터로 정해 둔 것
   const planOn = planMode || plan
   const setText = (next: string) => updateDraft(agentId, d => (d.text === next ? d : { ...d, text: next }))
   const setAttached = (fn: (list: Attached[]) => Attached[]) => updateDraft(agentId, d => ({ ...d, attached: fn(d.attached) }))
+  // 칩 빼기 — 오류 줄도 지운다(뺀 파일의 보내기 실패 글이 남지 않게)
+  const remove = (key: number) => updateDraft(agentId, d => ({ ...d, attached: d.attached.filter(x => x.key !== key), error: undefined }))
+  // 보내는 중인 칩만 뺄 수 없다 — 빼도 그 파일은 간다(뺀 줄 알게 하지 않는다). 보내는 사이 새로 붙인 칩은 뺄 수 있다
+  const going = (key: number) => inFlight?.includes(key) ?? false
   // 오류 줄도 그 에이전트의 입력에 — 몇 분 걸린 보내기가 다른 카드에 가 있는 사이 실패해도 돌아오면 보인다
   const error = draftError ?? null
   const setError = (e: string | null) => updateDraft(agentId, d => ((d.error ?? null) === e ? d : { ...d, error: e ?? undefined }))
@@ -85,6 +101,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
   const [dragging, setDragging] = useState(false)
   const area = useRef<HTMLTextAreaElement>(null)
   const filePick = useRef<HTMLInputElement>(null)
+  const chipBox = useRef<HTMLDivElement>(null)
   const listId = useId()
 
   // / 명령 — '/' 로 시작하고 아직 띄어 쓰지 않았을 때만 목록
@@ -112,6 +129,20 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
   const images = attached.filter((a): a is Extract<Attached, { state: 'ready' }> => a.state === 'ready')
   const files = attached.filter((a): a is FileChip => a.state === 'file')
   const preparing = attached.filter(a => a.state === 'loading').length
+
+  // 칩을 붙이면 새 칩이 보이게 — 칸이 넘쳐 안에서 스크롤할 때 새 칩·보내기를 막는 오류 칩(100MB 넘음)이 아래에 숨지 않게.
+  // 열쇠는 늘 커지니 가장 큰 열쇠가 바뀔 때만(빼기·글 치기·다른 카드에서 돌아옴은 아님). 오류 칩이 마지막이라 둘 다 못 들면 오류 칩이 보인다
+  const newest = attached.reduce((m, a) => Math.max(m, a.key), 0)
+  const shownNewest = useRef(newest)
+  useEffect(() => {
+    if (newest <= shownNewest.current) return
+    shownNewest.current = newest
+    const box = chipBox.current
+    if (!box) return
+    const chips = box.querySelectorAll<HTMLElement>(':scope > .att, :scope > .att-file')
+    chips[chips.length - 1]?.scrollIntoView?.({ block: 'nearest' })
+    box.querySelector<HTMLElement>(':scope > .att-file.bad')?.scrollIntoView?.({ block: 'nearest' })
+  }, [newest])
   // 보내는 중(첨부는 몇 분 걸릴 수 있다)이거나 /model 을 바꾸는 중 — 글을 바꾸거나 또 보내지 않는다
   const locked = busy || sending !== undefined
   const canSend = !locked && preparing === 0 && !files.some(f => f.error) && (text.trim() !== '' || images.length > 0 || files.length > 0)
@@ -164,7 +195,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     for (const f of files) parts.push({ type: 'file', path: f.path, name: f.name, bytes: f.bytes })
     const sent = new Set([...images, ...files].map(a => a.key))
     // 보내는 중은 drafts 에 — 다른 카드로 갔다 와도 그대로라 같은 입력을 또 보내지 않는다. 실패는 그 에이전트 입력의 오류 줄로(글·칩 그대로)
-    updateDraft(agentId, d => ({ ...d, sending: files.length > 0 ? 'files' : 'text', error: undefined }))
+    updateDraft(agentId, d => ({ ...d, sending: files.length > 0 ? 'files' : 'text', sent: [...sent], error: undefined }))
     try {
       // 보낸 말은 기록(history 이벤트)으로 목록에 붙는다 — 일하는 중이면 엔진이 차례를 기다리게 둔다
       // 계획 먼저는 한 번짜리 — 이미 계획 모드인 에이전트에겐 따로 정하지 않는다
@@ -174,7 +205,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
       updateDraft(agentId, d => ({ text: '', attached: d.attached.filter(a => !sent.has(a.key)), plan: false }))
       onSent?.(agentId)
     } catch (e) {
-      updateDraft(agentId, d => ({ ...d, sending: undefined, error: errorMessage(e) }))
+      updateDraft(agentId, d => ({ ...d, sending: undefined, sent: undefined, error: errorMessage(e) }))
     }
   }
 
@@ -307,10 +338,11 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
   }
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     setDragging(false)
-    const files = Array.from(e.dataTransfer?.files ?? [])
-    if (files.length === 0) return
+    const { files, folders } = droppedFiles(e.dataTransfer)
+    if (files.length === 0 && folders === 0) return
     e.preventDefault()
     addFiles(files)
+    if (folders > 0) setError(ATTACH_FOLDER)
   }
 
   // 크게 보기는 준비가 끝난 그림만 — 썸네일과 같은 차례
@@ -341,7 +373,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
           />
         </Presence>
         {attached.length > 0 && (
-          <div className="atts">
+          <div className="atts" ref={chipBox}>
             {attached.map(a =>
               a.state === 'loading' ? (
                 <span key={a.key} className="att wait" role="status" aria-label="이미지 준비 중" />
@@ -360,8 +392,8 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
                     className="att-x"
                     aria-label={`${a.name} 빼기`}
                     title="빼기"
-                    disabled={sending !== undefined}
-                    onClick={() => setAttached(list => list.filter(x => x.key !== a.key))}
+                    disabled={going(a.key)}
+                    onClick={() => remove(a.key)}
                   >
                     <X className="i" size={12} strokeWidth={2.25} aria-hidden="true" />
                   </button>
@@ -380,8 +412,8 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
                     className="att-x"
                     aria-label="이미지 지우기"
                     title="지우기"
-                    disabled={sending !== undefined}
-                    onClick={() => setAttached(list => list.filter(x => x.key !== a.key))}
+                    disabled={going(a.key)}
+                    onClick={() => remove(a.key)}
                   >
                     <X className="i" size={12} strokeWidth={2.25} aria-hidden="true" />
                   </button>

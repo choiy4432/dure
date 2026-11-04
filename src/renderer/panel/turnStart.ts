@@ -1,6 +1,6 @@
 // 대화 위 고정(StickyPrompt) — 이름이 StickyPrompt.tsx 와 대소문자만 다르면 윈도우에서 한쪽만 불린다. 지금 화면 맨 위에 걸친 차례를 연 줄(내 말 · 전달된 메시지) 고르기와 그 한 줄 글 (순수)
 import type { ChatLine } from '../state/transcript'
-import { firstLine } from '../lib/words'
+import { attachCount, firstLine } from '../lib/words'
 
 /** 차례를 연 줄 하나의 자리 — 화면 좌표(getBoundingClientRect) */
 export interface PromptBox {
@@ -35,7 +35,6 @@ export function stickyPromptIndex(boxes: PromptBox[], viewTop: number, zone = 0)
 export function promptText(line: PromptLine): string {
   if (line.kind === 'relay') return firstLine(line.text)
   const text = line.text.replace(/\s+/g, ' ').trim()
-  const n = line.images.length
-  const f = line.files.length
-  return text || [n > 0 ? `이미지 ${n}장` : '', f > 0 ? `첨부 ${f}개` : ''].filter(Boolean).join(' · ')
+  // 붙잡기 카드·지난 대화 제목과 같은 말 — '그림 1장 · 첨부 1개'
+  return text || attachCount(line.images.length, line.files.length)
 }

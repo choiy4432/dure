@@ -40,8 +40,14 @@ describe('splitName — 가운데 줄임용(앞은 말줄임, 끝은 남김)', (
   })
 
   it('길면 확장자와 그 앞 몇 글자를 끝에 둔다', () => {
-    expect(splitName('2026-11-04 매우 긴 기획서 최종본.pdf')).toEqual(['2026-11-04 매우 긴 기획서 ', '최종본.pdf'])
+    expect(splitName('2026-11-04 매우 긴 기획서 최종본.pdf')).toEqual(['2026-11-04 매우 긴 기획서', '최종본.pdf'])
     expect(splitName('very-long-file-name-without-extension')).toEqual(['very-long-file-name-without-ex', 'tension'])
+  })
+
+  it('나눈 자리의 빈칸은 뗀다 — 앞 조각 끝 · 끝 조각 앞(말줄임 뒤 빈칸이 겹치지 않게)', () => {
+    expect(splitName('2026 3분기 마케팅 성과 보고서 최종본.pdf')).toEqual(['2026 3분기 마케팅 성과 보고서', '최종본.pdf'])
+    expect(splitName('abcdefghijklmnopq rs.txt')).toEqual(['abcdefghijklmnopq', 'rs.txt'])
+    expect(splitName('abcdefghijklmnopq  \u3000 rs.txt')).toEqual(['abcdefghijklmnopq', 'rs.txt'])
   })
 
   it('글자(서로게이트 짝)를 쪼개지 않는다', () => {

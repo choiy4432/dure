@@ -741,7 +741,30 @@ describe('Composer — 파일 첨부', () => {
     fireEvent.paste(input(), { clipboardData: { files: [blob], types: ['Files'], getData: () => '' } })
     await settle()
     expect(fileChips()).toHaveLength(0)
-    expect(screen.getByRole('alert')).toHaveTextContent('이 파일은 붙일 수 없어요 — 파일 첨부 단추로 골라 주세요')
+    expect(screen.getByRole('alert')).toHaveTextContent('이 파일은 붙일 수 없어요 — 저장한 뒤 파일 첨부 단추로 골라 주세요')
+  })
+
+  it('폴더를 끌어다 놓으면 칩 없이 안내 — 같이 놓은 파일은 칩으로(폴더가 0 B 칩이 되지 않게)', async () => {
+    await renderPanel()
+    const box = input().closest('.box')!
+    const entry = (isDirectory: boolean) => ({ kind: 'file', webkitGetAsEntry: () => ({ isDirectory, isFile: !isDirectory }) })
+    // 폴더도 files 에 크기 0 의 File 로 끼어 온다 — items 의 같은 자리에서 폴더인지 안다
+    const folder = new File([], '시안 모음', { type: '' })
+    const drop = fireEvent.drop(box, {
+      dataTransfer: { types: ['Files'], files: [folder, pdf('spec.pdf', 512)], items: [entry(true), entry(false)] },
+    })
+    await settle()
+    expect(drop).toBe(false) // 기본 동작(파일 열기)을 막았다
+    expect(fileChips().map(chipText)).toEqual([['spec.pdf', '512 B']])
+    expect(screen.getByRole('alert')).toHaveTextContent('폴더는 보낼 수 없어요')
+
+    // 폴더만 놓아도 — 칩 없이 안내, 기본 동작은 막는다
+    fireEvent.click(screen.getByRole('button', { name: 'spec.pdf 빼기' }))
+    const only = fireEvent.drop(box, { dataTransfer: { types: ['Files'], files: [folder], items: [entry(true)] } })
+    await settle()
+    expect(only).toBe(false)
+    expect(fileChips()).toHaveLength(0)
+    expect(screen.getByRole('alert')).toHaveTextContent('폴더는 보낼 수 없어요')
   })
 
   it('보내기 — sendUser 에 file part(path·name·bytes) · 그림 → 글 → 파일 차례, 보내면 칩을 비운다', async () => {
@@ -859,6 +882,82 @@ describe('Composer — 파일 첨부', () => {
     await settle()
     expect(screen.queryByText('보내는 중…')).toBeNull()
     await act(async () => { done() })
+  })
+
+  it('보내는 중에 새로 붙인 칩은 뺄 수 있다 — 가는 칩만 빼기를 막고, 끝나면 새 칩은 남는다', async () => {
+    let done!: () => void
+    api.sendUser.mockReturnValueOnce(new Promise<void>(r => { done = r }))
+    prep.mockResolvedValue(ready())
+    const { container, store } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [pdf()] } })
+    await settle()
+    key('Enter')
+    await settle()
+    expect(screen.getByText('보내는 중…')).toBeInTheDocument()
+    fireEvent.change(fileInput(container), { target: { files: [pdf('more.pdf', 512), pdf('extra.pdf', 256), png('b.png')] } })
+    await settle()
+    expect(screen.getByRole('button', { name: 'report.pdf 빼기' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'more.pdf 빼기' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '이미지 지우기' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: 'extra.pdf 빼기' }))
+    expect(fileChips().map(c => chipText(c)[0])).toEqual(['report.pdf', 'more.pdf'])
+
+    // 다른 카드에 갔다 와도 — 가는 칩만 막힌 채
+    await select(store, 'p')
+    await select(store, 'w')
+    expect(screen.getByRole('button', { name: 'report.pdf 빼기' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'more.pdf 빼기' })).toBeEnabled()
+
+    await act(async () => { done() })
+    expect(fileChips().map(c => chipText(c)[0])).toEqual(['more.pdf'])
+    expect(chips()).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'more.pdf 빼기' })).toBeEnabled()
+    expect(sendButton()).toBeEnabled()
+  })
+
+  it('칩을 빼면 오류 줄을 지운다', async () => {
+    api.sendUser.mockRejectedValueOnce(new Error('파일을 보내지 못했어요 — report.pdf: 찾을 수 없어요'))
+    const { container } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [pdf(), pdf('notes.md', 8)] } })
+    await settle()
+    fireEvent.click(sendButton())
+    await settle()
+    expect(screen.getByRole('alert')).toHaveTextContent('파일을 보내지 못했어요 — report.pdf: 찾을 수 없어요')
+    fireEvent.click(screen.getByRole('button', { name: 'report.pdf 빼기' }))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(fileChips().map(c => chipText(c)[0])).toEqual(['notes.md'])
+  })
+
+  it('칩을 붙이면 새 칩이 보이게 — 오류 칩이 있으면 그것도(칸이 넘쳐 안에서 스크롤할 때)', async () => {
+    let seen: Element[] = []
+    const into = vi.fn(function (this: Element, _o?: ScrollIntoViewOptions) { seen.push(this) })
+    ;(HTMLElement.prototype as any).scrollIntoView = into
+    try {
+      const { container } = await renderPanel()
+      fireEvent.change(fileInput(container), { target: { files: [pdf('a.pdf'), pdf('b.pdf')] } })
+      await settle()
+      const named = (n: string) => fileChips().find(c => chipText(c)[0] === n)
+      expect(seen.at(-1)).toBe(named('b.pdf')) // 가장 새 칩
+      expect(into).toHaveBeenLastCalledWith({ block: 'nearest' })
+
+      seen = []
+      into.mockClear()
+      fireEvent.change(fileInput(container), { target: { files: [sized('over.zip', ATTACH_MAX_BYTES + 1), pdf('c.pdf')] } })
+      await settle()
+      // 새 칩 다음에 첫 오류 칩 — 둘 다 들어가지 않으면 보내기를 막은 까닭이 보이게
+      expect(seen).toEqual([named('c.pdf'), named('over.zip')])
+      expect(into.mock.calls.every(c => c[0]?.block === 'nearest')).toBe(true)
+
+      // 칩을 빼거나 글을 쳐도 다시 스크롤하지 않는다
+      seen = []
+      into.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: 'c.pdf 빼기' }))
+      type('같이')
+      await settle()
+      expect(into).not.toHaveBeenCalled()
+    } finally {
+      delete (HTMLElement.prototype as any).scrollIntoView
+    }
   })
 })
 

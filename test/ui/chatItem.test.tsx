@@ -290,6 +290,16 @@ describe('ChatItem — 내 말의 첨부 파일은 칩', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
+  it('긴 이름 — 나눈 자리에 빈칸이 있었으면 앞 조각 끝에 한 칸(nbsp — 줄 끝 보통 빈칸은 그려지지 않는다), 말줄임이면 같이 가려진다', () => {
+    const long = { name: '2026 3분기 마케팅 성과 보고서 최종본.pdf', bytes: 1, file: '20261104-101010-long.pdf' }
+    const plain = { name: 'very-long-file-name-without-extension', bytes: 1, file: '20261104-101010-plain' }
+    const { container } = render(<ChatItem line={{ kind: 'me', text: '', images: [], files: [long, plain], at: 1 }} index={0} agentId="w" />)
+    const [a, b] = Array.from(container.querySelectorAll('.af-n'))
+    expect(a.querySelector('.af-h')!.textContent).toBe('2026 3분기 마케팅 성과 보고서\u00a0')
+    expect(a.querySelector('.af-t')!.textContent).toBe('최종본.pdf')
+    expect(b.textContent).toBe('very-long-file-name-without-extension') // 빈칸 없던 자리엔 덧붙이지 않는다
+  })
+
   it('파일이 바뀌면 다시 그린다(같은 줄 번호 · 새 줄 객체)', () => {
     const { rerender } = render(<ChatItem line={{ kind: 'me', text: '', images: [], files: [REPORT], at: 1 }} index={0} agentId="w" />)
     rerender(<ChatItem line={{ kind: 'me', text: '', images: [], files: [REPORT, SCRIPT], at: 1 }} index={0} agentId="w" />)
