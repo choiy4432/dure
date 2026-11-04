@@ -26,6 +26,8 @@ export function buildArgs(a: {
   allowBypass: boolean;
   /** 갈래 칠 원래 세션 — 있으면 그 기록을 이어 받은 새 세션(id = sessionId)으로 띄운다(probe22). 원래 세션의 기록은 그대로 */
   forkOf?: string | null;
+  /** 도구가 승인 없이 읽을 수 있게 더하는 폴더 — 에이전트의 첨부 폴더(probe27 A1: --add-dir 로 Read 가 묻지 않는다). 폴더마다 --add-dir 한 쌍 */
+  addDirs?: string[];
 }): string[] {
   // --allowedTools / --disallowedTools are variadic: each must be followed by another flag.
   return [
@@ -40,6 +42,8 @@ export function buildArgs(a: {
     '--permission-prompts', 'host',
     '--permission-prompt-tool', APPROVE_TOOL,
     ...(a.allowBypass ? [ALLOW_BYPASS_FLAG] : []),
+    // --add-dir 도 가변 인자 — 값마다 따로, 바로 뒤에 플래그가 온다
+    ...(a.addDirs ?? []).flatMap((d) => ['--add-dir', d]),
     '--allowedTools', ...DURE_TOOLS,
     '--disallowedTools', ...BLOCKED_TOOLS,
     '--append-system-prompt-file', a.promptPath,

@@ -1,4 +1,5 @@
-import type { AssistantBlock, ControlRequest, DiffHunk, StreamEvent, SubagentEnd, UserPart } from './types.js';
+import { attachmentLines } from './attachmentStore.js';
+import type { AssistantBlock, ControlRequest, DiffHunk, ReadyPart, StreamEvent, SubagentEnd } from './types.js';
 
 const ignored = (type: string): StreamEvent => ({ kind: 'ignored', type });
 
@@ -203,13 +204,28 @@ function escapeSeparators(json: string): string {
   return json.replace(LINE_SEPARATORS, (c) => `\\u${c.charCodeAt(0).toString(16)}`);
 }
 
-export function encodeUser(parts: UserPart[]): string {
-  const content = parts.map((p) =>
-    p.type === 'text'
-      ? { type: 'text', text: p.text }
-      : { type: 'image', source: { type: 'base64', media_type: p.mediaType, data: p.base64 } },
-  );
-  return escapeSeparators(JSON.stringify({ type: 'user', message: { role: 'user', content } })) + '\n';
+type Block = { type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
+/** Claude 에게 가는 내용 블록 — 글·그림은 차례대로, 첨부는 모아 맨 끝에 글 블록 하나(경로 줄 — Claude 가 자기 도구로 읽는다) */
+function contentOf(parts: ReadyPart[]): Block[] {
+  const blocks: Block[] = [];
+  const paths: string[] = [];
+  for (const p of parts) {
+    if (p.type === 'text') blocks.push({ type: 'text', text: p.text });
+    else if (p.type === 'image') blocks.push({ type: 'image', source: { type: 'base64', media_type: p.mediaType, data: p.base64 } });
+    else paths.push(p.sendPath);
+  }
+  if (paths.length) blocks.push({ type: 'text', text: attachmentLines(paths) });
+  return blocks;
+}
+
+/** 보낸 줄의 글 — 글 블록을 줄바꿈으로 이은 것(경로 줄 포함). Claude 의 되돌림(replay)과 같은 꼴이라 차례 도중에 보낸 말을 맞출 때 쓴다 */
+export function sentText(parts: ReadyPart[]): string {
+  return contentOf(parts).flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('\n');
+}
+
+export function encodeUser(parts: ReadyPart[]): string {
+  return escapeSeparators(JSON.stringify({ type: 'user', message: { role: 'user', content: contentOf(parts) } })) + '\n';
 }
 
 export function encodeControl(requestId: string, req: ControlRequest): string {

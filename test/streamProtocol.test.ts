@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { encodeControl, encodeUser, parseLine } from '../src/engine/streamProtocol.js';
+import { encodeControl, encodeUser, parseLine, sentText } from '../src/engine/streamProtocol.js';
+import type { ReadyPart } from '../src/engine/types.js';
 
 describe('parseLine', () => {
   test('되돌린 사람 말(isReplay) → replay — 글 조각만 이어 붙인다(그림은 뺀다), 문자열 내용도', () => {
@@ -310,6 +311,31 @@ describe('encode', () => {
         { type: 'text', text },
       ] },
     });
+  });
+
+  test('encodeUser: 첨부는 다른 블록 뒤에 글 블록 하나(경로 줄) — 되돌림의 글은 sentText 와 같다', () => {
+    const parts: ReadyPart[] = [
+      { type: 'text', text: '읽어 줘' },
+      { type: 'file', name: 'a.txt', bytes: 3, file: '20261104-090507-a.txt', sendPath: 'C:\\data\\attachments\\x\\20261104-090507-a.txt' },
+      { type: 'image', mediaType: 'image/png', base64: 'AA==' },
+      { type: 'file', name: 'b c.pdf', bytes: 9, file: '20261104-090507-b c.pdf', sendPath: '/home/a/.dure/attachments/x/b c.pdf', remotePath: '/home/a/.dure/attachments/x/b c.pdf' },
+    ];
+    const lines = '\n\n첨부 파일:\n- C:\\data\\attachments\\x\\20261104-090507-a.txt\n- /home/a/.dure/attachments/x/b c.pdf';
+    const decoded = JSON.parse(encodeUser(parts));
+    expect(decoded.message.content).toEqual([
+      { type: 'text', text: '읽어 줘' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } },
+      { type: 'text', text: lines },
+    ]);
+    expect(sentText(parts)).toBe(`읽어 줘\n${lines}`);
+    // Claude 의 되돌림(replay)은 글 블록을 이어 붙인다 — 차례 도중에 보낸 첨부도 읽은 것으로 맞춘다
+    const replay = JSON.stringify({ type: 'user', isReplay: true, message: decoded.message });
+    expect(parseLine(replay)).toEqual({ kind: 'replay', text: sentText(parts) });
+    // 첨부만 — 글 블록은 경로 줄 하나
+    const only: ReadyPart[] = [parts[1]];
+    expect(JSON.parse(encodeUser(only)).message.content).toEqual([{ type: 'text', text: '\n\n첨부 파일:\n- C:\\data\\attachments\\x\\20261104-090507-a.txt' }]);
+    // 첨부가 없으면 지금 그대로
+    expect(sentText([{ type: 'text', text: '하나' }, { type: 'image', mediaType: 'image/png', base64: 'AA==' }, { type: 'text', text: '둘' }])).toBe('하나\n둘');
   });
 
   test('encodeUser: U+2028·U+2029 는 이스케이프해 한 줄로 — 받는 쪽이 줄 끝으로 읽어 쪼개지 않게', () => {

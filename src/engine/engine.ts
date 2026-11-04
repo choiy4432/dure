@@ -15,6 +15,9 @@ import { capPatch, lastN, openHistory, patchFromInput, trimToolInput, type Histo
 import { conversationFacts, splitConversations, type Conversation } from './conversations';
 import { claudeDirOf, existingSessions } from './claudeSessions';
 import { openImageStore, type ImageStore } from './imageStore';
+import { openAttachmentStore, type AttachmentStore } from './attachmentStore';
+import { ATTACH_FAILED, ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../shared/attachments';
+import { sentText } from './streamProtocol';
 import { buildArgs, buildMcpConfig, buildUsageArgs, CREATE_AGENT_TOOL, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
 import { ClaudeSession } from './claudeSession';
@@ -28,7 +31,7 @@ import { EFFORT_LEVELS, SLEEP_CHOICES, SLEEP_DEFAULT_MIN, THEME_PREFS, type Effo
 import { toContextUsage } from './usage';
 import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
 import type {
-  Agent, AgentDescription, ConversationSummary, AgentId, AgentPatch, AgentStatus, ContextUsage, CreateAgentInput, Decision, DiffHunk, EngineEventMap, HistoryItem, HistoryPart, Hold, HoldItem, PendingRequest, PlanUsage, RelayMessage, RemoteIssue, Room, RoomId, StreamEvent, UserPart,
+  Agent, AgentDescription, ConversationSummary, AgentId, AgentPatch, AgentStatus, ContextUsage, CreateAgentInput, Decision, DiffHunk, EngineEventMap, FileInput, FileReady, HistoryItem, HistoryPart, Hold, HoldItem, PendingRequest, PlanUsage, ReadyPart, RelayMessage, RemoteIssue, Room, RoomId, StreamEvent, UserPart,
 } from './types';
 
 export interface EngineOptions {
@@ -447,6 +450,14 @@ const PLAN_ON_FAILED_NOTICE = '계획 모드로 바꾸지 못했어요';
 const PLAN_ON_FAILED_STOPPED_NOTICE = '계획 모드로 바꾸지 못해 멈췄어요';
 const PLAN_OFF_FAILED = '계획 모드를 끄지 못했어요 — Claude 가 권한 모드를 바꾸지 않았어요.';
 const PLAN_OFF_FAILED_NOTICE = '계획 모드를 끄지 못해 계획 모드 그대로예요';
+/** 첨부 보내기 실패의 까닭(ATTACH_FAILED 뒤 ' — <이름>: ' 다음) */
+const ATTACH_REMOTE_NOT_YET = '서버 방 첨부는 아직이에요';
+const ATTACH_BAD_PATH = '파일 경로가 올바르지 않아요';
+const ATTACH_FOLDER = '폴더는 보낼 수 없어요';
+const ATTACH_NOT_FILE = '보통 파일이 아니에요';
+const ATTACH_CREDENTIALS = '자격 증명 파일은 보낼 수 없어요';
+/** Claude 자격 증명 파일 이름 — 첨부로도 읽거나 옮기지 않는다 */
+const CREDENTIALS_FILE = '.credentials.json';
 
 /** 엔진이 써 넣은 /effort 한 줄 — 그 result 까지 */
 interface EffortTurn {
@@ -454,10 +465,13 @@ interface EffortTurn {
   timer: NodeJS.Timeout | null; // 답이 없으면 다시 띄운다
 }
 
-/** 보낼 차례를 기다리는 사람 입력 — id: 엔진이 붙인 것(붙잡기 목록의 항목 id) · plan: 계획 먼저(쓰기 직전에 계획 모드로) */
+/**
+ * 보낼 차례를 기다리는 사람 입력 — id: 엔진이 붙인 것(붙잡기 목록의 항목 id) · plan: 계획 먼저(쓰기 직전에 계획 모드로) ·
+ * parts: 준비를 마친 꼴(첨부는 이미 사본·경로 — 원본이 사라져도 그대로 간다)
+ */
 interface HeldInput {
   id: string;
-  parts: UserPart[];
+  parts: ReadyPart[];
   plan?: true;
 }
 
@@ -632,10 +646,12 @@ class EngineImpl extends EventEmitter implements Engine {
   private watcher: UsageWatcher | null;
 
   private images: ImageStore;
+  private attachments: AttachmentStore;
 
   constructor(private o: EngineOptions, private store: Store, private log: MessageLog, private hist: History) {
     super();
     this.images = openImageStore(o.dataDir);
+    this.attachments = openAttachmentStore(o.dataDir);
     this.limit = this.loadLimit(o.autoChainLimit ?? AUTO_CHAIN_LIMIT);
     const settings = this.readSettings();
     this.allow = settings.allowBypass === true;
@@ -1244,6 +1260,8 @@ class EngineImpl extends EventEmitter implements Engine {
       this.store.removeAgent(id);
       this.hist.remove(id);
       this.images.remove(id);
+      // 첨부 사본도 — 다른 프로그램이 연 채 잠가 못 지워도 지우기는 끝낸다(남은 것은 알린다)
+      this.guard(id, () => this.attachments.remove(id));
     } finally {
       this.removing.delete(id);
       this.shown.delete(id);
@@ -1524,28 +1542,120 @@ class EngineImpl extends EventEmitter implements Engine {
 
   // ── 대화 ──
   async sendUser(id: AgentId, parts: UserPart[], o?: { plan?: boolean }) {
-    const agent = this.need(id);
+    this.need(id);
+    // 첨부는 맨 먼저 — 사본을 다 만든 뒤에 끼우기·줄 세우기·붙잡기. 하나라도 실패하면 만든 것을 되돌리고 던진다(아무것도 안 보냄).
+    // 줄에 선·붙잡힌 입력엔 원본 경로가 아니라 준비된 꼴이 들어간다(원본이 사라져도 그대로 간다). 첨부가 없으면 기다림 없이 지금 그대로
+    const ready: ReadyPart[] = noFiles(parts) ? parts : await this.prepareParts(id, parts);
+    // 아래에서 보내지도 줄에 서지도 못하고 던지면 이번에 만든 사본을 되돌린다
+    const undo = (e: unknown): never => {
+      this.dropPrepared(id, ready);
+      throw e;
+    };
+    let agent: Agent;
+    try {
+      agent = this.need(id); // 준비하는 사이 지워졌을 수 있다
+    } catch (e) {
+      return undo(e);
+    }
     this.router.humanInput(agent.roomId);
     // 일하는 중이면 바로 보낸다 — Claude Code 처럼 지금 차례에 끼어든다(다음 걸음에서 읽는다, probe17)
     const s = this.sessions.get(id);
-    if (s && o?.plan !== true && this.canSendMid(id, s, parts)) {
-      this.sendTo(id, s, parts, { kind: 'human', input: { id: crypto.randomUUID(), parts }, mid: true });
+    if (s && o?.plan !== true && this.canSendMid(id, s, ready)) {
+      try {
+        this.sendTo(id, s, ready, { kind: 'human', input: { id: crypto.randomUUID(), parts: ready }, mid: true });
+      } catch (e) {
+        return undo(e); // 쓰기 전에 막혔다(세션이 실행 중이 아님) — 기록도 없다
+      }
       this.emitStatus(id);
       return;
     }
     const q = this.heldOf(id);
     // 계획 먼저는 그 입력에 붙여 둔다 — 차례 중이면 지금 차례를 계획 모드로 바꾸지 않고, 그 입력을 쓸 때(pump) 바꾼다
     // 붙잡힌 동안 새로 친 말도 여기로 — 붙잡기를 거치지 않고 보통처럼 나간다(사람이 지금 하는 말이 가장 급하다)
-    q.push({ id: crypto.randomUUID(), parts, ...(o?.plan === true ? { plan: true as const } : {}) });
+    q.push({ id: crypto.randomUUID(), parts: ready, ...(o?.plan === true ? { plan: true as const } : {}) });
     try {
       this.ensure(id);
     } catch (e) {
       q.pop();
-      throw e;
+      return undo(e);
     }
     this.emitHeld(id);
     this.pump(id); // 차례 중·승인 대기면 그대로 두고, 그 차례의 result 에서 보낸다 — 두 줄을 동시에 보내지 않는다
     this.emitStatus(id); // /effort 차례 중이면 기다리는 입력 때문에 작업 중
+  }
+
+  /**
+   * 첨부를 보낼 꼴로 — 글·그림은 그대로, 파일은 차례대로 하나씩 준비한다(prepareFile). 하나라도 실패하면 이번에 만든 사본을 지우고
+   * 그 파일의 오류('파일을 보내지 못했어요 — <이름>: <이유>')를 던진다
+   */
+  private async prepareParts(id: AgentId, parts: UserPart[]): Promise<ReadyPart[]> {
+    const agent = this.need(id);
+    // 서버 방 첨부(서버로 올리기)는 아직 — 반쯤 되는 일이 없게 아무것도 만들기 전에 거절한다. 올리기는 prepareFile 의 자리에 잇는다
+    if (this.remoteOf(agent)) throw new Error(`${ATTACH_FAILED} — ${ATTACH_REMOTE_NOT_YET}`);
+    const out: ReadyPart[] = [];
+    try {
+      for (const p of parts) out.push(p.type === 'file' ? await this.prepareFile(id, p) : p);
+    } catch (e) {
+      this.dropPrepared(id, out);
+      throw e;
+    }
+    return out;
+  }
+
+  /**
+   * 첨부 하나 — 원본이 보통 파일이고 ATTACH_MAX_BYTES 이하인지 엔진이 다시 잰 뒤(화면이 준 bytes 는 믿지 않는다) 그 에이전트의
+   * 첨부 폴더로 복사한다. 원본은 읽기만 한다. Claude 에게는 사본의 절대 경로가 간다
+   */
+  private async prepareFile(id: AgentId, p: FileInput): Promise<FileReady> {
+    const shown = typeof p.name === 'string' ? firstLine(p.name) : '';
+    const fail = (why: string) => new Error(`${ATTACH_FAILED} — ${shown ? `${shown}: ` : ''}${why}`);
+    if (typeof p.path !== 'string' || !path.isAbsolute(p.path)) throw fail(ATTACH_BAD_PATH);
+    // 자격 증명 파일은 읽지도 옮기지도 않는다(약관 경계) — 사용자가 골라도
+    if (path.basename(p.path).toLowerCase() === CREDENTIALS_FILE) throw fail(ATTACH_CREDENTIALS);
+    let st: fs.Stats;
+    try {
+      st = await fs.promises.stat(p.path);
+    } catch (e) {
+      throw fail(fileErrorText(e));
+    }
+    if (st.isDirectory()) throw fail(ATTACH_FOLDER);
+    if (!st.isFile()) throw fail(ATTACH_NOT_FILE);
+    if (st.size > ATTACH_MAX_BYTES) throw fail(ATTACH_TOO_BIG);
+    const name = shown || path.basename(p.path);
+    let copy: { file: string; abs: string };
+    try {
+      copy = this.attachments.copyIn(id, p.path, name);
+    } catch (e) {
+      throw fail(fileErrorText(e));
+    }
+    // 잰 뒤 복사하는 사이 원본이 커졌을 수 있다 — 상한·기록의 크기는 사본으로
+    let bytes: number;
+    try {
+      bytes = fs.statSync(copy.abs).size;
+    } catch (e) {
+      this.dropFile(id, copy.file);
+      throw fail(fileErrorText(e));
+    }
+    if (bytes > ATTACH_MAX_BYTES) {
+      this.dropFile(id, copy.file);
+      throw fail(ATTACH_TOO_BIG);
+    }
+    // 서버 방이면 여기서 서버로 올린다(remotePath, sendPath = remotePath) — 실패하면 이 사본을 지우고 던진다
+    return { type: 'file', name, bytes, file: copy.file, sendPath: copy.abs };
+  }
+
+  /** 준비한 첨부를 되돌린다(보내지도 줄에 서지도 못했다) — 이 PC 사본을 지운다. 그새 에이전트가 지워졌으면 첨부 폴더째 */
+  private dropPrepared(id: AgentId, parts: ReadyPart[]): void {
+    for (const p of parts) if (p.type === 'file') this.dropFile(id, p.file);
+    if (!this.store.agent(id)) this.guard(null, () => this.attachments.remove(id));
+  }
+
+  private dropFile(id: AgentId, file: string): void {
+    try {
+      this.attachments.removeFile(id, file);
+    } catch {
+      // 못 지운 사본은 에이전트를 지울 때 폴더째 지워진다 — 보내기 실패의 까닭을 가리지 않는다
+    }
   }
 
   async interrupt(id: AgentId) {
@@ -1705,10 +1815,22 @@ class EngineImpl extends EventEmitter implements Engine {
     return agent;
   }
 
-  /** 갈래로 옮길 기록 한 줄 — 사람이 보낸 그림은 새 에이전트 칸으로 복사, 복사 못 한 그림은 file 을 뺀다(크기·형식은 그대로) */
+  /**
+   * 갈래로 옮길 기록 한 줄 — 사람이 보낸 그림은 새 에이전트 칸으로 복사, 복사 못 한 그림은 file 을 뺀다(크기·형식은 그대로).
+   * 첨부도 이 PC 사본을 새 에이전트 첨부 폴더로 같은 이름에 복사한다 — 기록의 file 은 이제 새 폴더의 사본(못 하면 칩은 남고 열 때 없다고 한다).
+   * 서버 파일은 다시 올리지 않는다(remotePath 그대로 — Claude 의 기억 속 경로는 원래 에이전트의 첨부)
+   */
   private forkedItem(from: AgentId, to: AgentId, it: HistoryItem): HistoryItem {
-    if (it.kind !== 'user' || !it.parts.some((p) => p.type === 'image' && p.file)) return it;
+    if (it.kind !== 'user' || !it.parts.some((p) => (p.type === 'image' && p.file) || p.type === 'file')) return it;
     const parts = it.parts.map((p): HistoryPart => {
+      if (p.type === 'file') {
+        try {
+          this.attachments.copy(from, to, p.file);
+        } catch {
+          // 디스크가 막혀도 갈래는 만든다 — 그 첨부만 다시 열 수 없다
+        }
+        return p;
+      }
       if (p.type !== 'image' || !p.file) return p;
       try {
         if (this.images.copy(from, to, p.file)) return p;
@@ -2084,7 +2206,7 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /** 사람 말을 지금 차례에 끼워 보낼 수 있나 — 위 조건에 슬래시 명령이 아닐 때(명령은 쉴 때 차례로) */
-  private canSendMid(id: AgentId, s: ClaudeSession, parts: UserPart[]): boolean {
+  private canSendMid(id: AgentId, s: ClaudeSession, parts: ReadyPart[]): boolean {
     return this.canInterject(id, s) && !inputText(parts).trimStart().startsWith('/');
   }
 
@@ -2228,7 +2350,7 @@ class EngineImpl extends EventEmitter implements Engine {
     return true;
   }
 
-  private sendTo(id: AgentId, s: ClaudeSession, parts: UserPart[], item: Extract<InFlight, { kind: 'human' }>): void {
+  private sendTo(id: AgentId, s: ClaudeSession, parts: ReadyPart[], item: Extract<InFlight, { kind: 'human' }>): void {
     this.write(s, parts, item);
     // 실제로 쓴 줄만 기록한다 — 대기 중인 입력은 보낼 때 나타난다
     this.guard(id, () => this.record(id, { kind: 'user', source: 'human', parts: parts.map((p) => this.historyPart(id, p)) }));
@@ -2246,7 +2368,7 @@ class EngineImpl extends EventEmitter implements Engine {
     }
   }
 
-  private write(s: ClaudeSession, parts: UserPart[], item: InFlight): void {
+  private write(s: ClaudeSession, parts: ReadyPart[], item: InFlight): void {
     s.send(parts);
     this.lastActive.set(s, performance.now());
     const list = this.inFlight.get(s) ?? [];
@@ -2255,9 +2377,13 @@ class EngineImpl extends EventEmitter implements Engine {
     this.prewarmed.delete(s); // 일을 받은 세션 — 고르지 않게 돼도 끄지 않는다(앱을 끌 때까지)
   }
 
-  /** 기록 한 칸 — 그림은 내용을 그림 칸에 따로 두고 기록엔 크기·이름만(저장을 못 하면 이름 없이, 보내기는 막지 않는다) */
-  private historyPart(id: AgentId, p: UserPart): HistoryPart {
+  /**
+   * 기록 한 칸 — 그림은 내용을 그림 칸에 따로 두고 기록엔 크기·이름만(저장을 못 하면 이름 없이, 보내기는 막지 않는다).
+   * 첨부는 칩에 쓸 이름·크기·사본 이름(서버 방이면 서버 경로)만 — 원본 경로·보낸 경로는 남기지 않는다
+   */
+  private historyPart(id: AgentId, p: ReadyPart): HistoryPart {
     if (p.type === 'text') return { type: 'text', text: p.text };
+    if (p.type === 'file') return { type: 'file', name: p.name, bytes: p.bytes, file: p.file, ...(p.remotePath ? { remotePath: p.remotePath } : {}) };
     const part: HistoryPart = { type: 'image', mediaType: p.mediaType, bytes: Buffer.from(p.base64, 'base64').length };
     try {
       const file = this.images.save(id, p.mediaType, p.base64);
@@ -2390,10 +2516,10 @@ class EngineImpl extends EventEmitter implements Engine {
     const allow = this.allow;
     // 갈래(새 에이전트로 이어 가기)의 첫 실행 — 원래 세션의 기록을 이어 받은 새 세션(id = 이 에이전트의 sessionId)으로. init 까지 그대로(앱을 다시 켜도)
     const forkOf = agent.forkOf ?? null;
-    const argsWith = (mcpConfigPath: string, promptPath: string) =>
+    const argsWith = (mcpConfigPath: string, promptPath: string, addDirs?: string[]) =>
       buildArgs({
         sessionId: agent.sessionId, resume: agent.started, forkOf, mcpConfigPath, promptPath, model: agent.model, name: agent.name,
-        allowBypass: allow,
+        allowBypass: allow, addDirs,
       });
     let s: ClaudeSession;
     if (remote) s = this.remoteSession(id, agent, remote.host, runDir, buildRoomPrompt(agent, peers), argsWith);
@@ -2402,9 +2528,12 @@ class EngineImpl extends EventEmitter implements Engine {
       const promptPath = path.join(runDir, 'prompt.md');
       fs.writeFileSync(mcpConfigPath, JSON.stringify(buildMcpConfig({ port: this.mcp.port, token: this.mcp.token, agentId: id })));
       fs.writeFileSync(promptPath, buildRoomPrompt(agent, peers));
+      // 첨부 폴더는 띄울 때마다 미리 허용한다 — 첨부를 읽을 때 승인 카드가 뜨지 않게(probe27 A1). 없으면 만든다
+      const attachDir = this.attachments.dir(id);
+      fs.mkdirSync(attachDir, { recursive: true });
       s = new ClaudeSession({
         command: this.o.claude.command,
-        args: [...(this.o.claude.argsPrefix ?? []), ...argsWith(mcpConfigPath, promptPath)],
+        args: [...(this.o.claude.argsPrefix ?? []), ...argsWith(mcpConfigPath, promptPath, [attachDir])],
         cwd: agent.folder,
         env: this.spawnEnv(),
       });
@@ -3414,9 +3543,34 @@ function sameFlags(x: Flags, y: Flags): boolean {
  * 보낸 줄과 상관없이 온다(부모 차례가 끝난 뒤에도 서브에이전트는 돈다). 생각 신호(thinking)·API 상태(api-status)도 치지 않는다 —
  * 늘 그 차례의 init 뒤에 오니 읽은 표시는 init 이 이미 했다
  */
-/** 보낸 말의 글 — 되돌림(replay)과 맞출 때. 글 조각만 줄바꿈으로(되돌림도 같은 꼴) */
-function inputText(parts: UserPart[]): string {
-  return parts.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('\n');
+/** 보낸 말의 글 — 되돌림(replay)과 맞출 때. 쓴 글 블록만 줄바꿈으로(첨부의 경로 줄 블록 포함 — 되돌림도 같은 꼴) */
+function inputText(parts: ReadyPart[]): string {
+  return sentText(parts);
+}
+
+/** 첨부가 하나도 없는 입력 — 준비 없이 그대로 보낼 꼴 */
+function noFiles(parts: UserPart[]): parts is Exclude<UserPart, FileInput>[] {
+  return !parts.some((p) => p.type === 'file');
+}
+
+/** 첨부를 읽거나 복사하지 못한 까닭 — 흔한 것은 쉬운 말로, 그 밖은 오류의 첫 줄 */
+function fileErrorText(e: unknown): string {
+  switch ((e as NodeJS.ErrnoException | null)?.code) {
+    case 'ENOENT':
+    case 'ENOTDIR':
+      return '찾을 수 없어요';
+    case 'EACCES':
+    case 'EPERM':
+      return '읽을 권한이 없어요';
+    case 'EBUSY':
+      return '다른 프로그램이 쓰고 있어요';
+    case 'ENOSPC':
+      return '디스크에 빈 자리가 없어요';
+    case 'EISDIR':
+      return ATTACH_FOLDER;
+    default:
+      return firstLine(e instanceof Error ? e.message : String(e)) || '알 수 없는 오류예요';
+  }
 }
 
 function readsInput(ev: StreamEvent): boolean {
@@ -3433,10 +3587,12 @@ function firstLine(s: string): string {
   return [...line].slice(0, HOLD_TEXT_MAX).join('');
 }
 
-/** 붙잡은 내 입력 — 글은 글 칸들을 이은 것의 첫 줄, 그림은 수만 */
+/** 붙잡은 내 입력 — 글은 글 칸들을 이은 것의 첫 줄(경로 줄은 빼고), 그림·첨부는 수만(첨부는 있을 때만) */
 function humanItem(input: HeldInput): HoldItem {
   const texts = input.parts.flatMap((p) => (p.type === 'text' ? [p.text] : []));
-  return { id: input.id, source: 'human', from: null, text: firstLine(texts.join('\n')), images: input.parts.length - texts.length };
+  const images = input.parts.filter((p) => p.type === 'image').length;
+  const files = input.parts.filter((p) => p.type === 'file').length;
+  return { id: input.id, source: 'human', from: null, text: firstLine(texts.join('\n')), images, ...(files ? { files } : {}) };
 }
 
 /** 붙잡은 전달 대기 메시지 — id 는 메시지 id, 보낸 쪽은 보낸 에이전트 */

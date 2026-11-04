@@ -72,6 +72,19 @@ describe('buildArgs', () => {
     // 옵션 하나를 더해도 나머지는 그대로
     expect(on.filter((x) => x !== '--allow-dangerously-skip-permissions')).toEqual(off);
   });
+  test('addDirs → --add-dir', () => {
+    const dirs = ['C:\\Users\\x\\AppData\\Roaming\\Dure\\attachments\\a 1', '/home/a/.dure/attachments/a1'];
+    const a = buildArgs({ ...base, addDirs: dirs });
+    // 폴더마다 --add-dir 한 쌍 — 공백 있는 경로도 한 항목, 값 바로 뒤는 플래그(가변 인자가 다음 값을 삼키지 않게)
+    const at = a.flatMap((x, i) => (x === '--add-dir' ? [i] : []));
+    expect(at.map((i) => a[i + 1])).toEqual(dirs);
+    for (const i of at) expect(a[i + 2].startsWith('-')).toBe(true);
+    // 나머지는 그대로 · 없거나 비면 --add-dir 없음
+    const rest = a.filter((_, i) => !at.some((j) => i === j || i === j + 1));
+    expect(rest).toEqual(buildArgs(base));
+    expect(buildArgs(base)).not.toContain('--add-dir');
+    expect(buildArgs({ ...base, addDirs: [] })).toEqual(buildArgs(base));
+  });
   test('공백·한글 이름도 argv 한 항목', () => {
     const a = buildArgs({ ...base, name: '월드 담당' });
     expect(a[a.indexOf('-n') + 1]).toBe('월드 담당');

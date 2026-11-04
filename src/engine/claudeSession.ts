@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import { parseLine, encodeUser, encodeControl } from './streamProtocol.js';
 import { killTree } from './killTree.js';
-import type { ControlRequest, SessionStatus, UserPart } from './types.js';
+import type { ControlRequest, ReadyPart, SessionStatus } from './types.js';
 
 export interface SessionOptions {
   command: string;
@@ -207,7 +207,7 @@ export class ClaudeSession extends EventEmitter {
   }
 
   /** quiet: 그 차례의 result 까지 상태를 working 으로 바꾸지 않는다 — 모델을 부르지 않는 로컬 명령(/effort)을 엔진이 몰래 보낼 때 */
-  send(parts: UserPart[], o: { quiet?: boolean } = {}): void {
+  send(parts: ReadyPart[], o: { quiet?: boolean } = {}): void {
     if (!this.running) throw new Error('세션이 실행 중이 아닙니다');
     if (o.quiet) this.quietTurn = true;
     else this.setStatus('working');

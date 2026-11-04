@@ -107,7 +107,21 @@ export interface RelayMessage {
   updatedAt: number;
 }
 
-export type UserPart = { type: 'text'; text: string } | { type: 'image'; mediaType: string; base64: string };
+/**
+ * 화면이 보내는 첨부 — path: 사용자가 고른 원본의 절대 경로(엔진은 읽기만 하고 사본을 만든다) · name: 칩에 보인 이름 ·
+ * bytes: 화면이 본 크기(엔진은 믿지 않고 fs.stat 으로 다시 잰다)
+ */
+export type FileInput = { type: 'file'; path: string; name: string; bytes: number };
+/**
+ * 엔진이 준비한 첨부(sendUser 에 들어온 순간 만든다 — 줄 세운·붙잡힌 입력도 이 꼴이라 원본이 사라져도 그대로 간다) —
+ * file: 첨부 폴더 안 사본 이름 · bytes: 사본의 크기 · sendPath: Claude 에게 줄 절대 경로(이 PC 방은 사본, 서버 방은 remotePath) ·
+ * remotePath: 서버 방이면 서버에 올린 경로
+ */
+export type FileReady = { type: 'file'; name: string; bytes: number; file: string; sendPath: string; remotePath?: string };
+/** 화면이 보내는 사람 입력 한 칸 */
+export type UserPart = { type: 'text'; text: string } | { type: 'image'; mediaType: string; base64: string } | FileInput;
+/** 준비를 마친 입력 한 칸 — 엔진 안의 줄 세우기·붙잡기·보내기(sendTo)·Claude 에게 쓰는 줄은 이 꼴만 다룬다 */
+export type ReadyPart = Exclude<UserPart, FileInput> | FileReady;
 export type ControlRequest =
   | { subtype: 'initialize' }
   | { subtype: 'interrupt' }
@@ -167,8 +181,15 @@ export interface ConversationSummary {
   why: 'old' | 'gone' | null;
 }
 
-/** 그림의 file = 그림 칸(images/<에이전트>/)에 저장한 이름 — 저장 전에 보낸 그림·저장을 못 한 그림엔 없다 */
-export type HistoryPart = { type: 'text'; text: string } | { type: 'image'; mediaType: string; bytes: number; file?: string };
+/**
+ * 그림의 file = 그림 칸(images/<에이전트>/)에 저장한 이름 — 저장 전에 보낸 그림·저장을 못 한 그림엔 없다.
+ * 첨부의 file = 첨부 폴더(attachments/<에이전트>/) 안 사본 이름(칩을 누르면 이것을 연다) · remotePath = 서버 방이면 서버에 올린 경로.
+ * 원본 경로는 남기지 않는다
+ */
+export type HistoryPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mediaType: string; bytes: number; file?: string }
+  | { type: 'file'; name: string; bytes: number; file: string; remotePath?: string };
 export type HistoryItem = { t: number } & (
   | { kind: 'user'; source: 'human' | 'relay'; parts: HistoryPart[]; messageId?: string }
   | { kind: 'assistant'; blocks: AssistantBlock[]; parent?: string }
@@ -216,7 +237,7 @@ export interface PendingRequest {
 
 /**
  * 붙잡은 것 하나 — id: 내 입력이면 엔진이 붙인 id, 메시지면 메시지 id · from: 메시지를 보낸 에이전트(내 입력이면 null) ·
- * text: 글의 첫 줄(200자까지, 글이 없으면 '') · images: 그림 수(그림 자체는 싣지 않는다)
+ * text: 글의 첫 줄(200자까지, 글이 없으면 '') · images: 그림 수(그림 자체는 싣지 않는다) · files: 첨부 파일 수(있을 때만)
  */
 export interface HoldItem {
   id: string;
@@ -224,6 +245,7 @@ export interface HoldItem {
   from: AgentId | null;
   text: string;
   images: number;
+  files?: number;
 }
 /**
  * 붙잡기 — 멈출 때 그 에이전트에게 기다리던 내 입력·전달 대기(queued) 메시지. 사람이 고를 때까지(이어서 보내기·빼기·모두 버리기) 나가지 않는다.

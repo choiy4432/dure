@@ -10,6 +10,7 @@ import { openMessageLog } from '../src/engine/messageLog';
 import { joinDeliveries } from '../src/engine/router';
 import { openStore } from '../src/engine/store';
 import { DENY } from '../src/shared/denyTexts';
+import { ATTACH_MAX_BYTES } from '../src/shared/attachments';
 
 const FAKE = path.resolve('test/fakeClaude.mjs');
 let dir: string;
@@ -6626,3 +6627,224 @@ describe('서버 방 띄우기', () => {
     expect(agentOf(e, a.id).remoteLaunch).toBeNull();
   }, 20_000);
 });
+
+// ── 파일 첨부(이 PC 방) ──
+const ATTACH_FAIL = '파일을 보내지 못했어요 — ';
+const attDir = (id: string) => path.join(dataDir, 'attachments', id);
+const attFiles = (id: string): string[] => (fs.existsSync(attDir(id)) ? fs.readdirSync(attDir(id)) : []);
+/** 사용자가 고른 원본 — 시험 폴더 안에만 만든다 */
+function original(name: string, body = '첨부 내용'): string {
+  const d = path.join(dir, 'originals');
+  fs.mkdirSync(d, { recursive: true });
+  const p = path.join(d, name);
+  fs.writeFileSync(p, body);
+  return p;
+}
+const fileOf = (p: string, name = path.basename(p)): UserPart => ({ type: 'file', path: p, name, bytes: fs.statSync(p).size });
+/** 가짜 claude 가 받은 사용자 줄마다 내용 블록 */
+const userContents = (): any[][] => readLog().filter((x) => x.type === 'user').map((x) => x.message.content);
+
+test('파일 첨부 — 사본·경로 줄·기록 칩', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const src = original('보고서 최종.txt', 'hello 첨부');
+  const items: HistoryItem[] = [];
+  e.on('history', (x: { agentId: string; item: HistoryItem }) => x.agentId === a.id && items.push(x.item));
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: '읽어 줘' }, { type: 'file', path: src, name: '보고서 최종.txt', bytes: 999 }]);
+  await done;
+
+  expect(attFiles(a.id)).toHaveLength(1);
+  const [file] = attFiles(a.id);
+  expect(file).toMatch(/^\d{8}-\d{6}-보고서 최종\.txt$/);
+  const abs = path.join(attDir(a.id), file);
+  expect(fs.readFileSync(abs, 'utf8')).toBe('hello 첨부');
+  expect(fs.readFileSync(src, 'utf8')).toBe('hello 첨부'); // 원본은 그대로
+  // 사람 글 뒤에 경로 줄 블록 하나 — 사본의 절대 경로, 따옴표 없이
+  expect(userContents()).toEqual([[{ type: 'text', text: '읽어 줘' }, { type: 'text', text: `\n\n첨부 파일:\n- ${abs}` }]]);
+  // 기록엔 칩에 쓸 것만 — 크기는 엔진이 잰 것(렌더러가 준 999 가 아니다), 원본·보낸 경로는 없다
+  const part = { type: 'file', name: '보고서 최종.txt', bytes: Buffer.byteLength('hello 첨부'), file };
+  expect(e.history(a.id)[0]).toEqual({ t: expect.any(Number), kind: 'user', source: 'human', parts: [{ type: 'text', text: '읽어 줘' }, part] });
+  expect(items[0]).toEqual(e.history(a.id)[0]);
+  expect(fs.readFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), 'utf8')).not.toContain(JSON.stringify(path.dirname(src)).slice(1, -1));
+  expect(e.status(a.id)).toBe('idle');
+});
+
+test('원본 없음 — 오류, 아무것도 안 보냄', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const gone = path.join(dir, 'originals', '없음.txt');
+  await expect(e.sendUser(a.id, [{ type: 'text', text: '읽어 줘' }, { type: 'file', path: gone, name: '없음.txt', bytes: 3 }])).rejects.toThrow(
+    `${ATTACH_FAIL}없음.txt: 찾을 수 없어요`,
+  );
+  // 폴더 · 상대 경로도 보내지 않는다
+  await expect(e.sendUser(a.id, [{ type: 'file', path: folder('폴더'), name: '폴더', bytes: 0 }])).rejects.toThrow(`${ATTACH_FAIL}폴더: 폴더는 보낼 수 없어요`);
+  await expect(e.sendUser(a.id, [{ type: 'file', path: 'rel.txt', name: 'rel.txt', bytes: 0 }])).rejects.toThrow(ATTACH_FAIL);
+  // 자격 증명 파일 이름은 골라도 읽거나 옮기지 않는다(시험 폴더의 가짜 파일)
+  await expect(e.sendUser(a.id, [fileOf(original('.credentials.json', '{}'))])).rejects.toThrow(`${ATTACH_FAIL}.credentials.json: 자격 증명 파일은 보낼 수 없어요`);
+  expect(spawns()).toEqual([]); // 띄우지도 않았다
+  expect(e.history(a.id)).toEqual([]);
+  expect(e.heldInput(a.id)).toBe(0);
+  expect(attFiles(a.id)).toEqual([]);
+});
+
+test('두 번째 파일 실패 — 첫 사본 되돌림, 오류', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const one = original('하나.txt', '1');
+  const gone = path.join(dir, 'originals', '둘.txt');
+  await expect(
+    e.sendUser(a.id, [{ type: 'text', text: 'echo 둘' }, fileOf(one), { type: 'file', path: gone, name: '둘.txt', bytes: 1 }]),
+  ).rejects.toThrow(`${ATTACH_FAIL}둘.txt: 찾을 수 없어요`);
+  expect(attFiles(a.id)).toEqual([]); // 이번에 만든 첫 사본은 지웠다
+  expect(spawns()).toEqual([]);
+  expect(e.history(a.id)).toEqual([]);
+  expect(fs.readFileSync(one, 'utf8')).toBe('1');
+  // 다시 보내면 새 사본으로
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 다시' }, fileOf(one)]);
+  await done;
+  expect(attFiles(a.id)).toHaveLength(1);
+});
+
+test('100MB+1 거절, 100MB 됨', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const big = original('큰.bin', 'x');
+  const edge = original('딱.bin', 'y');
+  const realStat = fs.promises.stat.bind(fs.promises);
+  // 진짜 큰 파일 대신 크기만 흉내 — 엔진은 렌더러가 준 bytes 가 아니라 fs.stat 으로 잰다
+  const spy = vi.spyOn(fs.promises, 'stat').mockImplementation((async (p: fs.PathLike, o?: any) => {
+    const st = await realStat(p, o);
+    if (p === big) return Object.assign(st, { size: ATTACH_MAX_BYTES + 1 });
+    if (p === edge) return Object.assign(st, { size: ATTACH_MAX_BYTES });
+    return st;
+  }) as any);
+  try {
+    await expect(e.sendUser(a.id, [{ type: 'file', path: big, name: '큰.bin', bytes: 1 }])).rejects.toThrow(
+      `${ATTACH_FAIL}큰.bin: 100MB 보다 큰 파일은 보낼 수 없어요`,
+    );
+    expect(attFiles(a.id)).toEqual([]);
+    const done = resultOf(e, a.id);
+    await e.sendUser(a.id, [{ type: 'text', text: 'echo 딱' }, { type: 'file', path: edge, name: '딱.bin', bytes: ATTACH_MAX_BYTES }]);
+    await done;
+    expect(attFiles(a.id)).toHaveLength(1);
+    expect(e.history(a.id)[0]).toMatchObject({ kind: 'user', parts: [{ type: 'text', text: 'echo 딱' }, { type: 'file', name: '딱.bin' }] });
+    expect(spy).toHaveBeenCalled();
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test('붙잡힌 입력도 준비된 꼴 — 원본을 지워도 나중에 그대로 감', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const src = original('메모.txt', '붙잡힌 첨부');
+  await slowTurn(e, a.id);
+  await e.sendUser(a.id, text('/대기')); // 줄에 서는 입력 — 뒤의 첨부도 줄에 선다
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(src)]);
+  expect(e.heldInput(a.id)).toBe(2);
+  expect(attFiles(a.id)).toHaveLength(1); // 줄에 서기 전에 사본을 만들었다
+  const [file] = attFiles(a.id);
+  const abs = path.join(attDir(a.id), file);
+  await e.interrupt(a.id);
+  // 붙잡기 목록 — 그림 수에 첨부를 세지 않는다
+  expect(e.hold(a.id)?.items.map((x) => [x.text, x.images, x.files ?? 0])).toEqual([['/대기', 0, 0], ['echo 첨부', 0, 1]]);
+  fs.rmSync(src); // 원본이 사라져도
+  const lines = `\n\n첨부 파일:\n- ${abs}`;
+  const got = resultTextIs(e, a.id, `받음: echo 첨부\n${lines}`);
+  e.resumeHold(a.id);
+  await got;
+  expect(userContents().at(-1)).toEqual([{ type: 'text', text: 'echo 첨부' }, { type: 'text', text: lines }]);
+  expect(attFiles(a.id)).toEqual([file]); // 다시 만들지 않았다
+  expect(fs.readFileSync(abs, 'utf8')).toBe('붙잡힌 첨부');
+  expect(e.history(a.id).filter((x) => x.kind === 'user').at(-1)).toMatchObject({
+    parts: [{ type: 'text', text: 'echo 첨부' }, { type: 'file', name: '메모.txt', file }],
+  });
+});
+
+test('차례 도중 첨부 — 지금 차례에 끼우고, 되돌림으로 읽은 것을 맞춰 바로 쉰다', async () => {
+  const e = await start({}, false, { midGraceMs: 60_000 }); // 되돌림을 못 맞추면 오래 작업 중으로 남는다
+  const { a } = setup(e);
+  const src = original('끼움.txt');
+  const slow = resultOf(e, a.id);
+  await e.sendUser(a.id, text('THINK 생각'));
+  await e.sendUser(a.id, [{ type: 'text', text: '이것도' }, fileOf(src)]);
+  expect(e.heldInput(a.id)).toBe(0); // 줄에 서지 않고 바로 나갔다
+  await slow;
+  await until('쉼', () => e.status(a.id) === 'idle', 2000);
+  const [file] = attFiles(a.id);
+  expect(userContents().at(-1)).toEqual([{ type: 'text', text: '이것도' }, { type: 'text', text: `\n\n첨부 파일:\n- ${path.join(attDir(a.id), file)}` }]);
+});
+
+test('갈래 — 사본 복사·기록 file 새 이름', async () => {
+  const { e } = await startConv();
+  const { a } = setup(e);
+  const src = original('설계.md', '# 설계');
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(src)]);
+  await done;
+  const s1 = agentOf(e, a.id).sessionId;
+  const p = (e.history(a.id).find((x) => x.kind === 'user') as any).parts[1];
+  await e.newConversation(a.id);
+
+  const made = await e.forkAgent({ from: a.id, key: s1, name: 'A 2', role: '기획' });
+
+  // 기록의 file 은 새 에이전트 첨부 폴더 안의 사본 — 복사는 같은 이름으로(copy)
+  const q = (e.history(made.id).find((x) => x.kind === 'user') as any).parts[1];
+  expect(q).toEqual({ type: 'file', name: '설계.md', bytes: p.bytes, file: p.file });
+  expect(fs.readFileSync(path.join(attDir(made.id), q.file), 'utf8')).toBe('# 설계');
+  expect(fs.readFileSync(path.join(attDir(a.id), p.file), 'utf8')).toBe('# 설계'); // 원래 것 그대로
+});
+
+test('에이전트 지우기 — 첨부 폴더 지움', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  const src = original('x.txt');
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, [{ type: 'text', text: 'echo' }, fileOf(src)]);
+  await done;
+  await talk(e, b.id, 'echo b');
+  expect(attFiles(a.id)).toHaveLength(1);
+  await e.removeAgent(a.id);
+  expect(fs.existsSync(attDir(a.id))).toBe(false);
+  expect(fs.existsSync(attDir(b.id))).toBe(true); // 다른 에이전트 것은 그대로
+  expect(fs.readFileSync(src, 'utf8')).toBe('첨부 내용'); // 원본은 그대로
+});
+
+test('모든 에이전트 띄우기에 첨부 폴더 --add-dir(폴더 생성)', async () => {
+  const e1 = await start();
+  const { a, b } = setup(e1);
+  expect(fs.existsSync(attDir(a.id))).toBe(false); // 띄우기 전엔 없다
+  await talk(e1, a.id, 'echo 하나');
+  await talk(e1, b.id, 'echo 둘');
+  await e1.newConversation(a.id);
+  await talk(e1, a.id, 'echo 셋');
+  await e1.shutdown();
+  const e2 = await start(); // --resume 으로 다시 뜨는 경우도
+  await talk(e2, a.id, 'echo 넷');
+
+  const all = spawns();
+  expect(all).toHaveLength(4);
+  for (const { argv } of all) {
+    const id = flagValue(argv, '-n') === 'A' ? a.id : b.id;
+    const i = argv.indexOf('--add-dir');
+    expect(argv.filter((x) => x === '--add-dir')).toHaveLength(1);
+    expect(argv[i + 1]).toBe(attDir(id));
+    expect(argv[i + 2].startsWith('-')).toBe(true);
+  }
+  expect(fs.statSync(attDir(a.id)).isDirectory()).toBe(true);
+  expect(fs.statSync(attDir(b.id)).isDirectory()).toBe(true);
+});
+
+test('서버 방 첨부는 아직 — 사본도 ssh 도 없이 거절', async () => {
+  const { e, calls } = await startSsh();
+  const room = e.addRoom('서버 실험', { host: 'dev' });
+  const w = e.addAgent({ roomId: room.id, name: 'W', role: '웹', folder: '/home/a/web' });
+  await expect(e.sendUser(w.id, [{ type: 'text', text: 'echo' }, fileOf(original('x.txt'))])).rejects.toThrow(
+    '파일을 보내지 못했어요 — 서버 방 첨부는 아직이에요',
+  );
+  expect(calls()).toEqual([]);
+  expect(attFiles(w.id)).toEqual([]);
+  expect(e.history(w.id)).toEqual([]);
+}, 20_000);
