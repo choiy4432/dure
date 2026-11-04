@@ -385,6 +385,47 @@ test('기다리는 정리 — 정리가 되면 그 띄우기만 뺀다(다른 �
   expect(openStore(dir).pendingCleanups()).toEqual([]);
 });
 
+test('기다리는 첨부 정리 — 서버 방 에이전트를 지우면 그 서버 첨부 폴더를 목록에(띄우기와 상관없이, 방 지우기도) · 이 PC 방은 없다 · 다시 열어도 남는다 · 되면 뺀다', () => {
+  const s = openStore(dir);
+  const srv = s.addRoom('서버', { host: 'me@h:2222' });
+  const a = s.addAgent({ roomId: srv.id, name: 'a', role: 'r', folder: '/home/a/web' });
+  const b = s.addAgent({ roomId: srv.id, name: 'b', role: 'r', folder: '/home/a/api' });
+  s.updateAgent(a.id, { remoteLaunch: { pid: 11, run: 'aaaa1111' } });
+  const local = s.addRoom('이 PC');
+  const d = s.addAgent({ roomId: local.id, name: 'd', role: 'r', folder: dir });
+  expect(s.pendingAttachmentCleanups()).toEqual([]);
+  s.removeAgent(a.id);
+  s.removeAgent(d.id);
+  expect(s.pendingAttachmentCleanups()).toEqual([{ host: 'me@h:2222', agentId: a.id }]);
+  expect(s.pendingCleanups()).toEqual([{ host: 'me@h:2222', agentId: a.id, launch: { pid: 11, run: 'aaaa1111' } }]); // 띄우기 정리는 따로 그대로
+  s.removeRoom(srv.id);
+  const want = [{ host: 'me@h:2222', agentId: a.id }, { host: 'me@h:2222', agentId: b.id }];
+  expect(s.pendingAttachmentCleanups()).toEqual(want);
+  expect(openStore(dir).pendingAttachmentCleanups()).toEqual(want);
+  s.dropPendingAttachmentCleanup('ghost');
+  expect(s.pendingAttachmentCleanups()).toHaveLength(2);
+  s.dropPendingAttachmentCleanup(a.id);
+  expect(s.pendingAttachmentCleanups()).toEqual([{ host: 'me@h:2222', agentId: b.id }]);
+  expect(openStore(dir).pendingAttachmentCleanups()).toEqual([{ host: 'me@h:2222', agentId: b.id }]);
+});
+
+test('기다리는 첨부 정리 — 옛 state.json 에 칸이 없으면 빈 목록 · 깨진 줄은 버린다', () => {
+  const s = openStore(dir);
+  s.addRoom('A');
+  const file = path.join(dir, 'state.json');
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete raw.pendingAttachmentCleanups;
+  fs.writeFileSync(file, JSON.stringify(raw));
+  expect(openStore(dir).pendingAttachmentCleanups()).toEqual([]);
+  raw.pendingAttachmentCleanups = [{ host: 'dev', agentId: 'ag1' }, { host: 'a b', agentId: 'ag1' }, { host: 'dev', agentId: '../x' }, { host: 'dev' }, 7];
+  fs.writeFileSync(file, JSON.stringify(raw));
+  expect(openStore(dir).pendingAttachmentCleanups()).toEqual([{ host: 'dev', agentId: 'ag1' }]);
+  raw.pendingAttachmentCleanups = 'nope';
+  fs.writeFileSync(file, JSON.stringify(raw));
+  expect(openStore(dir).pendingAttachmentCleanups()).toEqual([]);
+  expect(fs.readdirSync(dir).filter((f) => f.includes('.broken-'))).toEqual([]);
+});
+
 test('기다리는 정리 — 옛 state.json 에 칸이 없으면 빈 목록 · 깨진 줄은 버린다', () => {
   const s = openStore(dir);
   s.addRoom('A');

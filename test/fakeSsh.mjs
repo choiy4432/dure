@@ -35,8 +35,12 @@
 //   FAKE_SSH_CLEANUP_MS  정리 명령이 끝나기 전에 더 기다린다(진짜는 sleep 2 — 기본 0, 정리 상한 시험용)
 //   FAKE_SSH_UPLOAD_CODE 첨부 올리기의 종료 코드(기본 0). 0 이 아니면 stdin 을 다 받은 뒤 반만 쓰고 DURE_HOME 없이 끝난다 —
 //                        255·-1 은 'Connection to <host> closed by remote host.'(도중 끊김), 그 밖은 'cat: write error: No space left on device'
+//   FAKE_SSH_UPLOAD_ERR  FAKE_SSH_UPLOAD_CODE 가 서버 명령 오류일 때(255·-1 이 아님) stderr 의 글(기본 위의 No space left)
 //   FAKE_SSH_UPLOAD_HOLD 올릴 사본 이름에 그 글자가 들어 있으면 다 쓴 뒤 끝내지 않는다(DURE_HOME 없이 — 끌 때까지, 안전 상한 60초 뒤 255).
 //                        느린·멈춘 올리기 흉내(멈춤·새 대화·시간 상한 시험). FAKE_SSH_LOG 에 {event:'upload', agentId, file, bytes[, partial]}
+//   FAKE_SSH_UPLOAD_RELEASE  붙잡은 올리기는 이 파일이 생기면 풀고 보통처럼 끝난다(DURE_HOME, 0) — 느린 올리기가 끝나는 것 흉내
+//   FAKE_SSH_UPLOAD_PROXY    붙잡은 올리기가 같은 stdout·stderr 를 물려받은 자식을 하나 둔다(30초 산다 — ProxyJump·ProxyCommand 흉내).
+//                            FAKE_SSH_LOG 에 {event:'upload-proxy', pid}
 //   FAKE_SSH_CONFIG_RFWD ~/.ssh/config 의 RemoteForward 흉내 — 그 원격 포트는 늘 실패(서버에서 다른 것이 쓰는 중). ClearAllForwardings=yes 면 없다
 //   FAKE_SSH_CONFIG_REMOTECOMMAND  ~/.ssh/config 의 RemoteCommand 흉내 — -o RemoteCommand=none 이 없으면 명령과 부딪혀 255
 // 서버 환경 = 이 프로세스의 환경 + 띄우기 스크립트의 export — CLAUDE_CONFIG_DIR·FAKE_TRANSCRIPTS·FAKE_CLAUDE_LOG 등이 가짜 claude 에 그대로 간다.
@@ -155,16 +159,18 @@ function stopKeeper(rec) {
 }
 
 // ── 셸 단어 풀기(remote.ts 가 만드는 모양만큼) ──
-// 명령은 따옴표 밖 ; 로 나눈다. 단어 = { value, home }(home = 따옴표 밖·큰따옴표 안의 $HOME 을 펼쳤다).
+// 명령은 따옴표 밖 ; 로 나눈다. 단어 = { value, home, src }(home = 따옴표 밖·큰따옴표 안의 $HOME 을 펼쳤다).
+// src = value 의 글자마다 어디서 왔나 — S 작은따옴표 안 · D 큰따옴표 안 · E 따옴표 밖 \ 로 푼 글자 · U 따옴표 밖 · H 펼친 $HOME.
 // 작은따옴표는 그대로, 큰따옴표는 \$ \` \" \\ 만 풀고 $HOME·${HOME} 을 펼친다. 다른 $변수는 글자 그대로 둔다.
 const HOME_RE = /^\$(?:HOME(?![A-Za-z0-9_])|\{HOME\})/;
 function tokenize(src) {
   const cmds = [];
   let cmd = [];
   let word = null;
-  const add = (s, home = false) => {
-    word ??= { value: '', home: false };
+  const add = (s, home = false, tag = 'U') => {
+    word ??= { value: '', home: false, src: '' };
     word.value += s;
+    word.src += (home ? 'H' : tag).repeat(s.length);
     if (home) word.home = true;
   };
   const push = () => {
@@ -182,7 +188,7 @@ function tokenize(src) {
     if (ch === "'") {
       const j = src.indexOf("'", i + 1);
       if (j < 0) throw new Error('닫히지 않은 작은따옴표');
-      add(src.slice(i + 1, j));
+      add(src.slice(i + 1, j), false, 'S');
       i = j + 1;
     } else if (ch === '"') {
       add('');
@@ -195,18 +201,18 @@ function tokenize(src) {
           break;
         }
         if (c === '\\' && '$`"\\\n'.includes(src[i + 1] ?? '')) {
-          if (src[i + 1] !== '\n') add(src[i + 1]);
+          if (src[i + 1] !== '\n') add(src[i + 1], false, 'D');
           i += 2;
         } else if (c === '$' && HOME_RE.test(src.slice(i))) {
           add(REMOTE_HOME, true);
           i += HOME_RE.exec(src.slice(i))[0].length;
         } else {
-          add(c);
+          add(c, false, 'D');
           i++;
         }
       }
     } else if (ch === '\\') {
-      if (src[i + 1] !== '\n') add(src[i + 1] ?? '');
+      if (src[i + 1] !== '\n') add(src[i + 1] ?? '', false, 'E');
       i += 2;
     } else if (ch === '$' && HOME_RE.test(src.slice(i))) {
       add(REMOTE_HOME, true);
@@ -326,8 +332,17 @@ const ATTACH_D = new RegExp(`^d=${REMOTE_HOME}/\\.dure/attachments/(${SAFE})$`);
 const ATTACH_DIR = new RegExp(`^${REMOTE_HOME}/\\.dure/attachments/(${SAFE})$`);
 /** `d="$HOME/.dure/attachments/<에이전트>"` 한 명령이면 그 에이전트 */
 const attachD = (c) => (c?.length === 1 && c[0].home ? (ATTACH_D.exec(c[0].value)?.[1] ?? null) : null);
-/** `"$d"/'<이름>'` 한 단어면 그 이름 */
-const inD = (w) => (w && w.value.startsWith('$d/') && fileName(w.value.slice(3)) ? w.value.slice(3) : null);
+/**
+ * `"$d"/'<이름>'` 한 단어면 그 이름 — `"$d"` 는 큰따옴표 안, `/` 는 따옴표 밖, 이름은 글자 하나까지 작은따옴표 안(shq 꼴: 이름의 `'` 만
+ * 따옴표 밖 `\'`). 따옴표 밖의 `&`·`$( )`·큰따옴표 이름은 진짜 셸에선 명령이 끼어들거나 펼쳐진다 — 모른다
+ */
+const inD = (w) => {
+  if (!w || !w.value.startsWith('$d/') || !w.src.startsWith('DDU')) return null;
+  const name = w.value.slice(3);
+  const tags = w.src.slice(3);
+  const literal = [...tags].every((t, k) => t === 'S' || (t === 'E' && name[k] === "'"));
+  return literal && fileName(name) ? name : null;
+};
 /**
  * 첨부 스크립트 셋(remote.ts) — 올리기(uploadScript) · 파일 지우기(attachmentRemoveScript) · 폴더 지우기(attachmentsCleanupScript).
  * 셋 다 아니면 null(다른 모양으로 넘긴다)
@@ -527,14 +542,28 @@ async function runUpload(spec, host) {
     const half = data.subarray(0, Math.floor(data.length / 2));
     fs.writeFileSync(target, half);
     log({ event: 'upload', agentId: spec.agentId, file: spec.file, bytes: half.length, partial: true });
-    return fail(code, sshLevelCode(code) ? `Connection to ${host} closed by remote host.` : 'bash: line 1: cat: write error: No space left on device');
+    const why = process.env.FAKE_SSH_UPLOAD_ERR || 'bash: line 1: cat: write error: No space left on device';
+    return fail(code, sshLevelCode(code) ? `Connection to ${host} closed by remote host.` : why);
   }
   fs.writeFileSync(target, data);
   log({ event: 'upload', agentId: spec.agentId, file: spec.file, bytes: data.length });
   const hold = process.env.FAKE_SSH_UPLOAD_HOLD;
   if (hold && spec.file.includes(hold)) {
-    await sleep(60_000); // 끌 때까지 — 안전 상한
-    return fail(255, `Timeout, server ${host} not responding.`);
+    // ProxyJump·ProxyCommand 흉내 — 같은 stdout·stderr 를 물려받은 자식(그것이 살아 있는 동안 부모의 파이프가 닫히지 않는다).
+    // detached: node 가 띄운 보통 자식은 부모와 함께 죽는 작업 개체(job)에 들어 파이프가 바로 닫힌다(이 PC 실측) — ssh.exe 가 띄운
+    // ProxyCommand 자식은 그렇게 묶이지 않는다고 보고, 묶이지 않은 자식으로 흉내 낸다
+    if (process.env.FAKE_SSH_UPLOAD_PROXY) {
+      const proxy = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, detached: true });
+      proxy.unref();
+      log({ event: 'upload-proxy', pid: proxy.pid });
+    }
+    // 끌 때까지(안전 상한 60초) — FAKE_SSH_UPLOAD_RELEASE 파일이 생기면 풀고 보통처럼 끝난다
+    const release = process.env.FAKE_SSH_UPLOAD_RELEASE;
+    const until = Date.now() + 60_000;
+    while (!(release && fs.existsSync(release))) {
+      if (Date.now() > until) return fail(255, `Timeout, server ${host} not responding.`);
+      await sleep(50);
+    }
   }
   process.stdout.write(`\nDURE_HOME=${REMOTE_HOME}\n`);
   finish(0);

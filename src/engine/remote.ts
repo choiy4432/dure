@@ -285,6 +285,11 @@ export function classifyExit(a: { code: number | null; stderr: string; started: 
 
 /** 맺은 연결이 도중에 끊긴 ssh 의 줄 — 서버가 닫음·연결 재설정·파이프 끊김·ServerAlive 응답 없음 */
 const DROPPED = /closed by remote host|Connection reset|Broken pipe|not responding|client_loop:/i;
+/**
+ * 접속 전(인사·키 교환 전)에 끝난 줄 — 키 거절·서버 키, 그리고 서버가 인사 전에 끊음(`kex_exchange_identification: …`,
+ * 옛 이름 `ssh_exchange_identification` — MaxStartups·fail2ban). 끊김 줄(Connection reset·closed by remote host)이 함께 와도 서버에 쓴 것이 없다
+ */
+const BEFORE_CONNECT = /Permission denied|Host key verification failed|kex_exchange_identification|ssh_exchange_identification/i;
 
 /**
  * 올리기 ssh(uploadScript)가 끝난 까닭 — ssh 쪽 종료(255·-1)만 가른다: 도중에 끊긴 줄이면 끊김, 아니면 접속 전 실패(classifyExit — 키 거절·
@@ -292,8 +297,20 @@ const DROPPED = /closed by remote host|Connection reset|Broken pipe|not respondi
  */
 export function classifyUploadExit(code: number | null, stderr: string): RemoteIssue | null {
   if (!sshLevel(code)) return null;
-  if (DROPPED.test(stderr) && !/Permission denied|Host key verification failed/i.test(stderr)) return { kind: 'disconnected', detail: null };
-  return classifyExit({ code, stderr, started: false });
+  if (DROPPED.test(stderr) && !BEFORE_CONNECT.test(stderr)) return { kind: 'disconnected', detail: null };
+  return classifyExit({ code, stderr, started: false }); // 인사 전에 끊긴 것은 접속 못 함 — 까닭은 그 첫 줄
+}
+
+/**
+ * 서버 명령(uploadScript)이 실패한 까닭 — 흔한 것은 쉬운 말로, 그 밖은 종료 코드만(모르면 그것도 없이). 서버 stderr 원문은 싣지 않는다
+ * (영어·서버 경로가 실린다 — 이 PC 의 읽기 오류 `읽을 수 없어요(<코드>)` 와 같은 규칙)
+ */
+export function uploadWriteText(code: number | null, stderr: string): string {
+  if (/No space left/i.test(stderr)) return '서버 디스크에 빈 자리가 없어요';
+  if (/Disk quota/i.test(stderr)) return '서버에서 쓸 수 있는 자리를 다 썼어요';
+  if (/Permission denied/i.test(stderr)) return '서버 첨부 폴더에 쓸 권한이 없어요';
+  if (/File name too long/i.test(stderr)) return '파일 이름이 너무 길어요';
+  return code === null ? '서버에 파일을 쓰지 못했어요' : `서버에 파일을 쓰지 못했어요(종료 코드 ${code})`;
 }
 
 /** 띄운 셸이 stderr 로 알리는 `DURE_PID=<숫자>` — 정리 때 쓴다 */

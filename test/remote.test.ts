@@ -7,6 +7,7 @@ import {
   hostArgs, SSH_OPTIONS, shq, remoteRunDir, remoteRunFiles, remoteLaunchScript, launchArgs, launchPreamble,
   cleanupScript, checkScript, updateScript, transcriptCheckScript, classifyExit, parsePid, isLoginFailure, posixJoin, parseCheckOutput, sshErrorLines, isSafeId,
   runArgs, forwardFailed, remoteAttachDir, uploadScript, parseUploadHome, attachmentsCleanupScript, attachmentRemoveScript, classifyUploadExit,
+  uploadWriteText,
 } from '../src/engine/remote';
 import { SPAWN_ENV_EXTRA } from '../src/engine/claudeArgs';
 
@@ -725,5 +726,44 @@ describe('classifyUploadExit — 올리기 ssh 의 끝', () => {
   });
   it('서버 명령의 종료(1·3·127 — claude·폴더와 상관없다)·0·null 은 가르지 않는다', () => {
     for (const code of [0, 1, 2, 3, 127, null]) expect(u(code, 'bash: line 1: claude: command not found')).toBeNull();
+  });
+  it('인사(kex·ssh_exchange_identification) 전에 서버가 끊은 것은 접속 못 함 — MaxStartups·fail2ban, 서버에 쓴 것이 없다', () => {
+    const lines = [
+      'kex_exchange_identification: read: Connection reset by peer',
+      'kex_exchange_identification: Connection closed by remote host',
+      'ssh_exchange_identification: Connection closed by remote host',
+      'ssh_exchange_identification: read: Connection reset by peer',
+    ];
+    for (const code of [255, -1, 4294967295]) {
+      for (const line of lines) {
+        expect(u(code, `${line}\r\nConnection reset by 10.0.0.12 port 22`)).toEqual({ kind: 'unreachable', detail: line });
+      }
+    }
+  });
+});
+
+describe('uploadWriteText — 서버 명령(올리기)이 실패한 까닭', () => {
+  /** 화면에 가는 글 — 영어 원문·서버 경로가 없다 */
+  const plain = (s: string) => expect(s).not.toMatch(/[A-Za-z/]/);
+  it('흔한 것은 쉬운 말로 — 서버 stderr 원문(영어·서버 경로)은 싣지 않는다', () => {
+    const cases: [string, string][] = [
+      ['bash: line 1: cat: write error: No space left on device', '서버 디스크에 빈 자리가 없어요'],
+      ["bash: line 1: /home/u/.dure/attachments/ag1/20261104-101010-x.txt: Disk quota exceeded", '서버에서 쓸 수 있는 자리를 다 썼어요'],
+      ["cat: write error: Disk quota exceeded", '서버에서 쓸 수 있는 자리를 다 썼어요'],
+      ["bash: line 1: /home/u/.dure/attachments/ag1/20261104-101010-x.txt: Permission denied", '서버 첨부 폴더에 쓸 권한이 없어요'],
+      ["mkdir: cannot create directory '/home/u/.dure': Permission denied", '서버 첨부 폴더에 쓸 권한이 없어요'],
+      [`bash: line 1: /home/u/.dure/attachments/ag1/${'가'.repeat(90)}.txt: File name too long`, '파일 이름이 너무 길어요'],
+    ];
+    for (const [stderr, want] of cases) {
+      expect(uploadWriteText(1, stderr)).toBe(want);
+      expect(uploadWriteText(1, `프로필 잡음\r\n${stderr}\r\n`)).toBe(want);
+      plain(uploadWriteText(1, stderr));
+    }
+  });
+  it('그 밖은 원문 없이 종료 코드만(모르면 그것도 없이)', () => {
+    expect(uploadWriteText(1, 'bash: line 1: cat: write error: Input/output error')).toBe('서버에 파일을 쓰지 못했어요(종료 코드 1)');
+    expect(uploadWriteText(2, '')).toBe('서버에 파일을 쓰지 못했어요(종료 코드 2)');
+    expect(uploadWriteText(null, 'Killed')).toBe('서버에 파일을 쓰지 못했어요');
+    for (const s of [uploadWriteText(1, 'cat: /home/u/x: Input/output error'), uploadWriteText(null, 'Killed')]) plain(s);
   });
 });

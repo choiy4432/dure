@@ -11,6 +11,12 @@ export interface PendingCleanup {
   launch: { pid: number; run: string };
 }
 
+/** 지운 서버 방 에이전트의 서버 첨부 폴더(`$HOME/.dure/attachments/<id>`) — 지우기가 되면 뺀다. 띄우기 정리(PendingCleanup)와 따로 */
+export interface PendingAttachmentCleanup {
+  host: string;
+  agentId: AgentId;
+}
+
 export interface Store {
   rooms(): Room[];
   agents(roomId?: RoomId): Agent[];
@@ -26,12 +32,19 @@ export interface Store {
    */
   checkAgent(input: { roomId: RoomId; name: string; folder: string }): void;
   updateAgent(id: AgentId, patch: AgentPatch): Agent;
-  /** 서버 방 에이전트면 저장된 띄우기(remoteLaunch)를 기다리는 정리 목록으로 옮긴 뒤 지운다 */
+  /**
+   * 서버 방 에이전트면 저장된 띄우기(remoteLaunch)를 기다리는 정리 목록으로, 그 서버 첨부 폴더를 기다리는 첨부 정리 목록으로 옮긴 뒤 지운다
+   * (엔진이 곧 지우고 되면 뺀다 — 서버가 내려가 있었으면 남아 다음에 켤 때 다시)
+   */
   removeAgent(id: AgentId): void;
   /** 기다리는 정리 — 엔진이 켤 때 다시 해 본다 */
   pendingCleanups(): PendingCleanup[];
   /** 그 에이전트의 그 띄우기를 목록에서 뺀다(정리가 됐다) — 없으면 아무것도 안 한다 */
   dropPendingCleanup(agentId: AgentId, launch: { pid: number; run: string }): void;
+  /** 기다리는 첨부 정리(지운 서버 방 에이전트의 서버 첨부 폴더) — 엔진이 켤 때 다시 해 본다 */
+  pendingAttachmentCleanups(): PendingAttachmentCleanup[];
+  /** 그 에이전트의 서버 첨부 폴더를 목록에서 뺀다(지웠다) — 없으면 아무것도 안 한다 */
+  dropPendingAttachmentCleanup(agentId: AgentId): void;
 }
 
 interface State {
@@ -39,6 +52,7 @@ interface State {
   rooms: Room[];
   agents: Agent[];
   pendingCleanups: PendingCleanup[];
+  pendingAttachmentCleanups: PendingAttachmentCleanup[];
 }
 
 const norm = (s: string) => s.trim().toLocaleLowerCase('ko');
@@ -119,12 +133,30 @@ function savedPending(v: unknown): PendingCleanup[] {
   return out;
 }
 
+/** 저장된 기다리는 첨부 정리 — 올바른 서버 이름·안전한 에이전트 id 만(셸 명령에 들어간다), 깨진 줄·배열이 아니면 버린다 */
+function savedPendingAttachments(v: unknown): PendingAttachmentCleanup[] {
+  if (!Array.isArray(v)) return [];
+  const out: PendingAttachmentCleanup[] = [];
+  for (const x of v) {
+    if (!x || typeof x !== 'object') continue;
+    const { host, agentId } = x as Record<string, unknown>;
+    if (typeof host !== 'string' || typeof agentId !== 'string' || !isSafeId(agentId)) continue;
+    try {
+      hostArgs(host);
+    } catch {
+      continue;
+    }
+    out.push({ host, agentId });
+  }
+  return out;
+}
+
 export const REMOTE_FOLDER_ABSOLUTE = '서버 폴더는 / 로 시작하는 전체 경로로 적어 주세요';
 /** 줄바꿈 같은 제어 문자 — 이름·역할·서버 폴더에 쓰지 않는다(서버 폴더는 셸 명령에 들어간다) */
 export const CONTROL_CHAR = /[\p{Cc}\u2028\u2029]/u;
 
 function load(file: string): State {
-  const empty: State = { version: 1, rooms: [], agents: [], pendingCleanups: [] };
+  const empty: State = { version: 1, rooms: [], agents: [], pendingCleanups: [], pendingAttachmentCleanups: [] };
   if (!fs.existsSync(file)) return empty;
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -137,6 +169,7 @@ function load(file: string): State {
         forkOf: typeof a.forkOf === 'string' && a.forkOf ? a.forkOf : null, remoteLaunch: savedLaunch(a.remoteLaunch),
       })),
       pendingCleanups: savedPending(raw.pendingCleanups), // 옛 파일엔 없다 → []
+      pendingAttachmentCleanups: savedPendingAttachments(raw.pendingAttachmentCleanups), // 옛 파일엔 없다 → []
     };
   } catch {
     renameRetrying(file, `${file}.broken-${Date.now()}`);
@@ -180,6 +213,12 @@ export function openStore(dataDir: string): Store {
     if (state.pendingCleanups.some((p) => p.agentId === a.id && p.launch.pid === launch.pid && p.launch.run === launch.run)) return;
     state.pendingCleanups.push({ host, agentId: a.id, launch: { pid: launch.pid, run: launch.run } });
   };
+  /** 지우는 서버 방 에이전트의 서버 첨부 폴더를 기다리는 첨부 정리 목록으로 — 띄운 적이 없어도(올리기만 했을 수 있다), 같은 것은 한 번 */
+  const keepAttachments = (a: Agent) => {
+    const host = state.rooms.find((r) => r.id === a.roomId)?.remote?.host;
+    if (!host || state.pendingAttachmentCleanups.some((p) => p.agentId === a.id)) return;
+    state.pendingAttachmentCleanups.push({ host, agentId: a.id });
+  };
   const checkAgent = ({ roomId, name, folder }: { roomId: RoomId; name: string; folder: string }) => {
     const room = needRoom(roomId);
     checkName(roomId, name);
@@ -217,7 +256,12 @@ export function openStore(dataDir: string): Store {
     },
     removeRoom(id) {
       needRoom(id);
-      for (const a of state.agents) if (a.roomId === id) keepLaunch(a); // 방이 지워지기 전에(서버 이름은 방에 있다)
+      // 방이 지워지기 전에(서버 이름은 방에 있다)
+      for (const a of state.agents) {
+        if (a.roomId !== id) continue;
+        keepLaunch(a);
+        keepAttachments(a);
+      }
       state.rooms = state.rooms.filter((r) => r.id !== id);
       state.agents = state.agents.filter((a) => a.roomId !== id);
       save();
@@ -247,8 +291,10 @@ export function openStore(dataDir: string): Store {
       return clone(a);
     },
     removeAgent(id) {
-      keepLaunch(needAgent(id));
-      state.agents = state.agents.filter((a) => a.id !== id);
+      const a = needAgent(id);
+      keepLaunch(a);
+      keepAttachments(a);
+      state.agents = state.agents.filter((x) => x.id !== id);
       save();
     },
     pendingCleanups: () => clone(state.pendingCleanups),
@@ -256,6 +302,13 @@ export function openStore(dataDir: string): Store {
       const rest = state.pendingCleanups.filter((p) => !(p.agentId === agentId && p.launch.pid === launch.pid && p.launch.run === launch.run));
       if (rest.length === state.pendingCleanups.length) return;
       state.pendingCleanups = rest;
+      save();
+    },
+    pendingAttachmentCleanups: () => clone(state.pendingAttachmentCleanups),
+    dropPendingAttachmentCleanup(agentId) {
+      const rest = state.pendingAttachmentCleanups.filter((p) => p.agentId !== agentId);
+      if (rest.length === state.pendingAttachmentCleanups.length) return;
+      state.pendingAttachmentCleanups = rest;
       save();
     },
   };

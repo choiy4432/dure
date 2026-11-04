@@ -13,6 +13,7 @@ import { DENY } from '../src/shared/denyTexts';
 import { ATTACH_MAX_BYTES } from '../src/shared/attachments';
 import { attachmentsCleanupScript, uploadScript } from '../src/engine/remote';
 import { ClaudeSession } from '../src/engine/claudeSession';
+import { Readable } from 'node:stream';
 
 const FAKE = path.resolve('test/fakeClaude.mjs');
 let dir: string;
@@ -6395,9 +6396,11 @@ describe('서버 방 띄우기', () => {
     const errors2: any[] = [];
     e2.on('engine-error', (x) => errors2.push(x));
     await until('켤 때 다시', () => calls().filter((c) => c.kind === 'cleanup').length === 4, 10_000);
-    await until('알림', () => errors2.length === 1, 5000);
+    const LAUNCH_LEFT = '서버의 claude 를 끄지 못했어요 — 서버에서 직접 확인해 주세요';
+    await until('알림', () => errors2.some((x) => x.message === LAUNCH_LEFT), 5000);
     await sleep(300);
-    expect(errors2).toHaveLength(1);
+    // 띄우기 정리 알림은 한 번 · 서버 첨부 폴더도 켤 때 다시 해 봤다(기다리는 첨부 정리 — 그 알림도 한 번)
+    expect(errors2.map((x) => x.message).sort()).toEqual([LAUNCH_LEFT, '서버의 첨부 폴더를 다 지우지 못했어요 — 두레를 다시 켜면 다시 지워요'].sort());
     expect(openStore(dataDir).pendingCleanups()).toEqual([{ host: 'dev', agentId: web.id, launch }]);
     await e2.shutdown();
     engines = engines.filter((x) => x !== e2);
@@ -6966,8 +6969,10 @@ describe('서버 방 첨부', () => {
     expect(e.agents().map((x) => x.id)).toEqual([]);
     await until('정리 실패 기록', () => errs.length > 0, 10_000);
     await sleep(300);
-    expect(errs).toEqual([{ agentId: api.id, message: '서버의 첨부 파일을 다 지우지 못했어요' }]);
-    expect(calls().filter((x) => x.kind === 'attachments-cleanup')).toHaveLength(2); // 다시 하지 않는다
+    expect(errs).toEqual([{ agentId: api.id, message: '서버의 첨부 폴더를 다 지우지 못했어요 — 두레를 다시 켜면 다시 지워요' }]);
+    expect(calls().filter((x) => x.kind === 'attachments-cleanup')).toHaveLength(2); // 지금은 다시 하지 않는다(다음에 켤 때 — 기다리는 정리)
+    // 지워진 web 은 목록에서 빠졌고, 못 지운 api 만 남았다
+    expect(openStore(dataDir).pendingAttachmentCleanups()).toEqual([{ host: 'dev', agentId: api.id }]);
   }, 40_000);
 
   test('위험한 이름 — 사본 이름·서버 스크립트', async () => {
@@ -7064,6 +7069,196 @@ describe('서버 방 첨부', () => {
     await until('서버 파일 되돌림', () => servedFiles().length === 0, 10_000);
     expect(calls().filter((c) => c.kind === 'launch')).toEqual([]);
   }, 30_000);
+
+  /** 그 에이전트의 다음 result — 서버 방은 띄우기·올리기가 있어 넉넉히 */
+  const resultSoon = (e: Engine, id: string) => waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === id && x.event.kind === 'result', 20_000);
+
+  test('올리는 중엔 지난 대화로 돌아가지 않는다 — 다 올리면 지금 대화로 가고, 그 뒤엔 돌아갈 수 있다', async () => {
+    const release = path.join(dir, 'upload-release');
+    const { e, web, ofKind } = await attachRoom({
+      CLAUDE_CONFIG_DIR: path.join(dir, 'srv-claude'), FAKE_TRANSCRIPTS: '1', FAKE_SSH_UPLOAD_HOLD: '느린', FAKE_SSH_UPLOAD_RELEASE: release,
+    });
+    await talk(e, web.id, 'echo 하나');
+    const first = agentOf(e, web.id).sessionId;
+    await e.newConversation(web.id);
+    await talk(e, web.id, 'echo 둘');
+    const second = agentOf(e, web.id).sessionId;
+    const sending = e.sendUser(web.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(original('느린.txt'))]);
+    await until('올리는 중', () => ofKind('upload').length === 1, 10_000);
+    await expect(e.resumeConversation(web.id, first)).rejects.toThrow('보내는 중인 입력이 끝나면 돌아갈 수 있어요');
+    expect(agentOf(e, web.id).sessionId).toBe(second);
+    const done = resultSoon(e, web.id);
+    fs.writeFileSync(release, ''); // 올리기를 끝낸다
+    await sending;
+    await done;
+    // 지금 대화로 갔다 — 돌아간 대화로 흘러가지 않았다
+    expect(agentOf(e, web.id).sessionId).toBe(second);
+    expect(convUserTexts(e.history(web.id))).toEqual(['echo 둘', 'echo 첨부']);
+    await e.resumeConversation(web.id, first);
+    expect(agentOf(e, web.id).sessionId).toBe(first);
+  }, 60_000);
+
+  test('서버 줄(앞선 정리)을 기다리는 동안 멈춤 — 줄을 기다리지 않고 바로 실패', async () => {
+    const { e, web, calls, ofKind } = await attachRoom({ FAKE_SSH_CLEANUP_MS: '8000' });
+    await talk(e, web.id, 'echo 하나');
+    await e.newConversation(web.id); // 세션을 내린다 — 그 띄우기 정리가 서버 줄에 선다(8초)
+    await until('정리 중', () => calls().some((c) => c.kind === 'cleanup'), 10_000);
+    const sending = e.sendUser(web.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(original('x.txt'))]);
+    const failed = expect(sending).rejects.toThrow(`${ATTACH_FAIL}x.txt: ${STOPPED}`);
+    await until('사본', () => attFiles(web.id).length === 1);
+    await sleep(200); // 올리기 전 — 서버 줄을 기다리는 중
+    const t0 = Date.now();
+    await e.interrupt(web.id);
+    await failed;
+    expect(Date.now() - t0).toBeLessThan(3000); // 정리는 8초 — 멈춤이 그것을 기다리지 않았다
+    expect(ofKind('upload')).toEqual([]);
+    expect(calls().filter((c) => c.kind === 'upload')).toEqual([]);
+    expect(attFiles(web.id)).toEqual([]);
+    expect(e.heldInput(web.id)).toBe(0);
+    expect(e.hold(web.id)).toBeNull();
+  }, 40_000);
+
+  test('서버 명령 실패 — 쉬운 까닭(영어 원문·서버 경로 없이) · 반쯤 쓴 서버 파일은 지운다', async () => {
+    const { e, web, ofKind, servedFiles } = await attachRoom({
+      FAKE_SSH_UPLOAD_CODE: '1', FAKE_SSH_UPLOAD_ERR: 'bash: line 1: /home/a/.dure/attachments/ag/20261104-101010-x.txt: Disk quota exceeded',
+    });
+    const err = (await e.sendUser(web.id, [fileOf(original('x.txt'))]).catch((x: Error) => x)) as Error;
+    expect(err.message).toBe(`${ATTACH_FAIL}x.txt: 서버에서 쓸 수 있는 자리를 다 썼어요`);
+    expect(err.message).not.toMatch(/Disk|quota|\/home/);
+    expect(attFiles(web.id)).toEqual([]);
+    await until('서버 파일 되돌림', () => ofKind('attachment-remove').length === 1 && servedFiles().length === 0, 10_000);
+  }, 30_000);
+
+  test('ssh 를 못 띄움 — 그 까닭(코드만, 내 PC 경로 없이) · 서버를 지우러 가지 않는다', async () => {
+    const notExe = path.join(dir, 'ssh-not-exe.txt');
+    fs.writeFileSync(notExe, 'x');
+    const { e, web } = await attachRoom({}, { ssh: { command: notExe } });
+    const errs: unknown[] = [];
+    e.on('engine-error', (x) => errs.push(x));
+    const err = (await e.sendUser(web.id, [fileOf(original('x.txt'))]).catch((x: Error) => x)) as Error;
+    expect(err.message).toMatch(/^파일을 보내지 못했어요 — x\.txt: ssh 를 실행하지 못했어요\([A-Z0-9_]+\)$/);
+    expect(attFiles(web.id)).toEqual([]);
+    await sleep(500);
+    expect(errs).toEqual([]); // 지우기를 세웠다면 그 ssh 도 못 띄워 engine-error 가 났다
+  }, 30_000);
+
+  test('이 PC 사본을 못 읽음 — 그 까닭(코드만) · 서버를 지우러 가지 않는다', async () => {
+    const { e, web, calls } = await attachRoom();
+    const errs: unknown[] = [];
+    e.on('engine-error', (x) => errs.push(x));
+    const real = fs.createReadStream;
+    const spy = vi.spyOn(fs, 'createReadStream').mockImplementation(((p: fs.PathLike, o?: any) => {
+      if (!String(p).startsWith(attDir(web.id))) return real(p, o);
+      const r = new Readable({ read() {} });
+      setImmediate(() => r.destroy(Object.assign(new Error(`EBUSY: resource busy or locked, open '${String(p)}'`), { code: 'EBUSY' })));
+      return r;
+    }) as any);
+    let err: Error;
+    try {
+      err = (await e.sendUser(web.id, [fileOf(original('x.txt'))]).catch((x: Error) => x)) as Error;
+    } finally {
+      spy.mockRestore();
+    }
+    expect(err.message).toBe(`${ATTACH_FAIL}x.txt: 이 PC 사본을 읽지 못했어요(EBUSY)`);
+    expect(attFiles(web.id)).toEqual([]);
+    await sleep(500);
+    expect(calls().filter((c) => c.kind === 'attachment-remove')).toEqual([]);
+    expect(errs).toEqual([]);
+  }, 30_000);
+
+  test('올리는 중 멈춤 — ssh 를 나무째 끈다(ProxyJump 처럼 자식이 같은 파이프를 쥐어도 바로 끝난다)', async () => {
+    const { e, web, ofKind } = await attachRoom({ FAKE_SSH_UPLOAD_HOLD: '느린', FAKE_SSH_UPLOAD_PROXY: '1' });
+    const sending = e.sendUser(web.id, [fileOf(original('느린.txt'))]);
+    const failed = expect(sending).rejects.toThrow(`${ATTACH_FAIL}느린.txt: ${STOPPED}`);
+    await until('자식', () => ofKind('upload-proxy').length === 1, 10_000);
+    const proxy = ofKind('upload-proxy')[0].pid;
+    expect(isAlive(proxy)).toBe(true);
+    const t0 = Date.now();
+    await e.interrupt(web.id);
+    await failed;
+    expect(Date.now() - t0).toBeLessThan(5000); // 자식은 30초를 버틴다 — 그 파이프가 닫히기를 기다리지 않았다
+    await until('자식도 꺼짐', () => !isAlive(proxy), 5000);
+  }, 60_000);
+
+  test('큰 파일(여러 조각) — 서버에 바이트 그대로', async () => {
+    const { e, web, served } = await attachRoom();
+    const big = Buffer.alloc(1024 * 1024 + 4097);
+    for (let i = 0; i < big.length; i++) big[i] = (i * 131 + 17) & 0xff;
+    big.set([0, 0x1a, 13, 10, 0, 13, 10, 0x1a], 65_536 - 4); // NUL·^Z·CRLF 가 조각(64KB) 경계에 걸치게
+    const src = original('큰.bin');
+    fs.writeFileSync(src, big);
+    const done = resultSoon(e, web.id);
+    await e.sendUser(web.id, [{ type: 'text', text: 'echo 큰 것' }, fileOf(src)]);
+    await done;
+    const [file] = attFiles(web.id);
+    expect(fs.readFileSync(path.join(attDir(web.id), file)).equals(big)).toBe(true);
+    expect(fs.readFileSync(served(file)).equals(big)).toBe(true);
+  }, 40_000);
+
+  test('올리는 중 에이전트 지우기 · 앱 끄기 — ssh 를 끄고 아무것도 안 보내며, 떠도는 거절이 없다', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (r: unknown) => unhandled.push(r);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const { e, root, room, web, calls, ofKind, servedDir } = await attachRoom({ FAKE_SSH_UPLOAD_HOLD: '느린' });
+      // 지우기
+      const sending = e.sendUser(web.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(original('느린.txt'))]);
+      const failed = expect(sending).rejects.toThrow(`${ATTACH_FAIL}느린.txt: ${STOPPED}`);
+      await until('올리는 중', () => ofKind('upload').length === 1, 10_000);
+      const upPid = calls().find((c) => c.kind === 'upload').sshPid;
+      await e.removeAgent(web.id);
+      await failed;
+      await until('ssh 꺼짐', () => !isAlive(upPid), 5000);
+      expect(fs.existsSync(attDir(web.id))).toBe(false);
+      await until('서버 첨부 폴더째', () => ofKind('attachments-cleanup').length === 1 && !fs.existsSync(servedDir(web.id)), 10_000);
+      // 끄기
+      fs.mkdirSync(path.join(root, 'home', 'a', 'api'), { recursive: true });
+      const api = e.addAgent({ roomId: room.id, name: 'api', role: '서버', folder: '/home/a/api' });
+      const sending2 = e.sendUser(api.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(original('느린둘.txt'))]);
+      const failed2 = expect(sending2).rejects.toThrow(`${ATTACH_FAIL}느린둘.txt: ${STOPPED}`);
+      await until('올리는 중', () => ofKind('upload').length === 2, 10_000);
+      const upPid2 = calls().filter((c) => c.kind === 'upload').at(-1).sshPid;
+      const t0 = Date.now();
+      await e.shutdown();
+      await failed2;
+      expect(Date.now() - t0).toBeLessThan(5000);
+      await until('ssh 꺼짐', () => !isAlive(upPid2), 5000);
+      expect(attFiles(api.id)).toEqual([]);
+      // 아무것도 안 보냈다
+      expect(calls().filter((c) => c.kind === 'launch')).toEqual([]);
+      expect(userTexts()).toEqual([]);
+      await sleep(200);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  }, 60_000);
+
+  test('지운 에이전트의 서버 첨부 폴더를 못 지우면 기다리는 정리로 남겼다가 다음에 켤 때 지운다', async () => {
+    const { e, web, mode, ofKind, servedDir, servedFiles } = await attachRoom();
+    const done = resultSoon(e, web.id);
+    await e.sendUser(web.id, [{ type: 'text', text: 'echo' }, fileOf(original('x.txt'))]);
+    await done;
+    expect(servedFiles()).toHaveLength(1);
+    mode('refused');
+    const errs: { agentId: string | null; message: string }[] = [];
+    e.on('engine-error', (x: { agentId: string | null; message: string }) => errs.push(x));
+    await e.removeAgent(web.id);
+    const LEFT = '서버의 첨부 폴더를 다 지우지 못했어요 — 두레를 다시 켜면 다시 지워요';
+    await until('정리 실패 기록', () => errs.some((x) => x.message === LEFT), 10_000);
+    expect(openStore(dataDir).pendingAttachmentCleanups()).toEqual([{ host: 'dev', agentId: web.id }]);
+    expect(fs.existsSync(servedDir())).toBe(true);
+    await e.shutdown();
+    engines = engines.filter((x) => x !== e);
+
+    // 서버가 돌아왔다 — 켤 때 지우고 목록에서 뺀다
+    mode('');
+    const { calls } = await startSsh();
+    await until('켤 때 정리', () => ofKind('attachments-cleanup').length === 1, 10_000);
+    await until('목록 비움', () => openStore(dataDir).pendingAttachmentCleanups().length === 0, 5000);
+    expect(fs.existsSync(servedDir())).toBe(false);
+    expect(calls().find((c) => c.kind === 'attachments-cleanup').script).toBe(attachmentsCleanupScript(web.id));
+  }, 60_000);
 });
 
 test('멈춤과 준비 완료가 겹쳐도 붙잡기 순서는 보낸 순서', async () => {
@@ -7099,6 +7294,34 @@ test('멈춤과 준비 완료가 겹쳐도 붙잡기 순서는 보낸 순서', a
     stopSpy.mockRestore();
   }
   expect(e.hold(a.id)?.items.map((x) => x.text)).toEqual(['echo 끼움', 'echo 첨부']);
+});
+
+test('보내는 중(느린 복사)엔 지난 대화로 돌아가지 않는다 — 복사가 끝나면 지금 대화로 가고, 그 뒤엔 돌아갈 수 있다', async () => {
+  const { e } = await startConv();
+  const { a } = setup(e);
+  await talk(e, a.id, 'echo 하나');
+  const s1 = agentOf(e, a.id).sessionId;
+  await e.newConversation(a.id);
+  await talk(e, a.id, 'echo 둘');
+  const s2 = agentOf(e, a.id).sessionId;
+  const src = original('메모.txt');
+  const gate = holdStat(src);
+  try {
+    const sending = e.sendUser(a.id, [{ type: 'text', text: 'echo 첨부' }, fileOf(src)]);
+    await until('준비 중', gate.reached);
+    await expect(e.resumeConversation(a.id, s1)).rejects.toThrow('보내는 중인 입력이 끝나면 돌아갈 수 있어요');
+    expect(agentOf(e, a.id).sessionId).toBe(s2);
+    const done = resultOf(e, a.id);
+    gate.open();
+    await sending;
+    await done;
+  } finally {
+    gate.restore();
+  }
+  expect(agentOf(e, a.id).sessionId).toBe(s2);
+  expect(convUserTexts(e.history(a.id))).toEqual(['echo 둘', 'echo 첨부']);
+  await e.resumeConversation(a.id, s1);
+  expect(agentOf(e, a.id).sessionId).toBe(s1);
 });
 
 /** 원본 재기(fs.promises.stat)를 그 경로에서 붙잡아 둔다 — 첨부를 준비하는 도중(느린 원본)을 흉내. open() 하면 놓는다 */

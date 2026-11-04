@@ -484,6 +484,11 @@ describe('첨부 — 올리기·지우기·--add-dir', () => {
     expect(w.code).toBe(1);
     expect(w.stderr).toContain('No space left on device');
     expect(classifyUploadExit(w.code, w.stderr)).toBeNull();
+    // FAKE_SSH_UPLOAD_ERR — 서버 명령 오류의 글(디스크 할당량 등)
+    const q = await sshDone(up('20261104-101010-q.txt'), { FAKE_SSH_UPLOAD_CODE: '1', FAKE_SSH_UPLOAD_ERR: 'cat: write error: Disk quota exceeded' }, BYTES);
+    expect(q.code).toBe(1);
+    expect(q.stderr).toContain('cat: write error: Disk quota exceeded');
+    expect(q.stderr).not.toContain('No space left');
     // 접속 단계 흉내는 그대로 — 아무것도 쓰지 않는다
     const refused = await sshDone(up('20261104-101010-c.txt'), { FAKE_SSH_MODE: 'refused' }, BYTES);
     expect(refused.code).toBe(255);
@@ -502,6 +507,27 @@ describe('첨부 — 올리기·지우기·--add-dir', () => {
     expect(r.out()).not.toContain('DURE_HOME=');
     // 다른 이름은 그대로 끝난다
     expect((await sshDone(up(), { FAKE_SSH_UPLOAD_HOLD: '느린' }, BYTES)).code).toBe(0);
+    // FAKE_SSH_UPLOAD_RELEASE — 그 파일이 생기면 붙잡기를 풀고 보통처럼 끝난다(DURE_HOME)
+    const release = path.join(root, 'release');
+    const held = ssh(up('20261104-101010-느린2.txt'), { FAKE_SSH_UPLOAD_HOLD: '느린', FAKE_SSH_UPLOAD_RELEASE: release });
+    held.child.stdin!.end(BYTES);
+    await until(() => logLines().some((x) => x.event === 'upload' && x.file.endsWith('느린2.txt')), 8000, '올림');
+    await new Promise((res) => setTimeout(res, 300));
+    expect(held.child.exitCode).toBeNull();
+    fs.writeFileSync(release, '');
+    expect(await held.exit).toBe(0);
+    expect(held.out()).toContain('DURE_HOME=/home/a');
+  }, 20000);
+
+  it('FAKE_SSH_UPLOAD_PROXY — 붙잡은 올리기가 같은 stdio 를 쥔 자식(ProxyJump 흉내)을 둔다', async () => {
+    const r = ssh(up('20261104-101010-느린.txt'), { FAKE_SSH_UPLOAD_HOLD: '느린', FAKE_SSH_UPLOAD_PROXY: '1' });
+    r.child.stdin!.end(BYTES);
+    await until(() => logLines().some((x) => x.event === 'upload-proxy'), 8000, '자식');
+    const proxy = logLines().find((x) => x.event === 'upload-proxy').pid;
+    expect(alive(proxy)).toBe(true);
+    process.kill(proxy);
+    r.child.kill();
+    await r.exit;
   }, 20000);
 
   it('모양이 다르면 모른다(2) — 따옴표 없는 이름(끼어든 명령)·다른 폴더·빠진 표식', async () => {
@@ -516,6 +542,29 @@ describe('첨부 — 올리기·지우기·--add-dir', () => {
       expect((await sshDone(runArgs({ host: 'dev', script, login: false }), {}, 'x')).code).toBe(2);
     }
     expect(fs.existsSync(path.join(home, '.dure'))).toBe(false);
+  }, 20000);
+
+  it('사본 이름은 작은따옴표(shq) 글자만 — 따옴표 밖의 & · $( ) · 큰따옴표 이름은 모른다(2)', async () => {
+    const shape = (name: string) => `umask 077; d="$HOME/.dure/attachments/ag1"; mkdir -p "$d" && cat > "$d"/${name} && printf '\\nDURE_HOME=%s\\n' "$HOME"`;
+    // 모양은 uploadScript 그대로 — 이름 자리만 바꾼다(이름이 다르면 다른 까닭으로 모르는 것이 아니게)
+    expect(shape(shq('a'))).toBe(uploadScript('ag1', 'a'));
+    const bad = [
+      shape('a&b'),
+      shape('$(touch_x).txt'),
+      shape("'a'b"),
+      shape('"a"'),
+      shape('a'),
+      `d="$HOME/.dure/attachments/ag1"; rm -f "$d"/a&b`,
+      `d="$HOME/.dure/attachments/ag1"; rm -f "$d"/'a' "$d"/$(touch_x)`,
+    ];
+    for (const script of bad) {
+      expect((await sshDone(runArgs({ host: 'dev', script, login: false }), {}, 'x')).code).toBe(2);
+    }
+    expect(fs.existsSync(path.join(home, '.dure'))).toBe(false);
+    // shq 그대로면 작은따옴표가 든 이름(따옴표 밖의 \' 하나)도 받는다
+    expect(shape(shq("a'b"))).toBe(uploadScript('ag1', "a'b"));
+    expect((await sshDone(runArgs({ host: 'dev', script: shape(shq("a'b")), login: false }), {}, 'x')).code).toBe(0);
+    expect(fs.readFileSync(served("a'b"), 'utf8')).toBe('x');
   }, 20000);
 
   it('첨부 지우기 — 그 파일들만 · 지울 때는 그 에이전트 폴더째', async () => {

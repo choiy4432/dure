@@ -8,8 +8,9 @@ import { CONTROL_CHAR, openStore, renameRetrying, REMOTE_FOLDER_ABSOLUTE, type S
 import {
   attachmentRemoveScript, attachmentsCleanupScript, checkScript, classifyExit, classifyUploadExit, cleanupScript, hostArgs, isLoginFailure, launchArgs,
   launchPreamble, parseCheckOutput, parsePid, parseUploadHome, posixJoin, remoteAttachDir, remoteLaunchScript, remoteRunFiles, runArgs, sshErrorLines,
-  transcriptCheckScript, updateScript, uploadScript, type RemoteIssueKind,
+  transcriptCheckScript, updateScript, uploadScript, uploadWriteText, type RemoteIssueKind,
 } from './remote';
+import { killTree } from './killTree';
 import { REMOTE_CLEANUP_FAILED, remoteIssueText, remotePortBlockedText } from '../shared/remoteTexts';
 import { readSshHosts, type SshHostEntry } from './sshConfig';
 import { openMessageLog, type MessageLog } from './messageLog';
@@ -306,14 +307,16 @@ const stoppedHeldNotice = (n: number) => `멈췄어요 — Claude 가 아직 읽
 const HOLD_TEXT_MAX = 200;
 const NO_AGENT = '에이전트를 찾을 수 없습니다.';
 const NO_CONVERSATION = '그 대화를 찾을 수 없어요';
-/** 돌아가기를 막는 까닭 — 재울 수 없는 까닭(blockOf)과 같은 표 */
-const RESUME_BLOCKED: Record<SleepBlock, string> = {
+/** 돌아가기를 막는 까닭 — 재울 수 없는 까닭(blockOf)과 같은 표 + 보내는 중(첨부를 복사·올리는 보내기 차례) */
+const RESUME_BLOCKED: Record<SleepBlock | 'sending', string> = {
   working: '일이 끝나면 돌아갈 수 있어요',
   subagents: '일이 끝나면 돌아갈 수 있어요',
   background: '뒤에서 도는 명령이 끝나면 돌아갈 수 있어요', // 끝나지 않는 명령(dev 서버)일 수 있다 — 끄지 않고 막는다
   unread: '일이 끝나면 돌아갈 수 있어요',
   asking: '기다리는 카드를 먼저 처리해 주세요',
   'waiting-input': '붙잡아 둔 입력을 먼저 처리해 주세요',
+  // 준비가 끝나면 그 입력은 지금 대화로 간다 — 돌아간 뒤에 끝나면 돌아간 대화로 흘러간다(끊지 않고 막는다 — 몇 분짜리 올리기일 수 있다)
+  sending: '보내는 중인 입력이 끝나면 돌아갈 수 있어요',
 };
 const RESUMED_NOTICE = '이 대화로 돌아왔어요';
 /** --resume 했는데 Claude 쪽 대화 기록이 없었다(probe21) — 새 대화로 이어 간다 */
@@ -395,6 +398,12 @@ interface SshRun {
   stdout: string;
   stderr: string;
 }
+/** 올리기 ssh 한 번 — 시간 넘김 · ssh 를 못 띄움(ENOENT 말고) · 이 PC 사본을 못 읽어 껐음(둘 다 오류 코드만, 원문엔 내 PC 경로가 실린다) */
+interface UploadRun extends SshRun {
+  timedOut?: true;
+  spawnFailed?: { code: string | null };
+  readFailed?: { code: string | null };
+}
 /** 서버 방 첨부 하나를 올리는 ssh 의 상한 — 100MB(ATTACH_MAX_BYTES) 기준 넉넉히. 넘으면 끄고 실패 */
 const UPLOAD_MS = 600_000;
 /** 올리기 ssh 의 stdout·stderr 에서 남길 끝부분 — DURE_HOME 줄은 맨 끝에 온다 */
@@ -466,10 +475,14 @@ const ATTACH_UPLOAD_STOPPED = '서버로 올리는 중에 그만뒀어요';
 const ATTACH_UPLOAD_SLOW = '서버로 올리는 데 너무 오래 걸려 그만뒀어요';
 /** 서버 방 — 올렸다는데 서버가 $HOME 을 알리지 않았다(DURE_HOME 줄 없음) */
 const ATTACH_UPLOAD_NO_HOME = '서버에 올린 파일의 경로를 알 수 없어요';
-/** 서버 방 — 서버 명령이 실패했다(디스크 가득·권한 등). 뒤에 서버 stderr 의 마지막 줄 */
-const ATTACH_UPLOAD_WRITE = '서버에 파일을 쓰지 못했어요';
-/** 서버 첨부(되돌리기·지운 에이전트의 폴더)를 못 지웠다 — 기록만(engine-error). 남는 건 그 사용자만 읽는 파일이고, 에이전트를 지울 때 폴더째 지운다 */
+/** 서버 방 — ssh 를 띄우지 못했다(없음 ENOENT 은 NO_SSH). 오류 원문엔 내 PC 의 ssh 경로가 실린다 — 코드만 */
+const attachSshSpawnText = (code: string | null) => `ssh 를 실행하지 못했어요${code ? `(${code})` : ''}`;
+/** 서버 방 — 올리던 이 PC 사본을 읽지 못했다(백신이 잡음 등). 원문엔 내 PC 경로가 실린다 — 코드만 */
+const attachCopyReadText = (code: string | null) => `이 PC 사본을 읽지 못했어요${code ? `(${code})` : ''}`;
+/** 서버 첨부(되돌리기)를 못 지웠다 — 기록만(engine-error). 남는 건 그 사용자만 읽는 파일이고, 에이전트를 지울 때 폴더째 지운다 */
 const ATTACH_REMOTE_LEFT = '서버의 첨부 파일을 다 지우지 못했어요';
+/** 지운 에이전트의 서버 첨부 폴더를 못 지웠다(서버가 내려가 있음 등) — 기다리는 첨부 정리 목록에 남아 다음에 켤 때 다시 */
+const ATTACH_REMOTE_FOLDER_LEFT = '서버의 첨부 폴더를 다 지우지 못했어요 — 두레를 다시 켜면 다시 지워요';
 const ATTACH_FOLDER = '폴더는 보낼 수 없어요';
 const ATTACH_NOT_FILE = '보통 파일이 아니에요';
 const ATTACH_CREDENTIALS = '자격 증명 파일은 보낼 수 없어요';
@@ -774,6 +787,10 @@ class EngineImpl extends EventEmitter implements Engine {
     }
     // 지운 에이전트의 서버 claude 중 정리하지 못한 것(기다리는 정리 목록) — 되면 목록에서 뺀다(forgetLaunch), 안 되면 남겨 다음에 켤 때 다시
     for (const p of this.store.pendingCleanups()) this.guard(null, () => void this.queueClean(p.agentId, p.host, p.launch));
+    // 지운 에이전트의 서버 첨부 폴더 중 지우지 못한 것(기다리는 첨부 정리) — 되면 목록에서 뺀다. 아직 있는 에이전트의 것은 건드리지 않는다
+    for (const p of this.store.pendingAttachmentCleanups()) {
+      if (!this.store.agent(p.agentId)) this.guard(null, () => this.queueAttachmentsCleanup(p.agentId, p.host));
+    }
     // 지운 에이전트의 첨부 폴더가 잠겨 남았던 것 — 주인(에이전트)이 없는 폴더만 조용히 지운다. 기다리지 않는다(끌 때는 기다린다)
     this.pruning = this.attachments.prune((id) => !!this.store.agent(id));
     this.router.flushAll();
@@ -1294,12 +1311,12 @@ class EngineImpl extends EventEmitter implements Engine {
       const gone = this.store.agent(id);
       const remote = gone && this.remoteOf(gone);
       if (remote && gone.remoteLaunch) void this.queueClean(id, remote.host, gone.remoteLaunch);
-      // 서버 첨부 폴더도 통째로 — 한 번만 해 본다(실패는 기록만: 남는 건 그 사용자만 읽는 파일)
-      if (remote) this.queueRemoteAttachments(id, remote.host, attachmentsCleanupScript(id));
       for (const m of this.log.list({ states: ['pending', 'held', 'queued'] })) {
         if (m.to === id || m.from === id) this.router.dismiss(m.id);
       }
+      // store 가 지우며 서버 첨부 폴더를 기다리는 첨부 정리 목록에 넣는다 — 지금 한 번 해 보고, 되면 목록에서 뺀다(안 되면 다음에 켤 때 다시)
       this.store.removeAgent(id);
+      if (remote) this.queueAttachmentsCleanup(id, remote.host);
       this.hist.remove(id);
       this.images.remove(id);
       // 첨부 사본도 — 다른 프로그램이 연 채 잠가 못 지워도 지우기는 끝낸다(남은 것은 알리고, 다음에 켤 때 다시 지운다)
@@ -1761,19 +1778,23 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * 이 PC 사본 하나를 서버 첨부 폴더로(uploadScript — 바이트는 ssh stdin, 상한 uploadTimeoutMs). 되면 서버 절대 경로
-   * (`<DURE_HOME>/.dure/attachments/<에이전트>/<사본 이름>`). 안 되면 쉬운 까닭으로 던진다 — 서버에 반쯤 썼을 수 있으면(끊김·끊음·시간 넘김·
-   * 서버 명령 실패) 그 파일 지우기를 그 에이전트의 서버 줄에 세운다(접속도 못 했으면 쓴 것이 없다)
+   * (`<DURE_HOME>/.dure/attachments/<에이전트>/<사본 이름>`). 안 되면 쉬운 까닭으로 던진다(ssh·서버의 영어 원문·경로는 싣지 않는다) —
+   * 서버에 반쯤 썼을 수 있으면(끊김·끊음·시간 넘김·서버 명령 실패) 그 파일 지우기를 그 에이전트의 서버 줄에 세운다
+   * (접속도 못 했거나 ssh 를 못 띄웠거나 이 PC 사본을 못 읽었으면 지우러 가지 않는다)
    */
   private async uploadFile(id: AgentId, host: string, copy: { file: string; abs: string }, signal: AbortSignal): Promise<string> {
-    // 앞서 세운 되돌리기(서버 파일 지우기)가 끝난 뒤에 — 같은 이름으로 다시 올린 파일을 늦게 온 지우기가 지우지 않게
-    await this.remoteChain.get(id);
+    // 앞서 세운 되돌리기(서버 파일 지우기)가 끝난 뒤에 — 같은 이름으로 다시 올린 파일을 늦게 온 지우기가 지우지 않게.
+    // 끊기면(멈춤·새 대화·지우기·끄기) 그 줄을 기다리지 않는다 — 앞선 정리가 느린·내려간 서버에서 수십 초 걸릴 수 있다
+    await untilAborted(this.remoteChain.get(id), signal);
     if (signal.aborted) throw new Error(ATTACH_UPLOAD_STOPPED);
     const r = await this.sshUpload(host, uploadScript(id, copy.file), copy.abs, this.o.uploadTimeoutMs ?? UPLOAD_MS, signal);
+    if (r.spawnFailed) throw new Error(attachSshSpawnText(r.spawnFailed.code)); // ssh 가 돌지 않았다 — 서버에 쓴 것이 없다
     const undo = () => this.dropRemote(id, [copy.file]);
     if (signal.aborted) {
       undo();
       throw new Error(ATTACH_UPLOAD_STOPPED);
     }
+    if (r.readFailed) throw new Error(attachCopyReadText(r.readFailed.code));
     if (r.timedOut) {
       undo();
       throw new Error(ATTACH_UPLOAD_SLOW);
@@ -1785,8 +1806,7 @@ class EngineImpl extends EventEmitter implements Engine {
         throw new Error(remoteIssueText(host, issue));
       }
       undo(); // 서버에서 명령이 돌았다(디스크 가득 등) — 반쯤 쓴 파일
-      const why = sshErrorLines(r.stderr).at(-1);
-      throw new Error(why ? `${ATTACH_UPLOAD_WRITE} — ${why}` : r.code === null ? ATTACH_UPLOAD_WRITE : `${ATTACH_UPLOAD_WRITE}(code ${r.code})`);
+      throw new Error(uploadWriteText(r.code, r.stderr));
     }
     const home = parseUploadHome(r.stdout);
     if (!home) {
@@ -1799,15 +1819,11 @@ class EngineImpl extends EventEmitter implements Engine {
   /**
    * 올리기 ssh 한 번 — 확인·정리와 같은 옵션(runArgs: 전달 없음·BatchMode·RemoteCommand=none, bash -c — 셸 시작 파일을 읽지 않는다),
    * 파일은 스트림으로 stdin 에(명령 인자에 싣지 않는다 — 크기와 상관없이 메모리에 다 올리지 않는다). 시간을 넘기거나 끊으면(signal) ssh 를
-   * 끄고 code null(timedOut 이면 시간 넘김). ssh 가 없으면 NO_SSH 로 던진다. 끝나기 전에 사본 읽기를 닫는다(되돌릴 때 지울 수 있게)
+   * 나무째 끄고(ProxyJump·ProxyCommand 의 자식 ssh 가 같은 파이프를 쥐면 'close' 가 늦다) code null(timedOut 이면 시간 넘김).
+   * ssh 가 없으면 NO_SSH 로 던진다 · 그 밖의 이유로 못 띄우면 spawnFailed · 사본을 못 읽어 껐으면 readFailed(둘 다 오류 코드만).
+   * 끝나기 전에 사본 읽기를 닫는다(되돌릴 때 지울 수 있게)
    */
-  private sshUpload(
-    host: string,
-    script: string,
-    srcPath: string,
-    timeoutMs = UPLOAD_MS,
-    signal?: AbortSignal,
-  ): Promise<SshRun & { timedOut?: true }> {
+  private sshUpload(host: string, script: string, srcPath: string, timeoutMs = UPLOAD_MS, signal?: AbortSignal): Promise<UploadRun> {
     const ssh = this.o.ssh;
     if (!ssh || !this.sshAvailable()) return Promise.reject(new Error(NO_SSH));
     const args = [...(ssh.argsPrefix ?? []), ...runArgs({ host, script, login: false })];
@@ -1816,20 +1832,28 @@ class EngineImpl extends EventEmitter implements Engine {
       try {
         child = spawn(ssh.command, args, { windowsHide: true, env: { ...process.env, ...this.o.env }, stdio: ['pipe', 'pipe', 'pipe'] });
       } catch (e) {
-        resolve({ code: null, stdout: '', stderr: e instanceof Error ? e.message : String(e) });
+        // 실행 파일이 아니다(EFTYPE) 등 — 원문엔 내 PC 의 ssh 경로가 실린다
+        if ((e as NodeJS.ErrnoException | null)?.code === 'ENOENT') reject(new Error(NO_SSH));
+        else resolve({ code: null, stdout: '', stderr: '', spawnFailed: { code: errCode(e) } });
         return;
       }
       let stdout = '';
       let stderr = '';
       let timedOut = false;
-      let readFailed = false;
+      let readFailed: { code: string | null } | null = null;
       let settled = false;
+      let killing = false;
+      /** 나무째(taskkill /T /F) — 다 끈 뒤 그 ssh 를 한 번 더(이미 끝났으면 아무 일 없음) */
       const kill = () => {
-        try {
-          child.kill();
-        } catch {
-          // 이미 끝났다
-        }
+        if (killing || child.pid === undefined) return;
+        killing = true;
+        void killTree(child.pid).then(() => {
+          try {
+            child.kill();
+          } catch {
+            // 이미 끝났다
+          }
+        });
       };
       const timer = setTimeout(() => {
         timedOut = true;
@@ -1843,8 +1867,8 @@ class EngineImpl extends EventEmitter implements Engine {
       const input = fs.createReadStream(srcPath);
       const inputClosed = new Promise<void>((r) => input.once('close', () => r()));
       // 사본을 못 읽으면 ssh 를 끈다 — stdin 이 닫히면 서버 cat 은 반쯤 받은 것으로 끝나 DURE_HOME 까지 찍는다(완성으로 치지 않게)
-      input.on('error', () => {
-        readFailed = true;
+      input.on('error', (e) => {
+        readFailed = { code: errCode(e) };
         kill();
       });
       // ssh 가 먼저 끝나면(접속 실패 등) stdin 쓰기가 EPIPE·EOF(윈도우) — 오류는 버리고 종료 코드로 가른다
@@ -1862,7 +1886,7 @@ class EngineImpl extends EventEmitter implements Engine {
       // 띄우지도 못했다(pid 없음) — 'close' 가 오지 않을 수 있다
       child.on('error', (e: NodeJS.ErrnoException) => {
         if (child.pid !== undefined) return;
-        settle(() => (e.code === 'ENOENT' ? reject(new Error(NO_SSH)) : resolve({ code: null, stdout, stderr: e.message })));
+        settle(() => (e.code === 'ENOENT' ? reject(new Error(NO_SSH)) : resolve({ code: null, stdout, stderr, spawnFailed: { code: errCode(e) } })));
       });
       child.on('close', (code) =>
         settle(() =>
@@ -1871,6 +1895,7 @@ class EngineImpl extends EventEmitter implements Engine {
             stdout,
             stderr,
             ...(timedOut ? { timedOut: true as const } : {}),
+            ...(readFailed ? { readFailed } : {}),
           }),
         ),
       );
@@ -1905,6 +1930,24 @@ class EngineImpl extends EventEmitter implements Engine {
         /* ssh 없음 — 실패로 친다 */
       }
       if (r?.code !== 0) this.guard(id, () => this.emit('engine-error', { agentId: id, message: ATTACH_REMOTE_LEFT }));
+    });
+  }
+
+  /**
+   * 지운 에이전트의 서버 첨부 폴더를 통째로(attachmentsCleanupScript — 별도 ssh, bash -c) — 그 에이전트의 서버 줄 끝에. 되면 기다리는 첨부
+   * 정리 목록에서 뺀다. 안 되면 목록에 남겨(다음에 켤 때 다시) engine-error 한 번(main 이 기록) — 지금 다시 하지 않는다. 던지지 않는다
+   */
+  private queueAttachmentsCleanup(id: AgentId, host: string): void {
+    void this.queueRemote(id, async () => {
+      let r: SshRun | null = null;
+      try {
+        r = await this.sshRun(host, attachmentsCleanupScript(id), { login: false });
+      } catch {
+        /* ssh 없음 — 실패로 친다 */
+      }
+      if (this.finished) return; // 끈 뒤에 끝났다 — 목록은 그대로(다음에 켤 때 다시)
+      if (r?.code === 0) this.guard(id, () => this.store.dropPendingAttachmentCleanup(id));
+      else this.guard(id, () => this.emit('engine-error', { agentId: id, message: ATTACH_REMOTE_FOLDER_LEFT }));
     });
   }
 
@@ -2152,8 +2195,12 @@ class EngineImpl extends EventEmitter implements Engine {
     return { ...it, parts };
   }
 
-  /** 돌아가기를 막는 까닭 — 재울 수 없는 까닭(blockOf)과 같다. 세션이 없어도 기다리는·붙잡은 입력이 있으면 막는다 */
-  private resumeBlock(id: AgentId): SleepBlock | null {
+  /**
+   * 돌아가기를 막는 까닭 — 보내는 중(첨부를 복사·올리는 보내기 차례, 방 종류와 상관없이)이면 먼저, 그다음 재울 수 없는 까닭(blockOf)과 같다.
+   * 세션이 없어도 기다리는·붙잡은 입력이 있으면 막는다
+   */
+  private resumeBlock(id: AgentId): SleepBlock | 'sending' | null {
+    if (this.sending.has(id)) return 'sending';
     const block = this.blockOf(id);
     if (block !== 'no-session') return block;
     return (this.held.get(id)?.length ?? 0) > 0 || this.holds.has(id) ? 'waiting-input' : null;
@@ -3903,10 +3950,29 @@ function fileErrorText(e: unknown): string {
       return ATTACH_FOLDER;
     default: {
       // 원문(영어·내 PC 경로가 섞인다)은 보이지 않는다 — 오류 코드만 덧붙인다
-      const code = (e as NodeJS.ErrnoException | null)?.code;
-      return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `읽을 수 없어요(${code})` : '읽을 수 없어요';
+      const code = errCode(e);
+      return code ? `읽을 수 없어요(${code})` : '읽을 수 없어요';
     }
   }
+}
+
+/** 오류의 코드(EACCES 같은 대문자 꼴일 때만) — 화면 글에 원문 대신 덧붙인다. 아니면 null */
+function errCode(e: unknown): string | null {
+  const code = (e as NodeJS.ErrnoException | null)?.code;
+  return typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? code : null;
+}
+
+/** p 가 끝나거나 signal 이 끊길 때까지 — 끊기면 p 를 기다리지 않는다(p 가 없거나 이미 끊겼으면 바로). p 의 거절은 삼킨다 */
+function untilAborted(p: Promise<unknown> | undefined, signal: AbortSignal): Promise<void> {
+  if (!p || signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    signal.addEventListener('abort', done, { once: true });
+    void p.then(done, done);
+  });
 }
 
 /** realpath 가 이 까닭으로 실패하면 보내지 않는다 — 그 밖(EINVAL·UNKNOWN …)은 이름 검사만으로 넘어간다 */
