@@ -6,6 +6,7 @@ import { errorMessage, fieldError, FORK_DIALOG, REMOTE } from '../lib/words'
 import { placeMissing } from '../map/layout'
 import { markFresh } from '../map/freshNodes'
 import { onPhone } from '../lib/phone'
+import { PHONE_FOLDER_BAD, phoneFolderOk } from '../../shared/phoneAccess'
 import { FormDialog } from './FormDialog'
 import { RemoteCheckLine, ServerTag, useRemoteCheck } from './RemoteCheck'
 
@@ -121,6 +122,12 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
   const submit = async () => {
     const chosen = serverMode ? serverFolder : typedMode ? target || null : folder
     if (!chosen) return
+    // 휴대폰에서 친 이 PC 폴더는 전체 경로만(PC 도 거절한다 — phoneDispatcher) — 보내기 전에 그 칸에서 알린다
+    if (typedMode && !phoneFolderOk(chosen)) {
+      setError({ field: 'folder', message: PHONE_FOLDER_BAD })
+      pathInput.current?.focus()
+      return
+    }
     setBusy(true)
     setError(null)
     const store = getStore()

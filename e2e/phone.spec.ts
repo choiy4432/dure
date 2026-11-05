@@ -13,6 +13,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import NodeWebSocket from 'ws'
 import type { PhoneState } from '../src/shared/phoneTypes'
+import { phoneCookieName } from '../src/shared/phoneWire'
 import { markOnboarded } from './onboarded'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -20,6 +21,7 @@ const MAIN = path.join(ROOT, 'out', 'main', 'index.js')
 const FAKE_CLAUDE = path.join(ROOT, 'test', 'fakeClaude.mjs')
 const FAKE_TAILSCALE = path.join(ROOT, 'test', 'fakeTailscale.mjs')
 const DNS = 'fake-pc.tail0000.ts.net' // 가짜 tailscale 의 이 기기 이름
+const RENAMED = 'renamed-pc.tail0000.ts.net' // 켠 채 Tailscale 에서 바꾼 이름(가짜의 <root>/dns-name)
 
 const ROOM = '휴대폰 방'
 const AGENT = { name: '바깥일꾼', role: '밖에서 보기' }
@@ -278,7 +280,7 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
       expect(await wsOpen(port, { host: local, origin })).toBe(401)
       expect(await wsOpen(port, { host: local, origin: 'http://evil.example' })).toBe(403)
       expect(await wsOpen(port, { host: 'evil.example', origin: 'http://evil.example' })).toBe(403)
-      expect(await wsOpen(port, { host: local, origin, cookie: '__Host-dure_phone=not-a-token' })).toBe(401)
+      expect(await wsOpen(port, { host: local, origin, cookie: `${phoneCookieName(port)}=not-a-token` })).toBe(401)
     })
 
     browser = await chromium.launch({ executablePath: phoneBrowserPath(), headless: true })
@@ -397,7 +399,8 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
     })
 
     await test.step('짝 맺은 소켓은 휴대폰 메서드만 — PC 전용(setPhone)은 거절', async () => {
-      const cookie = (await ctx.cookies()).find((c) => c.name === '__Host-dure_phone')
+      // 쿠키 이름은 휴대폰이 부르는 주소의 포트마다(여기선 http://127.0.0.1:<서버 포트>)
+      const cookie = (await ctx.cookies()).find((c) => c.name === phoneCookieName(port))
       expect(cookie?.httpOnly).toBe(true)
       expect(cookie?.secure).toBe(true)
       expect(cookie?.sameSite).toBe('Strict')
@@ -415,7 +418,7 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
     })
 
     await test.step('PC 에서 끊기 → 휴대폰 소켓 4401 → 짝 맺기 화면 · 같은 토큰 거절', async () => {
-      const cookie = (await ctx.cookies()).find((c) => c.name === '__Host-dure_phone')!
+      const cookie = (await ctx.cookies()).find((c) => c.name === phoneCookieName(port))!
       await dlg.getByRole('button', { name: `${deviceName} 끊기` }).click()
       const ask = page.getByRole('alertdialog')
       await ask.getByRole('button', { name: '끊기', exact: true }).click()
@@ -430,6 +433,22 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
       await expect(page.locator('button.phn-top')).toHaveText('휴대폰 · 0')
     })
 
+    await test.step('켠 채 PC 이름을 바꿈 → 창으로 돌아오면 예전 이름의 길을 닫고 지금 이름으로 다시 연다', async () => {
+      await expect(dlg.getByText('바꾸기 전에 휴대폰 연결을 끄고, 바꾼 뒤 다시 켜 주세요', { exact: false })).toBeVisible()
+      const before = tailscaleCalls(tsLog).length
+      fs.writeFileSync(path.join(tsRoot, 'dns-name'), RENAMED) // Tailscale 대시보드에서 바꾼 꼴
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+      await expect(dlg.locator('.phn-url-t')).toHaveText(`https://${RENAMED}/mobile.html`)
+      const calls = tailscaleCalls(tsLog).slice(before)
+      expect(calls).toContain('serve --https=443 off')
+      expect(calls).toContain(`serve --bg --https=443 http://127.0.0.1:${port}`)
+      const serve = JSON.parse(fs.readFileSync(path.join(tsRoot, 'serve.json'), 'utf8')) as { Web?: Record<string, unknown> }
+      expect(Object.keys(serve.Web ?? {})).toEqual([`${RENAMED}:443`])
+      const rec = (JSON.parse(fs.readFileSync(path.join(userData, 'phone.json'), 'utf8')) as { serve?: { dnsName?: string; localPort: number } }).serve
+      expect(rec).toMatchObject({ dnsName: RENAMED, localPort: port }) // 같은 서버(포트) 그대로
+      await expect(page.locator('button.phn-top')).toHaveText('휴대폰 · 0')
+    })
+
     await test.step('창 닫기 → 트레이로 숨음 · 두레와 휴대폰 연결은 그대로', async () => {
       const menu = await app.evaluate(() => (globalThis as unknown as { __e2e: { tray: { label?: string }[] | null } }).__e2e.tray?.map((i) => i.label) ?? null)
       expect(menu).toEqual(TRAY_MENU) // 켤 때 트레이가 생겼다
@@ -437,7 +456,7 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
       await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => w.isVisible()))).toEqual([false])
       const st = await phoneStateOf(page)
       expect(st.settings.enabled).toBe(true)
-      expect(st.url).toBe(`https://${DNS}/mobile.html`)
+      expect(st.url).toBe(`https://${RENAMED}/mobile.html`)
       // 휴대폰 서버가 그대로 답한다 — 휴대폰 페이지도 다시 읽을 수 있다
       expect(await httpStatus(port, { path: '/mobile.html', headers: { host: `127.0.0.1:${port}` } })).toBe(200)
       await phone.reload()
@@ -445,11 +464,13 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
     })
 
     await test.step('트레이 메뉴 휴대폰 연결 끄기 → serve off · 서버 닫힘 · 창 다시 보임', async () => {
+      const offs = () => tailscaleCalls(tsLog).filter((c) => c === 'serve --https=443 off').length
+      const offsBefore = offs() // 이름을 바꿀 때 한 번 껐다
       await app.evaluate(() => {
         const items = (globalThis as unknown as { __e2e: { tray: { label?: string; click?: () => void }[] } }).__e2e.tray
         items.find((i) => i.label === '휴대폰 연결 끄기')!.click!()
       })
-      await expect.poll(() => tailscaleCalls(tsLog)).toContain('serve --https=443 off')
+      await expect.poll(offs).toBe(offsBefore + 1)
       // 트레이가 없어지면 숨은 창을 보인다(창도 트레이도 없는 두레가 되지 않게)
       await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => w.isVisible()))).toEqual([true])
       await expect(master).toHaveAttribute('aria-checked', 'false')

@@ -4,9 +4,15 @@ import type { PhoneDevice } from './phoneTypes'
 
 /**
  * 기기 토큰 쿠키 이름 — HttpOnly 라서 휴대폰 화면의 JS 는 토큰을 볼 수 없다(쿠키로만 받는다, 머리글 토큰 없음).
- * `__Host-` — 브라우저가 Secure · Path=/ · Domain 없음일 때만 받으므로, 같은 ts.net 의 다른 주소가 Domain 쿠키를 심어 덮어쓸 수 없다
+ * `__Host-` — 브라우저가 Secure · Path=/ · Domain 없음일 때만 받으므로, 같은 ts.net 의 다른 주소가 Domain 쿠키를 심어 덮어쓸 수 없다.
+ * 끝은 휴대폰이 부르는 주소의 포트(https 443·47615 — e2e 의 http://127.0.0.1 은 그 포트): 쿠키는 포트를 가리지 않아서, 같은 PC 이름의
+ * 다른 포트(두레 둘 — 설치본과 개발 실행)가 서로의 쿠키를 덮어쓰지 않게.
+ * 🟡 같은 PC 이름의 다른 `tailscale serve` 앱(다른 포트)도 이 쿠키를 받는다(브라우저가 포트를 가리지 않음) — 받아들인다(설계 §4.2)
  */
-export const PHONE_COOKIE = '__Host-dure_phone'
+export const PHONE_COOKIE_PREFIX = '__Host-dure_phone_'
+export function phoneCookieName(port: number): string {
+  return `${PHONE_COOKIE_PREFIX}${port}`
+}
 
 /** 서버 길 — ws 는 WebSocket(쿠키 필요), 나머지는 HTTP */
 export const PHONE_PATHS = Object.freeze({

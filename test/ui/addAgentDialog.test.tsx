@@ -325,6 +325,28 @@ describe('AddAgentDialog — 휴대폰(폴더 고르기 창 없음)', () => {
     expect(within(dlg).queryByText(/폴더를 찾을 수 없어요/)).toBeNull()
   })
 
+  it('전체 경로가 아니면(상대·드라이브만·..·\\\\?\\) 보내지 않고 폴더 칸 아래 안내 · 칸에 포커스 · 고치면 지운다 · UNC 는 된다', async () => {
+    const dlg = await renderDialog()
+    const input = folderInput(dlg)
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '디자인' } })
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '역할' }), { target: { value: '시안' } })
+    for (const bad of ['work', '.\\work', 'C:work', '\\work', 'C:\\work\\..\\Windows', '\\\\?\\C:\\work', '\\\\.\\pipe\\x']) {
+      fireEvent.change(input, { target: { value: bad } })
+      await add(dlg)
+      await settle()
+      const err = within(dlg).getByText('폴더 경로를 C:\\… 처럼 전체로 써 주세요')
+      expect(err.classList.contains('fe')).toBe(true)
+      expect(input.getAttribute('aria-invalid'), bad).toBe('true')
+      expect(document.activeElement).toBe(input)
+    }
+    expect(api.addAgent).not.toHaveBeenCalled()
+    fireEvent.change(input, { target: { value: '\\\\nas\\share\\web' } })
+    expect(within(dlg).queryByText(/전체로 써 주세요/)).toBeNull()
+    await add(dlg)
+    await settle()
+    expect(api.addAgent).toHaveBeenCalledWith({ roomId: 'r1', name: '디자인', role: '시안', folder: '\\\\nas\\share\\web' })
+  })
+
   it('경로가 비면 추가가 꺼져 있다', async () => {
     const dlg = await renderDialog()
     fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '디자인' } })

@@ -19,6 +19,8 @@ nsis:
   artifactName: Dure-Setup-${version}.${ext}
   shortcutName: 두레
   deleteAppDataOnUninstall: false
+  # 제거 때 휴대폰 연결 정리(두레가 연 serve 길·로그인 항목) — customUnInstall 이 `두레 --uninstall-cleanup` 을 기다린다. 앱 데이터는 지우지 않는다
+  include: build/installer.nsh
 publish:
   provider: github
   owner: choiy4432

@@ -139,8 +139,8 @@ describe('App 셸', () => {
     snapshot = { ...snapshot, rooms: [room('r1', '여름 캠페인')] }
     const phone = {
       settings: { enabled: true, keepAwake: true, openAtLogin: false, notify: { asks: true, finished: false }, port: 47615 },
-      devices: [], online: [], connected: 1, tailscale: { kind: 'ready', dnsName: 'dure.tail-cat.ts.net' },
-      url: 'https://dure.tail-cat.ts.net/mobile.html', pairing: null, problem: null,
+      devices: [], online: [], connected: 1, tailscale: { kind: 'ready', dnsName: 'fake-pc.tail0000.ts.net' },
+      url: 'https://fake-pc.tail0000.ts.net/mobile.html', pairing: null, problem: null,
     }
     Object.assign((window as any).dure, { phoneState: async () => phone, phoneCheck: async () => phone.tailscale })
     await renderApp()

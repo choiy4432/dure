@@ -12,7 +12,7 @@ import { createPhoneNotifier, type NotifierEngine } from './phoneNotifier'
 import { startPhoneServer, type PhoneServer, type PhoneServerOptions } from './phoneServer'
 import { openPhoneStore, publicDevice } from './phoneStore'
 import { createPush, type Push } from './push'
-import type { ServeOnResult, Tailscale } from './tailscale'
+import { offRecordedRoute, type ServeOnResult, type Tailscale } from './tailscale'
 
 // 휴대폰 연결 묶기 — 켜기(Tailscale 확인 → 127.0.0.1 서버 → tailscale serve 길 → 절전 막기)·끄기·짝 맺기·기기 끊기·알림 판단·자동 켜기.
 // 길은 두레가 연 것만 다룬다: 열기 전에 그 짝({httpsPort, localPort, dnsName})을 phone.json 에 적고, 끌 때·다음 시작 때 그 짝만 끈다(포트를 짐작해 지우지 않는다).
@@ -28,6 +28,10 @@ export const PHONE_INBOX = 'phone-inbox'
 const E = {
   notReady: '휴대폰 연결이 아직 열리지 않았어요',
   noHttpsPort: 'tailnet 의 https 포트 443·47615 가 모두 다른 곳에 쓰이고 있어요 — 하나를 비워 주세요',
+  /** https 포트를 고르려고 serve 설정을 읽다 못 읽음 — '모두 쓰이고 있어요' 와 다른 까닭 */
+  unreadable: 'Tailscale 상태를 읽지 못했어요 — 잠시 뒤 다시 확인해 주세요',
+  /** 사용자가 그 https 포트에 Funnel(인터넷 공개)을 켰다 — 두레는 그 포트를 쓰지도 남기지도 않는다 */
+  funnel: '이 포트가 인터넷에 공개(Funnel)돼 있어요 — Tailscale 에서 Funnel 을 꺼 주세요',
   stale: '두레가 전에 연 길을 정리하지 못했어요 — Tailscale 이 켜져 있는지 확인해 주세요',
   failed: '휴대폰 연결을 켜지 못했어요',
 } as const
@@ -43,7 +47,7 @@ export interface PhoneControllerOptions {
   dispatch: Dispatch
   /** 휴대폰 묶음 폴더(phoneStaticDir) */
   staticDir: string
-  tailscale: Pick<Tailscale, 'status' | 'serveOn' | 'serveOff' | 'httpsPortFree'>
+  tailscale: Pick<Tailscale, 'status' | 'serveOn' | 'serveOff' | 'httpsPortFree' | 'funnelOn'>
   /** 절전 막기 — 진짜는 powerSaveBlocker('prevent-app-suspension') */
   power: { start(): number; stop(id: number): void }
   /** 진짜는 powerMonitor.getSystemIdleState(120) — 'active' 면 PC 를 쓰는 중이라 휴대폰은 안 울린다 */
@@ -66,9 +70,15 @@ export interface PhoneController {
   /** 시작 정리(inbox 비우기 · 남은 길 정리 · 켜져 있으면 다시 열기)가 끝나면 풀린다 — 거절하지 않는다 */
   ready: Promise<void>
   state(): PhoneState
-  /** 칸을 바로 저장하고 따른다 — 켜기는 길을 열어 보고(멈추면 켜 둔 채 까닭을 state 에), 끄기는 길·서버·절전 막기를 거둔다(열고 있던 켜기는 멈춤) */
+  /**
+   * 칸을 바로 저장하고 따른다 — 켜기는 길을 열어 보고(멈추면 켜 둔 채 까닭을 state 에), 끄기는 그 자리에서 문을 닫고(Host 거절·소켓 끊기·절전 풀기·짝 맺기 닫기)
+   * 길은 줄을 서서 끈다(열고 있던 켜기는 멈춤)
+   */
   set(p: PhoneSettingsChange): Promise<void>
-  /** Tailscale 을 다시 본다 — 켜져 있고 길이 안 열렸으면 다시 열어 본다(https 가 꺼졌고 링크를 아직 모르면 켜기 링크까지) · 꺼져 있는데 두레 길이 남았으면 다시 꺼 본다 */
+  /**
+   * Tailscale 을 다시 본다 — 켜져 있고 길이 안 열렸으면 다시 열어 본다(https 가 꺼졌고 링크를 아직 모르면 켜기 링크까지) · 꺼져 있는데 두레 길이 남았으면 다시 꺼 본다 ·
+   * 길이 열려 있으면 PC 이름이 바뀌었나(→ 예전 이름의 길을 닫고 지금 이름으로 다시 연다)·그 포트에 Funnel 이 켜졌나(→ 길·서버를 닫고 까닭) 본다
+   */
   check(): Promise<TailscaleState>
   /** 새 짝 코드·6자리 숫자 — 앞의 것은 무효. 길이 열려 있어야 한다 */
   pairStart(): Promise<PhonePairOffer>
@@ -106,8 +116,8 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
 
   let tailscale: TailscaleState | null = null
   let server: PhoneServer | null = null
-  /** 길이 열려 있다 — host = 서버가 받는 Host(443 이면 포트 없이), url = 휴대폰 주소 */
-  let open: { host: string; url: string } | null = null
+  /** 길이 열려 있다 — host = 서버가 받는 Host(443 이면 포트 없이), url = 휴대폰 주소, dnsName·httpsPort = 연 짝(이름이 바뀌었나·Funnel 을 볼 때) */
+  let open: { host: string; url: string; dnsName: string; httpsPort: number } | null = null
   let problem: string | null = null
   let pair: { pin: string; expiresAt: number } | null = null
   let pairTimer: ReturnType<typeof setTimeout> | null = null
@@ -251,24 +261,35 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
     return s
   }
 
-  /** 서버를 닫고 절전 막기를 푼다(길은 따로 — routeOff) */
-  const closeServer = async () => {
+  /** 닫히는 중인 서버들 — closeServer 가 다 닫히길 기다린다(inbox 를 비우기 전에 올리기가 끝나게) */
+  let closing: Promise<unknown> = Promise.resolve()
+  /**
+   * 문을 그 자리에서 닫는다 — 새 요청은 거절(Host), 서버를 닫기 시작해 열린 소켓을 바로 끊고, 절전 막기를 푼다(길은 따로 — routeOff).
+   * 끄기·dispose·Funnel 이 같은 틱에 부른다 — 줄 선 일(serve 끄기 등)을 기다리지 않게
+   */
+  const shutServer = () => {
+    open = null
     const s = server
     server = null
-    open = null
-    if (s) await s.close().catch(() => {})
+    if (s) closing = Promise.all([closing, s.close().catch(() => {})])
     syncPower()
+  }
+  /** 서버를 닫고 절전 막기를 푼다 — 다 닫힐 때까지 기다린다 */
+  const closeServer = async () => {
+    shutServer()
+    await closing
   }
 
   /**
-   * phone.json 에 적어 둔 두레 길만 끈다(serveOff — 그 짝이 두레 꼴일 때만 끄고, 없거나 남의 것이면 그대로).
+   * phone.json 에 적어 둔 두레 길만 끈다(offRecordedRoute — 그 짝이 두레 꼴일 때만 끄고, 없거나 남의 것이면 그대로.
+   * PC 이름이 바뀌어 그 길이 지금 이름 아래로 옮겨졌으면 지금 이름으로).
    * 껐거나 이미 없으면 기록을 지우고 true · 끄지 못하면(설정 못 읽음·끄기 실패) 기록을 남기고 false — 다음에 다시
    */
   const routeOff = async (): Promise<boolean> => {
     const rec = store.read().serve
     if (!rec) return true
     try {
-      await o.tailscale.serveOff(rec.httpsPort, rec.localPort, rec.dnsName)
+      await offRecordedRoute(o.tailscale, rec)
       store.write({ serve: null })
       return true
     } catch {
@@ -276,13 +297,20 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
     }
   }
 
-  /** 지난번 포트 → 443 → 47615 중 비어 있는 첫 포트 — 주소가 바뀌면 휴대폰의 홈 화면 앱·알림 구독이 끊긴다 */
-  const pickHttpsPort = async (): Promise<number | null> => {
+  /**
+   * 지난번 포트 → 443 → 47615 중 비어 있는 첫 포트(Funnel 이 켜진 포트는 빈 포트가 아니다) — 주소가 바뀌면 휴대폰의 홈 화면 앱·알림 구독이 끊긴다.
+   * 없으면 까닭: 그중 Funnel 이 켜진 포트가 있으면 E.funnel, 아니면 E.noHttpsPort · serve 설정을 못 읽으면 E.unreadable
+   */
+  const pickHttpsPort = async (): Promise<number | string> => {
     const last = store.read().httpsPort
-    for (const p of new Set([...(last === undefined ? [] : [last]), ...PHONE_HTTPS_PORTS])) {
-      if (await o.tailscale.httpsPortFree(p)) return p
+    const ports = [...new Set([...(last === undefined ? [] : [last]), ...PHONE_HTTPS_PORTS])]
+    try {
+      for (const p of ports) if (await o.tailscale.httpsPortFree(p)) return p
+    } catch {
+      return E.unreadable
     }
-    return null
+    for (const p of ports) if (await o.tailscale.funnelOn(p).catch(() => false)) return E.funnel
+    return E.noHttpsPort
   }
 
   /**
@@ -323,9 +351,9 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
     if (halted()) return quit(false)
     const httpsPort = await pickHttpsPort()
     if (halted()) return quit(false)
-    if (httpsPort === null) {
+    if (typeof httpsPort === 'string') {
       await closeServer()
-      return E.noHttpsPort
+      return httpsPort
     }
     // 열기 전에 적는다 — serveOn 이 시간 상한으로 던져도·두레가 그 사이 꺼져도 그 짝만 정리할 수 있게. 못 적으면 열지 않는다
     try {
@@ -353,7 +381,7 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
     }
     safely('https 포트 적기', () => store.write({ httpsPort })) // 다음 켜기의 첫 포트 — 못 적어도 이번 길은 그대로
     const host = httpsPort === 443 ? dnsName : `${dnsName}:${httpsPort}`
-    open = { host, url: `https://${host}/mobile.html` }
+    open = { host, url: `https://${host}/mobile.html`, dnsName, httpsPort }
     syncPower()
     return null
   }
@@ -407,16 +435,51 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
     retryTimer.unref?.()
   }
 
-  /** 끄기 — 새 요청은 바로 거절 → 길 끄기 → 서버 닫기 → 절전 풀기 → inbox 비우기. 길을 못 끄면 까닭을 남기고 잠시 뒤 다시 */
+  /**
+   * 끄기(줄 선 쪽) — 문은 set 이 이미 닫았다(shutServer) · 길 끄기 → 서버가 다 닫히길 기다림 → inbox 비우기.
+   * 길을 못 끄면 까닭을 남기고 잠시 뒤 다시
+   */
   const bringDown = async () => {
     clearRetry()
     clearPairing()
-    open = null
+    shutServer()
     const ok = await routeOff()
     await closeServer()
     await emptyInbox()
     problem = ok ? null : E.stale
     if (!ok) scheduleRetry()
+  }
+
+  /**
+   * 길이 열린 채 확인 — PC 이름이 바뀌었으면(Tailscale 대시보드) 휴대폰이 아는 주소는 더 못 쓴다: 문을 닫고 짝 맺기(예전 주소의 QR)를 닫은 뒤
+   * 예전 이름의 짝을 끄고 지금 이름으로 다시 연다(서버는 그대로). 그 포트에 Funnel 이 켜졌으면 길·서버를 닫고 까닭 — 잠시 뒤 다시 해 보기는 공개 아닌 포트로.
+   * 그 사이 끄기·dispose 가 왔으면(my ≠ stops) 아무것도 하지 않는다
+   */
+  const recheckOpen = async (my: number): Promise<void> => {
+    const was = open
+    const ts = keepLink(await o.tailscale.status())
+    if (disposed || stops !== my || !was || open !== was) return
+    tailscale = ts
+    if (ts.kind === 'ready' && ts.dnsName !== was.dnsName) {
+      clearPairing()
+      open = null
+      syncPower()
+      await attempt(true, my)
+      return
+    }
+    const funnel = await o.tailscale.funnelOn(was.httpsPort).catch(() => false)
+    if (disposed || stops !== my || open !== was) return
+    if (funnel) {
+      // 서버부터 닫는다 — 길을 못 꺼도(기록이 남아 다시 해 보기가 정리) 공개된 길 끝엔 두레가 없다
+      clearPairing()
+      shutServer()
+      await routeOff()
+      await closeServer()
+      if (disposed || stops !== my) return
+      problem = E.funnel
+      scheduleRetry()
+    }
+    publish()
   }
 
   const notifier = o.engine
@@ -475,6 +538,10 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
       if (off) {
         stops++
         clearRetry()
+        // 문은 그 자리에서 — 줄 선 일(앞의 켜기·확인이 Tailscale 을 기다리는 중일 수 있다)을 기다리지 않고 새 요청을 거절하고 열린 소켓을 끊는다
+        clearPairing()
+        shutServer()
+        publish()
       }
       const my = stops
       return serial(async () => {
@@ -490,6 +557,7 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
       return serial(async () => {
         if (!disposed) {
           if (settings().enabled && !open) await attempt(true)
+          else if (settings().enabled) await recheckOpen(stops)
           else {
             tailscale = keepLink(await o.tailscale.status())
             // 꺼진 채 두레 길 기록이 남았으면 기다리지 않고 다시 꺼 본다(Tailscale 을 켠 뒤의 '확인')
@@ -537,11 +605,8 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
       clearRetry()
       clearPairing()
       if (notifier) safely('알림 끄기', () => notifier.dispose())
-      open = null // 새 요청은 바로 거절
-      syncPower()
-      const now = server
-      server = null
-      const closingNow = now ? now.close().catch(() => {}) : Promise.resolve()
+      shutServer() // 새 요청은 바로 거절 · 열린 소켓은 바로 끊는다
+      const closingNow = closing
       disposing = serial(async () => {
         await Promise.all([routeOff(), closeServer(), closingNow])
         await emptyInbox()

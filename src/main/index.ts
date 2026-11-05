@@ -1,13 +1,14 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, shell, Tray } from 'electron'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import electronUpdater from 'electron-updater'
 import { killTree } from '../engine/killTree'
 import { authStatus, claudeVersion, createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
 import type { AppEventMap, ClaudeUpdateState } from '../shared/appTypes'
-import { appEnv, appIconFor, appUserModelId } from './appEnv'
+import { appEnv, appIconFor, appUserModelId, loginItemName, loginItemSettings } from './appEnv'
 import { initAppPrefsSafe, writeAppPrefs } from './appPrefs'
 import { resolveClaudeCommand, resolveSshCommand, type ClaudeCommand } from './claudeCommand'
 import { cmdArgs, startWaitLine } from './cmdLine'
@@ -21,6 +22,7 @@ import { createDispatcher } from './dispatch'
 import { createPhoneController, phoneStaticDir, type PhoneController } from './phone/phoneController'
 import { createTailscale, resolveTailscaleCommand } from './phone/tailscale'
 import { createTrayControl, startHidden, trayTipOnce, TRAY_TIP, type TrayControl } from './tray'
+import { UNINSTALL_CLEANUP_ARG, uninstallCleanup } from './uninstallCleanup'
 import { appPageMatcher, focusExisting, guardNavigation, HIDDEN_ARG, withoutHiddenArg } from './window'
 import { TITLE_BAR_HEIGHT, veiledColor, windowColors } from './windowTheme'
 
@@ -168,6 +170,15 @@ function e2eFolders(raw: string | undefined): (() => string | null) | null {
 // Windows 알림·작업표시줄 묶음이 앱을 알아보게 — 설치본은 고정 ID, 개발 실행은 execPath
 if (process.platform === 'win32') app.setAppUserModelId(appUserModelId(app.isPackaged, process.execPath))
 
+/** 로그인 항목 이름 — 빌드에 실린 package.json 의 name(시험 빌드는 dure-…). 못 읽으면 app.getName() */
+function loginName(): string {
+  try {
+    return loginItemName(JSON.parse(readFileSync(join(app.getAppPath(), 'package.json'), 'utf8')), app.getName())
+  } catch {
+    return app.getName()
+  }
+}
+
 const indexFile = join(__dirname, '../renderer/index.html')
 /** 앱 아이콘(D 넘김) — 창·작업표시줄. 굽는 법은 scripts/icon/build.mjs */
 const appIcon = join(__dirname, '../../resources/icon.ico')
@@ -244,7 +255,23 @@ function createWindow(o: { hidden: boolean }): BrowserWindow {
   return win
 }
 
-if (!app.requestSingleInstanceLock()) {
+if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
+  // 제거 프로그램이 부른 정리(build/installer.nsh) — 창·트레이·엔진 없이 두레가 연 serve 길과 이 빌드의 로그인 항목만 끄고 늘 0 으로 나간다.
+  // 한 인스턴스 잠금은 잡지 않는다(켜진 두레가 second-instance 로 창을 띄우지 않게). 🔴 로그인 항목은 설치본만(개발 실행·시험은 건드리지 않는다)
+  void app
+    .whenReady()
+    .then(() =>
+      uninstallCleanup({
+        dataDir: app.getPath('userData'),
+        tailscale: createTailscale(resolveTailscaleCommand(env)),
+        removeLoginItem: () => {
+          if (app.isPackaged) app.setLoginItemSettings(loginItemSettings(false, loginName(), process.execPath))
+        },
+      }),
+    )
+    .catch(() => {})
+    .finally(() => app.exit(0))
+} else if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   // 창이 아직 없으면(숨겨 시작이 엔진을 기다리는 중) 잃지 않게 적어 둔다 — 창을 만들 때 숨기지 않는다
@@ -524,7 +551,8 @@ if (!app.requestSingleInstanceLock()) {
         idle: () => powerMonitor.getSystemIdleState(PHONE_IDLE_S),
         loginItem: {
           set(open) {
-            if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: open, args: [HIDDEN_ARG] })
+            // 이름은 빌드마다(loginName — package.json name) — 시험 빌드가 진짜 두레의 값을 덮거나 지우지 않게(loginItemSettings)
+            if (app.isPackaged) app.setLoginItemSettings(loginItemSettings(open, loginName(), process.execPath))
           },
         },
         emit: (s) => {

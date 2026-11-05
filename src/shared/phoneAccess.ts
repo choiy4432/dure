@@ -97,3 +97,19 @@ export const PHONE_ACCESS: Readonly<Record<ApiMethod, PhoneAccess>> = Object.fre
 export function phoneAllows(method: unknown): method is ApiMethod {
   return typeof method === 'string' && Object.hasOwn(PHONE_ACCESS, method) && PHONE_ACCESS[method as ApiMethod] === 'phone'
 }
+
+/** 휴대폰에서 이 PC 방에 에이전트를 만들 때 친 폴더가 전체 경로가 아니다 — 휴대폰 화면(AddAgentDialog)과 phoneDispatcher 가 같이 쓴다 */
+export const PHONE_FOLDER_BAD = '폴더 경로를 C:\\… 처럼 전체로 써 주세요'
+
+/**
+ * 휴대폰이 친 이 PC 폴더가 전체 Windows 경로인가 — 드라이브(`C:\…`·`C:/…`) 또는 UNC(`\\서버\공유…`).
+ * 아님: 상대(`work`·`.\work` — 두레가 도는 폴더로 풀린다) · 드라이브 상대(`C:work`) · 루트 상대(`\work`) · 장치 경로(`\\?\`·`\\.\`) ·
+ * `..` 마디 · 드라이브 뒤의 `:`(대체 데이터 스트림) · 제어 문자. PC 창은 폴더 고르기 창이 준 경로라 거치지 않는다
+ */
+export function phoneFolderOk(folder: string): boolean {
+  if (/[\u0000-\u001f]/.test(folder)) return false
+  if (folder.split(/[\\/]/).includes('..')) return false
+  const drive = /^[A-Za-z]:[\\/]/.test(folder)
+  const unc = /^\\\\[^\\/?.][^\\/]*[\\/][^\\/]+/.test(folder)
+  return (drive || unc) && !folder.slice(2).includes(':')
+}

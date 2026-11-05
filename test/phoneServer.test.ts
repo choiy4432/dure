@@ -9,7 +9,7 @@ import zlib from 'node:zlib'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import WebSocket from 'ws'
 import { startPhoneServer, type PhoneServerOptions } from '../src/main/phone/phoneServer'
-import { PHONE_CLOSE_UNPAIRED, PHONE_COOKIE, PHONE_WS_MESSAGE_MAX } from '../src/shared/phoneWire'
+import { PHONE_CLOSE_UNPAIRED, PHONE_WS_MESSAGE_MAX, phoneCookieName } from '../src/shared/phoneWire'
 import { ATTACH_MAX_BYTES } from '../src/shared/attachments'
 import type { PhoneDevice } from '../src/shared/phoneTypes'
 import type { InvokeResult } from '../src/shared/ipcContract'
@@ -164,7 +164,9 @@ function request(
 }
 
 const json = (r: Res) => JSON.parse(r.text)
-const cookie = (token: string) => `${PHONE_COOKIE}=${token}`
+/** 기기 토큰 쿠키 — 이름은 휴대폰이 부르는 주소의 포트마다(기본 HOST 의 47615) */
+const PHONE_COOKIE = phoneCookieName(47615)
+const cookie = (token: string, port = 47615) => `${phoneCookieName(port)}=${token}`
 const post = (port: number, p: string, body: unknown, headers: Record<string, string | undefined> = {}) =>
   request(port, {
     method: 'POST',
@@ -292,13 +294,33 @@ describe('phoneServer', () => {
     expect(off.dispatched).toEqual([])
   })
 
+  it('Funnel(인터넷)으로 들어온 요청 — Tailscale-Funnel-Request 머리글이 있으면 짝이 맞아도 모두 403', async () => {
+    const t = await setup()
+    const port = t.server.port
+    const token = t.pairing.add()
+    // 머리글 값은 가리지 않는다(있기만 하면) · 이름은 대소문자 무시(node 가 소문자로 준다)
+    for (const funnel of [{ 'Tailscale-Funnel-Request': '?1' }, { 'tailscale-funnel-request': '' }, { 'TAILSCALE-FUNNEL-REQUEST': 'x' }]) {
+      expect((await request(port, { path: '/mobile.html', headers: funnel })).status).toBe(403)
+      expect((await request(port, { path: '/api/me', headers: { ...funnel, cookie: cookie(token) } })).status).toBe(403)
+      expect((await post(port, '/api/pair', { secret: GOOD_SECRET, name: 'x' }, funnel)).status).toBe(403)
+      expect(await statusOf(connect(port, { ...funnel, Cookie: cookie(token) }))).toBe(403)
+    }
+    // 머리글이 없으면 그대로
+    expect((await request(port, { path: '/api/me', headers: { cookie: cookie(token) } })).status).toBe(200)
+    await tick()
+    expect(t.pairing.calls.redeem).toEqual([])
+    expect(t.dispatched).toEqual([])
+  })
+
   it('allowLocal — 127.0.0.1 주소도 받는다(e2e 만), 아니면 거절', async () => {
     const t = await setup({ allowLocal: true })
     const port = t.server.port
     const local = `127.0.0.1:${port}`
     const token = t.pairing.add()
     expect((await request(port, { path: '/', headers: { host: local } })).status).toBe(200)
-    const c = await connect(port, { Host: local, Origin: `http://${local}`, Cookie: cookie(token) })
+    // 쿠키 이름은 그 주소의 포트(여기선 127.0.0.1 의 서버 포트)
+    expect(await statusOf(connect(port, { Host: local, Origin: `http://${local}`, Cookie: cookie(token) }))).toBe(401)
+    const c = await connect(port, { Host: local, Origin: `http://${local}`, Cookie: cookie(token, port) })
     c.ws.send(JSON.stringify({ t: 'call', id: 1, method: 'snapshot', args: [] }))
     expect((await c.next()).ok).toBe(true)
 
@@ -306,7 +328,7 @@ describe('phoneServer', () => {
     const r = await post(port, '/api/pair', { secret: GOOD_SECRET, name: 'e2e' }, { host: local, origin: `http://${local}` })
     expect(r.status).toBe(200)
     const pair = r.headers['set-cookie']![0].split(';')[0]
-    expect(pair.startsWith('__Host-dure_phone=')).toBe(true)
+    expect(pair.startsWith(`__Host-dure_phone_${port}=`)).toBe(true)
     expect(r.headers['set-cookie']![0]).toContain('Secure')
     expect((await request(port, { path: '/api/me', headers: { host: local, cookie: pair } })).status).toBe(200)
     const c2 = await connect(port, { Host: local, Origin: `http://${local}`, Cookie: pair })
@@ -356,14 +378,20 @@ describe('phoneServer', () => {
     const sc = set![0]
     const [pair, ...attrs] = sc.split(';').map((s) => s.trim())
     const token = [...t.pairing.tokens.keys()].find((k) => t.pairing.tokens.get(k)!.id === 'dev1')!
-    // __Host- 쿠키 — 같은 ts.net 의 다른 주소가 Domain 쿠키로 덮어쓸 수 없다(Secure · Path=/ · Domain 없음이어야 브라우저가 받는다)
-    expect(PHONE_COOKIE).toBe('__Host-dure_phone')
-    expect(pair).toBe(`__Host-dure_phone=${token}`)
+    // __Host- 쿠키 — 같은 ts.net 의 다른 주소가 Domain 쿠키로 덮어쓸 수 없다(Secure · Path=/ · Domain 없음이어야 브라우저가 받는다).
+    // 이름 끝은 https 포트 — 쿠키는 포트를 가리지 않아서, 같은 PC 이름의 다른 포트(다른 두레 · 443 과 47615)와 섞이지 않게
+    expect(PHONE_COOKIE).toBe('__Host-dure_phone_47615')
+    expect(pair).toBe(`__Host-dure_phone_47615=${token}`)
     expect(attrs).toEqual(expect.arrayContaining(['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/']))
     expect(attrs.some((a) => /^Max-Age=\d+$/.test(a))).toBe(true)
     expect(attrs.some((a) => /^domain=/i.test(a))).toBe(false)
-    // 옛 이름 쿠키는 받지 않는다
-    expect((await request(port, { path: '/api/me', headers: { cookie: `dure_phone=${token}` } })).status).toBe(401)
+    // 옛 이름·다른 포트의 쿠키는 받지 않는다
+    for (const other of [`dure_phone=${token}`, `__Host-dure_phone=${token}`, cookie(token, 443), cookie(token, 4761)]) {
+      expect((await request(port, { path: '/api/me', headers: { cookie: other } })).status, other).toBe(401)
+      expect(await statusOf(connect(port, { Cookie: other })), other).toBe(401)
+    }
+    // 두 두레(443 · 47615)가 같은 PC 이름에 — 휴대폰이 두 쿠키를 함께 보내도 이 포트의 것만 본다
+    expect((await request(port, { path: '/api/me', headers: { cookie: `${cookie('someone-else', 443)}; ${pair}` } })).status).toBe(200)
 
     // 그 쿠키로 /api/me · WebSocket
     const me = await request(port, { path: '/api/me', headers: { cookie: pair } })
@@ -828,10 +856,14 @@ describe('phoneServer', () => {
     const token = t.pairing.add()
     for (const host of [DNS, `${DNS}:443`, DNS.toUpperCase(), `Pc.Tail1234.TS.net:443`]) {
       expect((await request(port, { path: '/', headers: { host } })).status, host).toBe(200)
-      expect((await request(port, { path: '/api/me', headers: { host, cookie: cookie(token) } })).status, host).toBe(200)
-      const c = await connect(port, { Host: host, Origin: `https://PC.tail1234.ts.net`, Cookie: cookie(token) })
+      expect((await request(port, { path: '/api/me', headers: { host, cookie: cookie(token, 443) } })).status, host).toBe(200)
+      expect((await request(port, { path: '/api/me', headers: { host, cookie: cookie(token, 47615) } })).status, host).toBe(401)
+      const c = await connect(port, { Host: host, Origin: `https://PC.tail1234.ts.net`, Cookie: cookie(token, 443) })
       c.ws.close()
     }
+    // 짝 맺기가 주는 쿠키도 443 이름
+    const paired = await post(port, '/api/pair', { secret: GOOD_SECRET, name: 'x' }, { host: DNS, origin: `https://${DNS}` })
+    expect(paired.headers['set-cookie']![0]).toMatch(/^__Host-dure_phone_443=/)
     const csp = String((await request(port, { path: '/', headers: { host: `${DNS}:443` } })).headers['content-security-policy'])
     expect(csp).toContain(`connect-src 'self' wss://${DNS};`)
     for (const host of [`${DNS}:47615`, `${DNS}:4430`, `${DNS}:44`, `${DNS}.evil.example`, `x${DNS}`]) {

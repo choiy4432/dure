@@ -12,7 +12,10 @@ import { startPhoneServer, type PhoneClient, type PhoneServer, type PhoneServerO
 import { EVENT_NAMES } from '../src/shared/ipcContract'
 import { PHONE_DENIED } from '../src/shared/phoneAccess'
 import { DEFAULT_PHONE_SETTINGS, PAIR_TTL_MS, type PhoneState, type TailscaleState } from '../src/shared/phoneTypes'
-import { PHONE_COOKIE } from '../src/shared/phoneWire'
+import { phoneCookieName } from '../src/shared/phoneWire'
+
+/** 443 으로 연 길의 기기 토큰 쿠키 이름 */
+const PHONE_COOKIE = phoneCookieName(443)
 
 // 휴대폰 연결 묶기 — 가짜 tailscale·절전 막기·로그인 항목·서버·푸시, 임시 폴더만.
 // 🔴 진짜 tailscale·로그인 항목·powerSaveBlocker·웹 푸시는 부르지 않는다(진짜 서버 시험 하나만 127.0.0.1 에 연다)
@@ -56,6 +59,8 @@ const putInbox = (name: string, d = dir) => {
 function fakeTailscale(start: TailscaleState = READY, order: string[] = []) {
   const routes = new Map<number, { localPort: number; dnsName?: string }>()
   const others = new Set<number>()
+  /** 사용자가 Funnel(인터넷 공개)을 켠 https 포트 — serve status 의 AllowFunnel */
+  const funnels = new Set<number>()
   const calls: string[] = []
   const log = (s: string) => {
     calls.push(s)
@@ -66,17 +71,22 @@ function fakeTailscale(start: TailscaleState = READY, order: string[] = []) {
     /** serveOn 이 돌려줄 것 — Error 면 길을 연 채로 던진다(시간 상한처럼) */
     onResult: null as null | { kind: 'no-https'; enableUrl: string } | Error,
     offError: null as Error | null,
-    routes, others, calls,
+    routes, others, funnels, calls,
     status: vi.fn(async (): Promise<TailscaleState> => {
       log('status')
       return t.state
     }),
     httpsPortFree: vi.fn(async (p: number) => {
       log(`free ${p}`)
-      return !others.has(p) && !routes.has(p)
+      return !others.has(p) && !routes.has(p) && !funnels.has(p)
+    }),
+    funnelOn: vi.fn(async (p: number) => {
+      log(`funnel ${p}`)
+      return funnels.has(p)
     }),
     serveOn: vi.fn(async (h: number, l: number, d?: string) => {
       log(`on ${h} ${l} ${d ?? '-'}`)
+      if (funnels.has(h)) throw new Error('이 포트가 인터넷에 공개(Funnel)돼 있어요 — Tailscale 에서 Funnel 을 꺼 주세요')
       const r = t.onResult
       if (r && !(r instanceof Error)) return r
       routes.set(h, { localPort: l, dnsName: d })
@@ -314,7 +324,8 @@ test('끄기 — serve 끄고 서버 닫고 절전 풀림 · 짝 맺기·inbox �
   putInbox('0123456789abcdef-사진.png')
   order.length = 0
   await c.set({ enabled: false })
-  expect(order).toEqual(['off 443 47615 fake-pc.tail0000.ts.net', 'close', 'power off'])
+  // 문(서버·절전)은 그 자리에서 닫고, 길은 줄을 서서 끈다
+  expect(order).toEqual(['close', 'power off', 'off 443 47615 fake-pc.tail0000.ts.net'])
   expect(ts.routes.size).toBe(0)
   expect(saved().serve).toBeUndefined()
   expect(servers.last().closed).toBe(true)
@@ -531,6 +542,131 @@ test('끄기는 바로 — 켜는 중(serveOn 기다림)이어도 꺼짐을 바�
   // 끈 뒤 다시 켜면 연다
   await c.set({ enabled: true })
   expect(c.state().url).toBe(`https://${DNS}/mobile.html`)
+})
+
+test('끄기 — 문은 그 자리에서 닫는다(앞에 줄 선 일이 Tailscale 을 기다려도): Host 거절 · 서버 닫기(소켓 끊김) · 절전 풀림 · 짝 맺기 닫힘', async () => {
+  const ts = fakeTailscale()
+  const { c, servers, power } = make({ ts })
+  await c.set({ enabled: true })
+  await c.pairStart()
+  const s = servers.last()
+  let release = () => {}
+  ts.status.mockImplementationOnce(() => new Promise<TailscaleState>((r) => (release = () => r(READY))))
+  const checking = c.check() // 줄 앞 — status 를 기다린다
+  await vi.waitFor(() => expect(ts.status).toHaveBeenCalledTimes(2))
+  const off = c.set({ enabled: false })
+  // 줄 선 끄기(serve 끄기)가 돌기 전인데도 — 새 요청은 거절, 열린 소켓은 닫힘
+  expect(ts.serveOff).not.toHaveBeenCalled()
+  expect(s.opts.allowedHost()).toBeNull()
+  expect(s.close).toHaveBeenCalledTimes(1)
+  expect(s.closed).toBe(true)
+  expect(power.on.size).toBe(0)
+  expect(c.state()).toMatchObject({ url: null, pairing: null, connected: 0 })
+  release()
+  await checking
+  await off
+  expect(ts.serveOff).toHaveBeenCalledWith(443, 47615, DNS)
+  expect(saved().serve).toBeUndefined()
+  expect(s.close).toHaveBeenCalledTimes(1)
+  expect(ts.serveOn).toHaveBeenCalledTimes(1) // 끈 뒤 확인이 다시 열지 않았다
+  expect(c.state()).toMatchObject({ settings: { enabled: false }, url: null, problem: null })
+})
+
+test('https 포트를 볼 serve 설정을 못 읽으면 — 포트가 모두 쓰인다는 글이 아니라 따로 된 까닭(serve 안 부름)', async () => {
+  const ts = fakeTailscale()
+  ts.httpsPortFree.mockRejectedValue(new Error('Tailscale 의 serve 설정을 읽지 못했어요'))
+  const { c, servers, power } = make({ ts })
+  await c.set({ enabled: true })
+  expect(c.state()).toMatchObject({ settings: { enabled: true }, url: null, problem: 'Tailscale 상태를 읽지 못했어요 — 잠시 뒤 다시 확인해 주세요' })
+  expect(ts.serveOn).not.toHaveBeenCalled()
+  expect(servers.last().closed).toBe(true)
+  expect(power.start).not.toHaveBeenCalled()
+  expect(saved().serve).toBeUndefined()
+})
+
+const FUNNEL = '이 포트가 인터넷에 공개(Funnel)돼 있어요 — Tailscale 에서 Funnel 을 꺼 주세요'
+
+test('Funnel(인터넷 공개)이 켜진 포트는 쓰지 않음 — 지난 포트가 공개면 다음 포트 · 모두 못 쓰는데 공개가 끼면 그 까닭', async () => {
+  seed({ httpsPort: 443 })
+  const ts = fakeTailscale()
+  ts.funnels.add(443)
+  const { c } = make({ ts })
+  await c.set({ enabled: true })
+  expect(ts.serveOn).toHaveBeenCalledWith(47615, 47615, DNS)
+  expect(c.state()).toMatchObject({ url: `https://${DNS}:47615/mobile.html`, problem: null })
+
+  const dB = path.join(dir, 'b')
+  const tsB = fakeTailscale()
+  tsB.funnels.add(443)
+  tsB.others.add(47615)
+  const b = make({ ts: tsB, dataDir: dB })
+  await b.c.set({ enabled: true })
+  expect(tsB.serveOn).not.toHaveBeenCalled()
+  expect(b.c.state()).toMatchObject({ settings: { enabled: true }, url: null, problem: FUNNEL })
+  expect(saved(dB).serve).toBeUndefined()
+})
+
+test('연 뒤에 그 포트에 Funnel 을 켜면 — 확인 때 두레 길·서버를 닫고 까닭 · 잠시 뒤 공개 아닌 포트로 다시', async () => {
+  const ts = fakeTailscale()
+  const { c, servers, power } = make({ ts, retryMs: 30 })
+  await c.set({ enabled: true })
+  await c.pairStart()
+  const first = servers.last()
+  ts.funnels.add(443)
+  await c.check()
+  expect(ts.serveOff).toHaveBeenCalledWith(443, 47615, DNS)
+  expect(ts.routes.has(443)).toBe(false)
+  expect(saved().serve).toBeUndefined()
+  expect(first.closed).toBe(true)
+  expect(first.opts.allowedHost()).toBeNull()
+  expect(power.on.size).toBe(0)
+  expect(c.state()).toMatchObject({ settings: { enabled: true }, url: null, pairing: null, problem: FUNNEL })
+  await vi.waitFor(() => expect(c.state().url).toBe(`https://${DNS}:47615/mobile.html`), { timeout: 3000 })
+  expect(c.state().problem).toBeNull()
+  expect(ts.routes.has(443)).toBe(false)
+  // 공개가 아니면 확인은 길을 건드리지 않는다
+  const offs = ts.serveOff.mock.calls.length
+  await c.check()
+  expect(ts.serveOff.mock.calls.length).toBe(offs)
+  expect(ts.calls.slice(-2)).toEqual(['status', 'funnel 47615'])
+})
+
+test('켜진 채 PC 이름을 바꾸면 — 확인 때 예전 이름의 길을 닫고 지금 이름으로 다시 연다 · 예전 주소의 짝 맺기는 닫힘', async () => {
+  const NEW = 'renamed-pc.tail0000.ts.net'
+  const ts = fakeTailscale()
+  const { c, servers, emitted } = make({ ts })
+  await c.set({ enabled: true })
+  await c.pairStart()
+  ts.state = { kind: 'ready', dnsName: NEW }
+  expect(await c.check()).toEqual({ kind: 'ready', dnsName: NEW })
+  expect(ts.serveOff).toHaveBeenCalledWith(443, 47615, DNS)
+  expect(ts.serveOn).toHaveBeenLastCalledWith(443, 47615, NEW)
+  expect(ts.routes.get(443)).toEqual({ localPort: 47615, dnsName: NEW })
+  expect(saved().serve).toEqual({ httpsPort: 443, localPort: 47615, dnsName: NEW })
+  expect(c.state()).toMatchObject({ tailscale: { kind: 'ready', dnsName: NEW }, url: `https://${NEW}/mobile.html`, pairing: null, problem: null })
+  expect(servers.made).toHaveLength(1) // 서버는 그대로 — Host 만 새 이름
+  expect(servers.last().opts.allowedHost()).toBe(NEW)
+  expect(emitted.at(-1)).toEqual(c.state())
+  expect(emitted.some((s) => s.url === `https://${DNS}/mobile.html` && s.tailscale?.kind === 'ready' && s.tailscale.dnsName === NEW)).toBe(false)
+  // 이름이 그대로면 길을 건드리지 않는다
+  const offs = ts.serveOff.mock.calls.length
+  await c.check()
+  expect(ts.serveOff.mock.calls.length).toBe(offs)
+})
+
+test('PC 이름이 바뀐 줄 모른 채 끄면 — 그 길이 지금 이름 아래로 옮겨졌어도 같은 짝(https 포트·로컬 포트)을 끈다', async () => {
+  const NEW = 'renamed-pc.tail0000.ts.net'
+  const ts = fakeTailscale()
+  const { c } = make({ ts })
+  await c.set({ enabled: true })
+  // Tailscale 이 두레 길을 새 이름 아래로 옮긴 꼴 — 두레는 아직 확인 전이라 모른다
+  ts.routes.set(443, { localPort: 47615, dnsName: NEW })
+  ts.state = { kind: 'ready', dnsName: NEW }
+  await c.set({ enabled: false })
+  expect(ts.calls.slice(-3)).toEqual([`off 443 47615 ${DNS}`, 'status', `off 443 47615 ${NEW}`])
+  expect(ts.routes.size).toBe(0)
+  expect(saved().serve).toBeUndefined()
+  expect(c.state().problem).toBeNull()
 })
 
 test('dispose — 켜는 중(serveOn 기다림)이어도 길·서버를 거두고 절전은 막지 않음 · 켜짐은 그대로', async () => {
@@ -837,4 +973,38 @@ test('진짜 서버 — 짝 맺기 → 기기·짝 닫힘이 상태에 · 끊기
       req.end()
     }),
   ).rejects.toThrow()
+})
+
+test('진짜 서버 — 끄면 serve 를 끄기 전에(Tailscale 이 늦어도) 열린 소켓이 닫힌다', async () => {
+  const port = await freePort()
+  seed({ settings: { ...DEFAULT_PHONE_SETTINGS, port } })
+  const ts = fakeTailscale()
+  const { c } = make({ ts, startServer: startPhoneServer })
+  await c.set({ enabled: true })
+  const offer = await c.pairStart()
+  const headers = { host: DNS, origin: `https://${DNS}`, 'content-type': 'application/json' }
+  const cookie = await new Promise<string>((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: '/api/pair', headers }, (r) => {
+      r.resume()
+      r.on('end', () => resolve(String(r.headers['set-cookie']?.[0] ?? '').split(';')[0]))
+    })
+    req.on('error', reject)
+    req.end(JSON.stringify({ secret: offer.pin, name: '폰' }))
+  })
+  expect(cookie.startsWith(`${PHONE_COOKIE}=`)).toBe(true)
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/api/ws`, { headers: { Host: DNS, Origin: `https://${DNS}`, Cookie: cookie } })
+  cleanup.push(() => ws.terminate())
+  const closed = new Promise<void>((r) => ws.on('close', () => r()))
+  await new Promise<void>((resolve, reject) => {
+    ws.on('open', () => resolve())
+    ws.on('error', reject)
+  })
+  // serve 끄기가 끝나지 않는다(Tailscale 이 답하지 않음) — 그래도 소켓은 바로 닫힌다
+  let release = (_: boolean) => {}
+  ts.serveOff.mockImplementationOnce(() => new Promise<boolean>((r) => (release = r)))
+  const off = c.set({ enabled: false })
+  await closed
+  await vi.waitFor(() => expect(ts.serveOff).toHaveBeenCalledTimes(1)) // 길 끄기는 아직 기다리는 중
+  release(true)
+  await off
 })

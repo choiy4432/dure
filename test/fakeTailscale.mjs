@@ -18,11 +18,15 @@
 //   FAKE_TAILSCALE_ROOT       serve 설정을 <root>/serve.json 에 둔다(미리 사용자 항목을 넣어 둘 수 있다). serve 명령에 필요
 //   FAKE_TAILSCALE_SERVE_FAIL 그 종료 코드로 serve --bg 가 실패한다 — stderr 에 사용자 이름·경로가 든 글(두레가 그대로 옮기지 않는지 보려고)
 //   FAKE_TAILSCALE_SPLIT_MS   no-https 의 켜기 링크를 노드 ID 가운데서 둘로 나눠, 그 밀리초 뒤에 나머지를 찍는다(출력이 쪼개져 오는 꼴)
-// 이 기기 이름은 늘 fake-pc.tail0000.ts.net, 사용자는 someone@example.com(가짜 — 결과·오류·로그에 새지 않는지 보려고 status 에 넣는다).
+//   FAKE_TAILSCALE_DNS        이 기기 이름(기본 fake-pc.tail0000.ts.net) — Tailscale 대시보드에서 PC 이름을 바꾼 꼴.
+//                             <root>/dns-name 파일이 있으면 그 글이 먼저(두레가 도는 사이에 이름을 바꾸는 e2e)
+//   FAKE_TAILSCALE_FUNNEL     쉼표로 나눈 https 포트 — serve status 가 그 포트를 AllowFunnel["<이름>:<포트>"]: true(인터넷 공개)로 낸다
+//                             (사용자가 `tailscale funnel` 을 켠 꼴. serve.json 에 AllowFunnel 을 미리 넣어 둬도 된다)
+// 사용자는 someone@example.com(가짜 — 결과·오류·로그에 새지 않는지 보려고 status 에 넣는다).
 import fs from 'node:fs';
 import path from 'node:path';
 
-const DNS = 'fake-pc.tail0000.ts.net';
+const DNS = currentName();
 const EMAIL = 'someone@example.com';
 const ENABLE_URL = 'https://login.tailscale.com/f/serve?node=nFAKE0000CNTRL';
 const NOT_RUNNING = 'failed to connect to local Tailscale service; is Tailscale running?';
@@ -35,6 +39,29 @@ const out = (s) => process.stdout.write(s);
 const fail = (code, msg) => {
   process.stderr.write(msg + '\n', () => process.exit(code));
 };
+
+/** 이 기기 이름 — <root>/dns-name → FAKE_TAILSCALE_DNS → 기본 */
+function currentName() {
+  const root = process.env.FAKE_TAILSCALE_ROOT;
+  if (root) {
+    try {
+      const n = fs.readFileSync(path.join(root, 'dns-name'), 'utf8').trim();
+      if (n) return n;
+    } catch {
+      // 파일 없음 — 아래로
+    }
+  }
+  return process.env.FAKE_TAILSCALE_DNS || 'fake-pc.tail0000.ts.net';
+}
+
+/** serve status 에 낼 꼴 — FAKE_TAILSCALE_FUNNEL 의 포트를 AllowFunnel 에 더한다 */
+function withFunnel(conf) {
+  const ports = (process.env.FAKE_TAILSCALE_FUNNEL || '').split(',').map((s) => s.trim()).filter(Boolean);
+  if (ports.length === 0) return conf;
+  const allow = { ...(conf.AllowFunnel ?? {}) };
+  for (const p of ports) allow[`${DNS}:${p}`] = true;
+  return { ...conf, AllowFunnel: allow };
+}
 
 function servePath() {
   const root = process.env.FAKE_TAILSCALE_ROOT;
@@ -102,7 +129,7 @@ function main() {
   if (argv.length === 3 && argv[0] === 'serve' && argv[1] === 'status' && argv[2] === '--json') {
     const file = servePath();
     if (!file) return;
-    out(JSON.stringify(readServe(file), null, 2) + '\n');
+    out(JSON.stringify(withFunnel(readServe(file)), null, 2) + '\n');
     return;
   }
   // serve --bg --https=<P> <target>

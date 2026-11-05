@@ -2,11 +2,16 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { UNINSTALL_CLEANUP_ARG } from '../src/main/uninstallCleanup'
 
 // electron-builder 가 설정을 읽는 그 파서(js-yaml — app-builder-lib 의 의존성)로 읽는다
 const { load } = createRequire(import.meta.url)('js-yaml') as { load(text: string): unknown }
 
-type BuilderConfig = { nsis?: { oneClick?: unknown; perMachine?: unknown; deleteAppDataOnUninstall?: unknown }; asarUnpack?: unknown; files?: unknown }
+type BuilderConfig = {
+  nsis?: { oneClick?: unknown; perMachine?: unknown; deleteAppDataOnUninstall?: unknown; include?: unknown }
+  asarUnpack?: unknown
+  files?: unknown
+}
 const config = load(readFileSync(join(__dirname, '..', 'electron-builder.yml'), 'utf8')) as BuilderConfig
 
 /**
@@ -22,6 +27,39 @@ describe('electron-builder.yml — 제거가 %APPDATA%\\Dure 를 지우지 않�
   it('내보낸 그대로 — 한 번에 설치(oneClick) · 사용자별(perMachine: false)', () => {
     expect(config.nsis?.oneClick).toBe(true)
     expect(config.nsis?.perMachine).toBe(false)
+  })
+})
+
+/**
+ * 제거 때 휴대폰 연결 정리 — NSIS customUnInstall 이 `Dure.exe --uninstall-cleanup` 을 기다렸다 간다(두레가 연 serve 길·이 빌드의 로그인 항목).
+ * 작고 안전하게: 끝 코드는 보지 않는다(정리가 실패해도 제거는 계속) · 업데이트(새 판이 옛 판을 지움)엔 부르지 않는다 · 아무것도 지우지 않는다
+ */
+describe('build/installer.nsh — 제거 때 휴대폰 연결 정리', () => {
+  const script = readFileSync(join(__dirname, '..', 'build', 'installer.nsh'), 'utf8')
+  // 주석(; …)을 뺀 명령 줄만
+  const code = script
+    .split(/\r?\n/)
+    .map((l) => l.replace(/;.*$/, '').trim())
+    .filter(Boolean)
+
+  it('electron-builder.yml 의 nsis.include 가 이 파일', () => {
+    expect(config.nsis?.include).toBe('build/installer.nsh')
+  })
+
+  it('customUnInstall 하나 — 업데이트가 아니면 설치 폴더의 그 exe 를 --uninstall-cleanup 으로 기다리고, 끝 코드는 버린다', () => {
+    expect(code).toEqual([
+      '!macro customUnInstall',
+      '${ifNot} ${isUpdated}',
+      `ExecWait '"$INSTDIR\\\${APP_EXECUTABLE_FILENAME}" ${UNINSTALL_CLEANUP_ARG}' $0`,
+      'ClearErrors',
+      '${endIf}',
+      '!macroend',
+    ])
+  })
+
+  it('지우는 명령이 없다 — 앱 데이터(%APPDATA%\\Dure)·파일·레지스트리를 건드리지 않는다', () => {
+    const text = code.join('\n')
+    for (const bad of [/RMDir/i, /Delete/i, /DeleteReg/i, /APPDATA/i, /delete-app-data/i, /nsExec/i, /\bExec\b/]) expect(text).not.toMatch(bad)
   })
 })
 

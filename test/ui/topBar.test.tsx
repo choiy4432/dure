@@ -90,7 +90,7 @@ describe('TopBar 휴대폰 알약', () => {
     expect(described(pill()!)).toBe('휴대폰 연결 켜짐 · 아직 안 열렸어요')
 
     // 길이 열리고 두 대 접속 — 초록 점 · 숫자
-    emit({ tailscale: { kind: 'ready', dnsName: 'dure.tail-cat.ts.net' }, url: 'https://dure.tail-cat.ts.net/mobile.html', connected: 2, online: ['a', 'b'] })
+    emit({ tailscale: { kind: 'ready', dnsName: 'fake-pc.tail0000.ts.net' }, url: 'https://fake-pc.tail0000.ts.net/mobile.html', connected: 2, online: ['a', 'b'] })
     const p = screen.getByRole('button', { name: '휴대폰 · 2' })
     expect(p).toBe(pill())
     expect(p.textContent).toBe('휴대폰 · 2')

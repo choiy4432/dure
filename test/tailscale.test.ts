@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  createTailscale, enableUrlIn, resolveTailscaleCommand, runCommand, stateFromStatus, type Runner,
+  createTailscale, enableUrlIn, offRecordedRoute, resolveTailscaleCommand, runCommand, stateFromStatus, type Runner,
 } from '../src/main/phone/tailscale'
 
 // Tailscale 감싸기 — 진짜 tailscale 은 부르지 않는다. 가짜(test/fakeTailscale.mjs)가 실측(probe28) 꼴 그대로 답한다.
@@ -322,9 +322,80 @@ describe('tailscale — 가짜 tailscale', () => {
     expect(await t.ts.httpsPortFree(47615)).toBe(true)
     expect(t.calls().every((c) => c.argv.join(' ') === 'serve status --json')).toBe(true)
 
-    // 설정을 못 읽으면 쓰이는 것으로 친다(443 대신 47615 로)
-    expect(await setup('missing').ts.httpsPortFree(443)).toBe(false)
+    // 설정을 못 읽으면 던진다(한국어) — '포트가 모두 쓰이고 있어요' 와 다른 까닭이다
+    await expect(setup('missing').ts.httpsPortFree(443)).rejects.toThrow(/[가-힣]/)
   }, 30_000)
+
+  it('Funnel(인터넷 공개) — 그 포트는 쓰지도 다시 켜지도 않음 · 이미 연 두레 길은 끌 수 있음', async () => {
+    const FUNNEL = '이 포트가 인터넷에 공개(Funnel)돼 있어요 — Tailscale 에서 Funnel 을 꺼 주세요'
+    const noBg = (t: { calls: () => { argv: string[] }[] }) => expect(t.calls().some((c) => c.argv[1] === '--bg')).toBe(false)
+    // 두레 길이 있는 포트에 사용자가 Funnel 을 켰다(`tailscale funnel 47615 on` 꼴) — 두레 꼴이어도 다시 켜지 않는다
+    const opened = { ...oursAt(DNS), AllowFunnel: { [`${DNS}:47615`]: true } }
+    const t = setup('ready', { serve: opened })
+    expect(await t.ts.funnelOn(47615)).toBe(true)
+    expect(await t.ts.funnelOn(443)).toBe(false)
+    expect(await t.ts.httpsPortFree(47615)).toBe(false)
+    await expect(t.ts.serveOn(47615, 47615, DNS)).rejects.toThrow(FUNNEL)
+    noBg(t)
+    // 닫기는 된다 — 공개된 두레 길을 남겨 두지 않게
+    expect(await t.ts.serveOff(47615, 47615, DNS)).toBe(true)
+    expect(t.calls().map((c) => c.argv)).toContainEqual(['serve', '--https=47615', 'off'])
+
+    // 길이 없어도 Funnel 표시만 남은 포트 · 앞쪽 세션의 Funnel — 빈 포트로 치지 않는다
+    const t2 = setup('ready', {
+      serve: {
+        AllowFunnel: { [`${DNS}:443`]: true, [`${DNS}:8443`]: false },
+        Foreground: { abc: { AllowFunnel: { [`${DNS}:10000`]: true } } },
+      },
+    })
+    expect(await t2.ts.httpsPortFree(443)).toBe(false)
+    expect(await t2.ts.funnelOn(443)).toBe(true)
+    expect(await t2.ts.funnelOn(10000)).toBe(true)
+    expect(await t2.ts.funnelOn(8443)).toBe(false) // false 는 공개가 아니다
+    expect(await t2.ts.httpsPortFree(8443)).toBe(true)
+    await expect(t2.ts.serveOn(443, 47615)).rejects.toThrow(FUNNEL)
+    noBg(t2)
+
+    // 가짜의 손잡이(FAKE_TAILSCALE_FUNNEL) — serve status 가 그 포트를 공개로 낸다
+    const t3 = setup('ready', { extra: { FAKE_TAILSCALE_FUNNEL: '443' } })
+    expect(await t3.ts.funnelOn(443)).toBe(true)
+    expect(await t3.ts.httpsPortFree(443)).toBe(false)
+    expect(await t3.ts.httpsPortFree(47615)).toBe(true)
+    // 설정을 못 읽으면 모른다 — 공개로 치지 않는다(이미 연 길을 함부로 닫지 않게)
+    expect(await setup('missing').ts.funnelOn(443)).toBe(false)
+    noForbidden([...t.calls(), ...t2.calls(), ...t3.calls()])
+  }, 60_000)
+
+  it('PC 이름을 바꾼 뒤 — 적어 둔 이름의 길이 지금 이름 아래로 옮겨졌어도 그 짝만 끈다(offRecordedRoute)', async () => {
+    const NEW = 'renamed-pc.tail0000.ts.net'
+    // 가짜의 손잡이(FAKE_TAILSCALE_DNS) — 이 기기 이름이 바뀌었다
+    const t = setup('ready', { serve: oursAt(NEW), extra: { FAKE_TAILSCALE_DNS: NEW } })
+    expect(await t.ts.status()).toEqual({ kind: 'ready', dnsName: NEW })
+    expect(await offRecordedRoute(t.ts, { httpsPort: 47615, localPort: 47615, dnsName: DNS })).toBe(true)
+    expect(t.serve()).toEqual({})
+    // 옮겨지지 않고 예전 이름 그대로 남았으면 그 이름으로 끈다(status 를 부르지 않는다)
+    const t2 = setup('ready', { serve: oursAt(DNS), extra: { FAKE_TAILSCALE_DNS: NEW } })
+    expect(await offRecordedRoute(t2.ts, { httpsPort: 47615, localPort: 47615, dnsName: DNS })).toBe(true)
+    expect(t2.serve()).toEqual({})
+    expect(t2.calls().some((c) => c.argv[0] === 'status')).toBe(false)
+    // 지금 이름 아래라도 로컬 포트가 다르거나 사용자가 길을 더 붙였으면 남의 것
+    const added = { TCP: oursAt(NEW).TCP, Web: { [`${NEW}:47615`]: { Handlers: { ...OURS_HANDLERS, '/docs': { Path: '/srv' } } } } }
+    const t3 = setup('ready', { serve: added, extra: { FAKE_TAILSCALE_DNS: NEW } })
+    expect(await offRecordedRoute(t3.ts, { httpsPort: 47615, localPort: 47615, dnsName: DNS })).toBe(false)
+    expect(await offRecordedRoute(t3.ts, { httpsPort: 47615, localPort: 47616, dnsName: DNS })).toBe(false)
+    expect(t3.serve()).toEqual(added)
+    // 이름이 그대로면 한 번만 본다
+    const t4 = setup('ready', { serve: USER_443 })
+    expect(await offRecordedRoute(t4.ts, { httpsPort: 443, localPort: 47615, dnsName: DNS })).toBe(false)
+    expect(t4.serve()).toEqual(USER_443)
+    // 파일 손잡이(<root>/dns-name) — 두레가 도는 사이에 이름을 바꾼 꼴(e2e)
+    const t5 = setup('ready')
+    fs.writeFileSync(path.join(t5.root, 'dns-name'), `${NEW}\n`)
+    expect(await t5.ts.status()).toEqual({ kind: 'ready', dnsName: NEW })
+    expect(await t5.ts.serveOn(443, 47615, NEW)).toEqual({ kind: 'on' })
+    expect(Object.keys((t5.serve() as { Web: object }).Web)).toEqual([`${NEW}:443`])
+    noForbidden([...t.calls(), ...t2.calls(), ...t3.calls(), ...t4.calls(), ...t5.calls()])
+  }, 60_000)
 
   it('남은 길 정리 — 두레 포트만', async () => {
     const ours = { '/': { Proxy: 'http://127.0.0.1:47615' } }

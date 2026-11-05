@@ -28,6 +28,7 @@ const E = {
   offFailed: (code: number | null) => `Tailscale 의 휴대폰 길을 닫지 못했어요(코드 ${code ?? '없음'})`,
   serveUnreadable: 'Tailscale 의 serve 설정을 읽지 못했어요',
   portBusy: '그 포트는 이미 다른 곳에 쓰이고 있어요',
+  funnel: '이 포트가 인터넷에 공개(Funnel)돼 있어요 — Tailscale 에서 Funnel 을 꺼 주세요',
   badPort: '포트 번호가 틀렸어요',
 }
 
@@ -171,15 +172,37 @@ export interface Tailscale {
   /**
    * `serve --bg --https=<httpsPort> http://127.0.0.1:<localPort>`. 먼저 serve 설정을 읽어, 그 https 포트가 비었거나
    * 이미 두레 길(→ 그 localPort)일 때만 켠다 — 남이 쓰면 '그 포트는 이미 다른 곳에 쓰이고 있어요'.
+   * 그 포트가 Funnel(인터넷 공개)이면 두레 길이어도 켜지 않는다 — '이 포트가 인터넷에 공개(Funnel)돼 있어요 …'.
    * 설정을 못 읽거나 실패·시간 초과는 한국어 오류로 던진다
    */
   serveOn(httpsPort: number, localPort: number, dnsName?: string): Promise<ServeOnResult>
-  /** 그 https 포트가 두레 길(→ http://127.0.0.1:<localPort>)이면 `serve --https=<httpsPort> off` 하고 true. 없거나 남의 것이면 그대로 false. 설정을 못 읽거나 끄기 실패는 던진다 */
+  /**
+   * 그 https 포트가 두레 길(→ http://127.0.0.1:<localPort>)이면 `serve --https=<httpsPort> off` 하고 true(Funnel 이 켜져 있어도 끈다 — 공개된 길을 남기지 않게).
+   * 없거나 남의 것이면 그대로 false. 설정을 못 읽거나 끄기 실패는 던진다
+   */
   serveOff(httpsPort: number, localPort: number, dnsName?: string): Promise<boolean>
-  /** serve 설정(앞쪽 세션 포함)에 그 https 포트가 없다 — 읽지 못하면 false */
+  /** serve 설정(앞쪽 세션 포함)에 그 https 포트가 없고 Funnel 도 아니다 — 설정을 못 읽으면 한국어 오류로 던진다('쓰이고 있음'과 다른 까닭) */
   httpsPortFree(httpsPort: number): Promise<boolean>
+  /** serve 설정(앞쪽 세션 포함)의 AllowFunnel 에 그 https 포트가 공개(true)로 있다 — 읽지 못하면 false(모르면 열린 길을 닫지 않는다) */
+  funnelOn(httpsPort: number): Promise<boolean>
   /** 비정상 종료로 남은 두레 길만 끈다(serveOff 와 같은 규칙) — 껐으면 true. 던지지 않는다 */
   cleanup(httpsPort: number, localPort: number, dnsName?: string): Promise<boolean>
+}
+
+/**
+ * 적어 둔 두레 길(phone.json 의 serve — 켤 때 적은 {httpsPort, localPort, dnsName})을 끈다 — 껐으면 true, 이미 없거나 남의 것이면 false.
+ * PC 이름을 Tailscale 에서 바꾸면 그 길이 지금 이름 아래로 옮겨질 수 있다 — 적어 둔 이름으로 두레 꼴이 아니면 status 의 지금 이름으로 한 번 더
+ * (같은 https 포트 · 그 이름의 Web 항목 하나 · '/' 하나가 그 127.0.0.1 포트). 설정을 못 읽거나 끄기가 실패하면 던진다
+ */
+export async function offRecordedRoute(
+  t: Pick<Tailscale, 'status' | 'serveOff'>,
+  rec: { httpsPort: number; localPort: number; dnsName?: string },
+): Promise<boolean> {
+  if (await t.serveOff(rec.httpsPort, rec.localPort, rec.dnsName)) return true
+  if (rec.dnsName === undefined) return false
+  const now = await t.status()
+  if (now.kind !== 'ready' || now.dnsName === rec.dnsName.toLowerCase()) return false
+  return t.serveOff(rec.httpsPort, rec.localPort, now.dnsName)
 }
 
 function checkPort(p: number): void {
@@ -196,6 +219,17 @@ function portUsedIn(conf: Record<string, unknown>, port: number): boolean {
 function foregroundUses(conf: Record<string, unknown>, port: number): boolean {
   const fg = isRecord(conf.Foreground) ? Object.values(conf.Foreground) : []
   return fg.some((s) => isRecord(s) && portUsedIn(s, port))
+}
+
+/**
+ * 그 포트가 Funnel(인터넷 공개)인가 — AllowFunnel["<이름>:<포트>"] 가 true(맨 위 또는 앞쪽 세션). 이름은 가리지 않는다(어느 이름이든 그 포트로 들어온다).
+ * 🔴 두레는 `funnel` 을 쓰지 않는다 — 사용자가 켰을 때 그 포트를 쓰지 않으려고 읽기만 한다
+ */
+function funnelIn(conf: Record<string, unknown>, port: number): boolean {
+  const on = (c: Record<string, unknown>) =>
+    isRecord(c.AllowFunnel) && Object.entries(c.AllowFunnel).some(([k, v]) => v === true && k.endsWith(`:${port}`))
+  const fg = isRecord(conf.Foreground) ? Object.values(conf.Foreground) : []
+  return on(conf) || fg.some((s) => isRecord(s) && on(s))
 }
 
 /**
@@ -263,8 +297,10 @@ export function createTailscale(o: { command: string; args: string[]; run?: Runn
     async serveOn(httpsPort, localPort, dnsName) {
       checkPort(httpsPort)
       checkPort(localPort)
-      // `serve --bg` 는 그 포트의 사용자 길을 덮어쓴다 — 비었거나 이미 두레 길일 때만(앞쪽 세션이 쥐었으면 안 됨)
+      // `serve --bg` 는 그 포트의 사용자 길을 덮어쓴다 — 비었거나 이미 두레 길일 때만(앞쪽 세션이 쥐었으면 안 됨).
+      // 공개(Funnel)된 포트는 두레 길이어도 안 된다 — 두레가 인터넷에 열린다
       const conf = await readServeConfig()
+      if (funnelIn(conf, httpsPort)) throw new Error(E.funnel)
       const free = !portUsedIn(conf, httpsPort) || oursIn(conf, httpsPort, localPort, dnsName)
       if (!free || foregroundUses(conf, httpsPort)) throw new Error(E.portBusy)
       const r = await cli(['serve', '--bg', `--https=${httpsPort}`, `http://127.0.0.1:${localPort}`], {
@@ -285,9 +321,14 @@ export function createTailscale(o: { command: string; args: string[]; run?: Runn
 
     async httpsPortFree(httpsPort) {
       checkPort(httpsPort)
+      const conf = await readServeConfig()
+      return !portUsedIn(conf, httpsPort) && !foregroundUses(conf, httpsPort) && !funnelIn(conf, httpsPort)
+    },
+
+    async funnelOn(httpsPort) {
+      checkPort(httpsPort)
       const conf = await serveConfig()
-      if (!conf) return false
-      return !portUsedIn(conf, httpsPort) && !foregroundUses(conf, httpsPort)
+      return conf ? funnelIn(conf, httpsPort) : false
     },
 
     async cleanup(httpsPort, localPort, dnsName) {

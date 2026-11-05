@@ -48,7 +48,7 @@ export const PHONE = {
   openFailed: '휴대폰 주소를 열지 못했어요',
   recheck: '다시 확인',
   rechecking: '확인하는 중…',
-  tip: 'Tailscale 대시보드에서 PC 이름을 dure 처럼 바꾸면 휴대폰 주소가 짧아져요',
+  tip: 'Tailscale 대시보드에서 PC 이름을 dure 처럼 바꾸면 주소가 짧아져요 — 바꾸기 전에 휴대폰 연결을 끄고, 바꾼 뒤 다시 켜 주세요',
   copyUrl: '주소 복사',
   copied: '복사했어요',
   copyFailed: '복사하지 못했어요',
@@ -216,22 +216,24 @@ function Frame({ onClose }: { onClose: () => void }) {
     }
   }
 
-  // 꺼진 채 시작하면 main 은 Tailscale 을 부르지 않는다 — 처음 열 때 아직 모르면 한 번 본다
+  // 처음 열 때 한 번 본다 — 꺼진 채 시작하면 main 은 Tailscale 을 부르지 않아 아직 모를 때 · 주소가 열려 있을 때(창이 닫힌 사이 PC 이름을 바꿨을 수 있다 —
+  // 바뀌었으면 main 이 지금 이름으로 다시 연다)
   const askedFirst = useRef(false)
   useEffect(() => {
-    if (askedFirst.current || !p || p.tailscale !== null) return
+    if (askedFirst.current || !p || (p.tailscale !== null && !addressOpen(p))) return
     askedFirst.current = true
     void recheck()
   }, [p]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 바깥(브라우저·Tailscale)에 다녀와 창으로 돌아오면 — 아직 안 됐거나 까닭이 남았으면 다시 본다([다시 확인]을 누르지 않아도)
+  // 바깥(브라우저·Tailscale 대시보드)에 다녀와 창으로 돌아오면 — 아직 안 됐거나 까닭이 남았거나 주소가 열려 있으면(이름을 바꿨을 수 있다) 다시 본다
+  // ([다시 확인]을 누르지 않아도)
   const latest = useRef({ p, checking, recheck })
   latest.current = { p, checking, recheck }
   useEffect(() => {
     const onFocus = () => {
       const { p: now, checking: busy, recheck: again } = latest.current
       if (!now || busy) return
-      if (stuck(now)) void again()
+      if (stuck(now) || addressOpen(now)) void again()
     }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
@@ -468,6 +470,11 @@ const STEP_ICON: Record<StepState, typeof Check> = { ok: Check, need: CircleAler
  */
 function stuck(p: PhoneState, enabled = p.settings.enabled): boolean {
   return p.tailscale?.kind !== 'ready' || p.problem !== null || (enabled && p.url === null)
+}
+
+/** 켜져 있고 휴대폰 주소가 열려 있다 — 창으로 돌아오면 다시 본다(Tailscale 대시보드에서 PC 이름을 바꿨으면 그 주소는 끊긴다) */
+function addressOpen(p: PhoneState): boolean {
+  return p.settings.enabled && p.url !== null
 }
 
 function Checklist({ p, enabled, checking, onRecheck }: { p: PhoneState; enabled: boolean; checking: boolean; onRecheck: () => void }) {

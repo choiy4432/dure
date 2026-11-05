@@ -6,10 +6,10 @@ import {
   type AgentView, type DureApi, type InvokeResult, type Snapshot,
 } from '../shared/ipcContract'
 import { ATTACH_FAILED, ATTACH_NOT_FOUND, ATTACH_OPEN_FAILED, IMAGE_TYPES, opensAsDocument } from '../shared/attachments'
-import { PHONE_DENIED, phoneAllows } from '../shared/phoneAccess'
+import { PHONE_DENIED, PHONE_FOLDER_BAD, phoneAllows, phoneFolderOk } from '../shared/phoneAccess'
 import { pickPhoneChange } from '../shared/phoneTypes'
 import { REALPATH_FATAL } from '../engine/attachmentStore'
-import { SLEEP_DEFAULT_MIN, type AgentPatch, type ThemePref, type UserPart } from '../engine/types'
+import { SLEEP_DEFAULT_MIN, type AgentPatch, type Decision, type ThemePref, type UserPart } from '../engine/types'
 import { pickPrefs } from './appPrefs'
 
 // IPC(창)와 휴대폰 서버가 같이 타는 디스패처 — 메서드 이름 + 인자 → 앱 쪽·엔진·창 쪽 일. 누가 불렀는지(창 프레임·휴대폰 기기)는
@@ -70,6 +70,11 @@ const FILE_PART_BAD = `${ATTACH_FAILED} — 첨부 정보가 올바르지 않아
 const AGENT_BAD = '에이전트 정보가 올바르지 않아요'
 const HISTORY_BAD = '대화 기록을 부를 수 없어요'
 const PHONE_DEVICE_BAD = '끊을 기기를 알 수 없어요'
+const MODEL_BAD = '모델 이름이 올바르지 않아요'
+const ROOM_NAME_BAD = '방 이름을 바꿀 수 없어요'
+const DECISION_BAD = '답을 보낼 수 없어요 — 답 꼴이 올바르지 않아요'
+/** 모델 이름 상한 — 화면의 목록·직접 입력 모두 이보다 짧다 */
+const MODEL_MAX = 200
 
 /** 칸이 꼭 이 이름들뿐인 보통 객체인가(목록·null 아님) — 부르는 쪽이 꾸민 칸을 엔진에 넘기지 않게 */
 function hasOnlyKeys(v: unknown, keys: readonly string[]): v is Record<string, unknown> {
@@ -146,6 +151,9 @@ function checkedPatch(p: unknown): UiPatch {
   return out as UiPatch
 }
 
+/** 몇 개까지 — 1 이상 정수 · Infinity(내보내기 — 창 IPC 만. 휴대폰 JSON 은 Infinity 를 null 로 바꿔 거절된다) */
+const isLimit = (v: unknown): v is number => typeof v === 'number' && (v === Infinity || (Number.isSafeInteger(v) && v >= 1))
+
 /** history 의 o — 없음, 또는 { all?: 참거짓, limit?: 1 이상 정수 · Infinity(내보내기) }. 값이 undefined 인 칸은 없는 것으로 */
 function checkedHistoryOpts(o: unknown): { all?: boolean; limit?: number } | undefined {
   if (o === undefined) return undefined
@@ -158,11 +166,49 @@ function checkedHistoryOpts(o: unknown): { all?: boolean; limit?: number } | und
       if (typeof v !== 'boolean') throw new Error(HISTORY_BAD)
       out.all = v
     } else {
-      if (typeof v !== 'number' || !(v === Infinity || (Number.isSafeInteger(v) && v >= 1))) throw new Error(HISTORY_BAD)
+      if (!isLimit(v)) throw new Error(HISTORY_BAD)
       out.limit = v
     }
   }
   return out
+}
+
+/** conversation 의 o — 없음, 또는 { limit?: 1 이상 정수 · Infinity(내보내기) }. 값이 undefined 인 칸은 없는 것으로 */
+function checkedConversationOpts(o: unknown): { limit?: number } | undefined {
+  if (o === undefined) return undefined
+  if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error(CONV_BAD)
+  const out: { limit?: number } = {}
+  for (const [k, v] of Object.entries(o)) {
+    if (k !== 'limit') throw new Error(CONV_BAD)
+    if (v === undefined) continue
+    if (!isLimit(v)) throw new Error(CONV_BAD)
+    out.limit = v
+  }
+  return out
+}
+
+/**
+ * answerRequest 의 답 — Decision 꼴만: { type:'allow' } · { type:'allow-always' } · { type:'deny', message?: 글 } ·
+ * { type:'answer', answers: 글 → 글 }. 다른 칸·틀린 값이면 거절(엔진엔 정한 칸만 — undefined 인 message 는 없는 것으로)
+ */
+function checkedDecision(d: unknown): Decision {
+  if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error(DECISION_BAD)
+  const x = d as Record<string, unknown>
+  const keys = Object.keys(x).filter((k) => x[k] !== undefined)
+  const only = (...ks: string[]) => keys.length === ks.length && keys.every((k) => ks.includes(k))
+  if ((x.type === 'allow' || x.type === 'allow-always') && only('type')) return { type: x.type }
+  if (x.type === 'deny' && (only('type') || (only('type', 'message') && typeof x.message === 'string'))) {
+    return typeof x.message === 'string' ? { type: 'deny', message: x.message } : { type: 'deny' }
+  }
+  if (x.type === 'answer' && only('type', 'answers')) {
+    const a = x.answers
+    if (!a || typeof a !== 'object' || Array.isArray(a)) throw new Error(DECISION_BAD)
+    const entries = Object.entries(a)
+    if (!entries.every(([, v]) => typeof v === 'string')) throw new Error(DECISION_BAD)
+    // fromEntries — '__proto__' 같은 칸 이름도 그냥 글 칸으로(원형을 바꾸지 않는다)
+    return { type: 'answer', answers: Object.fromEntries(entries) as Record<string, string> }
+  }
+  throw new Error(DECISION_BAD)
 }
 
 function agentViews(engine: Engine): AgentView[] {
@@ -228,7 +274,10 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
     if (typeof roomId !== 'string' || typeof folder !== 'string') throw new Error(REMOTE_BAD)
     return e.checkRemoteFolder(roomId, folder)
   },
-  renameRoom: (e, _d, id, name) => e.renameRoom(id, name),
+  renameRoom: (e, _d, id, name) => {
+    if (typeof id !== 'string' || typeof name !== 'string') throw new Error(ROOM_NAME_BAD)
+    return e.renameRoom(id, name) // 빈 이름·겹침은 엔진이
+  },
   removeRoom: (e, _d, id) => e.removeRoom(id),
   addAgent: (e, _d, i) => e.addAgent(checkedNewAgent(i)),
   updateAgent: (e, _d, id, p) => {
@@ -245,7 +294,13 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   revokeAlwaysAllow: (e, _d, id, toolName) => e.revokeAlwaysAllow(id, toolName),
   interrupt: (e, _d, id) => e.interrupt(id),
   newConversation: (e, _d, id) => e.newConversation(id),
-  setModel: (e, _d, id, model) => e.setModel(id, model),
+  setModel: (e, _d, id, model) => {
+    // null = 기본 모델 · 글은 1~MODEL_MAX 자(claude 의 --model 로 간다)
+    if (typeof id !== 'string' || !(model === null || (typeof model === 'string' && model.length > 0 && model.length <= MODEL_MAX))) {
+      throw new Error(MODEL_BAD)
+    }
+    return e.setModel(id, model)
+  },
   setEffort: (e, _d, id, level) => e.setEffort(id, level),
   refreshUsage: (e) => e.refreshUsage(),
   describe: (e, _d, id) => e.describe(id),
@@ -259,7 +314,7 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   },
   conversation: (e, _d, id, key, o) => {
     if (typeof id !== 'string' || typeof key !== 'string') throw new Error(CONV_BAD)
-    return e.conversation(id, key, o)
+    return e.conversation(id, key, checkedConversationOpts(o))
   },
   resumeConversation: (e, _d, id, key) => {
     if (typeof id !== 'string' || typeof key !== 'string') throw new Error(CONV_BAD)
@@ -291,7 +346,10 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   approveMessage: (e, _d, id) => e.approveMessage(id),
   dismissMessage: (e, _d, id) => e.dismissMessage(id),
   continueHeld: (e, _d, roomId) => e.continueHeld(roomId),
-  answerRequest: (e, _d, id, d) => e.answerRequest(id, d),
+  answerRequest: (e, _d, id, d) => {
+    if (typeof id !== 'string') throw new Error(DECISION_BAD)
+    return e.answerRequest(id, checkedDecision(d))
+  },
   setAutoChainLimit: (e, _d, n) => e.setAutoChainLimit(n),
   setAllowBypass: (e, _d, on) => e.setAllowBypass(on),
   setNotify: (e, _d, p) => e.setNotify(p),
@@ -437,8 +495,23 @@ async function removeInboxFile(p: string): Promise<void> {
 }
 
 /**
+ * 휴대폰의 addAgent — 폴더가 전체 Windows 경로(phoneFolderOk)면 그대로. 아니면 그 방이 서버 방일 때만(서버 경로 '/…' 는 엔진이 본다) —
+ * 이 PC 방·모르는 방·방 목록을 못 받음이면 거절(상대 경로가 두레가 도는 폴더로 풀리지 않게). 꼴이 틀린 입력은 안쪽 디스패처가 거절한다(AGENT_BAD)
+ */
+async function phoneFolderAllowed(dispatch: Dispatch, input: unknown): Promise<boolean> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return true
+  const { roomId, folder } = input as { roomId?: unknown; folder?: unknown }
+  if (typeof folder !== 'string' || phoneFolderOk(folder)) return true
+  const snap = await dispatch('snapshot', [])
+  const rooms = snap.ok && snap.value && typeof snap.value === 'object' ? (snap.value as { rooms?: unknown }).rooms : null
+  if (!Array.isArray(rooms)) return false
+  return rooms.some((r) => !!r && typeof r === 'object' && (r as { id?: unknown }).id === roomId && (r as { remote?: unknown }).remote != null)
+}
+
+/**
  * 휴대폰 서버가 타는 디스패처 — 허용 목록(PHONE_ACCESS 의 'phone')만 안쪽 디스패처로, 그 밖(PC 전용·모르는 이름)은 PHONE_DENIED.
- * addRoom 의 서버 방(remote 가 null·없음이 아님)은 거절. sendUser 의 file part 는 path 가 inbox 바로 안의 파일일 때만 — 하나라도 밖이면
+ * addRoom 의 서버 방(remote 가 null·없음이 아님)은 거절. addAgent 의 이 PC 방 폴더는 전체 Windows 경로만(PHONE_FOLDER_BAD).
+ * sendUser 의 file part 는 path 가 inbox 바로 안의 파일일 때만 — 하나라도 밖이면
  * 통째로 거절(엔진에 닿지 않는다). 그 요청이 가리킨 inbox 파일은 끝나면(보냄·실패·거절 모두) 지운다 — 엔진은 보내기 전에 사본을 만든다
  */
 export function phoneDispatcher(dispatch: Dispatch, o: { inboxDir: string }): Dispatch {
@@ -446,6 +519,7 @@ export function phoneDispatcher(dispatch: Dispatch, o: { inboxDir: string }): Di
     if (!phoneAllows(method)) return { ok: false, error: PHONE_DENIED }
     const a: unknown[] = Array.isArray(args) ? args : []
     if (method === 'addRoom' && a[1] != null) return { ok: false, error: PHONE_DENIED }
+    if (method === 'addAgent' && !(await phoneFolderAllowed(dispatch, a[0]))) return { ok: false, error: PHONE_FOLDER_BAD }
     const files = method === 'sendUser' && Array.isArray(a[1]) ? a[1].filter(isFilePart) : []
     if (files.length === 0) return dispatch(method, a)
     const found = await Promise.all(files.map((f) => inboxFile(o.inboxDir, f.path)))

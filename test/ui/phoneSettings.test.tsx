@@ -5,8 +5,8 @@ import type { Snapshot } from '../../src/shared/ipcContract'
 import type { PhoneSettingsChange, PhoneState, TailscaleState } from '../../src/shared/phoneTypes'
 import { allowMotion } from './motion'
 
-const READY: TailscaleState = { kind: 'ready', dnsName: 'dure.tail-cat.ts.net' }
-const URL_OPEN = 'https://dure.tail-cat.ts.net/mobile.html'
+const READY: TailscaleState = { kind: 'ready', dnsName: 'fake-pc.tail0000.ts.net' }
+const URL_OPEN = 'https://fake-pc.tail0000.ts.net/mobile.html'
 const ENABLE_URL = 'https://login.tailscale.com/f/serve?node=nFAKE'
 const QR = 'data:image/png;base64,iVBORw0KGgo='
 
@@ -258,23 +258,44 @@ describe('휴대폰 창', () => {
       ['휴대폰 주소가 열렸어요', 'ok'],
     ])
     expect(within(dlg).getByText(URL_OPEN).closest('.phn-url')).not.toBeNull()
-    expect(dlg.textContent).toContain('Tailscale 대시보드에서 PC 이름을 dure 처럼 바꾸면 휴대폰 주소가 짧아져요')
+    // 켠 채 이름을 바꾸면 휴대폰이 아는 주소가 끊긴다 — 끄고 바꾼 뒤 다시 켜라고
+    expect(dlg.textContent).toContain('Tailscale 대시보드에서 PC 이름을 dure 처럼 바꾸면 주소가 짧아져요 — 바꾸기 전에 휴대폰 연결을 끄고, 바꾼 뒤 다시 켜 주세요')
     expect((within(dlg).getByRole('button', { name: '휴대폰 짝 맺기' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('창으로 돌아오면(바깥 브라우저에 다녀옴) 아직 안 됐을 때만 다시 확인', async () => {
+  it('창으로 돌아오면(바깥 브라우저·Tailscale 대시보드에 다녀옴) — 아직 안 됐거나 주소가 열려 있으면 다시 확인 · 꺼져 있고 다 됐으면 안 부름', async () => {
+    const focus = async () => {
+      await act(async () => { window.dispatchEvent(new Event('focus')) })
+      await settle()
+    }
     await renderApp()
     await openPhone()
     expect(api.phoneCheck).toHaveBeenCalledTimes(1) // 처음 열 때
     emit({ tailscale: { kind: 'no-https', enableUrl: ENABLE_URL } })
-    await act(async () => { window.dispatchEvent(new Event('focus')) })
-    await settle()
+    await focus()
     expect(api.phoneCheck).toHaveBeenCalledTimes(2)
-    // 다 됐으면 부르지 않는다
+    // 주소가 열려 있어도 — 대시보드에서 PC 이름을 바꾸고 돌아왔을 수 있다(main 이 지금 이름으로 다시 연다)
     emit({ tailscale: READY, settings: { ...phone.settings, enabled: true }, url: URL_OPEN })
-    await act(async () => { window.dispatchEvent(new Event('focus')) })
-    await settle()
-    expect(api.phoneCheck).toHaveBeenCalledTimes(2)
+    await focus()
+    expect(api.phoneCheck).toHaveBeenCalledTimes(3)
+    // 꺼져 있고 Tailscale 이 준비됐으면 볼 것이 없다
+    emit({ settings: { ...phone.settings, enabled: false }, url: null })
+    await focus()
+    expect(api.phoneCheck).toHaveBeenCalledTimes(3)
+  })
+
+  it('주소가 열린 채 휴대폰 창을 열면 한 번 확인 — 창이 닫혀 있는 동안 PC 이름을 바꿨을 수 있다', async () => {
+    phone = { ...base(), settings: { ...base().settings, enabled: true }, tailscale: READY, url: URL_OPEN }
+    await renderApp()
+    await openPhone()
+    expect(api.phoneCheck).toHaveBeenCalledTimes(1)
+    // 꺼져 있고 Tailscale 을 이미 알면 열 때 부르지 않는다(지금처럼)
+    cleanup()
+    api.phoneCheck.mockClear()
+    phone = { ...base(), tailscale: READY }
+    await renderApp()
+    await openPhone()
+    expect(api.phoneCheck).not.toHaveBeenCalled()
   })
 
   it('까닭(problem)은 그대로 — 꺼져 있어도 보인다', async () => {

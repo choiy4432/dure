@@ -11,7 +11,7 @@ import { ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../../shared/attachments'
 import type { InvokeResult } from '../../shared/ipcContract'
 import type { PhoneDevice } from '../../shared/phoneTypes'
 import {
-  PHONE_CLOSE_UNPAIRED, PHONE_COOKIE, PHONE_PATHS, PHONE_WS_MESSAGE_MAX, type PhoneServerMessage,
+  PHONE_CLOSE_UNPAIRED, PHONE_PATHS, PHONE_WS_MESSAGE_MAX, phoneCookieName, type PhoneServerMessage,
 } from '../../shared/phoneWire'
 import type { Dispatch } from '../dispatch'
 import type { Pairing } from './pairing'
@@ -19,7 +19,8 @@ import { pickSubscription, type PhonePushSubscription } from './phoneStore'
 
 // 휴대폰 서버 — 127.0.0.1 에만 HTTP + WebSocket. 바깥 길은 사용자의 `tailscale serve`(tailnet 안 https → 이 포트)가 낸다.
 // 문은 셋: Host(그 ts.net 주소 — PC 의 다른 웹 페이지·DNS 재바인딩을 막는다) · Origin(상태를 바꾸는 요청·WebSocket) ·
-// 기기 토큰 쿠키(__Host-dure_phone — HttpOnly·Secure·SameSite=Strict·Path=/·Domain 없음, 쿠키로만). 짝 맺기 화면이 떠야 하므로 정적 파일만 토큰 없이 준다.
+// 기기 토큰 쿠키(__Host-dure_phone_<포트> — HttpOnly·Secure·SameSite=Strict·Path=/·Domain 없음, 쿠키로만). 짝 맺기 화면이 떠야 하므로 정적 파일만 토큰 없이 준다.
+// Funnel(인터넷)으로 들어온 요청(Tailscale-Funnel-Request 머리글)은 무엇이든 거절 — 두레는 tailnet 안에서만.
 // 🔴 토큰·짝 코드·숫자·쿠키는 로그·오류 글에 싣지 않는다(이 파일은 아무것도 로그에 쓰지 않는다) · 휴대폰에 가는 오류 글은 한국어, 경로·스택 없이
 
 /** 포트가 쓰이고 있으면 +1 씩 이만큼 해 본다(처음 포트 포함) */
@@ -168,7 +169,8 @@ export interface PhoneServer {
   clients(): PhoneClient[]
 }
 
-type Gate = { host: string; origin: string; secure: boolean }
+/** 들어온 문 — cookie = 그 주소의 포트로 정한 기기 토큰 쿠키 이름(phoneCookieName) */
+type Gate = { host: string; origin: string; secure: boolean; cookie: string }
 type Paired = { device: PhoneDevice; token: string }
 type Auth = Paired | 'none' | 'error'
 type Client = { ws: WebSocket; deviceId: string; visible: boolean; alive: boolean }
@@ -193,16 +195,21 @@ const within = (root: string, p: string) => {
   const r = path.relative(root, p)
   return r !== '' && !path.isAbsolute(r) && r.split(path.sep)[0] !== '..'
 }
-const cookieFor = (token: string) =>
-  `${PHONE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${COOKIE_MAX_AGE_S}`
+/** 다듬은 Host 의 포트 — 포트가 없으면 https 기본(443, normHost 가 :443 을 뗀다) */
+const portOfHost = (h: string) => {
+  const m = /:(\d+)$/.exec(h)
+  return m ? Number(m[1]) : 443
+}
+const cookieFor = (name: string, token: string) =>
+  `${name}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${COOKIE_MAX_AGE_S}`
 /** 화면용 칸만 — pairing 이 무엇을 더 주든 휴대폰엔 이것만 */
 const deviceView = (d: PhoneDevice): PhoneDevice => ({ id: d.id, name: d.name, createdAt: d.createdAt, lastSeen: d.lastSeen, push: d.push })
 
-function cookieToken(raw: string | undefined): string | null {
+function cookieToken(raw: string | undefined, name: string): string | null {
   if (typeof raw !== 'string') return null
   for (const part of raw.split(';')) {
     const i = part.indexOf('=')
-    if (i > 0 && part.slice(0, i).trim() === PHONE_COOKIE) return part.slice(i + 1).trim() || null
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim() || null
   }
   return null
 }
@@ -341,7 +348,7 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
   const clients = new Set<Client>()
   const sockets = new Set<Socket>()
   /** WebSocket 을 열 때 쿠키를 다시 붙이려고(수명 늘리기) — 머리글을 쓰는 순간까지만 둔다 */
-  const upgradeTokens = new WeakMap<IncomingMessage, string>()
+  const upgradeTokens = new WeakMap<IncomingMessage, { name: string; token: string }>()
   let port = 0
   let closed = false
   let closing: Promise<void> | null = null
@@ -358,6 +365,8 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
   }
 
   function gateOf(req: IncomingMessage): Gate | null {
+    // Funnel(인터넷)으로 들어온 요청 — Tailscale 이 붙이는 머리글. 사용자가 두레 포트에 Funnel 을 켜도 두레는 tailnet 밖에 답하지 않는다
+    if (req.headers['tailscale-funnel-request'] !== undefined) return null
     const raw = req.headers.host
     if (typeof raw !== 'string' || raw === '') return null
     const host = normHost(raw)
@@ -367,16 +376,17 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
     } catch {
       allowed = null
     }
-    if (allowed && host === normHost(allowed)) return { host, origin: `https://${host}`, secure: true }
+    if (allowed && host === normHost(allowed)) return { host, origin: `https://${host}`, secure: true, cookie: phoneCookieName(portOfHost(host)) }
     const local = `127.0.0.1:${port}`
-    if (o.allowLocal && host === local) return { host, origin: `http://${local}`, secure: false }
+    if (o.allowLocal && host === local) return { host, origin: `http://${local}`, secure: false, cookie: phoneCookieName(port) }
     return null
   }
   const originOk = (req: IncomingMessage, g: Gate) =>
     typeof req.headers.origin === 'string' && req.headers.origin.toLowerCase() === g.origin
 
-  function authOf(req: IncomingMessage): Auth {
-    const token = cookieToken(req.headers.cookie)
+  /** 그 문의 쿠키 이름으로 기기 토큰을 찾아 짝을 본다 — 다른 포트(다른 두레)의 쿠키는 보지 않는다 */
+  function authOf(req: IncomingMessage, g: Gate): Auth {
+    const token = cookieToken(req.headers.cookie, g.cookie)
     if (!token) return 'none'
     try {
       const device = o.pairing.verify(token)
@@ -421,15 +431,15 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
     if (p === PHONE_PATHS.pair || p === PHONE_PATHS.upload || p === PHONE_PATHS.subscribe) {
       if (method !== 'POST') return refuse(req, res, 405, E.method, { allow: 'POST' })
       if (!originOk(req, gate)) return refuse(req, res, 403, E.forbidden)
-      if (p === PHONE_PATHS.pair) return pair(req, res)
-      const a = authOf(req)
+      if (p === PHONE_PATHS.pair) return pair(req, res, gate)
+      const a = authOf(req, gate)
       if (a === 'error') return refuse(req, res, 503, E.busy)
       if (a === 'none') return refuse(req, res, 401, E.unpaired)
       return p === PHONE_PATHS.upload ? upload(req, res, a) : subscribe(req, res, a)
     }
     if (p === PHONE_PATHS.vapid || p === PHONE_PATHS.me) {
       if (method !== 'GET') return refuse(req, res, 405, E.method, { allow: 'GET' })
-      const a = authOf(req)
+      const a = authOf(req, gate)
       if (a === 'error') return refuse(req, res, 503, E.busy)
       if (a === 'none') return refuse(req, res, 401, E.unpaired)
       if (p === PHONE_PATHS.me) return sendJson(res, 200, { ok: true, device: deviceView(a.device) })
@@ -447,7 +457,7 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
     return serveStatic(req, res, gate, p)
   }
 
-  async function pair(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  async function pair(req: IncomingMessage, res: ServerResponse, gate: Gate): Promise<void> {
     const b = await readBody(req, PAIR_BODY_MAX)
     if (b.kind === 'gone') return void req.destroy()
     if (b.kind === 'big') return sendJson(res, 413, fail(E.tooBig), b.ended ? undefined : CLOSE)
@@ -467,7 +477,7 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
       if (r.error === 'expired') return sendJson(res, 410, fail(E.pairExpired))
       return sendJson(res, 400, fail(E.pairWrong))
     }
-    sendJson(res, 200, { ok: true, device: deviceView(r.device) }, { 'set-cookie': [cookieFor(r.token)] })
+    sendJson(res, 200, { ok: true, device: deviceView(r.device) }, { 'set-cookie': [cookieFor(gate.cookie, r.token)] })
   }
 
   async function subscribe(req: IncomingMessage, res: ServerResponse, a: Paired): Promise<void> {
@@ -665,9 +675,9 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: PHONE_WS_MESSAGE_MAX, perMessageDeflate: false, clientTracking: false })
   wss.on('headers', (headers, req) => {
-    const token = upgradeTokens.get(req)
+    const t = upgradeTokens.get(req)
     upgradeTokens.delete(req)
-    if (token) headers.push(`Set-Cookie: ${cookieFor(token)}`)
+    if (t) headers.push(`Set-Cookie: ${cookieFor(t.name, t.token)}`)
   })
   wss.on('error', () => {})
 
@@ -684,10 +694,10 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
     if (!gate) return deny(socket, 403)
     if (pathOf(req.url) !== PHONE_PATHS.ws) return deny(socket, 404)
     if (!originOk(req, gate)) return deny(socket, 403)
-    const a = authOf(req)
+    const a = authOf(req, gate)
     if (a === 'error') return deny(socket, 503)
     if (a === 'none') return deny(socket, 401)
-    upgradeTokens.set(req, a.token)
+    upgradeTokens.set(req, { name: gate.cookie, token: a.token })
     wss.handleUpgrade(req, socket, head, (ws) => accept(ws, a.device))
   }
 
