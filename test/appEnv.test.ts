@@ -19,6 +19,13 @@ describe('appEnv', () => {
     const src = Object.fromEntries(TEST_ENV_KEYS.map((k) => [k, '1']))
     expect(appEnv(src, true)).toEqual({})
   })
+  it('새 시험 키도 설치본에서 지움', () => {
+    const keys = ['DURE_TAILSCALE_COMMAND', 'DURE_TAILSCALE_ARGS', 'DURE_PHONE_ALLOW_LOCAL']
+    for (const k of keys) expect(TEST_ENV_KEYS).toContain(k)
+    const src = { ...Object.fromEntries(keys.map((k) => [k, '1'])), PATH: 'p' }
+    expect(appEnv(src, true)).toEqual({ PATH: 'p' })
+    expect(appEnv(src, false)).toEqual(src)
+  })
   it('앱 id — 설치본은 고정 id, 아니면 execPath', () => {
     expect(appUserModelId(true, 'e')).toBe('io.github.choiy4432.dure')
     expect(APP_ID).toBe('io.github.choiy4432.dure')

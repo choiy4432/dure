@@ -6,7 +6,7 @@ export interface ClaudeCommand {
 }
 
 /** 손잡이의 앞 인자 — 없거나 빈 글이면 [], 글 배열 JSON 이 아니면 던진다 */
-function jsonArgs(raw: string | undefined, name: string): string[] {
+export function jsonArgs(raw: string | undefined, name: string): string[] {
   if (raw === undefined || raw === '') return []
   let parsed: unknown
   try {
