@@ -20,18 +20,21 @@ for (const size of SIZES) {
   await page.setContent(`<!doctype html><html><body style="margin:0;background:transparent"><div style="width:${size}px;height:${size}px">${svg.replace('<svg ', `<svg width="${size}" height="${size}" `)}</div></body></html>`)
   pngs.push({ size, data: await page.screenshot({ omitBackground: true, clip: { x: 0, y: 0, width: size, height: size } }) })
 }
-// 휴대폰용(웹 앱 매니페스트·알림) — resources/icon/mobile/: 앱 아이콘 192·512(dure.svg), 상태 표시줄 badge 96(dure-badge.svg, 흰 단색·투명)
+// 휴대폰용(웹 앱 매니페스트·알림) — resources/icon/mobile/: 앱 아이콘 192·512(dure.svg, 투명 모서리), 상태 표시줄 badge 96(dure-badge.svg, 흰 단색·투명),
+// 꽉 찬 판(dure-square.svg) — 안드로이드 maskable 512 · 아이폰 홈 화면 180. opaque 는 바탕도 판 색으로 칠해 투명한 화소가 없게
 const MOBILE = [
   { file: 'dure-192.png', size: 192, svg: 'dure.svg' },
   { file: 'dure-512.png', size: 512, svg: 'dure.svg' },
   { file: 'dure-badge-96.png', size: 96, svg: 'dure-badge.svg' },
+  { file: 'dure-maskable-512.png', size: 512, svg: 'dure-square.svg', opaque: '#2563EB' },
+  { file: 'dure-apple-180.png', size: 180, svg: 'dure-square.svg', opaque: '#2563EB' },
 ]
 fs.mkdirSync(path.join(SRC, 'mobile'), { recursive: true })
 for (const m of MOBILE) {
   const svg = fs.readFileSync(path.join(SRC, m.svg), 'utf8')
   await page.setViewportSize({ width: m.size, height: m.size })
-  await page.setContent(`<!doctype html><html><body style="margin:0;background:transparent"><div style="width:${m.size}px;height:${m.size}px">${svg.replace('<svg ', `<svg width="${m.size}" height="${m.size}" `)}</div></body></html>`)
-  fs.writeFileSync(path.join(SRC, 'mobile', m.file), await page.screenshot({ omitBackground: true, clip: { x: 0, y: 0, width: m.size, height: m.size } }))
+  await page.setContent(`<!doctype html><html><body style="margin:0;background:${m.opaque ?? 'transparent'}"><div style="width:${m.size}px;height:${m.size}px">${svg.replace('<svg ', `<svg width="${m.size}" height="${m.size}" `)}</div></body></html>`)
+  fs.writeFileSync(path.join(SRC, 'mobile', m.file), await page.screenshot({ omitBackground: !m.opaque, clip: { x: 0, y: 0, width: m.size, height: m.size } }))
 }
 await browser.close()
 

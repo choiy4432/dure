@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- 두레 앱 아이콘 — 꽉 찬 판(투명한 곳 없음). 안드로이드 maskable(휴대폰이 원·둥근 네모로 잘라 낸다) · 아이폰 홈 화면(apple-touch-icon — 투명한 곳은 검게 보인다).
+       판 색·윤기·마크는 dure.svg 와 같고, 마크만 가운데를 두고 0.9 배 — 가장 먼 점(위 고리 바깥)이 가운데에서 반지름 35% 안(maskable 안전 영역 40%) -->
+  <defs><linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".10"/><stop offset=".55" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>
+  <rect width="256" height="256" fill="#2563EB"/>
+  <rect width="256" height="256" fill="url(#sheen)"/>
+  <g transform="translate(128 128) scale(0.9) translate(-128 -128)">
+    <path d="M84 68 V188" stroke="#fff" stroke-opacity=".32" stroke-width="14" stroke-linecap="round"/>
+    <path d="M84 68 H116 C160 68 188 98 188 128 C188 158 160 188 116 188 H84" fill="none" stroke="#fff" stroke-opacity=".32" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M84 68 H116 C160 68 188 98 188 128 C188 158 160 188 116 188 H84" pathLength="100" fill="none" stroke="#fff" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="52 100"/>
+    <circle cx="84" cy="68" r="20" fill="#2563EB" stroke="#fff" stroke-width="12"/>
+    <circle cx="84" cy="188" r="23" fill="#fff"/>
+    <circle cx="188" cy="128" r="13" fill="#fff"/>
+  </g>
+</svg>

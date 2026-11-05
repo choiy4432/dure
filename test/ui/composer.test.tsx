@@ -168,6 +168,18 @@ describe('Composer — 보내기', () => {
     expect(input().value).toBe('안녕')
   })
 
+  it('휴대폰 — 보냈는데 답 전에 끊기면(보냈는지 모름) 그 글을 보이고 입력은 남긴다(기록을 보고 다시 보낼지 정하게)', async () => {
+    const { PHONE_UNSURE } = await import('../../src/renderer/mobile/wsApi')
+    api.sendUser.mockRejectedValueOnce(new Error(PHONE_UNSURE))
+    await renderPanel()
+    type('배포해 줘')
+    key('Enter')
+    await settle()
+    expect(screen.getByRole('alert')).toHaveTextContent('보냈는지 확인하지 못했어요 — 기록을 확인해 주세요')
+    expect(input().value).toBe('배포해 줘')
+    expect(sendButton()).toBeEnabled()
+  })
+
   it('대기 입력이 있으면 "보낼 차례를 기다리는 입력 N개" — 이벤트로 바뀐다', async () => {
     snapshot.agents[0].heldInput = 2
     await renderPanel()

@@ -761,6 +761,18 @@ describe('phoneServer', () => {
     expect((await live.next()).ok).toBe(true)
   })
 
+  it('휴대폰이 묻는 { t:ping } — 바로 { t:pong } (반쯤 열린 연결을 휴대폰이 알아보게) · 디스패처 안 부름', async () => {
+    const t = await setup()
+    const c = await connect(t.server.port, { Cookie: cookie(t.pairing.add('dev-a')) })
+    c.ws.send(JSON.stringify({ t: 'ping' }))
+    expect(await c.next()).toEqual({ t: 'pong' })
+    c.ws.send(JSON.stringify({ t: 'ping' }))
+    c.ws.send(JSON.stringify({ t: 'call', id: 1, method: 'snapshot', args: [] }))
+    expect(await c.next()).toEqual({ t: 'pong' })
+    expect(await c.next()).toMatchObject({ t: 'result', id: 1, ok: true })
+    expect(t.dispatched.map(([m]) => m)).toEqual(['snapshot'])
+  })
+
   it('Host — 대소문자 무시 · 443 이면 포트 없이도 :443 으로도', async () => {
     // tailscale serve 가 443 이면 allowedHost 는 포트 없이 온다 — 휴대폰 Host 는 포트 없이(브라우저) 또는 :443
     const DNS = 'pc.tail1234.ts.net'

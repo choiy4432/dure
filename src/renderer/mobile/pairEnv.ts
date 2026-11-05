@@ -26,9 +26,18 @@ const IN_APP: readonly [RegExp, string | null][] = [
   [/;\s*wv\)/, null],
 ]
 
-/** 앱 안 브라우저면 그 이름(모르면 null), 보통 브라우저(크롬·삼성 인터넷·사파리·아이폰 크롬)면 null */
-export function inAppBrowser(ua: string): { name: string | null } | null {
+/** inAppBrowser 가 UA 말고 더 보는 것 — 안 주면 UA 표시만 본다 */
+export type InAppHints = { ios?: boolean; standalone?: boolean; pushManager?: boolean }
+
+/**
+ * 앱 안 브라우저면 그 이름(모르면 null), 보통 브라우저(크롬·삼성 인터넷·사파리·아이폰 크롬)면 null.
+ * 이름표가 없는 것도 잡는다: 아이폰(홈 화면 앱 아님)인데 UA 에 Safari/ 가 없다(다음·밴드 같은 WKWebView — 사파리·아이폰 크롬·파이어폭스는 있다) ·
+ * 안드로이드인데 PushManager 가 없다(; wv 를 지운 웹뷰 등 — 어차피 알림을 못 받는다)
+ */
+export function inAppBrowser(ua: string, h: InAppHints = {}): { name: string | null } | null {
   for (const [re, name] of IN_APP) if (re.test(ua)) return { name }
+  if (h.ios && !h.standalone && !/\bSafari\//.test(ua)) return { name: null }
+  if (/\bAndroid\b/.test(ua) && h.pushManager === false) return { name: null }
   return null
 }
 
@@ -67,12 +76,13 @@ export async function detectPairEnv(): Promise<PairEnv> {
   const standalone = window.matchMedia?.('(display-mode: standalone)').matches === true
     || (nav as Navigator & { standalone?: boolean }).standalone === true
   const model = await uaModel(nav)
+  const pushManager = 'PushManager' in window
   return {
     ios,
     standalone,
-    inApp: inAppBrowser(ua),
+    inApp: inAppBrowser(ua, { ios, standalone, pushManager }),
     samsung: isSamsung(model, ua),
-    push: 'serviceWorker' in nav && 'PushManager' in window && 'Notification' in window,
+    push: 'serviceWorker' in nav && pushManager && 'Notification' in window,
     defaultName: defaultPhoneName(model, ios),
   }
 }

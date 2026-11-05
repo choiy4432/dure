@@ -197,7 +197,7 @@ export function PairScreen(p: PairScreenProps) {
         </>}
         foot={pairButton}
       >
-        <NameField value={name} onChange={setName} />
+        <NameField value={name} onChange={setName} errorId={notice ? noticeId : undefined} />
         {alert}
       </Screen>
     )
@@ -229,7 +229,7 @@ export function PairScreen(p: PairScreenProps) {
   )
 }
 
-/** 겉틀 — 위(제목·설명) · 가운데(칸·안내, 길면 스크롤) · 맨 아래 고정 단추. form 이면 Enter 로 보낸다 */
+/** 겉틀 — 위(제목·설명) · 가운데(칸·안내, 길면 스크롤) · 맨 아래 고정 단추. 늘 main 영역 하나 · form 이면 그 안에서 Enter 로 보낸다 */
 function Screen({ head, children, foot, form }: { head: ReactNode; children?: ReactNode; foot: ReactNode; form?: (e: FormEvent) => void }) {
   const body = (
     <>
@@ -240,12 +240,14 @@ function Screen({ head, children, foot, form }: { head: ReactNode; children?: Re
       <div className="pr-foot">{foot}</div>
     </>
   )
-  return form ? (
-    <form className="pr" onSubmit={form} noValidate>
-      {body}
-    </form>
-  ) : (
-    <main className="pr">{body}</main>
+  return (
+    <main className="pr">
+      {form ? (
+        <form className="pr-form" onSubmit={form} noValidate>
+          {body}
+        </form>
+      ) : body}
+    </main>
   )
 }
 
@@ -293,7 +295,8 @@ function Steps({ items }: { items: ReactNode[] }) {
   )
 }
 
-function NameField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+/** errorId — 오류 줄이 떠 있으면 그 id(읽어 주는 프로그램이 칸과 함께 읽는다) */
+function NameField({ value, onChange, errorId }: { value: string; onChange: (v: string) => void; errorId?: string }) {
   const id = useId()
   return (
     <div className="pr-field">
@@ -307,7 +310,7 @@ function NameField({ value, onChange }: { value: string; onChange: (v: string) =
         autoComplete="off"
         enterKeyHint="go"
         onChange={e => onChange(e.target.value)}
-        aria-describedby={`${id}-n`}
+        aria-describedby={errorId ? `${id}-n ${errorId}` : `${id}-n`}
       />
       <p className="pr-note" id={`${id}-n`}>PC 의 짝 맺은 휴대폰 목록에 이 이름으로 보여요</p>
     </div>

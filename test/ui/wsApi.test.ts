@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createWsApi, PHONE_OFFLINE, RECONNECT_MS, type PhoneApi } from '../../src/renderer/mobile/wsApi'
+import { createWsApi, OPEN_TIMEOUT_MS, PHONE_BAD_ARGS, PHONE_OFFLINE, PHONE_UNSURE, PING_EVERY_MS, PONG_WAIT_MS, RECONNECT_MS, type PhoneApi } from '../../src/renderer/mobile/wsApi'
+import { HTTP_TIMEOUT_MS } from '../../src/renderer/mobile/phoneHttp'
 import { getConn, onPhoneConn } from '../../src/renderer/mobile/connection'
 import { getStore } from '../../src/renderer/state/store'
 import { getDraft, updateDraft } from '../../src/renderer/panel/drafts'
@@ -10,13 +11,14 @@ import type { HistoryItem } from '../../src/engine/types'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 
 // ── 가짜 WebSocket — 보낸 글을 모으고, 시험이 열기·끊기·답·사건을 흉내 낸다 ──
-type Sent = { t: 'call'; id: number; method: string; args: unknown[] } | { t: 'visible'; on: boolean }
+type Sent = { t: 'call'; id: number; method: string; args: unknown[] } | { t: 'visible'; on: boolean } | { t: 'ping' }
 class FakeWs {
   static all: FakeWs[] = []
   static last(): FakeWs {
     return FakeWs.all[FakeWs.all.length - 1]
   }
   readyState = 0
+  bufferedAmount = 0
   sent: Sent[] = []
   raw: string[] = []
   closedByClient: number | null = null
@@ -43,6 +45,15 @@ class FakeWs {
   drop(code = 1006) {
     this.readyState = 3
     this.onclose?.({ code, reason: '' })
+  }
+  pings() {
+    return this.sent.filter(m => m.t === 'ping').length
+  }
+  visibles() {
+    return this.sent.filter((m): m is Extract<Sent, { t: 'visible' }> => m.t === 'visible')
+  }
+  pong() {
+    this.onmessage?.({ data: JSON.stringify({ t: 'pong' }) })
   }
   calls(method?: string) {
     return this.sent.filter((m): m is Extract<Sent, { t: 'call' }> => m.t === 'call' && (!method || m.method === method))
@@ -158,8 +169,10 @@ describe('createWsApi — 휴대폰의 window.dure', () => {
     const q = a.sendUser('a', [{ type: 'text', text: '안녕' }])
     expect(ws.calls().map(c => c.method)).toEqual(['snapshot', 'sendUser'])
     ws.drop()
-    await expect(p).rejects.toThrow(PHONE_OFFLINE)
-    await expect(q).rejects.toThrow(PHONE_OFFLINE)
+    // 이미 보냈는데 답을 못 받았다 — PC 가 받았는지 모른다('연결이 끊겼어요' 면 사용자가 그대로 또 보낸다)
+    expect(PHONE_UNSURE).toBe('보냈는지 확인하지 못했어요 — 기록을 확인해 주세요')
+    await expect(p).rejects.toThrow(PHONE_UNSURE)
+    await expect(q).rejects.toThrow(PHONE_UNSURE)
     const before = ws.sent.length
     await expect(a.snapshot()).rejects.toThrow(PHONE_OFFLINE)
     expect(ws.sent.length).toBe(before)
@@ -216,9 +229,142 @@ describe('createWsApi — 휴대폰의 window.dure', () => {
     expect(FakeWs.last().sent[0]).toEqual({ t: 'visible', on: false })
     vis.mockReturnValue('visible')
     document.dispatchEvent(new Event('visibilitychange'))
-    expect(FakeWs.last().sent.at(-1)).toEqual({ t: 'visible', on: true })
+    expect(FakeWs.last().visibles().at(-1)).toEqual({ t: 'visible', on: true })
     vis.mockRestore()
   })
+
+  it('반쯤 열린 연결 — 화면이 다시 보이면 바로 묻고, 7초 안에 아무 글도 없으면 끊긴 것으로 치고 다시 잇는다', async () => {
+    const conns: string[] = []
+    const a = make({ onConn: (s, again) => conns.push(`${s}:${again}`) })
+    const ws = FakeWs.last()
+    ws.open()
+    // 주머니 속 — 숨은 동안엔 묻지 않는다(휴대폰은 숨은 화면의 시계를 멈춘다)
+    const vis = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    document.dispatchEvent(new Event('visibilitychange'))
+    vi.advanceTimersByTime(10 * 60_000)
+    expect(ws.pings()).toBe(0)
+    // PC 가 잠들었다(닫힘 신호 없음) — 휴대폰을 다시 켜고 바로 보낸다
+    vis.mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    expect(ws.pings()).toBe(1)
+    const p = a.sendUser('a', [{ type: 'text', text: '안녕' }])
+    vi.advanceTimersByTime(PONG_WAIT_MS - 1)
+    expect(conns).toEqual(['open:false'])
+    expect(ws.closedByClient).toBeNull()
+    vi.advanceTimersByTime(1)
+    expect(conns).toEqual(['open:false', 'reconnecting:true'])
+    expect(ws.closedByClient).not.toBeNull()
+    await expect(p).rejects.toThrow(PHONE_UNSURE)
+    // 닫은 소켓의 늦은 닫힘은 버린다 — 다시 잇기는 한 번만
+    ws.drop()
+    expect(conns).toHaveLength(2)
+    vi.advanceTimersByTime(RECONNECT_MS[0])
+    expect(FakeWs.all).toHaveLength(2)
+    FakeWs.last().open()
+    expect(conns.at(-1)).toBe('open:true')
+    vis.mockRestore()
+  })
+
+  it('보이는 동안 25초마다 묻는다 — 답(pong)이든 사건이든 무엇이 오면 살아 있음 · 숨으면 멈춤', async () => {
+    make()
+    const ws = FakeWs.last()
+    ws.open()
+    vi.advanceTimersByTime(PING_EVERY_MS - 1)
+    expect(ws.pings()).toBe(0)
+    vi.advanceTimersByTime(1)
+    expect(ws.pings()).toBe(1)
+    vi.advanceTimersByTime(3000)
+    ws.pong()
+    vi.advanceTimersByTime(PING_EVERY_MS - 3000)
+    expect(ws.pings()).toBe(2)
+    ws.emit('status', { agentId: 'a', status: 'working', errorText: null })
+    vi.advanceTimersByTime(PONG_WAIT_MS * 2)
+    expect(ws.closedByClient).toBeNull()
+    expect(FakeWs.all).toHaveLength(1)
+    const vis = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    document.dispatchEvent(new Event('visibilitychange'))
+    const n = ws.pings()
+    vi.advanceTimersByTime(PING_EVERY_MS * 4)
+    expect(ws.pings()).toBe(n)
+    expect(ws.closedByClient).toBeNull()
+    vis.mockRestore()
+  })
+
+  it('큰 글을 보내는 중(그림)엔 답이 늦어도 — 보낼 몫이 줄고 있으면 기다리고, 멈췄으면 끊긴 것', async () => {
+    const conns: string[] = []
+    make({ onConn: (s, again) => conns.push(`${s}:${again}`) })
+    const ws = FakeWs.last()
+    ws.open()
+    ws.bufferedAmount = 6_000_000
+    vi.advanceTimersByTime(PING_EVERY_MS)
+    expect(ws.pings()).toBe(1)
+    ws.bufferedAmount = 3_000_000
+    vi.advanceTimersByTime(PONG_WAIT_MS)
+    expect(conns).toEqual(['open:false'])
+    ws.bufferedAmount = 1_000_000
+    vi.advanceTimersByTime(PONG_WAIT_MS)
+    expect(conns).toEqual(['open:false'])
+    // 더 줄지 않는다 — 망이 막혔다
+    vi.advanceTimersByTime(PONG_WAIT_MS)
+    expect(conns).toEqual(['open:false', 'reconnecting:true'])
+  })
+
+  it('여는 데 10초를 넘기면 못 연 것으로 → /api/me → 다시 · 늦게 열린 옛 소켓은 버린다', async () => {
+    const fetchImpl = meFetch(200)
+    const conns: string[] = []
+    const a = make({ fetchImpl: fetchImpl as unknown as typeof fetch, onConn: (s, again) => conns.push(`${s}:${again}`) })
+    const ws = FakeWs.last()
+    const p = a.snapshot()
+    vi.advanceTimersByTime(OPEN_TIMEOUT_MS - 1)
+    expect(ws.closedByClient).toBeNull()
+    vi.advanceTimersByTime(1)
+    expect(ws.closedByClient).not.toBeNull()
+    expect(conns).toEqual(['reconnecting:false'])
+    // 보내지 못한 call — '보냈는지 모름' 이 아니라 못 보냈다
+    await expect(p).rejects.toThrow(PHONE_OFFLINE)
+    await flush()
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    ws.open()
+    expect(conns).toEqual(['reconnecting:false'])
+    vi.advanceTimersByTime(RECONNECT_MS[0])
+    expect(FakeWs.all).toHaveLength(2)
+  })
+
+  it('/api/me 가 답하지 않아도 8초 뒤 모름으로 치고 다시 잇는다(요청은 끊어 둔다)', async () => {
+    let signal: AbortSignal | undefined
+    const hang = vi.fn((_u: unknown, init?: RequestInit) => {
+      signal = init?.signal ?? undefined
+      return new Promise<Response>(() => {}) // 끊기 신호도 무시하는 fetch
+    })
+    const onUnpaired = vi.fn()
+    make({ fetchImpl: hang as unknown as typeof fetch, onUnpaired })
+    FakeWs.last().drop()
+    await flush()
+    expect(hang).toHaveBeenCalledTimes(1)
+    expect(signal?.aborted).toBe(false)
+    vi.advanceTimersByTime(HTTP_TIMEOUT_MS)
+    await flush()
+    expect(signal?.aborted).toBe(true)
+    vi.advanceTimersByTime(RECONNECT_MS[0])
+    expect(FakeWs.all).toHaveLength(2)
+    expect(onUnpaired).not.toHaveBeenCalled()
+  })
+
+  it('JSON 으로 못 바꾸는 인자 — 그 call 만 바로 거절(보내지 않음) · 열리기 전이어도 · 다른 call 은 그대로', async () => {
+    const a = make()
+    const ws = FakeWs.last()
+    const loop: Record<string, unknown> = {}
+    loop.self = loop
+    // 열리기 전 — 열릴 때까지 기다리지 않고 바로
+    await expect(a.updateAgent('a', loop as never)).rejects.toThrow(PHONE_BAD_ARGS)
+    const ok = a.snapshot()
+    ws.open()
+    await expect(a.sendUser('a', [{ type: 'text', text: 1n as never }])).rejects.toThrow(PHONE_BAD_ARGS)
+    expect(ws.calls().map(c => c.method)).toEqual(['snapshot'])
+    ws.reply(ws.calls('snapshot')[0].id, snap())
+    await expect(ok).resolves.toMatchObject({ rooms: [{ id: 'r1' }] })
+  })
+
 
   it('PC 에서 끊기(4401) — 다시 잇지 않고 onUnpaired', async () => {
     const onUnpaired = vi.fn()
@@ -354,6 +500,42 @@ describe('createWsApi — 휴대폰의 window.dure', () => {
     expect(s.getState().history.b).toBeUndefined()
     expect(s.getState().thinking.b).toBeUndefined()
     expect(s.getState().streaming).toEqual({})
+  })
+
+  it('store.resync — 고르지 않은 에이전트의 끝남 표시·마지막 글: 다시 일하면 끝남을 내리고, 새 대화면 둘 다 내리고, 없어진 에이전트는 잊는다', async () => {
+    const { createStore } = await import('../../src/renderer/state/store')
+    const a = make()
+    const ws = FakeWs.last()
+    ws.open()
+    const s = createStore(a, { hasFocus: () => true })
+    const init = s.init()
+    await flush()
+    const ids = ['a', 'b', 'c', 'd', 'e']
+    ws.reply(ws.calls('snapshot')[0].id, snap({ agents: ids.map(id => agent(id)) }))
+    await init
+    s.selectAgent('a')
+    await flush()
+    ws.reply(ws.calls('history').at(-1)!.id, [])
+    await flush()
+    for (const [i, id] of ['b', 'c', 'd', 'e'].entries()) {
+      ws.emit('history', { agentId: id, item: { t: 10 + i, kind: 'assistant', blocks: [{ type: 'text', text: `${id} 끝` }] } })
+      ws.emit('history', { agentId: id, item: { t: 20 + i, kind: 'result', ok: true, subtype: 'success' } })
+    }
+    expect(Object.keys(s.getState().fresh).sort()).toEqual(['b', 'c', 'd', 'e'])
+    expect(Object.keys(s.getState().lastText).sort()).toEqual(['b', 'c', 'd', 'e'])
+
+    // 끊긴 사이 — b 는 다시 일을 시작했고, c 는 새 대화를 시작했고(지난 대화 수 +1), d 는 지워졌다. e 는 그대로
+    const done = s.resync()
+    await flush()
+    ws.reply(ws.calls('snapshot').at(-1)!.id, snap({ agents: [agent('a'), agent('b', { status: 'working' }), agent('c', { pastCount: 1 }), agent('e')] }))
+    await flush()
+    ws.reply(ws.calls('history').at(-1)!.id, [])
+    await done
+    const st = s.getState()
+    expect(Object.keys(st.fresh).sort()).toEqual(['e'])
+    expect(Object.keys(st.lastText).sort()).toEqual(['b', 'e'])
+    expect(st.lastText.e).toEqual({ text: 'e 끝', at: 13 })
+    expect(st.fresh.e).toBe(23)
   })
 
   it('close — 소켓을 닫고 다시 잇지 않음', async () => {

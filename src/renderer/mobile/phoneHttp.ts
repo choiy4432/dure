@@ -6,14 +6,34 @@ import type { PhoneDevice } from '../../shared/phoneTypes'
 export const PAIR_OFFLINE = '두레에 닿지 못했어요 — PC 가 켜져 있는지 확인해 주세요'
 export const PAIR_FAILED = '짝을 맺지 못했어요 — 다시 해 주세요'
 
+/** 짝 여부 묻기를 이만큼 기다린다 — PC 가 잠들었거나 망이 바뀌면 답도 닫힘도 없이 몇 분씩 걸린다 */
+export const HTTP_TIMEOUT_MS = 8000
+
 type Http = { base?: string; fetch?: typeof fetch }
 const baseOf = (o: Http) => o.base ?? location.origin
 const fetchOf = (o: Http): typeof fetch => o.fetch ?? ((...a) => fetch(...a))
 
-/** 이 휴대폰이 짝을 맺었나 — paired(200) · unpaired(401) · unknown(끊김·서버 오류: 일단 이어 보고 다시 묻는다) */
+/** ms 안에 답이 없으면 요청을 끊고 실패로 — fetch 가 끊기 신호를 무시해도 기다리지 않는다 */
+async function fetchWithin(o: Http, url: string, init: RequestInit, ms = HTTP_TIMEOUT_MS): Promise<Response> {
+  const ctl = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      ctl.abort()
+      reject(new Error('timeout'))
+    }, ms)
+  })
+  try {
+    return await Promise.race([fetchOf(o)(url, { ...init, signal: ctl.signal }), late])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** 이 휴대폰이 짝을 맺었나 — paired(200) · unpaired(401) · unknown(끊김·서버 오류·8초 넘게 답 없음: 일단 이어 보고 다시 묻는다) */
 export async function checkMe(o: Http = {}): Promise<'paired' | 'unpaired' | 'unknown'> {
   try {
-    const r = await fetchOf(o)(`${baseOf(o)}${PHONE_PATHS.me}`, { credentials: 'same-origin', cache: 'no-store' })
+    const r = await fetchWithin(o, `${baseOf(o)}${PHONE_PATHS.me}`, { credentials: 'same-origin', cache: 'no-store' })
     if (r.status === 401) return 'unpaired'
     return r.ok ? 'paired' : 'unknown'
   } catch {
@@ -24,7 +44,7 @@ export async function checkMe(o: Http = {}): Promise<'paired' | 'unpaired' | 'un
 /** 이 휴대폰(PC 가 기억하는 이름 등) — 짝을 안 맺었거나 끊겼거나 서버 오류면 null */
 export async function meDevice(o: Http = {}): Promise<PhoneDevice | null> {
   try {
-    const r = await fetchOf(o)(`${baseOf(o)}${PHONE_PATHS.me}`, { credentials: 'same-origin', cache: 'no-store' })
+    const r = await fetchWithin(o, `${baseOf(o)}${PHONE_PATHS.me}`, { credentials: 'same-origin', cache: 'no-store' })
     if (!r.ok) return null
     const body = (await r.json()) as PhoneMeResponse
     return body && body.ok && body.device && typeof body.device.name === 'string' ? body.device : null
@@ -64,7 +84,7 @@ export async function pairWith(secret: string, name: string, o: Http = {}): Prom
 
 export type PushOutcome = 'on' | 'denied' | 'unsupported' | 'failed'
 
-type NotificationLike = { permission: NotificationPermission; requestPermission(): Promise<NotificationPermission> }
+export type NotificationLike = { permission: NotificationPermission; requestPermission(): Promise<NotificationPermission> }
 type PushDeps = Http & {
   /** 없으면(앱 안 브라우저·아이폰 사파리) unsupported */
   notification?: NotificationLike | null

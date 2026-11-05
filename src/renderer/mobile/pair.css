@@ -13,6 +13,15 @@
   overflow-wrap: anywhere;
 }
 
+/* 이름·숫자 단계 — main 안의 form 이 같은 세로 틀을 잇는다(본문 스크롤 · 맨 아래 단추) */
+.pr-form {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
 .pr-body {
   flex: 1;
   min-height: 0;

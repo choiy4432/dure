@@ -85,6 +85,9 @@ const TYPES: Readonly<Record<string, string>> = {
 /** 정적 파일 경로의 마디 하나 — 빌드가 내는 이름 꼴만(점으로 시작·`..`·빈 마디·`\`·`:`·NUL 은 여기서 걸린다) */
 const SEGMENT = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/
 
+/** { t:'ping' } 의 답 — 늘 같다 */
+const PONG = JSON.stringify({ t: 'pong' } satisfies PhoneServerMessage)
+
 const BASE_HEADERS: OutgoingHttpHeaders = { 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' }
 const CLOSE: OutgoingHttpHeaders = { connection: 'close' }
 
@@ -694,7 +697,7 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
     else reply(c, { t: 'result', id, ok: false, error: typeof r.error === 'string' ? r.error : E.call })
   }
 
-  /** 받는 꼴: { t:'call', id, method, args } · { t:'visible', on }. 그 밖·글이 아닌 틀은 버린다. 토큰은 열 때 한 번만 봤다(메시지마다 안 봄) */
+  /** 받는 꼴: { t:'call', id, method, args } · { t:'visible', on } · { t:'ping' }. 그 밖·글이 아닌 틀은 버린다. 토큰은 열 때 한 번만 봤다(메시지마다 안 봄) */
   function onMessage(c: Client, data: RawData, isBinary: boolean): void {
     if (!clients.has(c) || isBinary) return
     let m: unknown
@@ -704,6 +707,8 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
       return
     }
     if (!isObj(m)) return
+    // 휴대폰이 연결이 살아 있나 묻는다 — 바로 답한다(휴대폰은 몇 초 안에 아무 글도 안 오면 끊긴 것으로 치고 다시 잇는다)
+    if (m.t === 'ping') return sendText(c, PONG)
     if (m.t === 'visible') {
       if (typeof m.on === 'boolean') setVisible(c, m.on)
       return

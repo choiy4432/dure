@@ -40,6 +40,40 @@ describe('PairScreen — 짝 맺기(B2: 큰 제목 + 아래 고정 단추)', () 
     expect(onDone).toHaveBeenCalledTimes(1)
   })
 
+  it('읽어 주는 프로그램 — 어느 단계든 main 영역 하나 · 이름 칸 오류는 그 칸이 오류 줄을 가리킨다', async () => {
+    const outcomes: PairOutcome[] = [
+      { ok: false, kind: 'locked', error: '여러 번 틀려서 잠깐 막았어요 — 1분 뒤에 다시 해 주세요' },
+      { ok: true },
+    ]
+    setup({ code: 'c0de', pair: async () => outcomes.shift()! })
+    expect(screen.getAllByRole('main')).toHaveLength(1)
+    expect(screen.getByRole('main')).toContainElement(heading())
+    // 단추는 main 안의 form 그대로 — Enter 로 보낸다
+    expect(screen.getByRole('button', { name: '짝 맺기' }).closest('form')).not.toBeNull()
+    const name = screen.getByRole('textbox', { name: '휴대폰 이름' })
+    const note = name.getAttribute('aria-describedby')!
+    expect(note).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '짝 맺기' }))
+    await settle()
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('여러 번 틀려서 잠깐 막았어요')
+    expect(name.getAttribute('aria-describedby')!.split(' ')).toEqual([note, alert.id])
+    fireEvent.click(screen.getByRole('button', { name: '짝 맺기' }))
+    await settle()
+    expect(heading()).toHaveTextContent('짝을 맺었어요')
+    expect(screen.getAllByRole('main')).toHaveLength(1)
+    cleanup()
+    setup({ env: iphoneHome })
+    expect(screen.getAllByRole('main')).toHaveLength(1)
+    expect(screen.getByRole('main')).toContainElement(screen.getByLabelText('숫자 6자리'))
+    cleanup()
+    setup({ env: iphoneSafari })
+    expect(screen.getAllByRole('main')).toHaveLength(1)
+    cleanup()
+    setup({ env: { ...android, inApp: { name: '카카오톡' } } })
+    expect(screen.getAllByRole('main')).toHaveLength(1)
+  })
+
   it('QR 코드가 지났거나 이미 썼으면 — 6자리 넣기로, 까닭과 함께', async () => {
     setup({ code: 'old', pair: async () => ({ ok: false, kind: 'wrong', error: '짝 코드나 숫자가 맞지 않아요' }) })
     fireEvent.click(screen.getByRole('button', { name: '짝 맺기' }))
@@ -236,6 +270,31 @@ describe('pairEnv — 어떤 브라우저인가', () => {
     expect(inAppBrowser(UA.samsungInternet)).toBeNull()
     expect(inAppBrowser(UA.safari)).toBeNull()
     expect(inAppBrowser(UA.crios)).toBeNull()
+  })
+
+  it('inAppBrowser — 이름 표시가 없는 앱 안 브라우저도: 아이폰(홈 화면 앱 아님)에 Safari/ 가 없음 · 안드로이드에 PushManager 없음', () => {
+    const daum = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 DaumApps/8.10.0 DaumDevice/mobile'
+    const band = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 BAND/16.2.1 iOS(18.1)'
+    const iosHomeApp = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148'
+    const ios = { ios: true, standalone: false, pushManager: false }
+    expect(inAppBrowser(daum, ios)).toEqual({ name: null })
+    expect(inAppBrowser(band, ios)).toEqual({ name: null })
+    // 홈 화면 앱(설치한 웹 앱)의 UA 에도 Safari/ 가 없다 — 앱 안이 아니다
+    expect(inAppBrowser(iosHomeApp, { ...ios, standalone: true })).toBeNull()
+    // 사파리·아이폰 크롬·아이패드(데스크톱 꼴)는 Safari/ 가 있다
+    expect(inAppBrowser(UA.safari, ios)).toBeNull()
+    expect(inAppBrowser(UA.crios, ios)).toBeNull()
+    expect(inAppBrowser(UA.ipad, ios)).toBeNull()
+    // 이름표가 있으면 그 이름이 먼저
+    expect(inAppBrowser(UA.kakaoIos, ios)).toEqual({ name: '카카오톡' })
+
+    // 안드로이드 — 웹 푸시를 못 받는 브라우저(앱 안 웹뷰가 ; wv 를 지운 것 등)
+    const android = { ios: false, standalone: false, pushManager: false }
+    expect(inAppBrowser(UA.chrome, android)).toEqual({ name: null })
+    expect(inAppBrowser(UA.chrome, { ...android, pushManager: true })).toBeNull()
+    expect(inAppBrowser(UA.samsungInternet, { ...android, pushManager: true })).toBeNull()
+    // 데스크톱(안드로이드·아이폰 아님)은 PushManager 가 없어도 앱 안으로 치지 않는다
+    expect(inAppBrowser('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36', android)).toBeNull()
   })
 
   it('isIOS — 아이폰·아이패드(데스크톱 꼴 UA + 터치)', () => {

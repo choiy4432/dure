@@ -1,0 +1,135 @@
+<!doctype html>
+<!--
+  PC 에 닿지 않을 때 화면 — 서비스 워커(sw.js)가 설치 때 받아 두었다가, 화면 열기가 실패하면(PC 꺼짐·잠듦·두레 안 떠 있음·Tailscale 꺼짐) 내어 준다.
+  짝 맺기 화면(PairScreen · 시안 B2)과 같은 틀: 위에 큰 제목, 할 일 단추는 엄지가 닿는 맨 아래. 색은 tokens.css 값을 옮겨 적었다(라이트·다크는 휴대폰 설정 따라감).
+  CSP 는 script-src 'self' — 스크립트는 offline.js 로만(같이 받아 둔다). 글꼴은 받지 않는다(시스템 글꼴)
+-->
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111827" media="(prefers-color-scheme: dark)" />
+    <title>두레 — PC 에 닿지 않아요</title>
+    <style>
+      :root {
+        --bg: #FFFFFF;
+        --text: #0F172A;
+        --text-3: #475569;
+        --border: #E2E8F0;
+        --primary: #2563EB;
+        --primary-hover: #1D4ED8;
+        --on-primary: #FFFFFF;
+        --warn-bg: #FFFBEB;
+        --warn-text: #B45309;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111827;
+          --text: #E5E9F0;
+          --text-3: #A3B1C6;
+          --border: #243044;
+          --primary-hover: #3B82F6;
+          --warn-bg: rgba(245, 158, 11, 0.12);
+          --warn-text: #FCD34D;
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Noto Sans KR', system-ui, sans-serif;
+        word-break: keep-all;
+        overflow-wrap: anywhere;
+        -webkit-text-size-adjust: 100%;
+      }
+      main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+      .body {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+        padding: calc(env(safe-area-inset-top) + 40px) 20px 20px;
+      }
+      .mark {
+        width: 48px;
+        height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        background: var(--warn-bg);
+        color: var(--warn-text);
+      }
+      h1 { margin: 0; font-size: 26px; line-height: 34px; font-weight: 700; letter-spacing: -0.02em; }
+      h1:focus { outline: none; }
+      p { margin: 0; font-size: 15px; line-height: 24px; color: var(--text-3); }
+      .foot {
+        flex: none;
+        padding: 12px 16px calc(env(safe-area-inset-bottom) + 16px);
+        border-top: 1px solid var(--border);
+        background: var(--bg);
+      }
+      button {
+        width: 100%;
+        min-height: 52px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 0 16px;
+        border: 0;
+        border-radius: 10px;
+        background: var(--primary);
+        color: var(--on-primary);
+        box-shadow: 0 1px 2px rgba(37, 99, 235, 0.35);
+        font: inherit;
+        font-size: 16px;
+        font-weight: 700;
+        transition: background-color 0.15s;
+        -webkit-tap-highlight-color: transparent;
+      }
+      button:active { background: var(--primary-hover); }
+      button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+      .spin, .busy { display: none; }
+      button[aria-busy='true'] .spin { display: block; animation: spin 0.9s linear infinite; }
+      button[aria-busy='true'] .busy { display: inline; }
+      button[aria-busy='true'] .again { display: none; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) {
+        button[aria-busy='true'] .spin { animation: none; }
+      }
+      .nb { white-space: nowrap; } /* 낱말과 조사를 한 줄에 */
+      .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="body">
+        <span class="mark" aria-hidden="true">
+          <!-- lucide unplug -->
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m19 5 3-3"/><path d="m2 22 3-3"/><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"/><path d="M7.5 13.5 10 11"/><path d="M10.5 16.5 13 14"/><path d="m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z"/></svg>
+        </span>
+        <h1 tabindex="-1">PC 에 닿지 않아요</h1>
+        <p>PC 가 켜져 있고 두레가 떠 있는지, 휴대폰의 <span class="nb">Tailscale 이</span> 켜져 있는지 봐 주세요.</p>
+      </div>
+      <div class="foot">
+        <button type="button" id="retry" aria-busy="false">
+          <svg class="spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+          <span class="again">다시 시도</span>
+          <span class="busy">다시 잇는 중…</span>
+        </button>
+        <span class="sr" role="status" id="status"></span>
+      </div>
+    </main>
+    <script src="/offline.js"></script>
+  </body>
+</html>

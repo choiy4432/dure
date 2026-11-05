@@ -703,6 +703,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       await fetchSnapshot()
     },
     async resync() {
+      const before = new Map(state.agents.map(a => [a.id, a]))
       await fetchSnapshot()
       const keep = state.selectedAgentId
       const only = <T,>(rec: Record<AgentId, T>): Record<AgentId, T> => {
@@ -717,7 +718,18 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
         thinking = without(thinking, id)
         phase = without(phase, id)
       }
-      set({ ...state, history: only(state.history), historyStatus: only(state.historyStatus), streaming: {}, thinking, phase })
+      // 고르지 않은 에이전트의 끝남 표시·마지막 글 — 놓친 사건이 했을 일을 스냅샷으로 아는 만큼(스냅샷엔 마지막 글이 없어 새 글은 다음 사건·열 때 채운다):
+      // 없어졌으면 잊고, 다시 일하는 중이면 끝남을 내리고, 새 대화로 갔으면(지난 대화 수가 바뀜) 앞 대화의 끝남·마지막 글을 내린다
+      let { lastText, fresh } = state
+      const now = new Map(state.agents.map(a => [a.id, a]))
+      for (const id of new Set([...Object.keys(lastText), ...Object.keys(fresh)])) {
+        if (id === keep) continue
+        const a = now.get(id)
+        const renewed = !!a && before.has(id) && before.get(id)!.pastCount !== a.pastCount
+        if (!a || renewed) lastText = without(lastText, id)
+        if (!a || renewed || busy(a.status)) fresh = without(fresh, id)
+      }
+      set({ ...state, history: only(state.history), historyStatus: only(state.historyStatus), streaming: {}, thinking, phase, lastText, fresh })
       if (keep) await loadHistory(keep, true)
     },
     selectAgent(id) {

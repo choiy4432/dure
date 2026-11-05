@@ -20,32 +20,14 @@ import { PairScreen } from './PairScreen'
 import { MobileApp } from './MobileApp'
 import { detectPairEnv } from './pairEnv'
 import { checkMe, copyText, pairWith, subscribePush } from './phoneHttp'
-
-/** QR 의 짝 코드(#pair=) — 읽자마자 주소에서 지운다(방문 기록·화면 공유에 남지 않게). #agent= 같은 다른 조각은 그대로 */
-function takePairCode(): string | null {
-  const code = new URLSearchParams(location.hash.slice(1)).get('pair')
-  if (code === null) return null
-  history.replaceState(null, '', location.pathname + location.search)
-  return code.trim() || null
-}
+import { openFromWorker, resubscribeIfGranted, takePairCode } from './entry'
 
 /** 알림 서비스 워커 — 짝 맺기 전에도 등록해 둔다(알림 켜기가 바로 구독하게). 알림을 누르면 열린 창이 그 대화로(#agent=) */
 function registerServiceWorker(): void {
   if (!('serviceWorker' in navigator) || !window.isSecureContext) return
   navigator.serviceWorker.register('/sw.js').catch(() => {})
   navigator.serviceWorker.addEventListener('message', (e: MessageEvent) => {
-    const m = e.data as { type?: unknown; url?: unknown } | null
-    if (!m || m.type !== 'dure:open' || typeof m.url !== 'string') return
-    let u: URL
-    try {
-      u = new URL(m.url, location.origin)
-    } catch {
-      return
-    }
-    if (u.origin !== location.origin) return
-    // 같은 조각이면 hashchange 가 안 생긴다 — 화면이 그 대화로 다시 가게 직접 알린다
-    if (location.hash === u.hash) window.dispatchEvent(new HashChangeEvent('hashchange'))
-    else location.hash = u.hash
+    openFromWorker(e.data)
   })
 }
 
@@ -68,6 +50,8 @@ async function boot(): Promise<void> {
   // 끊겼거나 PC 가 꺼져 있으면(모름) 일단 잇는다 — 못 열 때마다 다시 짝 여부를 본다(wsApi)
   if ((await checkMe()) === 'unpaired') return showPair()
   startApp()
+  // 이미 알림을 허락했으면 조용히 다시 구독 — 짝 맺기 화면에서 막 정한 때는 하지 않는다(그 자리에서 켰거나 '나중에' 를 골랐다)
+  void resubscribeIfGranted()
 }
 
 async function showPair(): Promise<void> {

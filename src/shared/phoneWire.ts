@@ -31,16 +31,22 @@ export const PHONE_WS_MESSAGE_MAX = 32 * 1024 * 1024
 /** 짝이 끊겨(PC 에서 [끊기]) 서버가 닫은 소켓의 닫기 코드 — 다시 이어도 401 이니 짝 맺기 화면으로 */
 export const PHONE_CLOSE_UNPAIRED = 4401
 
-/** 휴대폰 → PC. call 의 id 는 휴대폰이 고르는 정수(답의 id 로 돌아온다) · visible 은 화면이 보이는지(처음엔 안 보임으로 친다) */
+/**
+ * 휴대폰 → PC. call 의 id 는 휴대폰이 고르는 정수(답의 id 로 돌아온다) · visible 은 화면이 보이는지(처음엔 안 보임으로 친다) ·
+ * ping 은 연결이 살아 있나 묻기(서버는 바로 pong) — 브라우저는 WebSocket ping 틀을 보낼 수 없고, PC 가 잠들거나 망이 바뀌면
+ * 닫힘 신호 없이 반쯤 열린 채로 남는다
+ */
 export type PhoneClientMessage =
   | { t: 'call'; id: number; method: string; args: unknown[] }
   | { t: 'visible'; on: boolean }
+  | { t: 'ping' }
 
-/** PC → 휴대폰. result 는 call 의 답(InvokeResult 꼴 그대로) · event 는 엔진 사건(앱 사건은 오지 않는다) */
+/** PC → 휴대폰. result 는 call 의 답(InvokeResult 꼴 그대로) · event 는 엔진 사건(앱 사건은 오지 않는다) · pong 은 ping 의 답 */
 export type PhoneServerMessage =
   | { t: 'result'; id: number; ok: true; value: unknown }
   | { t: 'result'; id: number; ok: false; error: string }
   | { t: 'event'; name: string; payload: unknown }
+  | { t: 'pong' }
 
 /** HTTP 길의 실패 답 — error 는 화면에 그대로 보일 한국어 */
 export type PhoneApiError = { ok: false; error: string }
