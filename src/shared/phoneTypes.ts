@@ -1,0 +1,63 @@
+// 휴대폰으로 쓰기의 모양 — main(phone/*)·PC 설정 화면·휴대폰 화면이 같이 쓴다. 토큰·해시·구독·VAPID 같은 비밀 칸은 여기 없다(main 의 phoneStore 만)
+
+/** 휴대폰 서버가 127.0.0.1 에서 듣는 포트 기본값 — 쓰이고 있으면 다음 빈 포트를 phone.json 에 저장 */
+export const PHONE_PORT_DEFAULT = 47615
+
+/** 짝 코드(QR)·6자리 숫자가 살아 있는 시간 */
+export const PAIR_TTL_MS = 5 * 60_000
+
+/** 기기 이름 — 이 글자 수(코드 포인트)까지, 비면 기본 이름 */
+export const PHONE_NAME_MAX = 40
+export const PHONE_NAME_DEFAULT = '휴대폰'
+
+export type PhoneSettings = {
+  /** 휴대폰으로 쓰기 */
+  enabled: boolean
+  /** 켜 둔 동안 PC 절전 막기 */
+  keepAwake: boolean
+  /** Windows 를 켜면 두레도 켜기 */
+  openAtLogin: boolean
+  /** 휴대폰 알림 — 승인·질문 / 일을 마쳤어요(PC 의 Windows 알림과 따로) */
+  notify: { asks: boolean; finished: boolean }
+  /** 휴대폰 서버가 127.0.0.1 에서 듣는 포트 */
+  port: number
+}
+
+/** 칸이 없거나 꼴이 틀리면 이 값 */
+export const DEFAULT_PHONE_SETTINGS: Readonly<PhoneSettings> = Object.freeze({
+  enabled: false,
+  keepAwake: true,
+  openAtLogin: false,
+  notify: Object.freeze({ asks: true, finished: false }),
+  port: PHONE_PORT_DEFAULT,
+})
+
+/** 짝 맺은 기기 — 화면에 보여도 되는 칸만(토큰 해시·구독은 phoneStore 의 StoredPhoneDevice) */
+export type PhoneDevice = {
+  id: string
+  name: string
+  createdAt: number
+  /** 마지막 접속 — 모르면 null */
+  lastSeen: number | null
+  /** 알림 구독이 있다 */
+  push: boolean
+}
+
+/**
+ * PC 의 Tailscale 상태(main 의 tailscale.ts 가 만든다) — 깔려 있나 → 로그인됐나 → tailnet 에 https(Serve) 가 켜져 있나 → 준비됨.
+ * 이 기기의 DNS 이름만 담는다(로그인 이름·이메일 같은 사용자 칸은 꺼내지 않는다)
+ */
+export type TailscaleState =
+  | { kind: 'missing' }
+  | { kind: 'logged-out' }
+  | { kind: 'no-https'; enableUrl: string | null }
+  | { kind: 'ready'; dnsName: string }
+
+/** PC 설정의 휴대폰 칸이 받는 것 — connected = 지금 붙은 휴대폰 수, url = 휴대폰 주소(준비 안 됐으면 null) */
+export type PhoneState = {
+  settings: PhoneSettings
+  devices: PhoneDevice[]
+  connected: number
+  tailscale: TailscaleState
+  url: string | null
+}
