@@ -18,7 +18,7 @@ import { pickSubscription, type PhonePushSubscription } from './phoneStore'
 
 // 휴대폰 서버 — 127.0.0.1 에만 HTTP + WebSocket. 바깥 길은 사용자의 `tailscale serve`(tailnet 안 https → 이 포트)가 낸다.
 // 문은 셋: Host(그 ts.net 주소 — PC 의 다른 웹 페이지·DNS 재바인딩을 막는다) · Origin(상태를 바꾸는 요청·WebSocket) ·
-// 기기 토큰 쿠키(dure_phone — HttpOnly·Secure·SameSite=Strict, 쿠키로만). 짝 맺기 화면이 떠야 하므로 정적 파일만 토큰 없이 준다.
+// 기기 토큰 쿠키(__Host-dure_phone — HttpOnly·Secure·SameSite=Strict·Path=/·Domain 없음, 쿠키로만). 짝 맺기 화면이 떠야 하므로 정적 파일만 토큰 없이 준다.
 // 🔴 토큰·짝 코드·숫자·쿠키는 로그·오류 글에 싣지 않는다(이 파일은 아무것도 로그에 쓰지 않는다) · 휴대폰에 가는 오류 글은 한국어, 경로·스택 없이
 
 /** 포트가 쓰이고 있으면 +1 씩 이만큼 해 본다(처음 포트 포함) */
@@ -42,8 +42,15 @@ const SEND_BUFFER_MAX = 16 * 1024 * 1024
 const KICK_GRACE_MS = 2_000
 /** 쿠키 수명 — 브라우저 상한(400일). WebSocket 을 열 때마다 새로 붙여 늘린다 */
 const COOKIE_MAX_AGE_S = 400 * 24 * 60 * 60
-/** 머리글을 받는 시간 상한(Node 기본값) — 몸은 위의 조용한 시간으로 잰다(requestTimeout 0) */
-const HEADERS_TIMEOUT_MS = 60_000
+/** 머리글을 받는 시간 상한 — 조금씩 흘려 보내 연결을 붙잡기(slowloris)를 막는다 · 몸은 위의 조용한 시간으로 잰다(requestTimeout 0) */
+const HEADERS_TIMEOUT_MS = 30_000
+/**
+ * 연결이 이만큼 아무것도 주고받지 않으면 끊는다(server.timeout) — 흘려 받는 올리기·받아 가는 정적 파일은 조용하지 않다.
+ * 읽지 않는 큰 다운로드처럼 보내기가 막힌 채 멈춘 연결도 여기서 끊긴다. WebSocket 은 열린 뒤 ws 가 끈다(대신 ping)
+ */
+const IDLE_MS = 120_000
+/** 동시에 열린 연결 상한(WebSocket 포함) — 넘는 연결은 받자마자 닫는다 */
+const MAX_CONNECTIONS = 64
 
 const E = {
   forbidden: '이 주소로는 열 수 없어요',
@@ -92,7 +99,10 @@ export interface PhoneServerOptions {
   port: number
   /** 휴대폰이 부르는 주소의 Host — 'pc.tailnet.ts.net:47615'(443 이면 포트 없이). 요청마다 묻는다 · null 이면 모두 거절(준비 안 됨) */
   allowedHost: () => string | null
-  /** 짝 맺기 — redeem 은 /api/pair 에서, verify 는 WebSocket 을 열 때·올리기·구독·vapid·me 에서만, touch 는 WebSocket 을 열 때만 */
+  /**
+   * 짝 맺기 — redeem 은 /api/pair 에서, verify 는 WebSocket 을 열 때·올리기·구독·vapid·me 에서만(올리기·구독은 몸을 다 받은 뒤 한 번 더),
+   * touch 는 WebSocket 을 열 때만
+   */
   pairing: Pick<Pairing, 'redeem' | 'verify' | 'touch'>
   /** 휴대폰 디스패처(phoneDispatcher — 허용 목록·inbox 규칙이 거기 있다) */
   dispatch: Dispatch
@@ -112,6 +122,15 @@ export interface PhoneServerOptions {
   onClients?: () => void
   /** e2e 만 — Host `127.0.0.1:<포트>` · Origin `http://127.0.0.1:<포트>` 도 받는다 */
   allowLocal?: boolean
+  /** 시험만 — 상한을 줄여 본다. 안 준 칸은 기본값 */
+  limits?: {
+    /** 연결이 이만큼 조용하면 끊는다(밀리초) — 기본 120초 */
+    idleMs?: number
+    /** 동시에 열린 연결 상한(WebSocket 포함) — 기본 64 */
+    maxConnections?: number
+    /** WebSocket ping 간격(밀리초) — 기본 WS_PING_MS */
+    pingMs?: number
+  }
 }
 
 export interface PhoneServer {
@@ -126,7 +145,8 @@ export interface PhoneServer {
 }
 
 type Gate = { host: string; origin: string; secure: boolean }
-type Auth = { device: PhoneDevice; token: string } | 'none' | 'error'
+type Paired = { device: PhoneDevice; token: string }
+type Auth = Paired | 'none' | 'error'
 type Client = { ws: WebSocket; deviceId: string; visible: boolean; alive: boolean }
 type Body = { kind: 'ok'; body: Buffer } | { kind: 'big'; ended: boolean } | { kind: 'gone' }
 
@@ -224,6 +244,8 @@ function readBody(req: IncomingMessage, max: number, idleMs = BODY_IDLE_MS): Pro
     req.on('data', onData)
     req.once('end', onEnd)
     req.once('close', onClose)
+    // 앞에서 멈춰 둔 몸(올리기 쓰기 실패·쓰기 밀림)이어도 다시 흐르게 — 'data' 를 붙여도 pause() 한 흐름은 스스로 다시 안 흐른다
+    req.resume()
   })
 }
 
@@ -338,6 +360,16 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
     }
   }
 
+  /** 몸을 다 받은 뒤 다시 본다(verify 는 캐시라 싸다) — 받는 사이 PC 에서 [끊기] 했으면 'none' */
+  function stillPaired(a: Paired): 'ok' | 'none' | 'error' {
+    try {
+      return o.pairing.verify(a.token)?.id === a.device.id ? 'ok' : 'none'
+    } catch {
+      return 'error'
+    }
+  }
+  const unpairedAnswer = (still: 'none' | 'error') => (still === 'none' ? [401, E.unpaired] as const : [503, E.busy] as const)
+
   function cspFor(g: Gate): string {
     const ws = `${g.secure ? 'wss' : 'ws'}://${g.host}`
     return [
@@ -367,7 +399,7 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
       const a = authOf(req)
       if (a === 'error') return refuse(req, res, 503, E.busy)
       if (a === 'none') return refuse(req, res, 401, E.unpaired)
-      return p === PHONE_PATHS.upload ? upload(req, res) : subscribe(req, res, a.device)
+      return p === PHONE_PATHS.upload ? upload(req, res, a) : subscribe(req, res, a)
     }
     if (p === PHONE_PATHS.vapid || p === PHONE_PATHS.me) {
       if (method !== 'GET') return refuse(req, res, 405, E.method, { allow: 'GET' })
@@ -412,15 +444,20 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
     sendJson(res, 200, { ok: true, device: deviceView(r.device) }, { 'set-cookie': [cookieFor(r.token)] })
   }
 
-  async function subscribe(req: IncomingMessage, res: ServerResponse, device: PhoneDevice): Promise<void> {
+  async function subscribe(req: IncomingMessage, res: ServerResponse, a: Paired): Promise<void> {
     const b = await readBody(req, SUBSCRIBE_BODY_MAX)
     if (b.kind === 'gone') return void req.destroy()
     if (b.kind === 'big') return sendJson(res, 413, fail(E.tooBig), b.ended ? undefined : CLOSE)
+    const still = stillPaired(a)
+    if (still !== 'ok') {
+      const [status, error] = unpairedAnswer(still)
+      return sendJson(res, status, fail(error))
+    }
     const v = parseJson(b.body)
     const sub = isObj(v) ? pickSubscription(v.subscription) : null
     if (!sub) return sendJson(res, 400, fail(E.subscription))
     try {
-      await o.onSubscribe(device.id, sub)
+      await o.onSubscribe(a.device.id, sub)
     } catch {
       return sendJson(res, 500, fail(E.push))
     }
@@ -429,9 +466,9 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
 
   /**
    * 올리기 — 몸을 inboxDir/<무작위 16 hex>-<안전한 이름> 에 흘려 쓴다(메모리에 모으지 않는다). ATTACH_MAX_BYTES 를 넘으면 쓰기를 끊고
-   * 반쯤 쓴 파일을 지운 뒤 413. 끊기면 파일을 지운다
+   * 반쯤 쓴 파일을 지운 뒤 413. 끊기면 파일을 지운다. 다 받은 뒤 짝을 다시 본다 — 그 사이 끊겼으면 파일을 지우고 401
    */
-  async function upload(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  async function upload(req: IncomingMessage, res: ServerResponse, a: Paired): Promise<void> {
     const name = safeName(queryOf(req.url).get('name') ?? '')
     const declared = Number(req.headers['content-length'])
     if (Number.isFinite(declared) && declared > ATTACH_MAX_BYTES) return sendJson(res, 413, fail(ATTACH_TOO_BIG), CLOSE)
@@ -501,9 +538,15 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
     if (end === 'ok') {
       out.end()
       await outClosed
-      if (!outFailed) return sendJson(res, 200, { ok: true, path: file, name, bytes })
+      if (outFailed) {
+        await removeOurs()
+        return sendJson(res, 500, fail(E.upload))
+      }
+      const still = stillPaired(a)
+      if (still === 'ok') return sendJson(res, 200, { ok: true, path: file, name, bytes })
       await removeOurs()
-      return sendJson(res, 500, fail(E.upload))
+      const [status, error] = unpairedAnswer(still)
+      return sendJson(res, status, fail(error))
     }
     out.destroy()
     await outClosed
@@ -689,6 +732,8 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
       else res.destroy()
     })
   })
+  server.timeout = o.limits?.idleMs ?? IDLE_MS
+  server.maxConnections = o.limits?.maxConnections ?? MAX_CONNECTIONS
   server.on('connection', (s) => {
     sockets.add(s)
     s.on('close', () => sockets.delete(s))
@@ -706,7 +751,7 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
       c.alive = false
       safely(() => c.ws.ping())
     }
-  }, WS_PING_MS)
+  }, o.limits?.pingMs ?? WS_PING_MS)
   pinger.unref()
 
   async function close(): Promise<void> {

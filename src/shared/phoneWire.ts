@@ -2,8 +2,11 @@ import type { PhoneDevice } from './phoneTypes'
 
 // 휴대폰 ↔ PC 휴대폰 서버(src/main/phone/phoneServer.ts) 사이의 꼴 — main 과 휴대폰 진입점(wsApi)이 같이 쓴다. node 를 쓰지 않는다
 
-/** 기기 토큰 쿠키 이름 — HttpOnly 라서 휴대폰 화면의 JS 는 토큰을 볼 수 없다(쿠키로만 받는다, 머리글 토큰 없음) */
-export const PHONE_COOKIE = 'dure_phone'
+/**
+ * 기기 토큰 쿠키 이름 — HttpOnly 라서 휴대폰 화면의 JS 는 토큰을 볼 수 없다(쿠키로만 받는다, 머리글 토큰 없음).
+ * `__Host-` — 브라우저가 Secure · Path=/ · Domain 없음일 때만 받으므로, 같은 ts.net 의 다른 주소가 Domain 쿠키를 심어 덮어쓸 수 없다
+ */
+export const PHONE_COOKIE = '__Host-dure_phone'
 
 /** 서버 길 — ws 는 WebSocket(쿠키 필요), 나머지는 HTTP */
 export const PHONE_PATHS = Object.freeze({
@@ -20,8 +23,11 @@ export const PHONE_PATHS = Object.freeze({
   subscribe: '/api/subscribe',
 })
 
-/** 휴대폰이 보내는 WebSocket 메시지 하나의 상한(바이트) — 넘으면 서버가 소켓을 닫는다(1009) */
-export const PHONE_WS_MESSAGE_MAX = 1024 * 1024
+/**
+ * 휴대폰이 보내는 WebSocket 메시지 하나의 상한(바이트) — 넘으면 서버가 소켓을 닫는다(1009).
+ * 보내는 칸이 그림을 base64 로 담아(5MB 그림 → 7MB 쯤) 넉넉히. 쿠키를 확인한 짝 맺은 기기만 소켓을 열 수 있다
+ */
+export const PHONE_WS_MESSAGE_MAX = 32 * 1024 * 1024
 /** 짝이 끊겨(PC 에서 [끊기]) 서버가 닫은 소켓의 닫기 코드 — 다시 이어도 401 이니 짝 맺기 화면으로 */
 export const PHONE_CLOSE_UNPAIRED = 4401
 
