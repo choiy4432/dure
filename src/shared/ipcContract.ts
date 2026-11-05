@@ -176,7 +176,8 @@ export const CHANNEL = { invoke: 'dure:invoke', event: 'dure:event' } as const
 
 /** preload 안에서 처리해 invoke 로 가지 않는 것 — 사건 받기(on)·File 경로(pathForFile) */
 type PreloadOnly = 'on' | 'pathForFile'
-type ApiMethod = Exclude<keyof DureApi, PreloadOnly>
+/** invoke 로 부르는 메서드 이름 전부 — METHODS[number] | APP_METHODS[number] 와 같다(아래 ALL_COVERED 가 지킨다) */
+export type ApiMethod = Exclude<keyof DureApi, PreloadOnly>
 
 /** 앱 쪽 메서드 — 엔진이 없어도(claude 가 없어도)·엔진 시작 전에도 main 의 AppHost 로 간다 */
 export const APP_METHODS = [
