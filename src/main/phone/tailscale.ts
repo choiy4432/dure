@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { join } from 'node:path'
 import { killTree } from '../../engine/killTree'
 import type { TailscaleState } from '../../shared/phoneTypes'
 import { jsonArgs } from '../claudeCommand'
@@ -8,6 +8,7 @@ import { jsonArgs } from '../claudeCommand'
 // Tailscale 감싸기 — 사용자 PC 의 tailscale CLI 를 불러 상태를 보고, 두레 포트 하나만 `tailscale serve` 로 tailnet 안에 연다.
 // 명령·칸 이름은 실측 그대로(probe28 — .superpowers/sdd/2026-11-04-dure-phone-remote/task-1-report.md).
 // 🔴 `serve reset`·`funnel` 은 쓰지 않는다. 지우는 건 두레가 연 꼴(그 https 포트의 '/' 하나가 http://127.0.0.1:<두레 포트>)일 때만.
+//    켜는 것도 그 https 포트가 비었거나 이미 두레 꼴일 때만(`serve --bg` 는 그 포트의 사용자 길을 덮어쓴다).
 // 🔴 status 출력에서 BackendState·Self.DNSName·CertDomains 길이만 꺼낸다 — User·CurrentTailnet(로그인 이름·이메일이 든다)은 읽지 않는다.
 //    CLI 의 출력은 결과·오류 글·로그에 옮기지 않는다(이 파일은 아무것도 로그에 쓰지 않는다). 셸 없이, 인자는 배열로, 창 없이.
 
@@ -26,6 +27,7 @@ const E = {
   serveFailed: (code: number | null) => `Tailscale 로 휴대폰 길을 열지 못했어요(코드 ${code ?? '없음'})`,
   offFailed: (code: number | null) => `Tailscale 의 휴대폰 길을 닫지 못했어요(코드 ${code ?? '없음'})`,
   serveUnreadable: 'Tailscale 의 serve 설정을 읽지 못했어요',
+  portBusy: '그 포트는 이미 다른 곳에 쓰이고 있어요',
   badPort: '포트 번호가 틀렸어요',
 }
 
@@ -82,7 +84,18 @@ export function runCommand(
       // 끈 뒤 닫히길 기다린다 — 안 닫혀도 상한 뒤엔 돌려준다
       child.once('close', done)
       setTimeout(done, CLOSE_WAIT_MS).unref()
-      kill(pid).catch(() => {})
+      // 나무째 끄기가 실패했으면(던짐·taskkill 이 조용히 실패) 그 프로세스라도 끈다
+      Promise.resolve()
+        .then(() => kill(pid))
+        .catch(() => {})
+        .then(() => {
+          if (child.exitCode !== null || child.signalCode !== null) return
+          try {
+            child.kill()
+          } catch {
+            /* 이미 끝남 */
+          }
+        })
     }
     const timer = setTimeout(() => stop('timeout'), o.timeoutMs)
     const check = (): void => {
@@ -135,6 +148,7 @@ const ENABLE_URL = /https:\/\/login\.tailscale\.com\/f\/serve\?[A-Za-z0-9._~%=&+
 /**
  * Serve 가 꺼진 tailnet 에서 `serve --bg` 가 찍는 켜기 링크(`https://login.tailscale.com/f/serve?node=…`).
  * 아직 도는 중(ended 아님)이면 링크 뒤에 글자가 더 와야(줄 바꿈 등) 끝까지 받은 것으로 친다.
+ * stdout·stderr 는 따로 넣는다 — 둘을 이어 붙이면 그 사이 글자가 '링크 뒤 글자' 가 되어 덜 받은 링크를 끝으로 친다.
  */
 export function enableUrlIn(text: string, ended: boolean): string | null {
   const m = ENABLE_URL.exec(text)
@@ -146,17 +160,26 @@ export function enableUrlIn(text: string, ended: boolean): string | null {
 /** `serve --bg` 의 결과 — 켜짐, 또는 tailnet 의 Serve 가 꺼져 있어 켜기 링크(화면이 그 링크를 열게 한다) */
 export type ServeOnResult = { kind: 'on' } | Extract<TailscaleState, { kind: 'no-https' }>
 
+/*
+ * dnsName(이 기기 이름 — status() 의 ready.dnsName, Task 7 은 켤 때 적어 둔 이름)을 주면 두레 길은 그 이름의 길 하나뿐이다:
+ * 그 https 포트의 Web 항목이 `<dnsName>:<https>` 하나뿐이어야 한다(기기 이름이 바뀌어 남은 예전 이름의 길·다른 이름의 길은 남의 것).
+ * 안 주면 그 https 포트의 Web 항목이 모두 두레 꼴이면 두레 것.
+ */
 export interface Tailscale {
   /** 깔렸나 → 로그인됐나 → https(Serve) 가 켜졌나 → 준비됨. 던지지 않는다 */
   status(): Promise<TailscaleState>
-  /** `serve --bg --https=<httpsPort> http://127.0.0.1:<localPort>` — 실패·시간 초과는 한국어 오류로 던진다 */
-  serveOn(httpsPort: number, localPort: number): Promise<ServeOnResult>
-  /** 그 https 포트가 두레 길(→ http://127.0.0.1:<localPort>)이면 `serve --https=<httpsPort> off`. 없거나 남의 것이면 그대로. 실패는 던진다 */
-  serveOff(httpsPort: number, localPort: number): Promise<void>
+  /**
+   * `serve --bg --https=<httpsPort> http://127.0.0.1:<localPort>`. 먼저 serve 설정을 읽어, 그 https 포트가 비었거나
+   * 이미 두레 길(→ 그 localPort)일 때만 켠다 — 남이 쓰면 '그 포트는 이미 다른 곳에 쓰이고 있어요'.
+   * 설정을 못 읽거나 실패·시간 초과는 한국어 오류로 던진다
+   */
+  serveOn(httpsPort: number, localPort: number, dnsName?: string): Promise<ServeOnResult>
+  /** 그 https 포트가 두레 길(→ http://127.0.0.1:<localPort>)이면 `serve --https=<httpsPort> off` 하고 true. 없거나 남의 것이면 그대로 false. 설정을 못 읽거나 끄기 실패는 던진다 */
+  serveOff(httpsPort: number, localPort: number, dnsName?: string): Promise<boolean>
   /** serve 설정(앞쪽 세션 포함)에 그 https 포트가 없다 — 읽지 못하면 false */
   httpsPortFree(httpsPort: number): Promise<boolean>
   /** 비정상 종료로 남은 두레 길만 끈다(serveOff 와 같은 규칙) — 껐으면 true. 던지지 않는다 */
-  cleanup(httpsPort: number, localPort: number): Promise<boolean>
+  cleanup(httpsPort: number, localPort: number, dnsName?: string): Promise<boolean>
 }
 
 function checkPort(p: number): void {
@@ -169,12 +192,22 @@ function portUsedIn(conf: Record<string, unknown>, port: number): boolean {
   return isRecord(conf.Web) && Object.keys(conf.Web).some((k) => k.endsWith(`:${port}`))
 }
 
-/** 두레가 연 꼴인가 — TCP[<https>] = { HTTPS: true } 이고, 그 포트의 Web 항목이 '/' 하나뿐이며 http://127.0.0.1:<local> 로 간다 */
-function oursIn(conf: Record<string, unknown>, httpsPort: number, localPort: number): boolean {
+/** 앞쪽(foreground) `tailscale serve` 세션이 그 포트를 쥐고 있나 */
+function foregroundUses(conf: Record<string, unknown>, port: number): boolean {
+  const fg = isRecord(conf.Foreground) ? Object.values(conf.Foreground) : []
+  return fg.some((s) => isRecord(s) && portUsedIn(s, port))
+}
+
+/**
+ * 두레가 연 꼴인가 — TCP[<https>] = { HTTPS: true } 이고, 그 포트의 Web 항목이 '/' 하나뿐이며 http://127.0.0.1:<local> 로 간다.
+ * dnsName 을 주면 그 포트의 Web 항목이 `<dnsName>:<https>` 하나뿐이어야 한다(대소문자는 가리지 않음)
+ */
+function oursIn(conf: Record<string, unknown>, httpsPort: number, localPort: number, dnsName?: string): boolean {
   const tcp = isRecord(conf.TCP) ? conf.TCP[String(httpsPort)] : undefined
   if (!isRecord(tcp) || tcp.HTTPS !== true) return false
   const webs = isRecord(conf.Web) ? Object.entries(conf.Web).filter(([k]) => k.endsWith(`:${httpsPort}`)) : []
   if (webs.length === 0) return false
+  if (dnsName !== undefined && (webs.length !== 1 || webs[0][0].toLowerCase() !== `${dnsName.toLowerCase()}:${httpsPort}`)) return false
   const target = `http://127.0.0.1:${localPort}`
   return webs.every(([, w]) => {
     const handlers = isRecord(w) && isRecord(w.Handlers) ? w.Handlers : null
@@ -188,25 +221,30 @@ export function createTailscale(o: { command: string; args: string[]; run?: Runn
   const run: Runner = o.run ?? ((command, args, ro) => runCommand(command, args, ro))
   const cli = (args: string[], ro: RunOptions): Promise<RunResult> => run(o.command, [...o.args, ...args], ro)
 
-  /** `serve status --json` — 못 읽으면 null */
-  const serveConfig = async (): Promise<Record<string, unknown> | null> => {
+  /** `serve status --json` — 못 읽으면 한국어 오류로 던진다(CLI 출력은 옮기지 않음) */
+  const readServeConfig = async (): Promise<Record<string, unknown>> => {
     const r = await cli(['serve', 'status', '--json'], { timeoutMs: TAILSCALE_STATUS_TIMEOUT_MS })
-    if (r.kind !== 'exit' || r.code !== 0) return null
+    if (r.kind === 'missing') throw new Error(E.missing)
+    if (r.kind !== 'exit') throw new Error(E.timeout)
+    if (r.code !== 0) throw new Error(E.serveUnreadable)
+    let j: unknown
     try {
-      const j: unknown = JSON.parse(r.stdout)
-      return isRecord(j) ? j : null
+      j = JSON.parse(r.stdout)
     } catch {
-      return null
+      throw new Error(E.serveUnreadable)
     }
+    if (!isRecord(j)) throw new Error(E.serveUnreadable)
+    return j
   }
+  /** `serve status --json` — 못 읽으면 null */
+  const serveConfig = (): Promise<Record<string, unknown> | null> => readServeConfig().catch(() => null)
 
   /** 두레 길이면 끈다 — 껐으면 true, 없거나 남의 것이면 false. 설정을 못 읽거나 끄기가 실패하면 던진다 */
-  const offIfOurs = async (httpsPort: number, localPort: number): Promise<boolean> => {
+  const offIfOurs = async (httpsPort: number, localPort: number, dnsName?: string): Promise<boolean> => {
     checkPort(httpsPort)
     checkPort(localPort)
-    const conf = await serveConfig()
-    if (!conf) throw new Error(E.serveUnreadable)
-    if (!oursIn(conf, httpsPort, localPort)) return false
+    const conf = await readServeConfig()
+    if (!oursIn(conf, httpsPort, localPort, dnsName)) return false
     const r = await cli(['serve', `--https=${httpsPort}`, 'off'], { timeoutMs: TAILSCALE_STATUS_TIMEOUT_MS })
     if (r.kind === 'missing') throw new Error(E.missing)
     if (r.kind !== 'exit') throw new Error(E.timeout)
@@ -222,38 +260,39 @@ export function createTailscale(o: { command: string; args: string[]; run?: Runn
       return stateFromStatus(r.stdout) ?? { kind: 'missing' }
     },
 
-    async serveOn(httpsPort, localPort) {
+    async serveOn(httpsPort, localPort, dnsName) {
       checkPort(httpsPort)
       checkPort(localPort)
+      // `serve --bg` 는 그 포트의 사용자 길을 덮어쓴다 — 비었거나 이미 두레 길일 때만(앞쪽 세션이 쥐었으면 안 됨)
+      const conf = await readServeConfig()
+      const free = !portUsedIn(conf, httpsPort) || oursIn(conf, httpsPort, localPort, dnsName)
+      if (!free || foregroundUses(conf, httpsPort)) throw new Error(E.portBusy)
       const r = await cli(['serve', '--bg', `--https=${httpsPort}`, `http://127.0.0.1:${localPort}`], {
         timeoutMs: TAILSCALE_SERVE_TIMEOUT_MS,
-        until: (stdout, stderr) => enableUrlIn(`${stdout}\n${stderr}`, false) !== null,
+        until: (stdout, stderr) => (enableUrlIn(stdout, false) ?? enableUrlIn(stderr, false)) !== null,
       })
       if (r.kind === 'missing') throw new Error(E.missing)
-      const enableUrl = enableUrlIn(`${r.stdout}\n${r.stderr}`, true)
+      const enableUrl = enableUrlIn(r.stdout, true) ?? enableUrlIn(r.stderr, true)
       if (enableUrl) return { kind: 'no-https', enableUrl }
       if (r.kind !== 'exit') throw new Error(E.timeout)
       if (r.code !== 0) throw new Error(E.serveFailed(r.code))
       return { kind: 'on' }
     },
 
-    async serveOff(httpsPort, localPort) {
-      await offIfOurs(httpsPort, localPort)
+    serveOff(httpsPort, localPort, dnsName) {
+      return offIfOurs(httpsPort, localPort, dnsName)
     },
 
     async httpsPortFree(httpsPort) {
       checkPort(httpsPort)
       const conf = await serveConfig()
       if (!conf) return false
-      if (portUsedIn(conf, httpsPort)) return false
-      // 앞쪽(foreground) `tailscale serve` 세션도 그 포트를 쥐고 있을 수 있다
-      const fg = isRecord(conf.Foreground) ? Object.values(conf.Foreground) : []
-      return !fg.some((s) => isRecord(s) && portUsedIn(s, httpsPort))
+      return !portUsedIn(conf, httpsPort) && !foregroundUses(conf, httpsPort)
     },
 
-    async cleanup(httpsPort, localPort) {
+    async cleanup(httpsPort, localPort, dnsName) {
       try {
-        return await offIfOurs(httpsPort, localPort)
+        return await offIfOurs(httpsPort, localPort, dnsName)
       } catch {
         return false
       }
@@ -268,9 +307,13 @@ function envGet(env: Record<string, string | undefined>, name: string): string |
   return key === undefined ? undefined : env[key]
 }
 
+/** 완전한 드라이브 경로(`C:\…`)인가 — 상대(`.`·`bin`)·루트 상대(`\x`, 지금 드라이브)·드라이브 상대(`C:x`)·UNC 는 아님 */
+const fullDrivePath = (p: string): boolean => /^[A-Za-z]:[\\/]/.test(p)
+
 /**
  * tailscale CLI — DURE_TAILSCALE_COMMAND (+ DURE_TAILSCALE_ARGS, JSON 배열)로 시험·개발은 가짜.
- * 아니면 PATH 의 tailscale.exe → 없으면 %ProgramFiles%\Tailscale\tailscale.exe(실측: PATH 에 없을 수 있다). 있는지는 status() 가 본다
+ * 아니면 %ProgramFiles%\Tailscale\tailscale.exe 먼저(관리자만 쓰는 폴더 · 실측: PATH 에 없을 수 있다) → 없으면 PATH 의 tailscale.exe
+ * (완전한 드라이브 경로 폴더만). 둘 다 없으면 ProgramFiles 쪽 경로를 돌려준다 — 있는지는 status() 가 본다
  */
 export function resolveTailscaleCommand(
   env: Record<string, string | undefined>,
@@ -278,11 +321,15 @@ export function resolveTailscaleCommand(
 ): TailscaleCommand {
   const override = env.DURE_TAILSCALE_COMMAND
   if (override) return { command: override, args: jsonArgs(env.DURE_TAILSCALE_ARGS, 'DURE_TAILSCALE_ARGS') }
+  const pf = envGet(env, 'ProgramFiles')?.trim()
+  const installed = join(pf && fullDrivePath(pf) ? pf : 'C:\\Program Files', 'Tailscale', 'tailscale.exe')
+  if (exists(installed)) return { command: installed, args: [] }
   for (const raw of (envGet(env, 'PATH') ?? '').split(';')) {
     const dir = raw.trim().replace(/^"(.*)"$/, '$1')
-    if (!dir || !isAbsolute(dir)) continue // 상대 경로(. 등)는 지금 폴더에 심어 둔 exe 를 부를 수 있다 — 건너뜀
+    // 상대·루트 상대·드라이브 상대는 지금 폴더·드라이브에 따라 심어 둔 exe 를 부를 수 있다 — 건너뜀
+    if (!fullDrivePath(dir)) continue
     const p = join(dir, 'tailscale.exe')
     if (exists(p)) return { command: p, args: [] }
   }
-  return { command: join(envGet(env, 'ProgramFiles') ?? 'C:\\Program Files', 'Tailscale', 'tailscale.exe'), args: [] }
+  return { command: installed, args: [] }
 }

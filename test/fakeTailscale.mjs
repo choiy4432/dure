@@ -17,6 +17,7 @@
 //   FAKE_TAILSCALE_LOG        받은 인자를 한 줄에 하나씩 JSON 으로: {"argv":[…],"pid":<이 프로세스>}
 //   FAKE_TAILSCALE_ROOT       serve 설정을 <root>/serve.json 에 둔다(미리 사용자 항목을 넣어 둘 수 있다). serve 명령에 필요
 //   FAKE_TAILSCALE_SERVE_FAIL 그 종료 코드로 serve --bg 가 실패한다 — stderr 에 사용자 이름·경로가 든 글(두레가 그대로 옮기지 않는지 보려고)
+//   FAKE_TAILSCALE_SPLIT_MS   no-https 의 켜기 링크를 노드 ID 가운데서 둘로 나눠, 그 밀리초 뒤에 나머지를 찍는다(출력이 쪼개져 오는 꼴)
 // 이 기기 이름은 늘 fake-pc.tail0000.ts.net, 사용자는 someone@example.com(가짜 — 결과·오류·로그에 새지 않는지 보려고 status 에 넣는다).
 import fs from 'node:fs';
 import path from 'node:path';
@@ -115,7 +116,14 @@ function main() {
       return fail(Number(process.env.FAKE_TAILSCALE_SERVE_FAIL), `fake failure for ${EMAIL} at C:\\Users\\someone\\AppData\\Local\\Tailscale\\serve.json`);
     }
     if (state === 'no-https') {
-      out(`Serve is not enabled on your tailnet.\nTo enable, visit:\n\n         ${ENABLE_URL}\n\n`);
+      const msg = `Serve is not enabled on your tailnet.\nTo enable, visit:\n\n         ${ENABLE_URL}\n\n`;
+      const split = Number(process.env.FAKE_TAILSCALE_SPLIT_MS || 0);
+      if (split > 0) {
+        // 파이프가 출력을 쪼개 보낸 꼴 — 노드 ID 가운데(…node=nFAKE000 | 0CNTRL…)에서 나눈다
+        const cut = msg.indexOf(ENABLE_URL) + ENABLE_URL.length - 6;
+        out(msg.slice(0, cut));
+        setTimeout(() => out(msg.slice(cut)), split);
+      } else out(msg);
       // 진짜는 사용자가 켤 때까지 기다린다 — 두레가 끈다
       setTimeout(() => fail(1, '가짜 tailscale: 아무도 끄지 않아 60초 뒤 끝냄'), 60_000);
       return;
