@@ -6392,6 +6392,12 @@ code {
   width: 520px;
 }
 
+/* 겹쳐 뜬 대화상자(설정 → 휴대폰 → 짝 맺기·끊기 확인)의 막은 한 겹 — 맨 아래 막만 어둡고 위 막은 투명(바깥 누르기는 그대로 받는다).
+   나가는 중(inert)인 아래 막은 세지 않는다 — 설정을 닫고 바로 뜨는 확인 창은 제 막을 그린다 */
+body > .dlg-bd:not([inert]) ~ .dlg-bd {
+  background: transparent;
+}
+
 /* 한국어는 낱말 사이에서만 줄을 바꾼다(주소 칸은 .phn-url 이 아무 데서나) */
 .phn-dlg,
 .phn-pair-dlg {
@@ -6515,17 +6521,48 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* 휴대폰 주소 — 주소(끌어 고를 수 있음) + 복사 결과 글 + [주소 복사] */
 .phn-url {
+  display: flex;
+  align-items: center;
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg);
-  font-family: var(--mono);
   font-size: 12px;
   line-height: 18px;
   color: var(--text-3);
+}
+
+.phn-url-t {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
   overflow-wrap: anywhere;
   user-select: text;
+}
+
+/* 빈 동안엔 자리를 차지하지 않는다(알림 자리라 숨기지는 않는다) */
+.phn-copied {
+  flex: none;
+  font-weight: 500;
+  color: var(--ok-text);
+  white-space: nowrap;
+}
+
+.phn-copied:not(:empty) {
+  margin-left: 8px;
+}
+
+.phn-copied.bad {
+  color: var(--warn-text);
+}
+
+.ib.phn-copy {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin: -3px -4px -3px 4px;
 }
 
 .phn-tip {

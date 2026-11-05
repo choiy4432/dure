@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, Circle, CircleAlert, ExternalLink, Smartphone } from 'lucide-react'
+import { Check, Circle, CircleAlert, Copy, ExternalLink, Smartphone } from 'lucide-react'
 import type { PhoneDevice, PhoneSettingsChange, PhoneState } from '../../shared/phoneTypes'
 import { useDure } from '../state/store'
 import { useDialogFocus } from '../lib/dialog'
@@ -21,6 +21,8 @@ export const PHONE = {
   switchName: '휴대폰으로 쓰기',
   on: '켜짐',
   off: '꺼짐',
+  /** 머리 스위치의 이름 — 보이는 글(켜짐/꺼짐)을 이름에 담는다(WCAG 2.5.3 Label in Name) */
+  switchLabel: (on: boolean) => `휴대폰으로 쓰기 — ${on ? '켜짐' : '꺼짐'}`,
   desc: '밖에서 휴대폰으로 에이전트 일을 보고 승인해요. 내 Tailscale 기기에서만 열려요.',
   rowDesc: '밖에서 휴대폰으로 에이전트 일을 보고 승인해요',
   open: '열기',
@@ -47,6 +49,9 @@ export const PHONE = {
   recheck: '다시 확인',
   rechecking: '확인하는 중…',
   tip: 'Tailscale 대시보드에서 PC 이름을 dure 처럼 바꾸면 휴대폰 주소가 짧아져요',
+  copyUrl: '주소 복사',
+  copied: '복사했어요',
+  copyFailed: '복사하지 못했어요',
   // 기기
   devices: '짝 맺은 휴대폰',
   noDevices: '아직 짝 맺은 휴대폰이 없어요',
@@ -71,8 +76,10 @@ export const PHONE = {
   noState: '휴대폰 연결 상태를 아직 받지 못했어요',
   // 상태 한 줄(설정 칸 · 위 띠 알약)
   status: (p: PhoneState) => (!p.settings.enabled ? '꺼짐' : routeOpen(p) ? `켜짐 · ${p.connected}대 접속 중` : '켜짐 · 아직 안 열렸어요'),
+  /** 위 띠 알약의 보이는 글 = 이름 */
   pill: (n: number) => `휴대폰 · ${n}`,
-  pillName: (p: PhoneState) => (routeOpen(p) ? `휴대폰 연결 켜짐 · ${p.connected}대 접속 중` : '휴대폰 연결 켜짐 · 아직 안 열렸어요'),
+  /** 위 띠 알약의 긴 말 — 설명(aria-describedby)·툴팁 */
+  pillDesc: (p: PhoneState) => (routeOpen(p) ? `휴대폰 연결 켜짐 · ${p.connected}대 접속 중` : '휴대폰 연결 켜짐 · 아직 안 열렸어요'),
 } as const
 
 /** Tailscale 내려받기 — 기본 브라우저로 */
@@ -84,6 +91,11 @@ export const PHONE_LOGIN_OFFERED_KEY = 'dure.phoneLoginOffered'
 /** 휴대폰 주소가 열려 있고 까닭(문제)이 없다 — 초록 점 */
 export function routeOpen(p: PhoneState): boolean {
   return p.url !== null && p.problem === null
+}
+
+/** 상태 점 — 꺼짐 회색(s) · 켰는데 아직 안 열렸거나 까닭이 있음 앰버(a) · 열림 초록(g) */
+function dotOf(p: PhoneState): 's' | 'a' | 'g' {
+  return !p.settings.enabled ? 's' : routeOpen(p) ? 'g' : 'a'
 }
 
 /** 기본 브라우저로 — 새 창 요청을 main 이 받아 연다(http·https 만, 창 안에서는 옮겨 가지 않는다) */
@@ -118,7 +130,7 @@ export function PhoneField({ onOpen }: { onOpen: () => void }) {
       <span className="fld-l">{PHONE.title}</span>
       <div className="fld-row phn-row">
         <span className={`phn-stat${on && ok ? ' on' : ''}`} id={`${id}-s`}>
-          {on && <span className={`dot ${ok ? 'g' : 's'}`} aria-hidden="true" />}
+          <span className={`dot ${dotOf(p)}`} aria-hidden="true" />
           {PHONE.status(p)}
         </span>
         <button type="button" className="btn sec sm" aria-label={PHONE.openName} aria-describedby={`${id}-s ${id}-d`} onClick={onOpen}>
@@ -132,18 +144,26 @@ export function PhoneField({ onOpen }: { onOpen: () => void }) {
   )
 }
 
-/** 위 띠 알약(시안 D1) — 휴대폰 연결이 켜져 있을 때만, 설정 톱니 왼쪽. 초록 점 = 주소가 열림, 숫자 = 접속 중인 기기 */
+/**
+ * 위 띠 알약(시안 D1) — 휴대폰 연결이 켜져 있을 때만, 설정 톱니 왼쪽. 초록 점 = 주소가 열림, 앰버 = 아직 안 열렸거나 까닭, 숫자 = 접속 중인 기기.
+ * 이름은 보이는 글('휴대폰 · N') 그대로, 긴 말은 설명·툴팁으로
+ */
 export function PhonePill({ onOpen }: { onOpen: () => void }) {
   const p = useDure(s => s.app.phone)
+  const id = useId()
   if (!p?.settings.enabled) return null
-  const ok = routeOpen(p)
-  const name = PHONE.pillName(p)
+  const desc = PHONE.pillDesc(p)
   return (
-    <button type="button" className="phn-top" title={name} aria-label={name} onClick={onOpen}>
-      <span className={`dot ${ok ? 'g' : 's'}`} aria-hidden="true" />
-      <Smartphone className="i" size={14} aria-hidden="true" />
-      {PHONE.pill(p.connected)}
-    </button>
+    <>
+      <span id={id} hidden>
+        {desc}
+      </span>
+      <button type="button" className="phn-top" title={desc} aria-describedby={id} onClick={onOpen}>
+        <span className={`dot ${dotOf(p)}`} aria-hidden="true" />
+        <Smartphone className="i" size={14} aria-hidden="true" />
+        {PHONE.pill(p.connected)}
+      </button>
+    </>
   )
 }
 
@@ -162,11 +182,14 @@ function Frame({ onClose }: { onClose: () => void }) {
   const descId = useId()
   useMotion(backdrop, MOTION.backdrop)
   useMotion(ref, MOTION.dialog)
-  // 처음 초점은 창 자체 — 켜기 스위치에 두면 Space·Enter 한 번에 연결이 꺼질 수 있다. Tab 이 첫 단추부터 돈다
-  useDialogFocus(ref, onClose, () => null)
+  // 처음 초점은 창 자체 — 켜기 스위치에 두면 Space·Enter 한 번에 연결이 꺼질 수 있다. Tab 이 첫 단추부터 돈다.
+  // 위 띠 알약에서 열었는데 그사이 껐으면 알약이 없다 — 닫을 때 초점은 그 옆 설정 톱니로
+  useDialogFocus(ref, onClose, () => null, () => document.querySelector<HTMLElement>('[data-tour="settings-gear"]'))
 
-  /** 보낸 뒤 사건을 기다리는 스위치 — 그동안 바라는 쪽으로 보이고 다시 누를 수 없다 */
+  /** 보낸 뒤 사건을 기다리는 스위치 — 그동안 바라는 쪽으로 보인다(켜기 스위치 말고는 다시 누를 수 없다) */
   const [pending, setPending] = useState<Partial<Record<SwitchKey, boolean>>>({})
+  /** 스위치마다 보낸 차례 — 앞서 보낸 것이 늦게 끝나도 뒤에 보낸 것의 기다림 표시를 지우거나 그 실패를 띄우지 않게 */
+  const sent = useRef<Partial<Record<SwitchKey, number>>>({})
   const [error, setError] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
   const [pairOpen, setPairOpen] = useState(false)
@@ -201,15 +224,14 @@ function Frame({ onClose }: { onClose: () => void }) {
     void recheck()
   }, [p]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 바깥(브라우저·Tailscale)에 다녀와 창으로 돌아오면 — 아직 안 됐으면 다시 본다([다시 확인]을 누르지 않아도)
+  // 바깥(브라우저·Tailscale)에 다녀와 창으로 돌아오면 — 아직 안 됐거나 까닭이 남았으면 다시 본다([다시 확인]을 누르지 않아도)
   const latest = useRef({ p, checking, recheck })
   latest.current = { p, checking, recheck }
   useEffect(() => {
     const onFocus = () => {
       const { p: now, checking: busy, recheck: again } = latest.current
       if (!now || busy) return
-      const stuck = now.tailscale?.kind !== 'ready' || (now.settings.enabled && now.url === null)
-      if (stuck) void again()
+      if (stuck(now)) void again()
     }
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
@@ -247,19 +269,28 @@ function Frame({ onClose }: { onClose: () => void }) {
   }
   const shown = (k: SwitchKey) => pending[k] ?? actual[k]
 
-  /** 스위치 하나 — 바뀐 칸만 바로 보낸다. 실패하면 되돌아가고(사건이 없으니 그대로) 까닭을 보인다 */
+  /**
+   * 스위치 하나 — 바뀐 칸만 바로 보낸다. 실패하면 되돌아가고(사건이 없으니 그대로) 까닭을 보인다.
+   * 휴대폰 연결 켜기는 오래 걸린다(Tailscale 확인·길 열기 10~30초) — 그동안에도 다시 눌러 끌 수 있다(main 은 끄기를 바로 적고 켜기를 멈춘다).
+   * 다른 스위치는 보낸 것이 끝날 때까지 한 번만
+   */
   const flip = async (k: SwitchKey) => {
-    if (pending[k] !== undefined) return
+    if (pending[k] !== undefined && k !== 'enabled') return
     const to = !shown(k)
     const change: PhoneSettingsChange =
       k === 'asks' ? { notify: { asks: to } } : k === 'finished' ? { notify: { finished: to } } : { [k]: to }
     const also: Partial<Record<SwitchKey, boolean>> = {}
     // 처음 켤 때는 'Windows 를 켜면 두레도 켜기'도 켬으로(업데이트로 PC 가 다시 켜져도 이어지게) — 한 번만 제안한다
-    const offer = k === 'enabled' && to && !s.openAtLogin && !loginOffered()
+    const offer = k === 'enabled' && to && !shown('openAtLogin') && !loginOffered()
     if (offer) {
       change.openAtLogin = true
       also.openAtLogin = true
     }
+    const keys = [k, ...(Object.keys(also) as SwitchKey[])]
+    const mine: Partial<Record<SwitchKey, number>> = {}
+    for (const key of keys) mine[key] = sent.current[key] = (sent.current[key] ?? 0) + 1
+    /** 이 칸에 뒤에 보낸 것이 없다 */
+    const last = (key: SwitchKey) => sent.current[key] === mine[key]
     setError(null)
     setPending(cur => ({ ...cur, [k]: to, ...also }))
     try {
@@ -267,13 +298,13 @@ function Frame({ onClose }: { onClose: () => void }) {
       if (k === 'enabled' && to) markLoginOffered()
       if (offer && alive.current) setLoginOfferedNow(true)
     } catch (e) {
-      if (alive.current) setError(errorMessage(e))
+      // 켜는 중에 껐으면 앞의 켜기 실패는 지난 일 — 띄우지 않는다
+      if (alive.current && last(k)) setError(errorMessage(e))
     } finally {
       if (alive.current)
         setPending(cur => {
           const next = { ...cur }
-          delete next[k]
-          for (const a of Object.keys(also) as SwitchKey[]) delete next[a]
+          for (const key of keys) if (last(key)) delete next[key]
           return next
         })
     }
@@ -320,7 +351,7 @@ function Frame({ onClose }: { onClose: () => void }) {
               role="switch"
               aria-checked={enabled}
               aria-busy={pending.enabled !== undefined || undefined}
-              aria-label={PHONE.switchName}
+              aria-label={PHONE.switchLabel(enabled)}
               onClick={() => void flip('enabled')}
             >
               <span>{enabled ? PHONE.on : PHONE.off}</span>
@@ -341,7 +372,7 @@ function Frame({ onClose }: { onClose: () => void }) {
           <h3 className="phn-sub">{PHONE.devices}</h3>
           <Devices p={p} onUnpair={setUnpairing} />
           <div className="phn-pair">
-            <button type="button" className="btn pri" disabled={p.url === null} onClick={() => setPairOpen(true)}>
+            <button type="button" className="btn pri" data-pair disabled={p.url === null} onClick={() => setPairOpen(true)}>
               {PHONE.pair}
             </button>
             {p.url === null && <span className="fld-note">{PHONE.pairWait}</span>}
@@ -384,6 +415,8 @@ function Frame({ onClose }: { onClose: () => void }) {
           setUnpairing(null)
         }}
         onCancel={() => setUnpairing(null)}
+        // 끊으면 그 줄([끊기])이 없어진다 — [휴대폰 짝 맺기]로(막혀 있으면 휴대폰 창으로)
+        returnFocus={() => ref.current?.querySelector<HTMLElement>('[data-pair]')}
       />
     </>
   )
@@ -429,11 +462,17 @@ function stepsOf(p: PhoneState, enabled: boolean, checking: boolean): Step[] {
 
 const STEP_ICON: Record<StepState, typeof Check> = { ok: Check, need: CircleAlert, todo: Circle }
 
+/**
+ * 아직 다 안 됐다 — [다시 확인]을 보이고, 창으로 돌아오면 저절로 다시 본다.
+ * Tailscale 이 준비 전이거나(깔고·로그인하고·Serve 를 켠 뒤) · 까닭이 남았거나(꺼진 채 전에 연 길을 못 정리함 등) · 켰는데 주소가 안 열렸을 때
+ */
+function stuck(p: PhoneState, enabled = p.settings.enabled): boolean {
+  return p.tailscale?.kind !== 'ready' || p.problem !== null || (enabled && p.url === null)
+}
+
 function Checklist({ p, enabled, checking, onRecheck }: { p: PhoneState; enabled: boolean; checking: boolean; onRecheck: () => void }) {
   const steps = stepsOf(p, enabled, checking)
-  const ready = p.tailscale?.kind === 'ready'
-  // 다시 확인 — 아직 안 됐거나(Tailscale 을 깔고·로그인하고·Serve 를 켠 뒤) 켰는데 주소가 안 열렸을 때
-  const canRecheck = !ready || (enabled && p.url === null)
+  const canRecheck = stuck(p, enabled)
   return (
     <div className="phn-panel" aria-live="polite">
       <ul className="phn-steps">
@@ -454,7 +493,7 @@ function Checklist({ p, enabled, checking, onRecheck }: { p: PhoneState; enabled
         })}
       </ul>
       {p.problem && <p className="phn-problem">{p.problem}</p>}
-      {p.url !== null && <div className="phn-url">{p.url}</div>}
+      {p.url !== null && <UrlRow url={p.url} />}
       {/* 주소가 보일 때만 — 그 주소를 짧게 하는 법 */}
       {p.url !== null && <p className="phn-tip">{PHONE.tip}</p>}
       {canRecheck && (
@@ -462,6 +501,38 @@ function Checklist({ p, enabled, checking, onRecheck }: { p: PhoneState; enabled
           {checking ? PHONE.rechecking : PHONE.recheck}
         </button>
       )}
+    </div>
+  )
+}
+
+/** '복사했어요'·'복사하지 못했어요' 를 보이는 시간 */
+const COPIED_MS = 1500
+
+/** 휴대폰 주소 한 줄 — 주소(mono, 끌어 고를 수 있음) + [주소 복사]. 결과는 그 옆 글로(늘 붙어 있는 status 라 읽힌다) */
+function UrlRow({ url }: { url: string }) {
+  const [said, setSaid] = useState<'' | 'done' | 'fail'>('')
+  useEffect(() => {
+    if (!said) return
+    const t = setTimeout(() => setSaid(''), COPIED_MS)
+    return () => clearTimeout(t)
+  }, [said])
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url)
+      setSaid('done')
+    } catch {
+      setSaid('fail') // 창이 초점을 잃었을 때 등 — 주소를 끌어 골라 복사할 수 있다
+    }
+  }
+  return (
+    <div className="phn-url">
+      <span className="phn-url-t">{url}</span>
+      <span className={`phn-copied${said === 'fail' ? ' bad' : ''}`} role="status">
+        {said === 'done' ? PHONE.copied : said === 'fail' ? PHONE.copyFailed : ''}
+      </span>
+      <button type="button" className="ib phn-copy" title={PHONE.copyUrl} aria-label={PHONE.copyUrl} onClick={() => void copy()}>
+        {said === 'done' ? <Check className="i" size={14} aria-hidden="true" /> : <Copy className="i" size={14} aria-hidden="true" />}
+      </button>
     </div>
   )
 }

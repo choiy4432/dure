@@ -64,6 +64,14 @@ async function renderTopBar(onPhone = () => {}) {
 
 const pill = () => document.querySelector<HTMLButtonElement>('.phn-top')
 
+/** aria-describedby 가 가리키는 글 */
+const described = (el: Element) =>
+  (el.getAttribute('aria-describedby') ?? '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(id => document.getElementById(id)?.textContent ?? '')
+    .join(' ')
+
 describe('TopBar 휴대폰 알약', () => {
   it('켜짐·접속 수 표시', async () => {
     const onPhone = vi.fn()
@@ -73,18 +81,20 @@ describe('TopBar 휴대폰 알약', () => {
     // 꺼져 있으면 없다
     expect(pill()).toBeNull()
 
-    // 켜졌지만 길이 아직 — 회색 점
+    // 켜졌지만 길이 아직 — 앰버 점 · 이름은 보이는 글 그대로(WCAG 2.5.3), 긴 말은 설명으로
     emit({ settings: { ...phone.settings, enabled: true } })
     expect(pill()).not.toBeNull()
     expect(pill()!.textContent).toBe('휴대폰 · 0')
-    expect(pill()!.querySelector('.dot.s')).not.toBeNull()
-    expect(pill()!.getAttribute('aria-label')).toBe('휴대폰 연결 켜짐 · 아직 안 열렸어요')
+    expect(pill()!.querySelector('.dot.a')).not.toBeNull()
+    expect(screen.getByRole('button', { name: '휴대폰 · 0' })).toBe(pill())
+    expect(described(pill()!)).toBe('휴대폰 연결 켜짐 · 아직 안 열렸어요')
 
     // 길이 열리고 두 대 접속 — 초록 점 · 숫자
     emit({ tailscale: { kind: 'ready', dnsName: 'dure.tail-cat.ts.net' }, url: 'https://dure.tail-cat.ts.net/mobile.html', connected: 2, online: ['a', 'b'] })
-    const p = screen.getByRole('button', { name: '휴대폰 연결 켜짐 · 2대 접속 중' })
+    const p = screen.getByRole('button', { name: '휴대폰 · 2' })
     expect(p).toBe(pill())
     expect(p.textContent).toBe('휴대폰 · 2')
+    expect(described(p)).toBe('휴대폰 연결 켜짐 · 2대 접속 중')
     expect(p.getAttribute('title')).toBe('휴대폰 연결 켜짐 · 2대 접속 중')
     expect(p.querySelector('.dot.g')).not.toBeNull()
     expect(p.querySelector('svg')).not.toBeNull()
@@ -93,9 +103,10 @@ describe('TopBar 휴대폰 알약', () => {
     fireEvent.click(p)
     expect(onPhone).toHaveBeenCalledTimes(1)
 
-    // 까닭이 있으면 회색
+    // 까닭이 있으면 앰버
     emit({ problem: '그 포트는 이미 다른 곳에 쓰이고 있어요' })
-    expect(pill()!.querySelector('.dot.s')).not.toBeNull()
+    expect(pill()!.querySelector('.dot.a')).not.toBeNull()
+    expect(pill()!.querySelector('.dot.g')).toBeNull()
 
     // 끄면 사라진다
     emit({ settings: { ...phone.settings, enabled: false } })

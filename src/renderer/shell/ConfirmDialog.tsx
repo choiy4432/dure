@@ -20,6 +20,8 @@ export interface ConfirmDialogProps {
   onConfirm: () => void | Promise<void>
   /** 취소 · Esc · 바깥 누르기 */
   onCancel: () => void
+  /** 연 자리가 닫힐 때 없어졌으면(확인으로 그 줄을 지움) 초점을 줄 곳 — 없으면 아래에 열린 대화상자 */
+  returnFocus?: () => HTMLElement | null | undefined
 }
 
 /** 앱 안 확인 대화상자 — 브라우저 confirm 대신. 열려 있는 동안 포커스는 안에서만 돈다 */
@@ -27,7 +29,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   return <Presence show={props.open}>{createPortal(<Dialog {...props} />, document.body)}</Presence>
 }
 
-function Dialog({ title, body, confirmLabel, cancelLabel = '취소', danger, onConfirm, onCancel }: ConfirmDialogProps) {
+function Dialog({ title, body, confirmLabel, cancelLabel = '취소', danger, onConfirm, onCancel, returnFocus }: ConfirmDialogProps) {
   const ref = useRef<HTMLDivElement>(null)
   const backdrop = useRef<HTMLDivElement>(null)
   const confirmButton = useRef<HTMLButtonElement>(null)
@@ -43,7 +45,7 @@ function Dialog({ title, body, confirmLabel, cancelLabel = '취소', danger, onC
   }
 
   // 열리면 안으로 포커스(위험한 확인은 취소에 먼저), 닫히면 연 자리로 돌려준다 · Esc 는 기다리는 동안 무시
-  useDialogFocus(ref, cancel, box => box.querySelector<HTMLElement>(danger ? '[data-cancel]' : '[data-confirm]'))
+  useDialogFocus(ref, cancel, box => box.querySelector<HTMLElement>(danger ? '[data-cancel]' : '[data-confirm]'), returnFocus)
 
   const confirm = async () => {
     setError(null)
