@@ -3,14 +3,18 @@
  * 값은 tokens.css 변수만(라이트·다크는 휴대폰 설정 따라감). 누르는 곳 44px 이상 · 글 12px 이상 · 입력 칸 글 16px(아이폰이 확대하지 않게) ·
  * 한국어는 어절 단위로 줄을 바꾼다(keep-all).
  */
+/* 어절 줄바꿈은 body 에 — 설정 판·대화상자·떠 있는 목록은 .m-app 밖(body 바로 아래)에 그려진다 */
+body {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
 .m-app {
   height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--canvas);
   color: var(--text);
-  word-break: keep-all;
-  overflow-wrap: anywhere;
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -627,7 +631,7 @@ button.m-row:active {
   font-size: 12px;
 }
 
-/* ── 받은 일 ── */
+/* ── 할 일 ── */
 .m-inbox-body {
   flex: 1;
   min-height: 0;
@@ -771,6 +775,14 @@ button.m-row:active {
   min-height: 44px;
 }
 
+/* 모델 목록 — 칩이 줄 오른쪽 끝이라 칩 오른쪽에 맞춰 왼쪽으로 펼친다(PC 는 칩 왼쪽부터 오른쪽으로). 너비는 화면 안 */
+.m-set .pop {
+  left: auto;
+  right: 0;
+  max-width: calc(100vw - 32px);
+  transform-origin: top right !important;
+}
+
 .am-list {
   display: flex;
   flex-direction: column;
@@ -855,7 +867,7 @@ button.m-row:active {
   font-size: 14px;
 }
 
-/* ── 카드·받은 일의 단추와 글 링크 — 손가락 크기(보이는 칸 44px) ── */
+/* ── 카드·할 일의 단추와 글 링크 — 손가락 크기(보이는 칸 44px) ── */
 .m-agent .btn,
 .m-inbox .btn {
   height: 44px;
@@ -896,4 +908,30 @@ button.m-row:active {
   content: '';
   position: absolute;
   inset: -12px -6px;
+}
+
+/* PC 와 같이 쓰는 작은 단추 — 보이는 크기는 그대로, 누르는 칸만 44px 로(메시지 ⋯ 24px · 첨부 빼기 20px · 묻지 않음 경고 닫기 28px) */
+.m-agent .ib.xs,
+.m-inbox .ib.xs,
+.m-agent .band-x {
+  position: relative;
+}
+
+.m-agent .ib.xs::before,
+.m-inbox .ib.xs::before {
+  content: '';
+  position: absolute;
+  inset: -10px;
+}
+
+.m-agent .att-x::before {
+  content: '';
+  position: absolute;
+  inset: -12px;
+}
+
+.m-agent .band-x::before {
+  content: '';
+  position: absolute;
+  inset: -8px;
 }

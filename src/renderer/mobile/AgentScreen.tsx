@@ -1,5 +1,5 @@
 // 휴대폰 대화 화면(시안 A) — 화면 전체. 머리 ‹ · 아바타 · 이름 · 상태 알약 · ⋯(설정 판), 몸통은 PC 패널의 탭·고정 카드·대화·입력창 그대로
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { CircleStop, Ellipsis, History } from 'lucide-react'
 import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
@@ -37,12 +37,16 @@ function PhoneHeader({ slot, onBack }: { slot: PanelHeaderSlot; onBack: () => vo
     setSheet(false)
     slot.onModelOpenChange(false)
   }
+  const open = () => {
+    setError(null) // 판을 다시 열면 지난 오류는 지운다(다시 해 보는 중)
+    setSheet(true)
+  }
   return (
     <>
       <MobileTop
         onBack={onBack}
         actions={
-          <button type="button" className="m-ib" aria-label="에이전트 설정" aria-haspopup="dialog" onClick={() => setSheet(true)}>
+          <button type="button" className="m-ib" aria-label="에이전트 설정" aria-haspopup="dialog" onClick={open}>
             <Ellipsis className="i" size={20} aria-hidden="true" />
           </button>
         }
@@ -63,21 +67,24 @@ function PhoneHeader({ slot, onBack }: { slot: PanelHeaderSlot; onBack: () => vo
         </p>
       )}
       <PanelBands agent={agent} status={status} host={host} onError={setError} />
-      <SettingsSheet open={sheet} agent={agent} status={status} slot={slot} onClose={close} />
+      <SettingsSheet open={sheet} agent={agent} status={status} slot={slot} onClose={close} onClosedError={setError} />
     </>
   )
 }
 
 /**
  * 설정 판 — 모델 · 노력 · 맡기는 정도(묻지 않고 실행이 허용됐을 때 세 칸, 아니면 자동) / 멈추기 · 지난 대화 /
- * 이름·역할 · 새 대화 · 재우기 · 항상 허용한 일 · 지우기(PC 메뉴와 같은 항목·확인 — 폴더 열기·내보내기는 PC 에서만)
+ * 이름·역할 · 새 대화 · 재우기 · 항상 허용한 일 · 지우기(PC 메뉴와 같은 항목·확인 — 폴더 열기·내보내기는 PC 에서만).
+ * 오류는 판이 열려 있으면 판 안에, 판을 닫는 일(재우기 · 새 대화 · 지우기 뒤 다시 받기)이 닫힌 뒤 실패하면 대화 머리의 오류 줄(onClosedError)에.
+ * 판을 열 때마다 지난 오류·안내는 지운다
  */
-function SettingsSheet({ open, agent, status, slot, onClose }: {
+function SettingsSheet({ open, agent, status, slot, onClose, onClosedError }: {
   open: boolean
   agent: AgentView
   status: string
   slot: PanelHeaderSlot
   onClose: () => void
+  onClosedError: (message: string | null) => void
 }) {
   const allowBypass = useDure(s => s.allowBypass)
   const sendingFiles = useSendingFiles(agent.id)
@@ -86,6 +93,18 @@ function SettingsSheet({ open, agent, status, slot, onClose }: {
   const [stopping, setStopping] = useState(false)
   const [editing, setEditing] = useState(false)
   const canStop = (status === 'working' || status === 'awaiting' || sendingFiles) && !stopping
+  const isOpen = useRef(open)
+  isOpen.current = open
+  useEffect(() => {
+    if (!open) return
+    setError(null)
+    setNotice(null)
+  }, [open])
+  /** 오류를 보일 곳 — 열린 판, 이미 닫혔으면 대화 머리(null = 지우기) */
+  const report = (message: string | null) => {
+    if (isOpen.current) setError(message)
+    else onClosedError(message)
+  }
 
   const stop = async () => {
     setError(null)
@@ -94,7 +113,7 @@ function SettingsSheet({ open, agent, status, slot, onClose }: {
       await window.dure.interrupt(agent.id)
       onClose()
     } catch (e) {
-      setError(errorMessage(e))
+      report(errorMessage(e))
     } finally {
       setStopping(false)
     }
@@ -144,7 +163,7 @@ function SettingsSheet({ open, agent, status, slot, onClose }: {
               onRetry={slot.onRetryDescribe}
               open={slot.modelOpen}
               onOpenChange={slot.onModelOpenChange}
-              onError={setError}
+              onError={report}
             />
           </div>
           <div className="m-set-row">
@@ -157,7 +176,7 @@ function SettingsSheet({ open, agent, status, slot, onClose }: {
               description={slot.description}
               onLoad={slot.onLoadDescription}
               onRetry={slot.onRetryDescribe}
-              onError={setError}
+              onError={report}
             />
           </div>
           <div className="m-set-row">
@@ -165,7 +184,7 @@ function SettingsSheet({ open, agent, status, slot, onClose }: {
               {allowBypass ? '맡기는 정도' : '받은 메시지 바로 시작'}
               <span className="m-set-d">{allowBypass ? '끔 · 자동 · 묻지 않고 실행' : '묻지 않고 실행은 PC 설정에서 허용하면 골라요'}</span>
             </span>
-            {allowBypass ? <LevelSwitch agent={agent} onError={setError} /> : <AutoSwitch agent={agent} onError={setError} />}
+            {allowBypass ? <LevelSwitch agent={agent} onError={report} /> : <AutoSwitch agent={agent} onError={report} />}
           </div>
         </div>
         <div className="am-list">
@@ -179,7 +198,7 @@ function SettingsSheet({ open, agent, status, slot, onClose }: {
             {agent.pastCount > 0 && <span className="mi-n">{agent.pastCount}</span>}
           </button>
         </div>
-        <AgentMenu agent={agent} inline onEdit={() => setEditing(true)} onError={setError} onNotice={setNotice} onDone={onClose} />
+        <AgentMenu agent={agent} inline onEdit={() => setEditing(true)} onError={report} onNotice={setNotice} onDone={onClose} />
       </Sheet>
       {editing && <EditAgentDialog agent={agent} onClose={() => setEditing(false)} />}
     </>

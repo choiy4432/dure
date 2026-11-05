@@ -9,7 +9,7 @@ import { getStore, useDure } from '../state/store'
 import { displayStatus } from '../state/selectors'
 import { ContextRing } from './ContextRing'
 import { ATTACH_FOLDER, ATTACH_NO_PATH, ATTACH_SENDING, ATTACH_UPLOADING, ATTACH_WORD, errorMessage, formatBytes, RENEW_CONFIRM } from '../lib/words'
-import { phoneUpload } from '../lib/phone'
+import { onPhone, phoneUpload } from '../lib/phone'
 import { isImageType, prepareImage } from '../lib/image'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
 import type { Described } from './ModelPicker'
@@ -24,6 +24,12 @@ const LINE_PX = 22
 const MAX_LINES = 8
 /** 두레가 직접 처리하는 명령 — 목록을 거치든 직접 치든 Claude 에 보내지 않는다 */
 const OWN_COMMAND = /^\/(clear|model)(?:\s+([\s\S]*))?$/
+
+/**
+ * 휴대폰에서 올리는 중인 파일 — 칩 열쇠마다 끊기 신호. 칩을 빼면 올리기를 끊는다(다 올린 뒤에 뺀 파일은 PC 의 받은 폴더에 남고,
+ * 그 폴더는 휴대폰 연결을 켜고 끌 때 비운다). 에이전트를 오가도 올리기는 이어진다 — 칩 열쇠는 앱 전체에서 하나뿐이다(nextAttachKey)
+ */
+const uploads = new Map<number, AbortController>()
 
 interface Props {
   agentId: AgentId
@@ -96,8 +102,12 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
   const planOn = planMode || plan
   const setText = (next: string) => updateDraft(agentId, d => (d.text === next ? d : { ...d, text: next }))
   const setAttached = (fn: (list: Attached[]) => Attached[]) => updateDraft(agentId, d => ({ ...d, attached: fn(d.attached) }))
-  // 칩 빼기 — 오류 줄도 지운다(뺀 파일의 보내기 실패 글이 남지 않게)
-  const remove = (key: number) => updateDraft(agentId, d => ({ ...d, attached: d.attached.filter(x => x.key !== key), error: undefined }))
+  // 칩 빼기 — 오류 줄도 지운다(뺀 파일의 보내기 실패 글이 남지 않게). 휴대폰에서 올리는 중이면 올리기를 끊는다
+  const remove = (key: number) => {
+    uploads.get(key)?.abort()
+    uploads.delete(key)
+    updateDraft(agentId, d => ({ ...d, attached: d.attached.filter(x => x.key !== key), error: undefined }))
+  }
   // 보내는 중인 칩만 뺄 수 없다 — 빼도 그 파일은 간다(뺀 줄 알게 하지 않는다). 보내는 사이 새로 붙인 칩은 뺄 수 있다
   const going = (key: number) => inFlight?.includes(key) ?? false
   // 오류 줄도 그 에이전트의 입력에 — 몇 분 걸린 보내기가 다른 카드에 가 있는 사이 실패해도 돌아오면 보인다
@@ -290,7 +300,8 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
       void window.dure.interrupt(agentId).catch(err => setError(errorMessage(err)))
       return
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    // 휴대폰은 Enter 가 줄바꿈(휴대폰 자판의 Enter 는 줄을 바꾸는 자리다) — 보내기는 단추로. PC 창은 Enter 로 보낸다(Shift+Enter 줄바꿈)
+    if (e.key === 'Enter' && !e.shiftKey && !onPhone()) {
       e.preventDefault()
       void send()
     }
@@ -301,17 +312,23 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     const upload = phoneUpload()
     if (!upload) return
     const alive = () => getDraft(agentId).attached.some(x => x.key === key)
-    upload(file).then(
-      r => {
-        if (!alive()) return
-        setAttached(a => a.map(x => (x.key === key ? { key, state: 'file', name: r.name || file.name, bytes: r.bytes, path: r.path } : x)))
-      },
-      e => {
-        if (!alive()) return
-        setAttached(a => a.filter(x => x.key !== key))
-        setError(`${file.name} — ${errorMessage(e)}`)
-      },
-    )
+    const ac = new AbortController()
+    uploads.set(key, ac)
+    upload(file, ac.signal)
+      .then(
+        r => {
+          if (!alive()) return
+          setAttached(a => a.map(x => (x.key === key ? { key, state: 'file', name: r.name || file.name, bytes: r.bytes, path: r.path } : x)))
+        },
+        e => {
+          if (!alive() || ac.signal.aborted) return
+          setAttached(a => a.filter(x => x.key !== key))
+          setError(`${file.name} — ${errorMessage(e)}`)
+        },
+      )
+      .finally(() => {
+        if (uploads.get(key) === ac) uploads.delete(key)
+      })
   }
 
   /** 파일 칩 하나 — PC 는 경로로, 휴대폰은 올려서. 둘 다 안 되면 null. at 이 있으면 그 칩(그림 준비 자리)을 갈음한다 */

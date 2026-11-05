@@ -5,6 +5,7 @@ import { PHONE_DENIED, phoneAllows } from '../../shared/phoneAccess'
 import { PHONE_CLOSE_UNPAIRED, PHONE_PATHS, type PhoneClientMessage, type PhoneServerMessage, type PhoneUploadResponse } from '../../shared/phoneWire'
 import { ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../../shared/attachments'
 import { checkMe } from './phoneHttp'
+import { markPhone } from '../lib/phone'
 
 /** 연결이 끊긴 동안 부른 일 · 보내기 전에 끊긴 일 — 화면이 오류 줄로 보인다 */
 export const PHONE_OFFLINE = '연결이 끊겼어요 — 다시 잇는 중이에요'
@@ -32,8 +33,8 @@ export type PhoneUpload = { path: string; name: string; bytes: number }
 
 /** 휴대폰의 window.dure — DureApi + 올리기(휴대폰엔 PC 경로가 없다) */
 export type PhoneApi = DureApi & {
-  /** 휴대폰 파일을 PC 의 받은 폴더로 올린다 — 돌려받은 path 를 sendUser 의 file part 로. 100MB 넘으면 올리지 않고 거절 */
-  uploadFile(file: File): Promise<PhoneUpload>
+  /** 휴대폰 파일을 PC 의 받은 폴더로 올린다 — 돌려받은 path 를 sendUser 의 file part 로. 100MB 넘으면 올리지 않고 거절 · signal 로 끊는다(칩을 뺌) */
+  uploadFile(file: File, signal?: AbortSignal): Promise<PhoneUpload>
   /** 휴대폰 File 은 PC 경로가 없다 — 늘 '' (입력창은 '' 이면 uploadFile 로) */
   pathForFile(file: File): string
   /** 화면이 보이는가 — PC 가 보는 중인 기기엔 알림을 보내지 않는다. visibilitychange 는 스스로 따라간다 */
@@ -369,7 +370,8 @@ export function createWsApi(o: WsApiOptions): PhoneApi {
     })
   }
 
-  const api: Record<string, unknown> = {}
+  // 휴대폰 표시(onPhone) — 화면 코드는 메서드 이름이 아니라 이 표시로 휴대폰인지 안다
+  const api: Record<string, unknown> = markPhone({})
   for (const m of [...METHODS, ...APP_METHODS]) api[m] = (...args: unknown[]) => call(m, args)
   api.on = (name: string, fn: (p: unknown) => void) => {
     let set = listeners.get(name)
@@ -382,13 +384,13 @@ export function createWsApi(o: WsApiOptions): PhoneApi {
   api.pathForFile = () => ''
   api.setVisible = setVisible
   api.close = () => stop(PHONE_OFFLINE)
-  api.uploadFile = async (file: File): Promise<PhoneUpload> => {
+  api.uploadFile = async (file: File, signal?: AbortSignal): Promise<PhoneUpload> => {
     // 서버도 100MB 에서 끊지만, 올리는 도중의 413 은 휴대폰에 망 오류로 보일 수 있다 — 미리 막는다
     if (file.size > ATTACH_MAX_BYTES) throw new Error(ATTACH_TOO_BIG)
     const u = `${base}${PHONE_PATHS.upload}?name=${encodeURIComponent(file.name)}`
     let r: Response
     try {
-      r = await doFetch(u, { method: 'POST', body: file, credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream' } })
+      r = await doFetch(u, { method: 'POST', body: file, credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream' }, signal })
     } catch {
       throw new Error(UPLOAD_FAILED)
     }

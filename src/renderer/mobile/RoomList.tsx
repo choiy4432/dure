@@ -1,4 +1,5 @@
-// 휴대폰 방 고르기(시안 mobile-rooms-v2) — 머리(마크 · 연결된 PC · 연결 점 · ⋯) → 기다리는 일 N(누르면 그 대화로 바로) → 방 N(순서 그대로) → 이 PC에 새 방
+// 휴대폰 방 고르기(시안 mobile-rooms-v2) — 머리(마크 · 연결된 PC · 연결 점 · ⋯) → 할 일 N(누르면 그 대화로 바로) → 방 N(순서 그대로) → 이 PC에 새 방.
+// 이름은 PC 와 같은 '할 일', 수는 줄(에이전트) 수가 아니라 할 일 수(PC 의 할 일 수 · 판의 '할 일 N' 과 같다)
 import { useEffect, useId, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   ArrowRightLeft, BellRing, ChevronRight, MessageCircleQuestionMark, Pencil, Plus, ShieldAlert, Smartphone, Trash2, TriangleAlert,
@@ -15,7 +16,8 @@ import { useConn } from './connection'
 import { meDevice, subscribePush } from './phoneHttp'
 import { PUSH_DENIED, PUSH_FAILED } from './PairScreen'
 import { MobileTop, MoreMenu, OFFLINE_HINT, OfflineBand, Sheet, useOffline } from './parts'
-import { pcName, roomLine, waitingRows, type WaitKind, type WaitRow } from './rooms'
+import { todoCounts } from '../state/attention'
+import { pcName, roomLine, todoTotal, waitingRows, type WaitKind, type WaitRow } from './rooms'
 
 export const PUSH_ON = '알림을 켰어요'
 export const PUSH_UNSUPPORTED = '이 브라우저에서는 알림을 받을 수 없어요 — 아이폰은 홈 화면에 추가한 두레에서 켜 주세요'
@@ -167,6 +169,8 @@ export function RoomList({ onOpenRoom, onOpenAgent }: Props) {
   const { offline } = useOffline()
   const now = useNow()
   const rows = useMemo(() => waitingRows(v), [v])
+  const counts = useMemo(() => todoCounts(v), [v])
+  const todo = todoTotal(v, undefined, counts)
   const [creating, setCreating] = useState(false)
   const [pressed, setPressed] = useState<RoomId | null>(null)
   const [renaming, setRenaming] = useState<RoomId | null>(null)
@@ -237,7 +241,7 @@ export function RoomList({ onOpenRoom, onOpenAgent }: Props) {
         {rows.length > 0 && (
           <section className="m-sec" aria-labelledby={waitId}>
             <h2 className="m-sec-h" id={waitId}>
-              기다리는 일 <em>{rows.length}</em>
+              할 일{todo > 0 && <> <em>{todo}</em></>}
             </h2>
             <div className="m-grp pend">
               {rows.map(r => {
@@ -279,7 +283,7 @@ export function RoomList({ onOpenRoom, onOpenAgent }: Props) {
             </h2>
             <div className="m-grp">
               {v.rooms.map(r => (
-                <RoomRow key={r.id} room={r} line={roomLine(v, r.id, rows)} stale={offline} onOpen={() => onOpenRoom(r.id)} onLong={() => setPressed(r.id)} />
+                <RoomRow key={r.id} room={r} line={roomLine(v, r.id, rows, counts)} stale={offline} onOpen={() => onOpenRoom(r.id)} onLong={() => setPressed(r.id)} />
               ))}
             </div>
           </section>
@@ -332,7 +336,7 @@ function RoomRow({ room, line, stale, onOpen, onLong }: {
   onLong: () => void
 }) {
   const press = useLongPress(onLong)
-  const quiet = line.agents > 0 && line.working === 0 && line.waiting === 0 && !line.issue
+  const quiet = line.agents > 0 && line.working === 0 && line.todo === 0 && line.waiting === 0 && !line.issue
   const body = (
     <>
       <span className="m-row-main">
@@ -346,10 +350,10 @@ function RoomRow({ room, line, stale, onOpen, onLong }: {
               일하는 중 {line.working}
             </span>
           )}
-          {line.waiting > 0 && (
+          {line.todo > 0 && (
             <span className="m-st">
               <i className="dot a" aria-hidden="true" />
-              기다림 {line.waiting}
+              할 일 {line.todo}
             </span>
           )}
           {line.issue && (

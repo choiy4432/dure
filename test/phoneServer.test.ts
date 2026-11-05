@@ -5,6 +5,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import WebSocket from 'ws'
 import { startPhoneServer, type PhoneServerOptions } from '../src/main/phone/phoneServer'
@@ -19,7 +20,11 @@ const HOST = 'pc.tail1234.ts.net:47615'
 const ORIGIN = `https://${HOST}`
 const GOOD_SECRET = '123456'
 
-type Res = { status: number; headers: http.IncomingHttpHeaders; text: string }
+type Res = { status: number; headers: http.IncomingHttpHeaders; text: string; body: Buffer }
+const res_ = (rs: http.IncomingMessage, chunks: Buffer[]): Res => {
+  const body = Buffer.concat(chunks)
+  return { status: rs.statusCode ?? 0, headers: rs.headers, text: body.toString('utf8'), body }
+}
 
 const cleanup: (() => unknown)[] = []
 afterEach(async () => {
@@ -148,7 +153,10 @@ function request(
     const req = http.request({ host: '127.0.0.1', port, method: o.method ?? 'GET', path: o.path, headers }, (res) => {
       const chunks: Buffer[] = []
       res.on('data', (c: Buffer) => chunks.push(c))
-      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, text: Buffer.concat(chunks).toString('utf8') }))
+      res.on('end', () => {
+        const body = Buffer.concat(chunks)
+        resolve({ status: res.statusCode ?? 0, headers: res.headers, text: body.toString('utf8'), body })
+      })
     })
     req.on('error', reject)
     req.end(o.body)
@@ -219,7 +227,7 @@ function streaming(port: number, p: string, headers: Record<string, string>) {
     req.on('response', (rs) => {
       const chunks: Buffer[] = []
       rs.on('data', (c: Buffer) => chunks.push(c))
-      rs.on('end', () => resolve({ status: rs.statusCode ?? 0, headers: rs.headers, text: Buffer.concat(chunks).toString('utf8') }))
+      rs.on('end', () => resolve(res_(rs, chunks)))
     })
     req.on('error', reject)
   })
@@ -508,7 +516,7 @@ describe('phoneServer', () => {
       }, (rs) => {
         const chunks: Buffer[] = []
         rs.on('data', (c: Buffer) => chunks.push(c))
-        rs.on('end', () => resolve({ status: rs.statusCode ?? 0, headers: rs.headers, text: Buffer.concat(chunks).toString('utf8') }))
+        rs.on('end', () => resolve(res_(rs, chunks)))
       })
       req.on('error', reject)
       const chunk = Buffer.alloc(1024 * 1024, 7)
@@ -648,6 +656,45 @@ describe('phoneServer', () => {
     const v = await request(port, { path: '/api/vapid', headers: { cookie: cookie(token) } })
     expect(json(v)).toEqual({ ok: true, publicKey: 'PUBLIC-KEY' })
     expect(v.headers['cache-control']).toBe('no-store')
+  })
+
+  it('정적 파일 — /assets/ 의 글 파일(js·css·svg)은 gzip 을 받는 휴대폰에 압축해서 · 한 번 압축한 것은 기억 · Vary', async () => {
+    const t = await setup()
+    const port = t.server.port
+    const js = 'export const a = 1;\n'.repeat(400)
+    fs.writeFileSync(path.join(t.staticDir, 'assets', 'big-abc.js'), js)
+    const gz = await request(port, { path: '/assets/big-abc.js', headers: { 'accept-encoding': 'gzip, deflate, br' } })
+    expect(gz.status).toBe(200)
+    expect(gz.headers['content-encoding']).toBe('gzip')
+    expect(gz.headers.vary).toMatch(/accept-encoding/i)
+    expect(gz.headers['cache-control']).toBe('public, max-age=31536000, immutable')
+    expect(gz.headers['content-type']).toMatch(/^text\/javascript/)
+    expect(Number(gz.headers['content-length'])).toBe(gz.body.length)
+    expect(gz.body.length).toBeLessThan(js.length / 4)
+    expect(zlib.gunzipSync(gz.body).toString('utf8')).toBe(js)
+    // 같은 파일은 다시 압축하지 않는다 — 처음 압축한 바이트를 메모리에 둔다
+    const spy = vi.spyOn(zlib, 'gzip')
+    const again = await request(port, { path: '/assets/big-abc.js', headers: { 'accept-encoding': 'gzip' } })
+    expect(again.body.equals(gz.body)).toBe(true)
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
+    // gzip 을 안 받으면 그대로(Vary 는 같이)
+    const plain = await request(port, { path: '/assets/big-abc.js' })
+    expect(plain.headers['content-encoding']).toBeUndefined()
+    expect(plain.headers.vary).toMatch(/accept-encoding/i)
+    expect(plain.text).toBe(js)
+    const no = await request(port, { path: '/assets/big-abc.js', headers: { 'accept-encoding': 'gzip;q=0, br' } })
+    expect(no.headers['content-encoding']).toBeUndefined()
+    // HEAD — 몸 없이 같은 머리
+    const head = await request(port, { method: 'HEAD', path: '/assets/big-abc.js', headers: { 'accept-encoding': 'gzip' } })
+    expect(head.headers['content-encoding']).toBe('gzip')
+    expect(head.headers['content-length']).toBe(gz.headers['content-length'])
+    expect(head.body.length).toBe(0)
+    // 이미 압축된 꼴(woff2·png)과 /assets/ 밖(html·sw.js)은 압축하지 않는다
+    for (const p of ['/assets/font.woff2', '/mobile.html', '/sw.js']) {
+      const r = await request(port, { path: p, headers: { 'accept-encoding': 'gzip' } })
+      expect(r.headers['content-encoding'], p).toBeUndefined()
+    }
   })
 
   it('정적 파일 — staticDir 밖 경로 거절', async () => {

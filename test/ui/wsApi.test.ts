@@ -451,6 +451,28 @@ describe('createWsApi — 휴대폰의 window.dure', () => {
     await expect(a.uploadFile(f)).rejects.toThrow('파일을 올리지 못했어요')
   })
 
+  it('uploadFile — 끊기 신호를 fetch 에 넘긴다(올리는 칩을 빼면 끊는다) · 끊으면 거절', async () => {
+    let seen: AbortSignal | undefined
+    const fetchImpl = vi.fn((_u: unknown, o?: RequestInit) => {
+      seen = o?.signal ?? undefined
+      return new Promise<Response>((_res, rej) => o?.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))))
+    })
+    const a = make({ fetchImpl: fetchImpl as unknown as typeof fetch })
+    const ac = new AbortController()
+    const p = a.uploadFile(new File(['abc'], 'a.pdf'), ac.signal)
+    expect(seen).toBe(ac.signal)
+    ac.abort()
+    await expect(p).rejects.toThrow()
+  })
+
+  it('휴대폰 표시 — createWsApi 가 만든 것에만 붙는다(메서드 이름 uploadFile 로 가리지 않는다)', async () => {
+    const { onPhone } = await import('../../src/renderer/lib/phone')
+    expect(onPhone(make())).toBe(true)
+    expect(onPhone({ uploadFile: () => {} })).toBe(false)
+    expect(onPhone({})).toBe(false)
+    expect(onPhone(null)).toBe(false)
+  })
+
   it('JSON 꼴 — Infinity 는 큰 정수로(지난 대화 전부 보기) · 끝의 undefined 인자는 뺀다', async () => {
     const a = make()
     const ws = FakeWs.last()

@@ -6,7 +6,28 @@ export const FOCUSABLE =
   'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
 
 /** 지금 열린 대화상자 — 연 차례대로. 겹쳐 열리면(설정 → 휴대폰 → 짝 맺기·확인) 키는 맨 위 것만 받는다 */
-const openDialogs: { box: RefObject<HTMLElement | null> }[] = []
+const openDialogs: { box: RefObject<HTMLElement | null>; escape: () => void }[] = []
+/** 열린 대화상자 수가 바뀔 때 — 휴대폰 화면(MobileApp)이 뒤로 가기 자리를 맞춘다. PC 창엔 듣는 쪽이 없다 */
+const watchers = new Set<() => void>()
+const changed = () => watchers.forEach(fn => fn())
+
+/** 열린 대화상자 수(나가는 중인 것은 빼고) */
+export function openDialogCount(): number {
+  return openDialogs.length
+}
+
+/** 위에서부터 n 개의 대화상자를 Esc 처럼 닫는다(휴대폰의 뒤로 가기) — 기다리는 중이라 Esc 를 무시하는 대화상자는 그대로 */
+export function escapeTopDialogs(n = 1): void {
+  for (const d of openDialogs.slice(-n).reverse()) d.escape()
+}
+
+/** 열린 대화상자 수가 바뀌면 부른다 — 끊는 함수를 돌려준다 */
+export function watchDialogs(fn: () => void): () => void {
+  watchers.add(fn)
+  return () => {
+    watchers.delete(fn)
+  }
+}
 
 /** 초점을 돌려줄 수 있는 곳 — 문서에 붙어 있고 막히지 않았다(body 는 '연 자리 없음') */
 function focusable(el: HTMLElement | null | undefined): el is HTMLElement {
@@ -58,7 +79,7 @@ export function useDialogFocus(
 
   // 닫히는 순간 — 연 자리로 초점(나가는 요소는 inert 라 초점이 body 로 떨어지기 전에 먼저 옮긴다).
   // 열린 동안은 열린 대화상자 차례에 든다 — 나가기 시작하거나 언마운트되면 빠져, 아래 대화상자가 다시 키를 받는다
-  const me = useRef({ box })
+  const me = useRef({ box, escape: () => live.current.onEscape() })
   useLayoutEffect(() => {
     if (leaving) {
       giveBack()
@@ -67,9 +88,11 @@ export function useDialogFocus(
     returned.current = false
     const token = me.current
     openDialogs.push(token)
+    changed()
     return () => {
       const i = openDialogs.lastIndexOf(token)
       if (i >= 0) openDialogs.splice(i, 1)
+      changed()
     }
   }, [leaving])
 

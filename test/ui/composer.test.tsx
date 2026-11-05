@@ -1213,6 +1213,7 @@ describe('Composer — 휴대폰 첨부', () => {
     const uploadFile = vi.fn(upload)
     ;(window as any).dure.pathForFile = () => ''
     ;(window as any).dure.uploadFile = uploadFile
+    ;(window as any).dure[Symbol.for('dure.phone')] = true // 휴대폰 표시(createWsApi 가 붙인다)
     return uploadFile
   }
 
@@ -1232,12 +1233,65 @@ describe('Composer — 휴대폰 첨부', () => {
     await settle()
     expect(chipText(fileChips()[0])).toEqual(['보고서.pdf', '2 KB'])
     expect(sendButton()).toBeEnabled()
-    key('Enter')
+    await act(async () => { fireEvent.click(sendButton()) })
     await settle()
     expect(api.sendUser).toHaveBeenCalledWith('w', [
       { type: 'text', text: '읽어 줘' },
       { type: 'file', path: 'C:\\dure\\inbox\\x-보고서.pdf', name: '보고서.pdf', bytes: 2048 },
     ])
+  })
+
+  it('휴대폰 — Enter 는 줄바꿈(보내지 않는다 · 막지 않는다), 보내기는 단추로', async () => {
+    phone(async f => ({ path: `C:\\inbox\\${f.name}`, name: f.name, bytes: f.size }))
+    await renderPanel()
+    type('첫 줄')
+    const ev = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    input().dispatchEvent(ev)
+    await settle()
+    expect(ev.defaultPrevented).toBe(false) // 휴대폰 자판이 줄을 바꾼다
+    expect(api.sendUser).not.toHaveBeenCalled()
+    await act(async () => { fireEvent.click(sendButton()) })
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledWith('w', [{ type: 'text', text: '첫 줄' }])
+  })
+
+  it('휴대폰 — 올리는 중인 칩을 빼면 올리기를 끊는다(오류 줄 없이) · 다 올린 칩을 빼면 끊을 것이 없다', async () => {
+    const signals: (AbortSignal | undefined)[] = []
+    const finish: (() => void)[] = []
+    const uploadFile = phone((f, signal?: AbortSignal) => new Promise((resolve, reject) => {
+      signals.push(signal)
+      signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      finish.push(() => resolve({ path: `C:\\inbox\\${f.name}`, name: f.name, bytes: f.size }))
+    }))
+    const { container } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [pdf('a.pdf')] } })
+    await settle()
+    expect(uploadFile).toHaveBeenCalledTimes(1)
+    expect(signals[0]?.aborted).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'a.pdf 빼기' }))
+    await settle()
+    expect(signals[0]?.aborted).toBe(true)
+    expect(fileChips()).toHaveLength(0)
+    expect(screen.queryByRole('alert')).toBeNull()
+    // 다 올린 뒤에 빼기 — 끊기 신호는 그대로(이미 끝남)
+    fireEvent.change(fileInput(container), { target: { files: [pdf('b.pdf')] } })
+    await settle()
+    await act(async () => { finish[1]() })
+    await settle()
+    fireEvent.click(screen.getByRole('button', { name: 'b.pdf 빼기' }))
+    await settle()
+    expect(signals[1]?.aborted).toBe(false)
+  })
+
+  it('PC 창은 그대로 — Enter 로 보내고 Shift+Enter 는 줄바꿈', async () => {
+    await renderPanel()
+    type('보내기')
+    key('Enter', { shiftKey: true })
+    await settle()
+    expect(api.sendUser).not.toHaveBeenCalled()
+    key('Enter')
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledWith('w', [{ type: 'text', text: '보내기' }])
   })
 
   it('휴대폰 — 올리기 실패는 칩을 빼고 오류 줄 · 100MB 넘으면 올리지 않고 오류 칩', async () => {

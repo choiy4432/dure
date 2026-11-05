@@ -22,6 +22,8 @@ export default defineConfig({
     build: {
       // index = PC 창 · mobile = 휴대폰(main 의 휴대폰 서버가 out/renderer 를 내어 준다 — public/ 의 sw.js·manifest 도 그 맨 위에)
       rollupOptions: { input: { index: resolve(__dirname, 'src/renderer/index.html'), mobile: resolve(__dirname, 'src/renderer/mobile.html') } },
+      // 줄인다 — 휴대폰은 Tailscale 망으로 받는다(줄이지 않으면 공유 묶음이 2MB 를 넘는다). PC 창도 같은 묶음
+      minify: true,
       // 글꼴은 파일로만 — 작은 글꼴 조각을 data: 로 넣으면 CSP font-src 'self' 에 막힌다
       assetsInlineLimit: (file: string) => (/\.woff2?$/.test(file) ? false : undefined),
     },

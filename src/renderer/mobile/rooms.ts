@@ -1,6 +1,8 @@
-// 휴대폰 방 고르기의 재료 — 순수 모듈(화면·스토어를 import 하지 않는다). 기다리는 일 줄 · 방 줄의 수 · 연결된 PC 이름 · 받은 시각
+// 휴대폰 방 고르기의 재료 — 순수 모듈(화면·스토어를 import 하지 않는다). 할 일 줄 · 방 줄의 수 · 연결된 PC 이름 · 받은 시각.
+// 이름은 휴대폰 어디서나 '할 일'(PC 의 '할 일 N' · '내가 할 일'과 같다), 수는 PC 와 같은 todoCounts — 줄(에이전트) 수가 아니라 할 일 수
 import type { AgentId, PendingRequest, RelayMessage, RemoteIssue, Room, RoomId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
+import { roomTotal, todoCounts, type TodoCounts } from '../state/attention'
 import { displayStatus, shownIssue } from '../state/selectors'
 
 /** 기다리는 까닭 — 도구·계획·새 에이전트 승인 · 질문 · 에이전트끼리 넘기는 일(넘기는 메시지·이어 보내기 한도·붙잡힌 입력) · 서버 방 문제 */
@@ -43,7 +45,7 @@ interface Input {
 const LAST = Number.MAX_SAFE_INTEGER
 
 /**
- * 기다리는 일 — 에이전트마다 한 줄(가장 급한 까닭 하나): 승인·질문 → 넘기기 → 서버 문제.
+ * 할 일 줄 — 에이전트마다 한 줄(가장 급한 까닭 하나): 승인·질문 → 넘기기 → 서버 문제.
  * 넘기기 = 그 에이전트가 받을 넘기는 메시지(pending) · 이어 보내기 한도에 걸린 메시지(held) · 붙잡힌 입력(hold)
  */
 export function waitingRows(s: Input): WaitRow[] {
@@ -77,18 +79,26 @@ export function waitingRows(s: Input): WaitRow[] {
 export interface RoomLine {
   agents: number
   working: number
-  /** 승인·질문·넘기기를 기다리는 에이전트 수(서버 문제는 따로) */
+  /** 할 일 수 — PC 와 같은 셈(todoCounts: 승인·질문 하나하나 · 넘기는 메시지 · 이어 보내기 묶음은 방당 1). 판의 '할 일 N' 과 같다 */
+  todo: number
+  /** 할 일 줄이 있는 에이전트 수(서버 문제 빼고) — 붙잡힌 입력처럼 수에 안 드는 줄이 있으면 '모두 쉬는 중'이 아니다 */
   waiting: number
   /** 서버 방 문제가 보이는 에이전트가 있다 */
   issue: boolean
 }
 
-/** 방 줄의 수 — 에이전트 N개 · 일하는 중 N · 기다림 N · 서버 문제 */
-export function roomLine(s: Input, roomId: RoomId, rows: WaitRow[]): RoomLine {
+/** 할 일 수 — 휴대폰 화면들(방 목록 · 방 줄 · 판 · 할 일 화면)이 다 이것으로 센다. PC 의 할 일 수(todoCounts)와 같다 */
+export function todoTotal(s: Pick<Input, 'agents' | 'requests' | 'messages'>, roomId?: RoomId, counts: TodoCounts = todoCounts(s)): number {
+  return roomId === undefined ? counts.total : roomTotal(counts.rooms[roomId])
+}
+
+/** 방 줄의 수 — 에이전트 N개 · 일하는 중 N · 할 일 N · 서버 문제 */
+export function roomLine(s: Input, roomId: RoomId, rows: WaitRow[], counts: TodoCounts = todoCounts(s)): RoomLine {
   const here = s.agents.filter(a => a.roomId === roomId)
   return {
     agents: here.length,
     working: here.filter(a => displayStatus(a, s.requests) === 'working').length,
+    todo: todoTotal(s, roomId, counts),
     waiting: rows.filter(r => r.roomId === roomId && r.kind !== 'remote').length,
     issue: rows.some(r => r.roomId === roomId && r.kind === 'remote'),
   }

@@ -6,7 +6,7 @@ import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 import { APP_METHODS, METHODS } from '../../src/shared/ipcContract'
 import { PHONE_ACCESS, PHONE_DENIED } from '../../src/shared/phoneAccess'
 
-// 휴대폰 화면(MobileApp) — 방 고르기 → 카드 판 → 대화. window.dure 는 휴대폰 것(wsApi)처럼: uploadFile 이 있고 pathForFile 은 늘 '',
+// 휴대폰 화면(MobileApp) — 방 고르기 → 카드 판 → 대화. window.dure 는 휴대폰 것(wsApi)처럼: 휴대폰 표시와 uploadFile 이 있고 pathForFile 은 늘 '',
 // PC 전용 메서드는 부르면 PHONE_DENIED(실제 wsApi 는 보내지 않고 거절한다) — 시험은 그 메서드가 아예 불리지 않았는지 본다
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
@@ -19,6 +19,9 @@ const msg = (id: string, from: string, to: string, state: RelayMessage['state'],
 const req = (id: string, agentId: string, kind: PendingRequest['kind'] = 'permission', createdAt = 5): PendingRequest => ({
   id, agentId, toolName: kind === 'question' ? 'AskUserQuestion' : 'Bash', input: kind === 'question' ? { questions: [{ question: '어느 쪽?', options: [] }] } : { command: 'npm run migrate' }, kind, createdAt,
 })
+
+/** 휴대폰 표시 — src/renderer/lib/phone 의 PHONE_MARK(Symbol.for) */
+const PHONE = Symbol.for('dure.phone')
 
 const PC_ONLY = (Object.keys(PHONE_ACCESS) as (keyof typeof PHONE_ACCESS)[]).filter(k => PHONE_ACCESS[k] === 'pc')
 
@@ -72,6 +75,7 @@ beforeEach(() => {
   }
   fake.pathForFile = () => ''
   fake.uploadFile = vi.fn(async (f: File) => ({ path: `C:\\inbox\\${f.name}`, name: f.name, bytes: f.size }))
+  ;(fake as Record<symbol, unknown>)[PHONE] = true // 휴대폰 표시(createWsApi 가 붙이는 것 — onPhone 은 이것만 본다)
   fake.setVisible = () => {}
   fake.close = () => {}
   api = fake as typeof api
@@ -201,6 +205,44 @@ describe('MobileApp — 흐름', () => {
     expect(screen.getByRole('heading', { name: '방 3' })).toBeInTheDocument()
   })
 
+  it('처음 상태를 받기 전엔(PC 에 닿지 않음) #agent= · #room= 을 버리지 않는다 — 받으면 그 화면, 받은 뒤에도 없으면 그때 방 목록', async () => {
+    let reachable = false
+    api.snapshot.mockImplementation(async () => {
+      if (!reachable) throw new Error('연결이 끊겼어요 — 다시 잇는 중이에요')
+      return snapshot
+    })
+    const { getStore } = await import('../../src/renderer/state/store')
+    const conn = await import('../../src/renderer/mobile/connection')
+    const { MobileApp } = await import('../../src/renderer/mobile/MobileApp')
+    window.history.replaceState(null, '', '/mobile.html#agent=a2')
+    await act(async () => { await getStore().init().catch(() => {}) }) // 진입점처럼 — 못 받아도 화면은 띄운다
+    conn.onPhoneConn('reconnecting', true)
+    const r = render(<MobileApp />)
+    await settle()
+    expect(location.hash).toBe('#agent=a2')
+    expect(screen.queryByRole('heading', { name: '방 3' })).toBeNull()
+    expect(heading()).toHaveTextContent('대화')
+    expect(screen.getByRole('status')).toHaveTextContent('다시 잇는 중…')
+    reachable = true
+    await act(async () => { conn.onPhoneConn('open', true) })
+    await settle()
+    expect(heading()).toHaveTextContent('프론트')
+    r.unmount()
+
+    // 받은 뒤에 없으면 — 그때 떠난다
+    window.history.replaceState(null, '', '/mobile.html#room=gone')
+    render(<MobileApp />)
+    await settle()
+    expect(screen.getByRole('heading', { name: '방 3' })).toBeInTheDocument()
+  })
+
+  it('판의 몸통은 이름 붙은 영역(관계도)', async () => {
+    await renderPhone()
+    fireEvent.click(screen.getByRole('button', { name: /결제 리팩터링/ }))
+    await settle()
+    expect(screen.getByRole('region', { name: '관계도' })).toHaveClass('m-canvas')
+  })
+
   it('setSelected 안 부름 — 대화를 열고 닫고 다른 방으로 가도, PC 전용 메서드는 하나도', async () => {
     const { container } = await renderPhone()
     fireEvent.click(screen.getByRole('button', { name: /결제 리팩터링/ }))
@@ -219,19 +261,20 @@ describe('MobileApp — 흐름', () => {
 })
 
 describe('MobileApp — 방 고르기', () => {
-  it('기다리는 일 — 에이전트마다 한 줄, 누르면 그 대화로 바로(‹ 는 방 목록)', async () => {
+  it('할 일 — 에이전트마다 한 줄, 누르면 그 대화로 바로(‹ 는 방 목록)', async () => {
     snapshot.agents = snapshot.agents.map(a => (a.id === 'a1' ? { ...a, status: 'awaiting' } : a.id === 'b1' ? { ...a, remoteIssue: { kind: 'disconnected', detail: null } } : a))
     snapshot.requests = [req('q1', 'a1'), req('q2', 'a1', 'question', 6)]
     snapshot.messages = [msg('m1', 'a1', 'a2', 'pending')]
     await renderPhone()
-    const waiting = screen.getByRole('region', { name: /기다리는 일/ })
+    const waiting = screen.getByRole('region', { name: /^할 일/ })
     const rows = within(waiting).getAllByRole('button')
     expect(rows.map(r => r.textContent)).toEqual([
       expect.stringContaining('백엔드 승인을 기다려요'),
       expect.stringContaining('프론트 넘기기 승인을 기다려요'),
       expect.stringContaining('실험 서버 연결이 끊겼어요'),
     ])
-    expect(within(waiting).getByText('3')).toBeInTheDocument()
+    // 수는 줄 수가 아니라 할 일 수(PC 와 같이) — 백엔드 승인·질문 2 + 넘기는 메시지 1. 서버 문제는 세지 않는다
+    expect(within(waiting).getByRole('heading')).toHaveTextContent(/^할 일 3$/)
     fireEvent.click(rows[0])
     await settle()
     expect(heading()).toHaveTextContent('백엔드')
@@ -240,15 +283,15 @@ describe('MobileApp — 방 고르기', () => {
     expect(screen.getByRole('heading', { name: '방 3' })).toBeInTheDocument()
   })
 
-  it('방 줄 — 에이전트 수 · 일하는 중 · 기다림, 서버 방만 서버 표시', async () => {
+  it('방 줄 — 에이전트 수 · 일하는 중 · 할 일, 서버 방만 서버 표시', async () => {
     snapshot.agents = snapshot.agents.map(a => (a.id === 'a1' ? { ...a, status: 'working' } : a))
     snapshot.requests = [req('q1', 'a2')]
     await renderPhone()
-    // 방 줄(기다리는 일 줄에도 방 이름이 있다)
+    // 방 줄(할 일 줄에도 방 이름이 있다)
     const pay = within(screen.getByRole('region', { name: /^방/ })).getByRole('button', { name: /결제 리팩터링/ })
     expect(pay).toHaveTextContent('에이전트 2개')
     expect(pay).toHaveTextContent('일하는 중 1')
-    expect(pay).toHaveTextContent('기다림 1')
+    expect(pay).toHaveTextContent('할 일 1')
     expect(within(pay).queryByText('lab')).toBeNull()
     expect(screen.getByRole('button', { name: /논문 실험/ })).toHaveTextContent('lab')
     expect(screen.getByRole('button', { name: /두레 개발/ })).toHaveTextContent('에이전트 없음')
@@ -293,6 +336,86 @@ describe('MobileApp — 방 고르기', () => {
     expect(api.addRoom).toHaveBeenCalledWith('여름 캠페인')
     expect(heading()).toHaveTextContent('여름 캠페인') // 만든 방의 판으로
     noPcCalls()
+  })
+})
+
+describe('MobileApp — 휴대폰의 뒤로 가기는 위에 뜬 것부터', () => {
+  /** 안드로이드 뒤로 가기 손짓 = 브라우저 뒤로 가기 */
+  const gesture = () => act(async () => {
+    window.history.back()
+    await new Promise(r => setTimeout(r, 20))
+  })
+  const sheet = () => screen.queryByRole('dialog', { name: '백엔드 설정' })
+  async function openConversation() {
+    const r = await renderPhone()
+    fireEvent.click(screen.getByRole('button', { name: /결제 리팩터링/ }))
+    await settle()
+    fireEvent.click(card(r.container, 'a1'))
+    await settle()
+    expect(heading()).toHaveTextContent('백엔드')
+    return r
+  }
+
+  it('설정 판이 열려 있으면 판만 닫고 대화에 머문다 — 한 번 더면 판으로', async () => {
+    await openConversation()
+    fireEvent.click(screen.getByRole('button', { name: '에이전트 설정' }))
+    await settle()
+    expect(sheet()).toBeInTheDocument()
+    await gesture()
+    expect(sheet()).toBeNull()
+    expect(heading()).toHaveTextContent('백엔드')
+    await gesture()
+    expect(heading()).toHaveTextContent('결제 리팩터링')
+  })
+
+  it('설정 판 위의 확인 판 — 확인 판 → 설정 판 → 대화 → 판 차례로', async () => {
+    await openConversation()
+    fireEvent.click(screen.getByRole('button', { name: '에이전트 설정' }))
+    await settle()
+    fireEvent.click(within(sheet()!).getByRole('button', { name: '지우기' }))
+    await settle()
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    await gesture()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(sheet()).toBeInTheDocument()
+    expect(api.removeAgent).not.toHaveBeenCalled()
+    await gesture()
+    expect(sheet()).toBeNull()
+    expect(heading()).toHaveTextContent('백엔드')
+    await gesture()
+    expect(heading()).toHaveTextContent('결제 리팩터링')
+  })
+
+  it('단추로 닫으면 그 뒤로 가기 자리도 걷힌다 — 다음 뒤로 가기는 바로 한 단계 위로', async () => {
+    await openConversation()
+    fireEvent.click(screen.getByRole('button', { name: '에이전트 설정' }))
+    await settle()
+    fireEvent.click(within(sheet()!).getByRole('button', { name: '닫기' }))
+    await act(async () => { await new Promise(r => setTimeout(r, 20)) })
+    expect(sheet()).toBeNull()
+    await gesture()
+    expect(heading()).toHaveTextContent('결제 리팩터링')
+  })
+
+  it('판의 에이전트 추가 · 방 목록(첫 화면)의 새 방 — 뒤로 가기로 대화상자만 닫힌다', async () => {
+    await renderPhone()
+    fireEvent.click(screen.getByRole('button', { name: '이 PC에 새 방' }))
+    await settle()
+    expect(screen.getByRole('dialog', { name: '이 PC에 새 방' })).toBeInTheDocument()
+    await gesture()
+    expect(screen.queryByRole('dialog', { name: '이 PC에 새 방' })).toBeNull()
+    expect(screen.getByRole('heading', { name: '방 3' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /결제 리팩터링/ }))
+    await settle()
+    fireEvent.click(screen.getByRole('button', { name: '방 메뉴' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '에이전트 추가' }))
+    await settle()
+    expect(screen.getByRole('dialog', { name: '에이전트 추가' })).toBeInTheDocument()
+    await gesture()
+    expect(screen.queryByRole('dialog', { name: '에이전트 추가' })).toBeNull()
+    expect(heading()).toHaveTextContent('결제 리팩터링')
+    await gesture()
+    expect(screen.getByRole('heading', { name: '방 3' })).toBeInTheDocument()
   })
 })
 
@@ -358,15 +481,15 @@ describe('MobileApp — 되돌릴 수 없는 일', () => {
   })
 })
 
-describe('MobileApp — 받은 일', () => {
-  it('넘기기 승인 — 받은 일에서 approveMessage', async () => {
+describe('MobileApp — 할 일', () => {
+  it('넘기기 승인 — 할 일 화면에서 approveMessage', async () => {
     snapshot.messages = [msg('m1', 'a2', 'a1', 'pending')]
     await renderPhone()
     fireEvent.click(within(screen.getByRole('region', { name: /^방/ })).getByRole('button', { name: /결제 리팩터링/ }))
     await settle()
-    fireEvent.click(screen.getByRole('button', { name: /받은 일 1/ }))
+    fireEvent.click(screen.getByRole('button', { name: /할 일 1/ }))
     await settle()
-    expect(heading()).toHaveTextContent('받은 일')
+    expect(heading()).toHaveTextContent('할 일')
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '일 시키기' })) })
     await settle()
     expect(api.approveMessage).toHaveBeenCalledWith('m1')
@@ -374,6 +497,75 @@ describe('MobileApp — 받은 일', () => {
     await settle()
     expect(heading()).toHaveTextContent('결제 리팩터링')
     noPcCalls()
+  })
+})
+
+describe('MobileApp — 할 일 수', () => {
+  it("이름은 '할 일' 하나 · 수는 방 목록 · 방 줄 · 판 · 할 일 화면이 같고 PC 의 할 일 수와 같다(승인·질문 하나하나 · 넘기는 메시지 · 이어 보내기 묶음)", async () => {
+    snapshot.agents = snapshot.agents.map(a => (a.id === 'a1' ? { ...a, status: 'awaiting' } : a))
+    snapshot.requests = [req('q1', 'a1'), req('q2', 'a1', 'question', 6)]
+    snapshot.messages = [msg('m1', 'a1', 'a2', 'pending'), msg('m2', 'a2', 'a1', 'held', 11), msg('m3', 'a2', 'a1', 'held', 12)]
+    const { todoCounts, roomTotal } = await import('../../src/renderer/state/attention')
+    const pc = roomTotal(todoCounts(snapshot).rooms.r1)
+    expect(pc).toBe(4) // 승인·질문 2 + 넘기는 메시지 1 + 이어 보내기 묶음 1
+    await renderPhone()
+    // 방 목록 — 줄은 에이전트마다 둘(백엔드·프론트)이지만 수는 할 일 수
+    const todo = screen.getByRole('region', { name: /^할 일/ })
+    expect(within(todo).getAllByRole('button')).toHaveLength(2)
+    expect(within(todo).getByRole('heading')).toHaveTextContent(`할 일 ${pc}`)
+    const pay = within(screen.getByRole('region', { name: /^방/ })).getByRole('button', { name: /결제 리팩터링/ })
+    expect(pay).toHaveTextContent(`할 일 ${pc}`)
+    expect(screen.queryByText(/기다리는 일|기다림|받은 일/)).toBeNull()
+    // 판
+    fireEvent.click(pay)
+    await settle()
+    const btn = screen.getByRole('button', { name: `할 일 ${pc}` })
+    expect(screen.queryByText(/받은 일/)).toBeNull()
+    // 할 일 화면
+    fireEvent.click(btn)
+    await settle()
+    expect(heading()).toHaveTextContent(`할 일 ${pc}`)
+    expect(screen.queryByText(/받은 일/)).toBeNull()
+  })
+})
+
+describe('MobileApp — 설정 판의 오류', () => {
+  async function openSheet() {
+    const r = await renderPhone()
+    fireEvent.click(screen.getByRole('button', { name: /결제 리팩터링/ }))
+    await settle()
+    fireEvent.click(card(r.container, 'a1'))
+    await settle()
+    fireEvent.click(screen.getByRole('button', { name: '에이전트 설정' }))
+    await settle()
+    return screen.getByRole('dialog', { name: '백엔드 설정' })
+  }
+
+  it('판을 닫는 일(재우기 등)이 뒤에 실패하면 — 대화 머리의 오류 줄에(닫힌 판 안이 아니라)', async () => {
+    api.sleepBlock.mockResolvedValue(null)
+    api.sleep.mockRejectedValue(new Error('재우지 못했어요 — 다시 해 주세요'))
+    const sheet = await openSheet()
+    await act(async () => { fireEvent.click(within(sheet).getByRole('button', { name: '지금 재우기' })) })
+    await settle()
+    expect(screen.queryByRole('dialog', { name: '백엔드 설정' })).toBeNull()
+    expect(screen.getByRole('alert')).toHaveTextContent('재우지 못했어요 — 다시 해 주세요')
+    expect(screen.getByRole('alert').closest('.m-agent')).not.toBeNull()
+  })
+
+  it('판 안에서 난 오류는 판에 · 판을 다시 열면 지난 오류는 없다', async () => {
+    api.interrupt.mockRejectedValue(new Error('멈추지 못했어요'))
+    snapshot.agents = snapshot.agents.map(a => (a.id === 'a1' ? { ...a, status: 'working' } : a))
+    let sheet = await openSheet()
+    await act(async () => { fireEvent.click(within(sheet).getByRole('button', { name: '멈추기' })) })
+    await settle()
+    sheet = screen.getByRole('dialog', { name: '백엔드 설정' })
+    expect(within(sheet).getByRole('alert')).toHaveTextContent('멈추지 못했어요')
+    fireEvent.click(within(sheet).getByRole('button', { name: '닫기' }))
+    await settle()
+    fireEvent.click(screen.getByRole('button', { name: '에이전트 설정' }))
+    await settle()
+    sheet = screen.getByRole('dialog', { name: '백엔드 설정' })
+    expect(within(sheet).queryByRole('alert')).toBeNull()
   })
 })
 
@@ -394,6 +586,7 @@ describe('AgentMenu — 휴대폰', () => {
 
   it('PC 창의 메뉴는 그대로 — 폴더 열기 · 대화 내보내기가 있다', async () => {
     delete (window as any).dure.uploadFile
+    delete (window as any).dure[PHONE]
     const { AgentMenu } = await import('../../src/renderer/panel/AgentMenu')
     render(<AgentMenu agent={agent('a1')} onEdit={() => {}} onError={() => {}} onNotice={() => {}} />)
     fireEvent.click(screen.getByRole('button', { name: '메뉴' }))

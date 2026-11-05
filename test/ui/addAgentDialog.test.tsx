@@ -265,6 +265,7 @@ describe('AddAgentDialog — 휴대폰(폴더 고르기 창 없음)', () => {
   beforeEach(() => {
     // 휴대폰의 window.dure(wsApi) — uploadFile 이 있다. pickFolder 는 PC 전용이라 부르면 안 된다
     ;(window as any).dure.uploadFile = vi.fn()
+    ;(window as any).dure[Symbol.for('dure.phone')] = true // 휴대폰 표시
     snapshot = {
       ...snapshot,
       agents: [
@@ -432,6 +433,7 @@ describe('AddAgentDialog — 서버 방', () => {
 
   it('휴대폰 — 그 서버 방 에이전트들의 폴더를 고를 수 있고, 고르면 경로 칸에 들어가 확인을 거친다', async () => {
     ;(window as any).dure.uploadFile = vi.fn()
+    ;(window as any).dure[Symbol.for('dure.phone')] = true // 휴대폰 표시
     snapshot = { ...snapshot, agents: snapshot.agents.map(a => (a.roomId === 'r1' ? { ...a, folder: a.id === 'a1' ? '/srv/plan' : '/srv/web' } : a)) }
     const { getStore } = await import('../../src/renderer/state/store')
     const { AddAgentDialog } = await import('../../src/renderer/shell/AddAgentDialog')

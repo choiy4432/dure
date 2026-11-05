@@ -23,6 +23,7 @@ import { FIT_OPTIONS, ZoomControls } from './ZoomControls'
 import { EdgeModeControl } from './EdgeModeControl'
 import { fitPolicy, movedEnough, type Viewport, type FitReason, type FitState } from './fitPolicy'
 import { AUTO_FIT_MIN, arrange, columnsFor, isUnplaced, placeMissing, type Point } from './layout'
+import { firstView, rememberView, rememberedView } from './touchView'
 
 /** 처음 그릴 때와 자동 맞춤 — 모두 보기와 같되 너무 작아지지 않게 하한을 둔다 */
 const AUTO_FIT = { ...FIT_OPTIONS, minZoom: AUTO_FIT_MIN }
@@ -67,14 +68,15 @@ const ARIA_TOUCH = {
  * 관계도 — 그 방의 에이전트 카드와 넘김 엣지. 방을 바꾸면 처음부터 다시 그린다(화면 맞춤 포함).
  * onAddAgent — 오른쪽 아래 '에이전트 추가'(App 이 추가 대화상자를 연다)
  * touch — 휴대폰: 카드 끌기 끔(한 손가락 끌기는 판 이동, 두 손가락은 확대·축소) · 요약 칩·확대 조절·선 보기 대신 맞춤 단추 하나 ·
- * 화면 밖 할 일 알약은 그 카드로 옮겨 가기만(누르면 대화가 화면을 덮으니 고르지 않는다)
+ * 화면 밖 할 일 알약은 그 카드로 옮겨 가기만(누르면 대화가 화면을 덮으니 고르지 않는다) ·
+ * 판이 내려갔다 다시 그려지면(대화를 열었다 돌아옴) 방마다 기억한 화면으로, focus(돌아온 대화의 에이전트) 카드는 화면 안에(touchView)
  */
-export function RelationMap({ onAddAgent, touch = false }: { onAddAgent?: () => void; touch?: boolean } = {}) {
+export function RelationMap({ onAddAgent, touch = false, focus = null }: { onAddAgent?: () => void; touch?: boolean; focus?: AgentId | null } = {}) {
   const roomId = useDure(s => s.roomId)
   if (!roomId) return null
   return (
     <ReactFlowProvider key={roomId}>
-      <MapCanvas roomId={roomId} onAddAgent={onAddAgent} touch={touch} />
+      <MapCanvas roomId={roomId} onAddAgent={onAddAgent} touch={touch} focus={touch ? focus : null} />
     </ReactFlowProvider>
   )
 }
@@ -103,7 +105,7 @@ interface PairAt {
   y: number
 }
 
-function MapCanvas({ roomId, onAddAgent, touch }: { roomId: RoomId; onAddAgent?: () => void; touch: boolean }) {
+function MapCanvas({ roomId, onAddAgent, touch, focus }: { roomId: RoomId; onAddAgent?: () => void; touch: boolean; focus: AgentId | null }) {
   const seats = useDure(
     s => s.agents.filter(a => a.roomId === roomId).map(a => ({ id: a.id, name: a.name, role: a.role, pos: a.pos })),
     seatsEqual,
@@ -185,22 +187,48 @@ function MapCanvas({ roomId, onAddAgent, touch }: { roomId: RoomId; onAddAgent?:
   // 자동 맞춤 상태 — 사건마다 fitPolicy 가 다음 상태와 맞출지를 정한다
   const fitState = useRef<FitState>({ userMoved: false })
   const moveFrom = useRef<Viewport | null>(null) // 사용자가 움직이기 시작할 때의 화면
-  /** 휴대폰 맞춤(TOUCH_PAD · TOUCH_READ_ZOOM 참고) — 카드 크기를 잰 뒤에만(재기 전엔 아무것도 안 한다) */
-  const touchFit = useCallback((duration?: number) => {
+  /** 휴대폰 맞춤 화면(TOUCH_PAD · TOUCH_READ_ZOOM 참고) — 카드 크기를 잰 뒤에만(재기 전엔 null) */
+  const touchFitView = useCallback((): Viewport | null => {
     const el = wrap.current
     const ns = flow.getNodes()
-    if (!el || ns.length === 0) return
+    if (!el || ns.length === 0) return null
     const b = flow.getNodesBounds(ns)
     const availW = el.clientWidth - 2 * TOUCH_PAD.x
     const availH = el.clientHeight - TOUCH_PAD.top - TOUCH_PAD.bottom
-    if (availW <= 0 || availH <= 0 || b.width <= 0 || b.height <= 0) return
+    if (availW <= 0 || availH <= 0 || b.width <= 0 || b.height <= 0) return null
     const zoom = Math.min(1, Math.max(TOUCH_READ_ZOOM, Math.min(availW / b.width, availH / b.height)))
     const w = b.width * zoom
     // 가로는 들어오면 가운데, 세로는 늘 위부터(머리 바로 아래에서 읽기 시작한다)
     const x = (w <= availW ? TOUCH_PAD.x + (availW - w) / 2 : TOUCH_PAD.x) - b.x * zoom
     const y = TOUCH_PAD.top - b.y * zoom
-    void flow.setViewport({ x, y, zoom }, duration ? { duration, ease: easeOut5 } : undefined)
+    return { x, y, zoom }
   }, [flow])
+  const touchFit = useCallback((duration?: number) => {
+    const v = touchFitView()
+    if (v) void flow.setViewport(v, duration ? { duration, ease: easeOut5 } : undefined)
+  }, [flow, touchFitView])
+  /**
+   * 휴대폰 — 처음 그릴 때(카드를 잰 뒤 한 번): 이 방에서 기억한 화면(대화를 열기 전에 보던 자리), 없으면 맞춤.
+   * 대화에서 돌아왔으면(focus) 그 카드가 화면 밖일 때만 그 카드 쪽으로. 기억한 화면은 손으로 옮긴 것처럼 친다(크기 변화로 다시 맞추지 않는다)
+   */
+  const touchFirst = useCallback(() => {
+    const el = wrap.current
+    if (!el) return
+    const saved = rememberedView(roomId)
+    const node = focus ? flow.getNode(focus) : undefined
+    const w = node?.measured?.width ?? 0
+    const h = node?.measured?.height ?? 0
+    const v = firstView({
+      saved,
+      fit: touchFitView(),
+      card: node && w > 0 && h > 0 ? { x: node.position.x, y: node.position.y, width: w, height: h } : null,
+      area: { width: el.clientWidth, height: el.clientHeight },
+      pad: TOUCH_PAD,
+    })
+    if (!v) return
+    if (saved) fitState.current = fitPolicy(fitState.current, 'user-move').state
+    void flow.setViewport(v)
+  }, [flow, roomId, focus, touchFitView])
 
   const fitOn = useCallback((reason: FitReason) => {
     const r = fitPolicy(fitState.current, reason)
@@ -372,6 +400,8 @@ function MapCanvas({ roomId, onAddAgent, touch }: { roomId: RoomId; onAddAgent?:
           const from = moveFrom.current
           moveFrom.current = null
           if (from && movedEnough(from, vp)) fitOn('user-move')
+          // 휴대폰 — 방마다 마지막 화면을 적어 둔다(대화를 열었다 돌아오면 이 자리로)
+          if (touch) rememberView(roomId, vp)
         }}
         onPaneClick={() => getStore().selectAgent(null)}
         fitView={!touch}
@@ -391,7 +421,7 @@ function MapCanvas({ roomId, onAddAgent, touch }: { roomId: RoomId; onAddAgent?:
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={3} color="var(--dot)" bgColor="var(--canvas)" />
       </ReactFlow>
-      {touch && <FirstFit fit={touchFit} />}
+      {touch && <FirstFit fit={touchFirst} />}
       {!touch && <SummaryChips roomId={roomId} />}
       <OffscreenPill roomId={roomId} nodes={nodes} wrap={wrap} select={!touch} />
       {touch ? (

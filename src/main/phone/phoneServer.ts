@@ -4,6 +4,7 @@ import http, { type IncomingMessage, type OutgoingHttpHeaders, type ServerRespon
 import type { AddressInfo, Socket } from 'node:net'
 import path from 'node:path'
 import { pipeline, type Duplex } from 'node:stream'
+import zlib from 'node:zlib'
 import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import { safeName } from '../../engine/attachmentStore'
 import { ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../../shared/attachments'
@@ -82,6 +83,26 @@ const TYPES: Readonly<Record<string, string>> = {
   '.svg': 'image/svg+xml',
   '.webmanifest': 'application/manifest+json; charset=utf-8',
 }
+/**
+ * /assets/ 에서 압축해 줄 꼴 — 글 파일(빌드한 js·css·svg). woff2·png 는 이미 압축된 꼴이라 그대로.
+ * 휴대폰은 Tailscale 망으로 받는다 — 공유 묶음(js)이 줄여도 800kB 를 넘어 gzip 이 1/3 아래로 줄인다
+ */
+const GZIP_EXT: ReadonlySet<string> = new Set(['.js', '.css', '.svg'])
+
+/** Accept-Encoding 이 gzip 을 받는가 — 'gzip' 또는 '*' 이고 q 가 0 이 아니면 */
+export function acceptsGzip(header: string | string[] | undefined): boolean {
+  const all = Array.isArray(header) ? header.join(',') : header ?? ''
+  let star = false
+  for (const part of all.split(',')) {
+    const [name, ...params] = part.trim().toLowerCase().split(';')
+    const q = params.map((x) => x.trim()).find((x) => x.startsWith('q='))
+    const ok = !q || Number(q.slice(2)) > 0
+    if (name === 'gzip') return ok
+    if (name === '*') star = ok
+  }
+  return star
+}
+
 /** 정적 파일 경로의 마디 하나 — 빌드가 내는 이름 꼴만(점으로 시작·`..`·빈 마디·`\`·`:`·NUL 은 여기서 걸린다) */
 const SEGMENT = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/
 
@@ -325,6 +346,8 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
   let closed = false
   let closing: Promise<void> | null = null
   let unsubscribe: (() => void) | null = null
+  /** 압축한 /assets/ 파일 — 진짜 경로마다 하나(크기·고친 시각이 같은 동안). 처음 받을 때 한 번 압축한다(동시에 와도 한 번) */
+  const gzipped = new Map<string, { stamp: string; body: Promise<Buffer> }>()
 
   const safely = (f: () => void) => {
     try {
@@ -560,7 +583,7 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
   }
 
   /** staticDir 안의 파일 — 마디 꼴·확장자 허용 목록 · 글자로도 진짜 경로(realpath — 연결·junction 을 따라간 뒤)로도 안쪽만 */
-  async function staticFile(p: string): Promise<{ file: string; size: number; type: string; cache: string } | 'bad' | null> {
+  async function staticFile(p: string): Promise<{ file: string; size: number; stamp: string; type: string; cache: string; gzip: boolean } | 'bad' | null> {
     let rel: string
     try {
       rel = decodeURIComponent(p)
@@ -586,23 +609,53 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
       const cache = ext === '.html' || top === 'sw.js'
         ? 'no-store'
         : parts[0] === 'assets' ? 'public, max-age=31536000, immutable' : 'no-cache'
-      return { file: realFull, size: st.size, type, cache }
+      const gzip = parts[0] === 'assets' && GZIP_EXT.has(ext)
+      return { file: realFull, size: st.size, stamp: `${st.size}:${st.mtimeMs}`, type, cache, gzip }
     } catch {
       return null
     }
+  }
+
+  /** 압축한 바이트 — 기억해 둔 것이 있으면 그것, 없거나 파일이 바뀌었으면 새로(실패하면 잊는다 — 다음엔 다시) */
+  function gzipOf(file: string, stamp: string): Promise<Buffer> {
+    const had = gzipped.get(file)
+    if (had && had.stamp === stamp) return had.body
+    const body = fs.promises.readFile(file).then(
+      (raw) => new Promise<Buffer>((resolve, reject) => zlib.gzip(raw, { level: 9 }, (e, out) => (e ? reject(e) : resolve(out)))),
+    )
+    gzipped.set(file, { stamp, body })
+    body.catch(() => {
+      if (gzipped.get(file)?.body === body) gzipped.delete(file)
+    })
+    return body
   }
 
   async function serveStatic(req: IncomingMessage, res: ServerResponse, gate: Gate, p: string): Promise<void> {
     const hit = await staticFile(p)
     if (hit === 'bad') return refuse(req, res, 400, E.bad)
     if (!hit) return refuse(req, res, 404, E.notFound)
-    res.writeHead(200, {
+    const head: OutgoingHttpHeaders = {
       ...BASE_HEADERS,
       'content-type': hit.type,
-      'content-length': hit.size,
       'cache-control': hit.cache,
       'content-security-policy': cspFor(gate),
-    })
+      // 압축하는 꼴이면 받는 쪽마다 몸이 다르다 — 중간 캐시가 섞지 않게
+      ...(hit.gzip ? { vary: 'Accept-Encoding' } : {}),
+    }
+    if (hit.gzip && acceptsGzip(req.headers['accept-encoding'])) {
+      let body: Buffer | null = null
+      try {
+        body = await gzipOf(hit.file, hit.stamp)
+      } catch {
+        body = null // 압축을 못 했다 — 그대로 보낸다
+      }
+      if (body) {
+        if (res.destroyed) return
+        res.writeHead(200, { ...head, 'content-encoding': 'gzip', 'content-length': body.length })
+        return void res.end(req.method === 'HEAD' ? undefined : body)
+      }
+    }
+    res.writeHead(200, { ...head, 'content-length': hit.size })
     if (req.method === 'HEAD') return void res.end()
     // pipeline — 휴대폰이 받다 끊어도 읽던 파일을 닫는다(pipe 는 원본을 열어 둔다)
     pipeline(fs.createReadStream(hit.file), res, () => {})
