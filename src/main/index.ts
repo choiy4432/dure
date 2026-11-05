@@ -20,7 +20,7 @@ import { logEngineErrors, registerIpc, type AppHost, type IpcDeps } from './ipc'
 import { createDispatcher } from './dispatch'
 import { createPhoneController, phoneStaticDir, type PhoneController } from './phone/phoneController'
 import { createTailscale, resolveTailscaleCommand } from './phone/tailscale'
-import { createTrayControl, trayTipOnce, TRAY_TIP, type TrayControl } from './tray'
+import { createTrayControl, startHidden, trayTipOnce, TRAY_TIP, type TrayControl } from './tray'
 import { appPageMatcher, focusExisting, guardNavigation, HIDDEN_ARG, withoutHiddenArg } from './window'
 import { TITLE_BAR_HEIGHT, veiledColor, windowColors } from './windowTheme'
 
@@ -46,8 +46,10 @@ const phoneOn = (): boolean => {
 let tray: TrayControl | null = null
 /** 처음 숨을 때 안내 알림 — 누름을 받으려면 붙들어 둔다(안 그러면 GC 가 거둔다) */
 let trayTipNote: Notification | null = null
-/** 숨겨 시작(로그인 항목의 --hidden) — 휴대폰 연결이 켜져 있을 때만 창을 띄우지 않는다(꺼져 있으면 트레이가 없어 안 보이는 두레가 된다) */
+/** 숨겨 시작(로그인 항목의 --hidden) — 휴대폰 연결이 켜져 있고 트레이가 정말 있을 때만 창을 띄우지 않는다(startHidden) */
 const launchedHidden = process.argv.includes(HIDDEN_ARG)
+/** 창이 생기기 전(엔진 준비 중)에 두레를 또 켰다 — 그러면 숨겨 시작이어도 창을 보인다 */
+let showRequested = false
 /** Windows 로그아웃·끄기 — 그때 오는 창 닫기는 숨기지 않는다 */
 let sessionEnding = false
 /** 'PC 쓰는 중' — Windows 의 마지막 입력 뒤 이만큼(초) 안이고 잠금 화면이 아님(powerMonitor) → 휴대폰은 안 울린다 */
@@ -245,7 +247,11 @@ function createWindow(o: { hidden: boolean }): BrowserWindow {
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => focusExisting(mainWindow))
+  // 창이 아직 없으면(숨겨 시작이 엔진을 기다리는 중) 잃지 않게 적어 둔다 — 창을 만들 때 숨기지 않는다
+  app.on('second-instance', () => {
+    if (mainWindow) focusExisting(mainWindow)
+    else showRequested = true
+  })
 
   // 끄는 길 — before-quit 과 업데이트 설치(beforeInstall)가 같은 정리 하나를 쓴다(두 번 끄지 않는다). 판단은 quit.ts
   const quitControl = createQuitControl({
@@ -537,7 +543,10 @@ if (!app.requestSingleInstanceLock()) {
         },
         ipcDeps,
       )
-      const win = createWindow({ hidden: launchedHidden && phoneOn() })
+      // 트레이를 못 만들었거나(기록만 남는다) 그사이 두레를 또 켰으면 숨기지 않는다 — 창도 트레이도 없는 두레가 되지 않게
+      const win = createWindow({
+        hidden: startHidden({ launchedHidden, phoneOn: phoneOn(), trayActive: tray.active(), showRequested }),
+      })
       mainWindow = win
       // 창 닫기(×) — 휴대폰 연결 중이면 막고 숨긴다(트레이로). 꺼져 있거나 끄는 중(before-quit 이 정리를 시작함 · 업데이트 설치)이면 지금처럼 닫힌다
       win.on('close', (e) => {

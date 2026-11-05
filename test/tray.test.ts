@@ -6,6 +6,7 @@ import { readAppPrefs, writeAppPrefs } from '../src/main/appPrefs'
 import {
   closeDecision,
   createTrayControl,
+  startHidden,
   trayTipOnce,
   TRAY_MENU,
   TRAY_TIP,
@@ -91,6 +92,48 @@ describe('closeDecision · 창 닫기', () => {
     expect(hide).not.toHaveBeenCalled()
     expect(deps.notifyOnce).not.toHaveBeenCalled()
     expect(deps.log).toHaveBeenCalled()
+  })
+})
+
+describe('startHidden · 숨겨 시작', () => {
+  const base = { launchedHidden: true, phoneOn: true, trayActive: true, showRequested: false }
+
+  it('--hidden · 휴대폰 연결 켜짐 · 트레이 있음 · 창을 보여 달란 적 없음 — 그때만 숨긴다', () => {
+    expect(startHidden(base)).toBe(true)
+  })
+
+  it('하나라도 빠지면 창을 보인다 — 창도 트레이도 없는 두레가 되지 않게', () => {
+    expect(startHidden({ ...base, launchedHidden: false })).toBe(false) // 그냥 켬
+    expect(startHidden({ ...base, phoneOn: false })).toBe(false) // 꺼져 있으면 트레이가 없다
+    // 트레이를 못 만들었으면(아이콘을 못 읽음 등 — 기록만 남는다) 숨기면 다시 켜는 수밖에 없다
+    expect(startHidden({ ...base, trayActive: false })).toBe(false)
+    // 창이 생기기 전(엔진 준비 중)에 두레를 또 켰으면 — 그 요청을 잃지 않고 보인다
+    expect(startHidden({ ...base, showRequested: true })).toBe(false)
+    expect(startHidden({ launchedHidden: false, phoneOn: false, trayActive: false, showRequested: true })).toBe(false)
+  })
+
+  it('active — 트레이가 지금 있는지(숨겨 시작이 이걸 본다)', () => {
+    const { tray, made } = setup()
+    expect(tray.active()).toBe(false)
+    tray.sync(true)
+    expect(tray.active()).toBe(true)
+    tray.sync(false)
+    expect(made[0].destroy).toHaveBeenCalledTimes(1)
+    expect(tray.active()).toBe(false)
+    tray.sync(true)
+    expect(tray.active()).toBe(true)
+    tray.dispose()
+    expect(tray.active()).toBe(false)
+
+    // new Tray 가 던지면(아이콘을 못 읽음) 켜져 있어도 트레이는 없다
+    const broken = setup({
+      makeTray: () => {
+        throw new Error('no icon')
+      },
+    })
+    broken.tray.sync(true)
+    expect(broken.tray.active()).toBe(false)
+    expect(broken.deps.log).toHaveBeenCalled()
   })
 })
 

@@ -18,6 +18,20 @@ export function closeDecision(o: { phoneOn: boolean; quitting: boolean }): Close
   return o.phoneOn && !o.quitting ? 'hide' : 'close'
 }
 
+/**
+ * 숨겨 시작(로그인 항목의 --hidden) — 창을 띄우지 않아도 될 때만 true.
+ * 휴대폰 연결이 켜져 있고 트레이가 정말 있어야 한다(new Tray 가 던지면 기록만 남아 창도 트레이도 없는 두레가 된다).
+ * 창이 생기기 전(엔진 준비 중)에 두레를 또 켰으면(showRequested) 그 요청대로 보인다
+ */
+export function startHidden(o: {
+  launchedHidden: boolean
+  phoneOn: boolean
+  trayActive: boolean
+  showRequested: boolean
+}): boolean {
+  return o.launchedHidden && o.phoneOn && o.trayActive && !o.showRequested
+}
+
 export interface TrayMenuItem {
   label: string
   click(): void
@@ -54,6 +68,8 @@ export interface TrayControlOptions {
 export interface TrayControl {
   /** 휴대폰 연결 켜짐/꺼짐에 맞춘다 — 켜지면 트레이를 만들고, 꺼지면 없앤다(그때 창이 숨어 있으면 보인다) */
   sync(phoneOn: boolean): void
+  /** 트레이가 지금 있나 — 켜져 있어도 만들기가 실패했으면 false(숨겨 시작이 이걸 본다) */
+  active(): boolean
   /**
    * 창 'close' — closeDecision 이 hide 면 막고(preventDefault) 숨긴 뒤 처음 한 번 안내.
    * 숨긴 창엔 늘 트레이가 있다: 켜기가 도는 중이라 아직 트레이가 없으면 여기서 만들고, 못 만들면 숨기지 않고 닫는다
@@ -115,6 +131,8 @@ export function createTrayControl(o: TrayControlOptions): TrayControl {
         if (!o.isWindowVisible()) o.showWindow()
       })
     },
+
+    active: () => tray !== null,
 
     close(e, c) {
       if (closeDecision(c) === 'close' || !ensure()) return 'close'
