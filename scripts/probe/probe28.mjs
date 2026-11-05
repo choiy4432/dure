@@ -7,7 +7,7 @@
 import { createServer } from 'node:http'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { appendFileSync, existsSync } from 'node:fs'
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { deflateSync } from 'node:zlib'
 import { join } from 'node:path'
 import os from 'node:os'
@@ -85,7 +85,11 @@ document.getElementById('sub').onclick = async () => {
 // 같은 tag 의 알림이 이미 있으면 안드로이드는 조용히 바꿔치기만 한다(팝업 없음) — 알림마다 다른 tag + renotify.
 // badge = 상태 표시줄의 작은 단색 아이콘(없으면 크롬 아이콘), icon = 알림 안의 큰 아이콘
 const SW = `self.addEventListener('push', e => { const d = e.data ? e.data.json() : {}; e.waitUntil(self.registration.showNotification(d.title || '두레', { body: d.body || '', tag: d.tag || 'probe28', renotify: true, icon: '/icon-192.png', badge: '/badge.png', data: { url: '/' } })) })
-self.addEventListener('notificationclick', e => { e.notification.close(); e.waitUntil(clients.openWindow(e.notification.data.url)) })`
+self.addEventListener('notificationclick', e => { e.notification.close(); e.waitUntil(clients.openWindow(e.notification.data.url)) })
+// 새 판을 받으면 기다리지 않고 바로 이어받는다 — 안 그러면 알림을 예전 판이 띄운다(badge·icon 없는 판)
+self.addEventListener('install', () => self.skipWaiting())
+self.addEventListener('activate', e => e.waitUntil(self.clients.claim()))
+// 판 표시(시험용): v4`
 const MANIFEST = JSON.stringify({
   name: '두레 실측', short_name: '두레', start_url: '/', display: 'standalone', background_color: '#FFFFFF', theme_color: '#2563EB',
   icons: [{ src: '/icon-192.png', sizes: '192x192', type: 'image/png' }, { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }],
@@ -113,9 +117,14 @@ const png = (size, pixel) => {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))])
 }
 const appIcon = (size) => png(size, (u, v) => (inD(u, v) ? [255, 255, 255, 255] : [37, 99, 235, 255]))
-const ICON192 = appIcon(192)
-const ICON512 = appIcon(512)
-const BADGE = png(96, (u, v) => (inD(u, v) ? [255, 255, 255, 255] : [0, 0, 0, 0]))
+// 두레 마크(scripts/icon/build.mjs 가 구운 resources/icon/mobile/*.png)가 있으면 그것, 없으면 위의 그린 D
+const mobileIcon = (file, fallback) => {
+  const p = new URL(`../../resources/icon/mobile/${file}`, import.meta.url)
+  return existsSync(p) ? readFileSync(p) : fallback()
+}
+const ICON192 = mobileIcon('dure-192.png', () => appIcon(192))
+const ICON512 = mobileIcon('dure-512.png', () => appIcon(512))
+const BADGE = mobileIcon('dure-badge-96.png', () => png(96, (u, v) => (inD(u, v) ? [255, 255, 255, 255] : [0, 0, 0, 0])))
 const ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#2563EB"/><text x="32" y="44" font-size="34" text-anchor="middle" fill="#fff" font-family="sans-serif">D</text></svg>'
 
 const body = (req) => new Promise((r) => { let s = ''; req.on('data', (d) => { if (s.length < 16384) s += d }); req.on('end', () => r(s)) })

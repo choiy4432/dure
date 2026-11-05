@@ -20,6 +20,19 @@ for (const size of SIZES) {
   await page.setContent(`<!doctype html><html><body style="margin:0;background:transparent"><div style="width:${size}px;height:${size}px">${svg.replace('<svg ', `<svg width="${size}" height="${size}" `)}</div></body></html>`)
   pngs.push({ size, data: await page.screenshot({ omitBackground: true, clip: { x: 0, y: 0, width: size, height: size } }) })
 }
+// 휴대폰용(웹 앱 매니페스트·알림) — resources/icon/mobile/: 앱 아이콘 192·512(dure.svg), 상태 표시줄 badge 96(dure-badge.svg, 흰 단색·투명)
+const MOBILE = [
+  { file: 'dure-192.png', size: 192, svg: 'dure.svg' },
+  { file: 'dure-512.png', size: 512, svg: 'dure.svg' },
+  { file: 'dure-badge-96.png', size: 96, svg: 'dure-badge.svg' },
+]
+fs.mkdirSync(path.join(SRC, 'mobile'), { recursive: true })
+for (const m of MOBILE) {
+  const svg = fs.readFileSync(path.join(SRC, m.svg), 'utf8')
+  await page.setViewportSize({ width: m.size, height: m.size })
+  await page.setContent(`<!doctype html><html><body style="margin:0;background:transparent"><div style="width:${m.size}px;height:${m.size}px">${svg.replace('<svg ', `<svg width="${m.size}" height="${m.size}" `)}</div></body></html>`)
+  fs.writeFileSync(path.join(SRC, 'mobile', m.file), await page.screenshot({ omitBackground: true, clip: { x: 0, y: 0, width: m.size, height: m.size } }))
+}
 await browser.close()
 
 // ICO — 머리 6바이트 + 칸마다 16바이트 + PNG 그대로(Vista 이후 모든 크기에 PNG 칸을 읽는다)
