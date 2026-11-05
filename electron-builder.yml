@@ -6,6 +6,10 @@ files:
   - out/**
   - resources/icon.ico
   - package.json
+# 휴대폰 서버가 렌더러 묶음(mobile.html·assets)을 진짜 파일로 읽어 내어 준다(realpath·stream) — app.asar.unpacked/out/renderer.
+# 창은 그대로 app.asar/out/renderer/index.html 로 연다(Electron 이 풀린 파일을 알아서 읽는다)
+asarUnpack:
+  - out/renderer/**
 win:
   target: nsis
   icon: resources/icon.ico

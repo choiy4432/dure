@@ -53,11 +53,44 @@ export type TailscaleState =
   | { kind: 'no-https'; enableUrl: string | null }
   | { kind: 'ready'; dnsName: string }
 
-/** PC 설정의 휴대폰 칸이 받는 것 — connected = 지금 붙은 휴대폰 수, url = 휴대폰 주소(준비 안 됐으면 null) */
+/** PC 설정의 휴대폰 칸이 받는 것(앱 사건 'phone' · phoneState) — 🔴 PC 창에만 간다(휴대폰엔 안 감) */
 export type PhoneState = {
   settings: PhoneSettings
   devices: PhoneDevice[]
+  /** 지금 소켓이 하나라도 열린 기기 수 */
   connected: number
-  tailscale: TailscaleState
+  /** 마지막으로 본 Tailscale 상태 — null = 아직 안 봄(꺼져 있으면 시작 때 tailscale 을 부르지 않는다 · phoneCheck 로 본다) */
+  tailscale: TailscaleState | null
+  /** 휴대폰 주소 `https://<dnsName>[:포트]/mobile.html` — 길이 열려 있을 때만, 아니면 null */
   url: string | null
+  /** 지금 살아 있는 짝 맺기 — PC 가 띄우는 6자리 숫자와 만료 시각(벽시계). 없음·썼음·취소·만료·틀림 상한이면 null. QR 의 짝 코드는 싣지 않는다 */
+  pairing: { pin: string; expiresAt: number } | null
+  /** 켜기가 Tailscale 상태 밖의 까닭으로 멈췄다(https 포트가 다 쓰임·serve 실패·서버 포트 없음) — 한국어 한 줄, 없으면 null */
+  problem: string | null
 }
+
+/** setPhone 이 받는 것 — 화면이 바꾸는 칸만(포트는 main 이 정한다). 꼴이 틀린 칸은 pickPhoneChange 가 버린다 */
+export type PhoneSettingsChange = {
+  enabled?: boolean
+  keepAwake?: boolean
+  openAtLogin?: boolean
+  notify?: { asks?: boolean; finished?: boolean }
+}
+
+/** 받은 값에서 불리언인 아는 칸만 — 그 밖(글·모르는 칸·port·객체 아님)은 버린다 */
+export function pickPhoneChange(v: unknown): PhoneSettingsChange {
+  const obj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x)
+  if (!obj(v)) return {}
+  const out: PhoneSettingsChange = {}
+  for (const k of ['enabled', 'keepAwake', 'openAtLogin'] as const) if (typeof v[k] === 'boolean') out[k] = v[k] as boolean
+  if (obj(v.notify)) {
+    const n: { asks?: boolean; finished?: boolean } = {}
+    if (typeof v.notify.asks === 'boolean') n.asks = v.notify.asks
+    if (typeof v.notify.finished === 'boolean') n.finished = v.notify.finished
+    if (Object.keys(n).length > 0) out.notify = n
+  }
+  return out
+}
+
+/** phonePairStart 의 답 — qr = 휴대폰 주소 + `#pair=<짝 코드>` 의 QR(PNG data URL), url = 그 주소, pin = 6자리 숫자, expiresAt = 만료(벽시계) */
+export type PhonePairOffer = { qr: string; pin: string; url: string; expiresAt: number }

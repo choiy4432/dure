@@ -7,6 +7,7 @@ import {
 } from '../shared/ipcContract'
 import { ATTACH_FAILED, ATTACH_NOT_FOUND, ATTACH_OPEN_FAILED, IMAGE_TYPES, opensAsDocument } from '../shared/attachments'
 import { PHONE_DENIED, phoneAllows } from '../shared/phoneAccess'
+import { pickPhoneChange } from '../shared/phoneTypes'
 import { REALPATH_FATAL } from '../engine/attachmentStore'
 import { SLEEP_DEFAULT_MIN, type AgentPatch, type ThemePref, type UserPart } from '../engine/types'
 import { pickPrefs } from './appPrefs'
@@ -15,7 +16,7 @@ import { pickPrefs } from './appPrefs'
 // 부르는 쪽이 먼저 가린다: IPC 는 isAppPage(registerIpc), 휴대폰은 phoneDispatcher(허용 목록)
 
 type AppMethod = (typeof APP_METHODS)[number]
-/** 엔진 없이 도는 앱 쪽 일 — APP_METHODS 14개(main 이 준비 흐름·claude 최신으로·두레 업데이트로 채운다) */
+/** 엔진 없이 도는 앱 쪽 일 — APP_METHODS 전부(main 이 준비 흐름·claude 최신으로·두레 업데이트·휴대폰 연결로 채운다) */
 export type AppHost = Pick<DureApi, AppMethod>
 
 /** 디스패처가 쓰는 main 쪽 일 — IpcDeps 는 이것에 창 쪽 칸(사건 잇기·화면 주소 가리기)을 더한 것 */
@@ -68,6 +69,7 @@ const PARTS_BAD = '보낼 내용이 올바르지 않아요'
 const FILE_PART_BAD = `${ATTACH_FAILED} — 첨부 정보가 올바르지 않아요`
 const AGENT_BAD = '에이전트 정보가 올바르지 않아요'
 const HISTORY_BAD = '대화 기록을 부를 수 없어요'
+const PHONE_DEVICE_BAD = '끊을 기기를 알 수 없어요'
 
 /** 칸이 꼭 이 이름들뿐인 보통 객체인가(목록·null 아님) — 부르는 쪽이 꾸민 칸을 엔진에 넘기지 않게 */
 function hasOnlyKeys(v: unknown, keys: readonly string[]): v is Record<string, unknown> {
@@ -340,6 +342,15 @@ const APP_HANDLERS: Record<AppMethod, (app: AppHost, ...a: unknown[]) => unknown
   installUpdate: (a) => a.installUpdate(),
   openReleasePage: (a) => a.openReleasePage(),
   setTourVeil: (a, on) => a.setTourVeil(on === true),
+  phoneState: (a) => a.phoneState(),
+  setPhone: (a, p) => a.setPhone(pickPhoneChange(p)), // 불리언인 아는 칸만 — 포트·모르는 칸은 버린다
+  phoneCheck: (a) => a.phoneCheck(),
+  phonePairStart: (a) => a.phonePairStart(),
+  phonePairCancel: (a) => a.phonePairCancel(),
+  phoneUnpair: (a, id) => {
+    if (typeof id !== 'string' || id === '') throw new Error(PHONE_DEVICE_BAD)
+    return a.phoneUnpair(id)
+  },
 }
 
 const STARTS_NOW: ReadonlySet<string> = new Set(BEFORE_START)

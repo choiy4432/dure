@@ -20,13 +20,35 @@ export type StoredPhoneDevice = PhoneDevice & { tokenHash: string; subscription?
 
 export type VapidKeys = { publicKey: string; privateKey: string }
 
-export type PhoneFile = { settings: PhoneSettings; devices: StoredPhoneDevice[]; vapid?: VapidKeys }
+/**
+ * 두레가 연 `tailscale serve` 길 — 켜기 전에 적어 두고(serveOn 앞), 끈 뒤에 지운다. 비정상 종료로 남은 길은 다음 시작 때 이 짝만 정리한다
+ * (포트를 짐작해 지우지 않는다 — 사용자 길을 건드리지 않게). dnsName 이 없으면 https 켜기 링크를 받으려고 이름을 모른 채 열어 본 것
+ */
+export type PhoneServeRecord = { httpsPort: number; localPort: number; dnsName?: string }
+
+/**
+ * serve — 지금 열려 있을 수 있는 두레 길(PhoneServeRecord) ·
+ * httpsPort — 휴대폰이 아는 https 포트(마지막으로 길을 연 포트). 끈 뒤에도 남겨 다음 켜기에서 먼저 쓴다 — 주소가 바뀌면 홈 화면 앱·알림 구독이 끊긴다
+ */
+export type PhoneFile = {
+  settings: PhoneSettings
+  devices: StoredPhoneDevice[]
+  vapid?: VapidKeys
+  serve?: PhoneServeRecord
+  httpsPort?: number
+}
 
 /** 설정은 칸별로 합친다(notify 도 칸별로) — 꼴이 틀린 칸은 무시하고 지금 값 그대로 */
 export type PhoneSettingsPatch = Partial<Omit<PhoneSettings, 'notify'>> & { notify?: Partial<PhoneSettings['notify']> }
 
-/** devices·vapid 는 주면 통째로 바뀐다 — 꼴이 틀리면 write 가 던진다 */
-export type PhoneFilePatch = { settings?: PhoneSettingsPatch; devices?: StoredPhoneDevice[]; vapid?: VapidKeys }
+/** devices·vapid·serve 는 주면 통째로 바뀐다(serve: null 은 지움) — 꼴이 틀리면 write 가 던진다 */
+export type PhoneFilePatch = {
+  settings?: PhoneSettingsPatch
+  devices?: StoredPhoneDevice[]
+  vapid?: VapidKeys
+  serve?: PhoneServeRecord | null
+  httpsPort?: number
+}
 
 export interface PhoneStore {
   /**
@@ -44,6 +66,8 @@ const TOKEN_HASH_RE = /^[0-9a-f]{64}$/
 const ID_MAX = 64
 const ENDPOINT_MAX = 2048
 const KEY_MAX = 512
+/** Tailscale 이 준 이 기기의 DNS 이름 꼴(stateFromStatus 가 끝 '.' 을 떼고 소문자로 준다) */
+const DNS_NAME_RE = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/
 /** 브라우저가 준 endpoint 는 직렬화된 주소라 ASCII 의 보이는 글자뿐 — 빈칸·제어 문자·그 밖의 글자가 있으면 거른다 */
 const ENDPOINT_CHARS = /^[\x21-\x7E]+$/
 /** p256dh = P-256 공개 열쇠 65바이트(87자) · auth = 16바이트(22자) — base64url, 끝의 덧붙임(=)은 있어도 됨 */
@@ -186,10 +210,21 @@ function vapidFrom(v: unknown): VapidKeys | undefined {
   return shortText(publicKey, KEY_MAX) && shortText(privateKey, KEY_MAX) ? { publicKey, privateKey } : undefined
 }
 
+function serveFrom(v: unknown): PhoneServeRecord | undefined {
+  if (!isObject(v)) return undefined
+  const { httpsPort, localPort, dnsName } = v
+  if (!isPort(httpsPort) || !isPort(localPort)) return undefined
+  if (dnsName === undefined) return { httpsPort, localPort }
+  return typeof dnsName === 'string' && DNS_NAME_RE.test(dnsName) ? { httpsPort, localPort, dnsName } : undefined
+}
+
 function fileFrom(raw: Record<string, unknown>): PhoneFile {
   const out: PhoneFile = { settings: settingsFrom(raw.settings, DEFAULT_PHONE_SETTINGS), devices: devicesFrom(raw.devices) }
   const vapid = vapidFrom(raw.vapid)
   if (vapid) out.vapid = vapid
+  const serve = serveFrom(raw.serve)
+  if (serve) out.serve = serve
+  if (isPort(raw.httpsPort)) out.httpsPort = raw.httpsPort
   return out
 }
 
@@ -251,6 +286,12 @@ export function openPhoneStore(dir: string, o: { now?: () => number } = {}): Pho
       const vapid = patch.vapid !== undefined ? vapidFrom(patch.vapid) : cur.vapid
       if (patch.vapid !== undefined && !vapid) throw new Error('VAPID 열쇠 꼴이 틀렸어요')
       if (vapid) next.vapid = vapid
+      const serve = patch.serve === null ? undefined : patch.serve !== undefined ? serveFrom(patch.serve) : cur.serve
+      if (patch.serve != null && !serve) throw new Error('serve 길 기록 꼴이 틀렸어요')
+      if (serve) next.serve = serve
+      if (patch.httpsPort !== undefined && !isPort(patch.httpsPort)) throw new Error('https 포트 꼴이 틀렸어요')
+      const httpsPort = patch.httpsPort ?? cur.httpsPort
+      if (httpsPort !== undefined) next.httpsPort = httpsPort
       fs.mkdirSync(dir, { recursive: true })
       const tmp = `${file}.tmp`
       fs.writeFileSync(tmp, fileText(next))

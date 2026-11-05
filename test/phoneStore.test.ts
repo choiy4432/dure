@@ -267,3 +267,30 @@ test('BOM 붙은 파일도 읽는다 · 남은 .tmp 는 무시하고 덮어 쓴�
   expect(saved().settings).toEqual({ ...DEFAULT_PHONE_SETTINGS, enabled: true, keepAwake: false });
   expect(fs.existsSync(`${file()}.tmp`)).toBe(false);
 });
+
+test('serve 길 기록 · https 포트 — 쓰고 다시 읽힘 · serve:null 이면 지움(포트는 남음) · 꼴이 틀리면 write 가 던짐 · 손댄 칸은 버림', () => {
+  const s = openPhoneStore(dir);
+  const rec = { httpsPort: 443, localPort: 47616, dnsName: 'pc.tail0000.ts.net' };
+  s.write({ serve: rec, httpsPort: 443 });
+  expect(saved().serve).toEqual(rec);
+  expect(saved().httpsPort).toBe(443);
+  expect(openPhoneStore(dir).read()).toMatchObject({ serve: rec, httpsPort: 443 });
+  s.write({ serve: { httpsPort: 443, localPort: 47615 } }); // 이름 없이 — https 켜기 링크를 받으려고 열어 본 것
+  expect(saved().serve).toEqual({ httpsPort: 443, localPort: 47615 });
+  s.write({ devices: [] }); // 다른 칸을 써도 그대로
+  expect(saved().serve).toEqual({ httpsPort: 443, localPort: 47615 });
+  s.write({ serve: null });
+  expect(saved().serve).toBeUndefined();
+  expect(saved().httpsPort).toBe(443);
+
+  for (const bad of [{ httpsPort: 0, localPort: 1 }, { httpsPort: 443, localPort: '1' }, { httpsPort: 443, localPort: 1, dnsName: 'Bad Name' }, 'x']) {
+    expect(() => s.write({ serve: bad as never }), JSON.stringify(bad)).toThrow('serve 길 기록 꼴이 틀렸어요');
+  }
+  expect(() => s.write({ httpsPort: 70000 })).toThrow('https 포트 꼴이 틀렸어요');
+  expect(saved().serve).toBeUndefined();
+
+  seed({ settings: {}, devices: [], serve: { httpsPort: 443, localPort: 1, dnsName: '../x' }, httpsPort: 'x' });
+  const f = openPhoneStore(dir).read();
+  expect(f.serve).toBeUndefined();
+  expect(f.httpsPort).toBeUndefined();
+});

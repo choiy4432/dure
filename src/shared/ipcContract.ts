@@ -2,6 +2,7 @@ import type {
   Agent, AgentDescription, RemoteIssue, RemoteIssueKind, SshHostEntry, AgentId, ConversationSummary, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, SleepBlock, ThemePref, UserPart,
 } from '../engine/types'
 import type { AppEventMap, AppInfo, AppPrefs, ClaudeUpdateState, SetupState, UpdateState } from './appTypes'
+import type { PhonePairOffer, PhoneSettingsChange, PhoneState, TailscaleState } from './phoneTypes'
 
 /** 창이 받는 사건 전부 — 엔진 사건 + 앱 사건(이름이 겹치면 아래 NO_CLASH 에서 타입 오류) */
 export type DureEventMap = EngineEventMap & AppEventMap
@@ -163,6 +164,19 @@ export interface DureApi {
   /** 투어 막이 떠 있는 동안 창 단추 띠를 막 색으로 물들인다(Windows 가 웹 화면 위에 그리는 단추는 막이 못 덮는다) */
   setTourVeil(on: boolean): Promise<void>
 
+  // ── 휴대폰으로 쓰기(APP_METHODS — PC 창에서만, PHONE_ACCESS 'pc') · 바뀌면 앱 사건 'phone' ──
+  /** 휴대폰 설정·기기·접속 수·Tailscale 상태·주소·지금 짝 맺기(숫자·만료) */
+  phoneState(): Promise<PhoneState>
+  /** 켜기·끄기·절전 막기·자동 켜기·휴대폰 알림 — 켜기는 Tailscale 이 준비됐을 때만 길을 연다(아니면 켜 둔 채 까닭을 state 에) */
+  setPhone(p: PhoneSettingsChange): Promise<void>
+  /** Tailscale 상태를 다시 본다 — 켜져 있는데 길이 안 열렸으면 다시 켜 본다(https 가 꺼졌으면 켜기 링크까지) */
+  phoneCheck(): Promise<TailscaleState>
+  /** 새 짝 코드(QR)·6자리 숫자 — 앞의 것은 무효. 길이 열려 있어야 한다 */
+  phonePairStart(): Promise<PhonePairOffer>
+  phonePairCancel(): Promise<void>
+  /** 그 기기를 끊는다 — 토큰 무효 + 열린 연결 바로 닫기 */
+  phoneUnpair(id: string): Promise<void>
+
   /** 해제 함수를 돌려준다 */
   on<K extends keyof DureEventMap>(k: K, fn: (p: DureEventMap[K]) => void): () => void
   /**
@@ -183,6 +197,7 @@ export type ApiMethod = Exclude<keyof DureApi, PreloadOnly>
 export const APP_METHODS = [
   'appInfo', 'prefs', 'setPrefs', 'setupState', 'installClaude', 'loginClaude', 'openSetupGuide',
   'claudeUpdateState', 'updateState', 'checkUpdate', 'downloadUpdate', 'installUpdate', 'openReleasePage', 'setTourVeil',
+  'phoneState', 'setPhone', 'phoneCheck', 'phonePairStart', 'phonePairCancel', 'phoneUnpair',
 ] as const satisfies readonly ApiMethod[]
 
 /** invoke 로 부를 수 있는 엔진 쪽 이름 — DureApi 의 메서드 중 on·pathForFile(preload 안에서 처리)과 APP_METHODS 가 빠진다 */
@@ -219,7 +234,7 @@ const EVENT_FLAGS: Record<keyof EngineEventMap, true> = {
 export const EVENT_NAMES = Object.keys(EVENT_FLAGS) as (keyof EngineEventMap)[]
 
 /** 앱 사건 전부 — 새 사건을 AppEventMap 에 더하면 여기서 타입 오류가 난다 */
-const APP_EVENT_FLAGS: Record<keyof AppEventMap, true> = { setup: true, update: true, 'claude-update': true }
+const APP_EVENT_FLAGS: Record<keyof AppEventMap, true> = { setup: true, update: true, 'claude-update': true, phone: true }
 export const APP_EVENT_NAMES = Object.keys(APP_EVENT_FLAGS) as (keyof AppEventMap)[]
 
 /** 엔진 사건과 앱 사건의 이름이 겹치지 않는다 — 겹치면 여기서 타입 오류(한 봉투 이름으로 둘을 가를 수 없다) */

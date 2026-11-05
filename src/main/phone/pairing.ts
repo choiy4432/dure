@@ -28,6 +28,8 @@ export interface Pairing {
   start(): PairStart
   /** 지금 짝 코드·숫자를 무효로 */
   cancel(): void
+  /** 지금 짝 코드·숫자가 살아 있나 — 썼음·취소·5분 지남·틀림 상한(PAIR_TOTAL_FAIL_MAX)이면 false(PC 화면이 숫자를 거두게) */
+  open(): boolean
   /**
    * secret = 짝 코드나 6자리 숫자(빈칸은 무시). 맞으면 기기를 저장하고 토큰을 준다 — 코드·숫자 둘 다 그걸로 끝.
    * 셈·막힘은 6자리 숫자 꼴만 — QR 코드(256비트)는 맞혀 볼 수 없어 세지도 막지도 않는다.
@@ -119,6 +121,10 @@ export function createPairing(
 
     cancel() {
       pending = null
+    },
+
+    open() {
+      return pending !== null && clock() < pending.deadline
     },
 
     redeem(secret, deviceName, from) {

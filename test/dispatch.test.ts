@@ -74,6 +74,14 @@ function fakeDeps(over: Partial<DispatchDeps> = {}): DispatchDeps {
       downloadUpdate: vi.fn(async () => {}),
       installUpdate: vi.fn(async () => {}),
       openReleasePage: vi.fn(async () => {}),
+      phoneState: vi.fn(async () => {
+        throw new Error('시험에서 안 씀')
+      }),
+      setPhone: vi.fn(async () => {}),
+      phoneCheck: vi.fn(async () => ({ kind: 'missing' as const })),
+      phonePairStart: vi.fn(async () => ({ qr: 'data:,', pin: '000000', url: 'https://x/mobile.html#pair=y', expiresAt: 1 })),
+      phonePairCancel: vi.fn(async () => {}),
+      phoneUnpair: vi.fn(async () => {}),
     },
     engineReady: Promise.resolve(),
     pickFolder: vi.fn(async () => 'C:/picked'),

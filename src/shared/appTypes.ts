@@ -1,4 +1,5 @@
 /** 엔진 없이 도는 앱 쪽 일(앱 설정·준비·업데이트)의 모양 — main·preload·renderer 가 함께 쓴다 */
+import type { PhoneState } from './phoneTypes'
 
 /** 앱 설정 — settings.json 에 엔진 설정과 나란히(main 의 appPrefs.ts) */
 export type AppPrefs = { tourDone: boolean; approvalTipSeen: boolean; claudeAutoUpdate: boolean }
@@ -42,5 +43,5 @@ export type UpdateState =
 /** 켤 때 claude 최신으로 */
 export type ClaudeUpdateState = 'idle' | 'running' | 'done'
 
-/** 앱 사건 — 엔진 사건과 같은 봉투로 같은 채널에 */
-export type AppEventMap = { setup: SetupState; update: UpdateState; 'claude-update': ClaudeUpdateState }
+/** 앱 사건 — 엔진 사건과 같은 봉투로 같은 채널에(PC 창에만 — 휴대폰엔 엔진 사건만 간다) */
+export type AppEventMap = { setup: SetupState; update: UpdateState; 'claude-update': ClaudeUpdateState; phone: PhoneState }

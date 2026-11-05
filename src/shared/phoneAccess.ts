@@ -84,6 +84,13 @@ export const PHONE_ACCESS: Readonly<Record<ApiMethod, PhoneAccess>> = Object.fre
   installUpdate: 'pc',
   openReleasePage: 'pc',
   setTourVeil: 'pc',
+  // 휴대폰 연결·짝 맺기 — PC 설정에서만(휴대폰이 스스로 켜고 끄거나 짝을 맺고 끊지 못하게)
+  phoneState: 'pc',
+  setPhone: 'pc',
+  phoneCheck: 'pc',
+  phonePairStart: 'pc',
+  phonePairCancel: 'pc',
+  phoneUnpair: 'pc',
 })
 
 /** 휴대폰에서 부를 수 있는 이름인가 — 목록에 'phone' 으로 적힌 것만(프로토타입 이름·모르는 이름·글이 아닌 것은 false) */

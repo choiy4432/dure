@@ -6,7 +6,7 @@ import { join } from 'node:path'
 // electron-builder 가 설정을 읽는 그 파서(js-yaml — app-builder-lib 의 의존성)로 읽는다
 const { load } = createRequire(import.meta.url)('js-yaml') as { load(text: string): unknown }
 
-type BuilderConfig = { nsis?: { oneClick?: unknown; perMachine?: unknown; deleteAppDataOnUninstall?: unknown } }
+type BuilderConfig = { nsis?: { oneClick?: unknown; perMachine?: unknown; deleteAppDataOnUninstall?: unknown }; asarUnpack?: unknown; files?: unknown }
 const config = load(readFileSync(join(__dirname, '..', 'electron-builder.yml'), 'utf8')) as BuilderConfig
 
 /**
@@ -22,5 +22,12 @@ describe('electron-builder.yml — 제거가 %APPDATA%\\Dure 를 지우지 않�
   it('내보낸 그대로 — 한 번에 설치(oneClick) · 사용자별(perMachine: false)', () => {
     expect(config.nsis?.oneClick).toBe(true)
     expect(config.nsis?.perMachine).toBe(false)
+  })
+})
+
+describe('electron-builder.yml — 휴대폰 묶음', () => {
+  it('렌더러 출력(out/renderer)은 app.asar 밖으로 푼다 — 휴대폰 서버가 진짜 파일로 읽는다(phoneStaticDir 가 app.asar.unpacked 를 가리킴)', () => {
+    expect(config.asarUnpack).toEqual(['out/renderer/**'])
+    expect(config.files).toContain('out/**')
   })
 })

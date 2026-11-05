@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
@@ -16,7 +16,10 @@ import { createQuitControl } from './quit'
 import { createUpdater, RELEASE_URL, type UpdaterLike } from './updater'
 import { createSetupFlow, type SetupFlow } from './setupFlow'
 import { runStartup } from './startup'
-import { logEngineErrors, registerIpc, type AppHost } from './ipc'
+import { logEngineErrors, registerIpc, type AppHost, type IpcDeps } from './ipc'
+import { createDispatcher } from './dispatch'
+import { createPhoneController, phoneStaticDir, type PhoneController } from './phone/phoneController'
+import { createTailscale, resolveTailscaleCommand } from './phone/tailscale'
 import { appPageMatcher, focusExisting, guardNavigation } from './window'
 import { TITLE_BAR_HEIGHT, veiledColor, windowColors } from './windowTheme'
 
@@ -24,6 +27,14 @@ let mainWindow: BrowserWindow | null = null
 let engine: Engine | null = null
 let exitCode = 0
 let setup: SetupFlow | null = null
+/** 휴대폰 연결 — 끌 때 길(tailscale serve)·서버·절전 막기를 거둔다 */
+let phone: PhoneController | null = null
+const phoneNow = (): PhoneController => {
+  if (!phone) throw new Error('휴대폰 연결을 아직 준비하는 중이에요')
+  return phone
+}
+/** 'PC 쓰는 중' — Windows 의 마지막 입력 뒤 이만큼(초) 안이고 잠금 화면이 아님(powerMonitor) → 휴대폰은 안 울린다 */
+const PHONE_IDLE_S = 120
 /** 켤 때 도는 `claude update` — 끄면 나무째 끈다(Windows 는 자식이 부모보다 오래 산다) */
 let claudeUpdateRun: ClaudeUpdateRun | null = null
 
@@ -214,8 +225,9 @@ if (!app.requestSingleInstanceLock()) {
   // 끄는 길 — before-quit 과 업데이트 설치(beforeInstall)가 같은 정리 하나를 쓴다(두 번 끄지 않는다). 판단은 quit.ts
   const quitControl = createQuitControl({
     // 설치 나무·claude update 나무 끄기는 길어야 3초만 기다린다 — 엔진 끄기와 같이. 실패해도 끝난 것으로 친다
+    // 휴대폰 연결(serve 끄기 포함)도 길어야 3초 — 못 끈 길은 phone.json 에 적혀 있어 다음 시작 때 그 짝만 정리한다
     shutdown: async () => {
-      await Promise.all([bounded(setup?.dispose()), bounded(claudeUpdateRun?.kill()), engine?.shutdown()])
+      await Promise.all([bounded(setup?.dispose()), bounded(claudeUpdateRun?.kill()), bounded(phone?.dispose()), engine?.shutdown()])
     },
     exit: () => app.exit(exitCode),
   })
@@ -329,90 +341,131 @@ if (!app.requestSingleInstanceLock()) {
           const s = updater.state()
           if ('version' in s && s.version) await shell.openExternal(RELEASE_URL(s.version))
         },
+        // 휴대폰 연결 — 아래에서 만든다(만들기 전에 불릴 일은 없지만 그러면 한국어로 거절)
+        async phoneState() {
+          return phoneNow().state()
+        },
+        async setPhone(p) {
+          await phoneNow().set(p)
+        },
+        async phoneCheck() {
+          return phoneNow().check()
+        },
+        async phonePairStart() {
+          return phoneNow().pairStart()
+        },
+        async phonePairCancel() {
+          phoneNow().pairCancel()
+        },
+        async phoneUnpair(id) {
+          phoneNow().unpair(id)
+        },
       }
       // 저장한 화면 테마를 Windows 에 알린다 — 화면의 prefers-color-scheme·제목 표시줄 단추·스크롤바가 따른다(claude 가 없으면 Windows 따라감)
       nativeTheme.themeSource = engine?.theme() ?? 'system'
       nativeTheme.on('updated', () => {
         if (mainWindow) paintWindow(mainWindow)
       })
-      // 순서: 엔진 만들기 → 앱 설정 → 테마 → registerIpc(리스너 붙이기) → 창 → 준비 확인 → claude 최신으로 → engine.start() → engineReady.
+      // 순서: 엔진 만들기 → 앱 설정 → 테마 → 휴대폰 연결 → registerIpc(리스너 붙이기) → 창 → 준비 확인 → claude 최신으로 → engine.start() → engineReady.
       // claude 가 없으면 engine 은 null 이고 snapshot 이 claudeMissing 을 알린다.
+      const ipcDeps: IpcDeps = {
+        async pickFolder() {
+          if (nextE2eFolder) return nextE2eFolder()
+          // 창을 부모로 — 앱 뒤에 숨지 않는 모달 대화상자
+          const options: Electron.OpenDialogOptions = { properties: ['openDirectory'] }
+          const r = mainWindow && !mainWindow.isDestroyed()
+            ? await dialog.showOpenDialog(mainWindow, options)
+            : await dialog.showOpenDialog(options)
+          return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0]
+        },
+        async openFolder(path) {
+          const err = await shell.openPath(path)
+          if (err) throw new Error(err)
+        },
+        async openPath(path) {
+          // 첨부 사본 — ipc 가 엔진이 첨부 폴더 안으로 푼 경로만 넘긴다. 못 열면(연결된 프로그램 없음 등) 빈 글이 아닌 까닭이 온다
+          const err = await shell.openPath(path)
+          if (err) throw new Error(err)
+        },
+        showInFolder(path) {
+          shell.showItemInFolder(path)
+        },
+        async openExternal(url) {
+          await shell.openExternal(url)
+        },
+        async saveText(fileName, text) {
+          const testDir = env.DURE_E2E_SAVE_DIR
+          if (testDir) {
+            const file = join(testDir, fileName)
+            await writeFile(file, text, 'utf8')
+            return file
+          }
+          // 처음 자리는 문서 폴더 — 저장 창은 창을 부모로(앱 뒤에 숨지 않게)
+          const options: Electron.SaveDialogOptions = {
+            defaultPath: join(app.getPath('documents'), fileName),
+            filters: [{ name: '마크다운', extensions: ['md'] }],
+          }
+          const r = mainWindow && !mainWindow.isDestroyed()
+            ? await dialog.showSaveDialog(mainWindow, options)
+            : await dialog.showSaveDialog(options)
+          if (r.canceled || !r.filePath) return null
+          await writeFile(r.filePath, text, 'utf8')
+          return r.filePath
+        },
+        async setTaskbar(count, png) {
+          if (!mainWindow || mainWindow.isDestroyed()) return
+          mainWindow.setOverlayIcon(
+            png && count > 0 ? nativeImage.createFromDataURL(png) : null,
+            count > 0 ? `할 일 ${count}개` : '',
+          )
+        },
+        async flashWindow() {
+          // 이미 보고 있는 창은 깜박일 이유가 없다
+          if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return
+          mainWindow.flashFrame(true)
+        },
+        async focusWindow() {
+          focusExisting(mainWindow)
+        },
+        applyTheme(t) {
+          nativeTheme.themeSource = t // 'updated' 사건이 창을 다시 칠한다
+        },
+        isAppPage,
+        app: appHost,
+        // 켤 때 claude 최신으로가 끝나고 엔진이 시작하면 풀린다(runStartup)
+        engineReady,
+        onAppEvent(fn) {
+          appEventSinks.push(fn)
+        },
+      }
+      // 휴대폰 연결 — 엔진 다음. 휴대폰은 창과 같은 디스패처를 허용 목록(phoneDispatcher)으로 감싸 탄다. 꺼져 있으면 tailscale 을 부르지 않는다.
+      // 🔴 개발 실행·시험은 로그인 항목을 건드리지 않는다(설치본만). DURE_TAILSCALE_*·DURE_PHONE_ALLOW_LOCAL 은 설치본에선 걸러진다(appEnv)
+      phone = createPhoneController({
+        dataDir: userData,
+        engine,
+        dispatch: createDispatcher(engine, ipcDeps),
+        staticDir: phoneStaticDir(__dirname, app.isPackaged),
+        tailscale: createTailscale(resolveTailscaleCommand(env)),
+        power: {
+          start: () => powerSaveBlocker.start('prevent-app-suspension'),
+          stop: (id) => powerSaveBlocker.stop(id),
+        },
+        idle: () => powerMonitor.getSystemIdleState(PHONE_IDLE_S),
+        loginItem: {
+          set(open) {
+            if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: open, args: ['--hidden'] })
+          },
+        },
+        emit: (s) => emitApp('phone', s),
+        allowLocal: env.DURE_PHONE_ALLOW_LOCAL === '1',
+      })
       registerIpc(
         ipcMain,
         engine,
         (ch, payload) => {
           if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(ch, payload)
         },
-        {
-          async pickFolder() {
-            if (nextE2eFolder) return nextE2eFolder()
-            // 창을 부모로 — 앱 뒤에 숨지 않는 모달 대화상자
-            const options: Electron.OpenDialogOptions = { properties: ['openDirectory'] }
-            const r = mainWindow && !mainWindow.isDestroyed()
-              ? await dialog.showOpenDialog(mainWindow, options)
-              : await dialog.showOpenDialog(options)
-            return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0]
-          },
-          async openFolder(path) {
-            const err = await shell.openPath(path)
-            if (err) throw new Error(err)
-          },
-          async openPath(path) {
-            // 첨부 사본 — ipc 가 엔진이 첨부 폴더 안으로 푼 경로만 넘긴다. 못 열면(연결된 프로그램 없음 등) 빈 글이 아닌 까닭이 온다
-            const err = await shell.openPath(path)
-            if (err) throw new Error(err)
-          },
-          showInFolder(path) {
-            shell.showItemInFolder(path)
-          },
-          async openExternal(url) {
-            await shell.openExternal(url)
-          },
-          async saveText(fileName, text) {
-            const testDir = env.DURE_E2E_SAVE_DIR
-            if (testDir) {
-              const file = join(testDir, fileName)
-              await writeFile(file, text, 'utf8')
-              return file
-            }
-            // 처음 자리는 문서 폴더 — 저장 창은 창을 부모로(앱 뒤에 숨지 않게)
-            const options: Electron.SaveDialogOptions = {
-              defaultPath: join(app.getPath('documents'), fileName),
-              filters: [{ name: '마크다운', extensions: ['md'] }],
-            }
-            const r = mainWindow && !mainWindow.isDestroyed()
-              ? await dialog.showSaveDialog(mainWindow, options)
-              : await dialog.showSaveDialog(options)
-            if (r.canceled || !r.filePath) return null
-            await writeFile(r.filePath, text, 'utf8')
-            return r.filePath
-          },
-          async setTaskbar(count, png) {
-            if (!mainWindow || mainWindow.isDestroyed()) return
-            mainWindow.setOverlayIcon(
-              png && count > 0 ? nativeImage.createFromDataURL(png) : null,
-              count > 0 ? `할 일 ${count}개` : '',
-            )
-          },
-          async flashWindow() {
-            // 이미 보고 있는 창은 깜박일 이유가 없다
-            if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return
-            mainWindow.flashFrame(true)
-          },
-          async focusWindow() {
-            focusExisting(mainWindow)
-          },
-          applyTheme(t) {
-            nativeTheme.themeSource = t // 'updated' 사건이 창을 다시 칠한다
-          },
-          isAppPage,
-          app: appHost,
-          // 켤 때 claude 최신으로가 끝나고 엔진이 시작하면 풀린다(runStartup)
-          engineReady,
-          onAppEvent(fn) {
-            appEventSinks.push(fn)
-          },
-        },
+        ipcDeps,
       )
       mainWindow = createWindow()
 

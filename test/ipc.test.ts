@@ -8,6 +8,9 @@ import { logEngineErrors, registerIpc, type AppHost, type IpcDeps } from '../src
 import { appPageMatcher } from '../src/main/window'
 import { APP_EVENT_NAMES, APP_METHODS, BEFORE_START, CHANNEL, EVENT_NAMES, METHODS } from '../src/shared/ipcContract'
 import type { AppEventMap } from '../src/shared/appTypes'
+import { createDispatcher, phoneDispatcher } from '../src/main/dispatch'
+import { PHONE_ACCESS, PHONE_DENIED } from '../src/shared/phoneAccess'
+import { DEFAULT_PHONE_SETTINGS, type PhoneState } from '../src/shared/phoneTypes'
 import type { Engine } from '../src/engine'
 import { openAttachmentStore } from '../src/engine/attachmentStore'
 
@@ -101,9 +104,26 @@ const isAppPage = appPageMatcher({ indexFile: INDEX })
 
 const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true }
 
-/** 앱 쪽 흉내 — 13 메서드 모두 vi.fn, 돌려주는 값은 서로 다르게(칸이 뒤바뀌면 잡힌다) */
+const PHONE_STATE: PhoneState = {
+  settings: { ...DEFAULT_PHONE_SETTINGS, notify: { ...DEFAULT_PHONE_SETTINGS.notify } },
+  devices: [],
+  connected: 0,
+  tailscale: { kind: 'ready', dnsName: 'pc.tail0000.ts.net' },
+  url: 'https://pc.tail0000.ts.net/mobile.html',
+  pairing: null,
+  problem: null,
+}
+const PAIR_OFFER = { qr: 'data:image/png;base64,AA', pin: '123456', url: 'https://pc.tail0000.ts.net/mobile.html#pair=x', expiresAt: 9 }
+
+/** 앱 쪽 흉내 — 메서드 모두 vi.fn, 돌려주는 값은 서로 다르게(칸이 뒤바뀌면 잡힌다) */
 function fakeApp() {
   return {
+    phoneState: vi.fn(async () => PHONE_STATE),
+    setPhone: vi.fn(async (_p: object) => {}),
+    phoneCheck: vi.fn(async () => ({ kind: 'logged-out' as const })),
+    phonePairStart: vi.fn(async () => PAIR_OFFER),
+    phonePairCancel: vi.fn(async () => {}),
+    phoneUnpair: vi.fn(async (_id: string) => {}),
     appInfo: vi.fn(async () => ({ version: '1.2.3', packaged: false })),
     prefs: vi.fn(async () => PREFS),
     setPrefs: vi.fn(async (p: object) => ({ ...PREFS, ...p })),
@@ -259,10 +279,11 @@ describe('registerIpc', () => {
     }
   })
 
-  it('APP_METHODS 14개 · 엔진 메서드와 겹치지 않는다 · BEFORE_START 는 엔진 메서드 중에서 · 앱 사건 이름 셋', () => {
+  it('APP_METHODS 20개(휴대폰 6개 포함) · 엔진 메서드와 겹치지 않는다 · BEFORE_START 는 엔진 메서드 중에서 · 앱 사건 이름 넷', () => {
     expect([...APP_METHODS].sort()).toEqual([
       'appInfo', 'checkUpdate', 'claudeUpdateState', 'downloadUpdate', 'installClaude', 'installUpdate', 'loginClaude',
-      'openReleasePage', 'openSetupGuide', 'prefs', 'setPrefs', 'setTourVeil', 'setupState', 'updateState',
+      'openReleasePage', 'openSetupGuide', 'phoneCheck', 'phonePairCancel', 'phonePairStart', 'phoneState', 'phoneUnpair',
+      'prefs', 'setPhone', 'setPrefs', 'setTourVeil', 'setupState', 'updateState',
     ])
     for (const m of APP_METHODS) expect(METHODS as readonly string[], m).not.toContain(m)
     expect([...BEFORE_START].sort()).toEqual([
@@ -270,7 +291,7 @@ describe('registerIpc', () => {
       'setTaskbar', 'sleepBlock', 'sleepableIn', 'snapshot', 'sshAvailable', 'sshHosts',
     ])
     for (const m of BEFORE_START) expect(METHODS as readonly string[], m).toContain(m)
-    expect([...APP_EVENT_NAMES].sort()).toEqual(['claude-update', 'setup', 'update'])
+    expect([...APP_EVENT_NAMES].sort()).toEqual(['claude-update', 'phone', 'setup', 'update'])
     for (const n of APP_EVENT_NAMES) expect(EVENT_NAMES as readonly string[], n).not.toContain(n)
   })
 
@@ -290,6 +311,42 @@ describe('registerIpc', () => {
     }
     // 엔진 메서드는 여전히 claude 가 없다고
     expect(await call('addRoom', 'x')).toEqual({ ok: false, error: 'claude 를 찾을 수 없어요' })
+  })
+
+  it('phone 메서드는 창에서만 — 앱 화면이면 deps.app 으로(엔진 없어도), 다른 프레임·휴대폰 디스패처는 거절', async () => {
+    const PHONE_METHODS = ['phoneState', 'setPhone', 'phoneCheck', 'phonePairStart', 'phonePairCancel', 'phoneUnpair'] as const
+    const { call, callFrom, deps } = setup(false)
+    expect(await call('phoneState')).toEqual({ ok: true, value: PHONE_STATE })
+    expect(await call('phoneCheck')).toEqual({ ok: true, value: { kind: 'logged-out' } })
+    expect(await call('phonePairStart')).toEqual({ ok: true, value: PAIR_OFFER })
+    expect(await call('phonePairCancel', 'x')).toEqual({ ok: true, value: null })
+    expect(deps.app.phonePairCancel).toHaveBeenCalledWith()
+    // setPhone — 불리언인 아는 칸만(포트·모르는 칸·글은 버림)
+    expect(await call('setPhone', { enabled: true, port: 1, keepAwake: 'y', notify: { asks: false, x: 1 }, extra: true })).toEqual({ ok: true, value: null })
+    expect(deps.app.setPhone).toHaveBeenLastCalledWith({ enabled: true, notify: { asks: false } })
+    await call('setPhone', null)
+    expect(deps.app.setPhone).toHaveBeenLastCalledWith({})
+    // phoneUnpair — 글인 id 만
+    expect(await call('phoneUnpair', 'd1')).toEqual({ ok: true, value: null })
+    expect(deps.app.phoneUnpair).toHaveBeenCalledWith('d1')
+    for (const bad of [3, null, '', { id: 'd1' }]) {
+      expect(await call('phoneUnpair', bad)).toEqual({ ok: false, error: '끊을 기기를 알 수 없어요' })
+    }
+    expect(deps.app.phoneUnpair).toHaveBeenCalledTimes(1)
+
+    const counts = () => PHONE_METHODS.map((m) => deps.app[m].mock.calls.length)
+    const before = counts()
+    // 두레 화면이 아닌 프레임
+    for (const m of PHONE_METHODS) {
+      expect(await callFrom({ senderFrame: { url: 'https://evil.example/' } }, m, 'd1'), m).toEqual({ ok: false, error: '허용되지 않은 요청이에요' })
+    }
+    // 휴대폰 — 같은 디스패처를 타도 허용 목록에서 막힌다
+    const phone = phoneDispatcher(createDispatcher(null, deps), { inboxDir: os.tmpdir() })
+    for (const m of PHONE_METHODS) {
+      expect(PHONE_ACCESS[m], m).toBe('pc')
+      expect(await phone(m, ['d1']), m).toEqual({ ok: false, error: PHONE_DENIED })
+    }
+    expect(counts()).toEqual(before)
   })
 
   it('앱 메서드 오류는 { error: 문구 } 로 — 스택 없이', async () => {

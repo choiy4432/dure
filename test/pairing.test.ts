@@ -369,3 +369,26 @@ test('기기 이름 — 앞뒤 빈칸·제어 문자 빼고 40자, 비면 휴대
   const p = createPairing(openPhoneStore(dir), { now });
   expect(ok(p.redeem(p.start().pin, ' \n ', 'x')).device.name).toBe('휴대폰');
 });
+
+test('open — 짝 코드가 살아 있는 동안만 true(썼음·취소·5분 지남·틀림 상한이면 false)', () => {
+  const p = createPairing(openPhoneStore(dir), { now });
+  expect(p.open()).toBe(false);
+  const a = p.start();
+  expect(p.open()).toBe(true);
+  ok(p.redeem(a.pin, '폰', 'x'));
+  expect(p.open()).toBe(false);
+
+  p.start();
+  p.cancel();
+  expect(p.open()).toBe(false);
+
+  p.start();
+  t += PAIR_TTL_MS;
+  expect(p.open()).toBe(false);
+
+  const b = p.start();
+  for (let i = 0; i < PAIR_TOTAL_FAIL_MAX - 1; i++) p.redeem(wrongPin(b.pin), 'x', `from-${i}`);
+  expect(p.open()).toBe(true);
+  p.redeem(wrongPin(b.pin), 'x', 'from-last');
+  expect(p.open()).toBe(false);
+});
