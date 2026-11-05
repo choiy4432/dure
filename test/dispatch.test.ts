@@ -55,7 +55,7 @@ function fakeEngine(over: Record<string, (...a: any[]) => unknown> = {}) {
   return { engine, calls }
 }
 
-const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true }
+const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true, trayTipSeen: false }
 
 function fakeDeps(over: Partial<DispatchDeps> = {}): DispatchDeps {
   return {

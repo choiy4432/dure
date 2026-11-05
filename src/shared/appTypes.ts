@@ -1,11 +1,14 @@
 /** 엔진 없이 도는 앱 쪽 일(앱 설정·준비·업데이트)의 모양 — main·preload·renderer 가 함께 쓴다 */
 import type { PhoneState } from './phoneTypes'
 
-/** 앱 설정 — settings.json 에 엔진 설정과 나란히(main 의 appPrefs.ts) */
-export type AppPrefs = { tourDone: boolean; approvalTipSeen: boolean; claudeAutoUpdate: boolean }
+/**
+ * 앱 설정 — settings.json 에 엔진 설정과 나란히(main 의 appPrefs.ts)
+ * trayTipSeen: 휴대폰 연결 중 창을 닫아 트레이로 숨었을 때의 첫 안내('두레는 트레이에서 계속 돌아요')를 봤다(main 이 써 둔다)
+ */
+export type AppPrefs = { tourDone: boolean; approvalTipSeen: boolean; claudeAutoUpdate: boolean; trayTipSeen: boolean }
 
 /** 칸이 없거나 불리언이 아니면 이 값 */
-export const DEFAULT_APP_PREFS: AppPrefs = { tourDone: false, approvalTipSeen: false, claudeAutoUpdate: true }
+export const DEFAULT_APP_PREFS: AppPrefs = { tourDone: false, approvalTipSeen: false, claudeAutoUpdate: true, trayTipSeen: false }
 
 export type AppInfo = { version: string; packaged: boolean }
 

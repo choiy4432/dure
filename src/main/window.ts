@@ -56,13 +56,30 @@ export function guardNavigation(contents: ContentsLike, isAppPage: AppPageMatche
 export interface WindowLike {
   isDestroyed(): boolean
   isMinimized(): boolean
+  isVisible(): boolean
   restore(): void
+  show(): void
   focus(): void
 }
 
-/** 두레를 또 켰을 때 — 떠 있는 창을 앞으로. 닫히는 중(이미 파괴된 창)이면 아무것도 하지 않는다 */
+/** 숨겨 시작 — 'Windows 를 켜면 두레도 켜기'(로그인 항목)가 붙인다. 휴대폰 연결이 켜져 있으면 창을 띄우지 않고 트레이로 시작 */
+export const HIDDEN_ARG = '--hidden'
+
+/**
+ * 다시 켜는 줄(app.relaunch · 작업 표시줄 고정의 relaunchCommand)에선 HIDDEN_ARG 를 뺀다 —
+ * 자동으로 켜진 두레를 사용자가 다시 켜거나 고정해 켰는데 창이 안 뜨면 안 된다
+ */
+export function withoutHiddenArg(argv: readonly string[]): string[] {
+  return argv.filter((a) => a !== HIDDEN_ARG)
+}
+
+/**
+ * 두레를 또 켰을 때·트레이를 눌렀을 때 — 창을 앞으로. 숨은 창(휴대폰 연결 중 닫기·숨겨 시작)은 보이고, 최소화된 창은 되살린다.
+ * 닫히는 중(이미 파괴된 창)이면 아무것도 하지 않는다
+ */
 export function focusExisting(win: WindowLike | null): void {
   if (!win || win.isDestroyed()) return
+  if (!win.isVisible()) win.show()
   if (win.isMinimized()) win.restore()
   win.focus()
 }

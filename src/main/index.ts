@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, powerSaveBlocker, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, shell, Tray } from 'electron'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { writeFile } from 'node:fs/promises'
@@ -20,7 +20,8 @@ import { logEngineErrors, registerIpc, type AppHost, type IpcDeps } from './ipc'
 import { createDispatcher } from './dispatch'
 import { createPhoneController, phoneStaticDir, type PhoneController } from './phone/phoneController'
 import { createTailscale, resolveTailscaleCommand } from './phone/tailscale'
-import { appPageMatcher, focusExisting, guardNavigation } from './window'
+import { createTrayControl, trayTipOnce, TRAY_TIP, type TrayControl } from './tray'
+import { appPageMatcher, focusExisting, guardNavigation, HIDDEN_ARG, withoutHiddenArg } from './window'
 import { TITLE_BAR_HEIGHT, veiledColor, windowColors } from './windowTheme'
 
 let mainWindow: BrowserWindow | null = null
@@ -33,6 +34,22 @@ const phoneNow = (): PhoneController => {
   if (!phone) throw new Error('휴대폰 연결을 아직 준비하는 중이에요')
   return phone
 }
+/** 휴대폰 연결이 켜져 있나(설정 값 — 길이 아직 안 열렸어도 켜짐) — 못 읽으면 꺼짐으로(창 닫기가 지금처럼 두레를 끈다) */
+const phoneOn = (): boolean => {
+  try {
+    return phone?.state().settings.enabled ?? false
+  } catch {
+    return false
+  }
+}
+/** 트레이 — 휴대폰 연결을 켜 둔 동안만. 그동안 창을 닫으면 숨긴다(tray.ts) */
+let tray: TrayControl | null = null
+/** 처음 숨을 때 안내 알림 — 누름을 받으려면 붙들어 둔다(안 그러면 GC 가 거둔다) */
+let trayTipNote: Notification | null = null
+/** 숨겨 시작(로그인 항목의 --hidden) — 휴대폰 연결이 켜져 있을 때만 창을 띄우지 않는다(꺼져 있으면 트레이가 없어 안 보이는 두레가 된다) */
+const launchedHidden = process.argv.includes(HIDDEN_ARG)
+/** Windows 로그아웃·끄기 — 그때 오는 창 닫기는 숨기지 않는다 */
+let sessionEnding = false
 /** 'PC 쓰는 중' — Windows 의 마지막 입력 뒤 이만큼(초) 안이고 잠금 화면이 아님(powerMonitor) → 휴대폰은 안 울린다 */
 const PHONE_IDLE_S = 120
 /** 켤 때 도는 `claude update` — 끄면 나무째 끈다(Windows 는 자식이 부모보다 오래 산다) */
@@ -166,7 +183,8 @@ function paintWindow(win: BrowserWindow): void {
   win.setTitleBarOverlay({ color: tourVeil ? veiledColor(dark) : c.bg, symbolColor: c.symbol, height: TITLE_BAR_HEIGHT })
 }
 
-function createWindow(): BrowserWindow {
+/** hidden: 숨겨 시작 — ready-to-show 에서 보이지 않는다(트레이만). 두레를 또 켜거나 트레이를 누르면 focusExisting 이 보인다 */
+function createWindow(o: { hidden: boolean }): BrowserWindow {
   const c = windowColors(nativeTheme.shouldUseDarkColors)
   const win = new BrowserWindow({
     width: 1440,
@@ -193,11 +211,14 @@ function createWindow(): BrowserWindow {
     win.setAppDetails({
       appId: appUserModelId(app.isPackaged, process.execPath),
       ...appIconFor(app.isPackaged, process.execPath, appIcon),
-      relaunchCommand: process.argv.map(a => `"${a}"`).join(' '),
+      // 숨겨 켜진 두레를 고정해도, 고정 단추로 켜면 창이 뜨게 — --hidden 은 뺀다
+      relaunchCommand: withoutHiddenArg(process.argv).map(a => `"${a}"`).join(' '),
       relaunchDisplayName: '두레',
     })
   }
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => {
+    if (!o.hidden) win.show()
+  })
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
     return { action: 'deny' }
@@ -208,6 +229,10 @@ function createWindow(): BrowserWindow {
   // 닫힌 창을 붙들지 않는다 — 끄는 동안(최대 5초) 또 켜면 second-instance 가 파괴된 창을 건드려 오류 상자가 떴다
   win.on('closed', () => {
     if (mainWindow === win) mainWindow = null
+  })
+  // Windows 로그아웃·끄기 — 휴대폰 연결 중이어도 창 닫기를 막지 않는다
+  win.on('session-end', () => {
+    sessionEnding = true
   })
   if (env.ELECTRON_RENDERER_URL) {
     void win.loadURL(env.ELECTRON_RENDERER_URL)
@@ -227,6 +252,8 @@ if (!app.requestSingleInstanceLock()) {
     // 설치 나무·claude update 나무 끄기는 길어야 3초만 기다린다 — 엔진 끄기와 같이. 실패해도 끝난 것으로 친다
     // 휴대폰 연결(serve 끄기 포함)도 길어야 3초 — 못 끈 길은 phone.json 에 적혀 있어 다음 시작 때 그 짝만 정리한다
     shutdown: async () => {
+      // 트레이는 바로 거둔다 — 끄는 동안(최대 3초) 메뉴를 또 누르지 않게, 끈 뒤 알림 영역에 빈 아이콘이 남지 않게
+      tray?.dispose()
       await Promise.all([bounded(setup?.dispose()), bounded(claudeUpdateRun?.kill()), bounded(phone?.dispose()), engine?.shutdown()])
     },
     exit: () => app.exit(exitCode),
@@ -270,7 +297,8 @@ if (!app.requestSingleInstanceLock()) {
         spawnInstall,
         spawnLogin,
         relaunch: () => {
-          app.relaunch()
+          // 창에서 로그인한 뒤라 — 숨겨 켜졌었어도(--hidden) 다시 켤 땐 창이 뜨게
+          app.relaunch({ args: withoutHiddenArg(process.argv.slice(1)) })
           app.quit() // before-quit 의 끄기를 지난다
         },
         hasEngine: engine !== null,
@@ -438,6 +466,43 @@ if (!app.requestSingleInstanceLock()) {
           appEventSinks.push(fn)
         },
       }
+      // 트레이 — 휴대폰 연결 켜짐을 따른다('phone' 사건·아래 sync). 아이콘은 창과 같은 앱 아이콘. [두레 끄기]는 app.quit() → before-quit 의 끄는 길 그대로
+      tray = createTrayControl({
+        makeTray(spec) {
+          const t = new Tray(appIcon)
+          t.setToolTip(spec.tooltip)
+          t.setContextMenu(Menu.buildFromTemplate(spec.menu.map((m) => ({ label: m.label, click: () => m.click() }))))
+          t.on('click', () => spec.onClick())
+          return t
+        },
+        showWindow: () => focusExisting(mainWindow),
+        isWindowVisible: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible(),
+        phoneOff() {
+          // 끄기가 끝나면 'phone' 사건이 트레이를 거둔다 — 사건이 안 와도 지금 값으로 한 번 더 맞춘다
+          void phoneNow()
+            .set({ enabled: false })
+            .catch(() => console.error('[두레] 휴대폰 연결을 끄지 못했어요'))
+            .finally(() => tray?.sync(phoneOn()))
+        },
+        quit: () => app.quit(),
+        // 처음 숨을 때 한 번 — 본 것은 settings.json 의 trayTipSeen(창의 setPrefs 와 같은 파일·같은 prefs)
+        notifyOnce: trayTipOnce({
+          seen: () => prefs.trayTipSeen,
+          markSeen: () => {
+            prefs = writeAppPrefs(userData, { trayTipSeen: true })
+          },
+          notify: () => {
+            if (!Notification.isSupported()) throw new Error('알림을 쓸 수 없어요')
+            const n = new Notification({ title: '두레', body: TRAY_TIP, icon: appIcon })
+            n.on('click', () => focusExisting(mainWindow))
+            n.on('close', () => {
+              if (trayTipNote === n) trayTipNote = null
+            })
+            trayTipNote = n
+            n.show()
+          },
+        }),
+      })
       // 휴대폰 연결 — 엔진 다음. 휴대폰은 창과 같은 디스패처를 허용 목록(phoneDispatcher)으로 감싸 탄다. 꺼져 있으면 tailscale 을 부르지 않는다.
       // 🔴 개발 실행·시험은 로그인 항목을 건드리지 않는다(설치본만). DURE_TAILSCALE_*·DURE_PHONE_ALLOW_LOCAL 은 설치본에선 걸러진다(appEnv)
       phone = createPhoneController({
@@ -453,12 +518,17 @@ if (!app.requestSingleInstanceLock()) {
         idle: () => powerMonitor.getSystemIdleState(PHONE_IDLE_S),
         loginItem: {
           set(open) {
-            if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: open, args: ['--hidden'] })
+            if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: open, args: [HIDDEN_ARG] })
           },
         },
-        emit: (s) => emitApp('phone', s),
+        emit: (s) => {
+          emitApp('phone', s)
+          tray?.sync(s.settings.enabled)
+        },
         allowLocal: env.DURE_PHONE_ALLOW_LOCAL === '1',
       })
+      // 켜진 채 시작하면 길이 열리기 전(첫 'phone' 사건 전)에도 트레이가 있게
+      tray.sync(phoneOn())
       registerIpc(
         ipcMain,
         engine,
@@ -467,7 +537,12 @@ if (!app.requestSingleInstanceLock()) {
         },
         ipcDeps,
       )
-      mainWindow = createWindow()
+      const win = createWindow({ hidden: launchedHidden && phoneOn() })
+      mainWindow = win
+      // 창 닫기(×) — 휴대폰 연결 중이면 막고 숨긴다(트레이로). 꺼져 있거나 끄는 중(before-quit 이 정리를 시작함 · 업데이트 설치)이면 지금처럼 닫힌다
+      win.on('close', (e) => {
+        tray?.close(e, { phoneOn: phoneOn(), quitting: quitControl.started() || sessionEnding, hide: () => win.hide() })
+      })
 
       const smokeMs = Number(env.DURE_SMOKE_EXIT_MS)
       if (smokeMs > 0) setTimeout(() => app.quit(), smokeMs)

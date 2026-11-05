@@ -102,7 +102,7 @@ const APP_URL = pathToFileURL(INDEX).href
 const fromApp = { senderFrame: { url: APP_URL } }
 const isAppPage = appPageMatcher({ indexFile: INDEX })
 
-const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true }
+const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true, trayTipSeen: false }
 
 const PHONE_STATE: PhoneState = {
   settings: { ...DEFAULT_PHONE_SETTINGS, notify: { ...DEFAULT_PHONE_SETTINGS.notify } },

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { appPageMatcher, focusExisting, guardNavigation } from '../src/main/window'
+import { appPageMatcher, focusExisting, guardNavigation, HIDDEN_ARG, withoutHiddenArg } from '../src/main/window'
 
 const INDEX = path.resolve('out/renderer/index.html')
 const APP_URL = pathToFileURL(INDEX).href
@@ -54,22 +54,30 @@ describe('guardNavigation', () => {
 })
 
 describe('focusExisting', () => {
-  const fakeWindow = (o: { destroyed?: boolean; minimized?: boolean }) => ({
-    isDestroyed: vi.fn(() => o.destroyed ?? false),
-    isMinimized: vi.fn(() => {
+  const fakeWindow = (o: { destroyed?: boolean; minimized?: boolean; visible?: boolean }) => {
+    /** 파괴된 창의 메서드는 던진다(진짜처럼) */
+    const alive = <T,>(v: () => T) => () => {
       if (o.destroyed) throw new Error('Object has been destroyed')
-      return o.minimized ?? false
-    }),
-    restore: vi.fn(),
-    focus: vi.fn(),
-  })
+      return v()
+    }
+    return {
+      isDestroyed: vi.fn(() => o.destroyed ?? false),
+      isMinimized: vi.fn(alive(() => o.minimized ?? false)),
+      isVisible: vi.fn(alive(() => o.visible ?? true)),
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    }
+  }
 
   it('창이 없거나 닫힌(파괴된) 창이면 아무것도 부르지 않는다', () => {
     expect(() => focusExisting(null)).not.toThrow()
     const w = fakeWindow({ destroyed: true })
     expect(() => focusExisting(w)).not.toThrow()
     expect(w.isMinimized).not.toHaveBeenCalled()
+    expect(w.isVisible).not.toHaveBeenCalled()
     expect(w.restore).not.toHaveBeenCalled()
+    expect(w.show).not.toHaveBeenCalled()
     expect(w.focus).not.toHaveBeenCalled()
   })
 
@@ -83,7 +91,37 @@ describe('focusExisting', () => {
   it('떠 있는 창이면 앞으로만', () => {
     const w = fakeWindow({})
     focusExisting(w)
+    expect(w.show).not.toHaveBeenCalled()
     expect(w.restore).not.toHaveBeenCalled()
     expect(w.focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('숨은 창도 focusExisting 이 보인다', () => {
+    // 휴대폰 연결 중 닫기(트레이로 숨김)·숨겨 시작(--hidden) — 두레를 또 켜거나 트레이를 누르면 다시 보인다
+    const w = fakeWindow({ visible: false })
+    focusExisting(w)
+    expect(w.show).toHaveBeenCalledTimes(1)
+    expect(w.focus).toHaveBeenCalledTimes(1)
+    expect(w.show.mock.invocationCallOrder[0]).toBeLessThan(w.focus.mock.invocationCallOrder[0])
+    expect(w.restore).not.toHaveBeenCalled()
+
+    // 최소화된 채 숨었으면 — 보이고, 되살리고, 앞으로
+    const m = fakeWindow({ visible: false, minimized: true })
+    focusExisting(m)
+    expect(m.show).toHaveBeenCalledTimes(1)
+    expect(m.restore).toHaveBeenCalledTimes(1)
+    expect(m.focus).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('withoutHiddenArg', () => {
+  it('다시 켜는 줄에선 --hidden 만 뺀다 — 자동으로 켜진 두레를 다시 켜도 창이 뜨게', () => {
+    expect(HIDDEN_ARG).toBe('--hidden')
+    expect(withoutHiddenArg(['C:/Dure/Dure.exe', '--hidden'])).toEqual(['C:/Dure/Dure.exe'])
+    expect(withoutHiddenArg(['electron.exe', '.', '--hidden', '--x'])).toEqual(['electron.exe', '.', '--x'])
+    expect(withoutHiddenArg(['Dure.exe', '--hiddenx', 'hidden'])).toEqual(['Dure.exe', '--hiddenx', 'hidden'])
+    const argv = ['Dure.exe', '--hidden']
+    withoutHiddenArg(argv)
+    expect(argv).toEqual(['Dure.exe', '--hidden']) // 받은 배열은 그대로
   })
 })
