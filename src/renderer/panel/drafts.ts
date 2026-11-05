@@ -4,12 +4,13 @@ import { getStore } from '../state/store'
 
 /**
  * 입력창에 붙인 것 — 그림(준비 중이거나, 보낼 글(base64)과 미리보기 주소(object URL)를 가진 것) 또는 파일 칩.
- * 파일은 바이트를 옮기지 않고 경로만 — 엔진이 보낼 때 사본을 만든다. error 가 있으면(100MB 넘음) 보내기를 막는다
+ * 파일은 바이트를 옮기지 않고 경로만 — 엔진이 보낼 때 사본을 만든다. error 가 있으면(100MB 넘음) 보내기를 막는다.
+ * 휴대폰은 파일에 PC 경로가 없어 붙일 때 PC 로 올린다 — 올리는 동안 uploading(path 는 빈칸, 보내기를 막는다), 다 올리면 받은 PC 경로
  */
 export type Attached =
   | { key: number; state: 'loading' }
   | { key: number; state: 'ready'; mediaType: string; base64: string; url: string }
-  | { key: number; state: 'file'; name: string; bytes: number; path: string; error?: string }
+  | { key: number; state: 'file'; name: string; bytes: number; path: string; error?: string; uploading?: true }
 
 /** 에이전트 하나의 쓰던 입력 — 이번 실행 동안만(저장하지 않는다) */
 export interface Draft {

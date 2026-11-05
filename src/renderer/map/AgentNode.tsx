@@ -12,7 +12,7 @@ import { MOTION, popOnce, useRise } from '../lib/motion'
 import { useMotion } from '../lib/presence'
 import { peekFresh, takeFresh } from './freshNodes'
 
-export type AgentFlowNode = Node<Record<string, never>, 'agent'>
+export type AgentFlowNode = Node<Record<string, never>, 'agent' | 'touch'>
 
 /** 이보다 긴 역할은 최소 6em 을 지킨다(.nr .floor) — 짧은 역할은 제 폭 그대로 */
 const ROLE_FLOOR_CHARS = 6
@@ -291,6 +291,55 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
     </div>
   )
 }
+
+/**
+ * 휴대폰 판의 작은 카드(시안 A) — 이름 · 역할 · 상태(받은 메시지 수) · 한 줄(승인 대상이나 지금 하는 일). 단추 없이 카드 전체가 대화로 가는 자리.
+ * PC 카드(256px)를 줄이면 글이 6px 이 되어서, 휴대폰은 이 카드를 배율 1 로 그린다(자리는 PC 자리를 반으로 — RelationMap touch)
+ */
+export function TouchCard({ agentId }: { agentId: AgentId }) {
+  const v = useCardView(agentId)
+  if (!v) return null
+  const { agent, request, unread, status, fresh } = v
+  const isFresh = (status === 'idle' || status === 'stopped') && fresh
+  const sleep = isFresh ? null : sleepLook(agent, status)
+  const st = STATUS[status]
+  const word = isFresh ? FRESH_WORD : sleep ? SLEEP_WORD[sleep] : STATUS_WORD[status]
+  const line = request
+    ? request.kind === 'question'
+      ? QUESTION_LINK.split(' · ')[0]
+      : request.kind === 'plan' || request.kind === 'create-agent'
+        ? requestTitle(agent.name, request.toolName, request.input, request.fromSubagent)
+        : (requestTarget(request.toolName, request.input, agent.folder) ?? requestTitle(agent.name, request.toolName, request.input, request.fromSubagent))
+    : activityLine(v)
+  // 상태 줄과 같은 말이면(작업 중 · 작업 중…) 한 줄만
+  const showLine = request !== null || line.replace(/…$/, '') !== STATUS_WORD[status]
+  return (
+    <div className={`tcd${request ? ' pend' : ''}${agent.bypass || agent.bypassPending ? ' byp' : ''}`} data-status={status}>
+      <span className="tcd-n">
+        <b className="trunc">{agent.name}</b>
+        {agent.bypass && !agent.bypassNoticeClosed && <ShieldAlert className="i tcd-bp" size={14} aria-label="묻지 않고 실행해요" />}
+      </span>
+      {agent.role && <span className="tcd-r trunc">{agent.role}</span>}
+      <span className={`tcd-st${isFresh ? ' n' : st.tone ? ` ${st.tone}` : ''}`}>
+        {sleep === 'asleep' ? <Moon className="st-moon" size={12} aria-hidden="true" /> : <i className={`dot ${isFresh ? 'n' : sleep === 'waking' ? 'wake' : st.dot}`} aria-hidden="true" />}
+        <span className="trunc">{word}</span>
+        {unread > 0 && <span className="tcd-um">받은 메시지 {unread}</span>}
+      </span>
+      {showLine && <span className={`tcd-l trunc${request && request.kind === 'permission' ? ' mono' : ''}`}>{line}</span>}
+    </div>
+  )
+}
+
+/** 휴대폰 판의 노드 — 연결점 둘 + 작은 카드 */
+export const TouchNode = memo(function TouchNode({ id }: NodeProps<AgentFlowNode>) {
+  return (
+    <>
+      <Handle type="target" position={Position.Left} isConnectable={false} className="nd-port" />
+      <TouchCard agentId={id} />
+      <Handle type="source" position={Position.Right} isConnectable={false} className="nd-port" />
+    </>
+  )
+})
 
 /** React Flow 노드 — 보이지 않는 연결점 둘(엣지는 HandoffEdge 가 카드 테두리에서 직접 잇는다) + 카드 */
 export const AgentNode = memo(function AgentNode({ id }: NodeProps<AgentFlowNode>) {

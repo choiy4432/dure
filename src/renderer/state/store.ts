@@ -5,6 +5,7 @@ import type { AppEventMap, AppInfo, AppPrefs, ClaudeUpdateState, SetupState, Upd
 import type { PhoneState } from '../../shared/phoneTypes'
 import { displayStatus, effectiveSetup, type EdgeMode, type Phase } from './selectors'
 import { markFresh } from '../map/freshNodes'
+import { onPhone } from '../lib/phone'
 import { nextStep, tourAt, type TourState } from '../tour/tourSteps'
 
 /** 엔진 없이 도는 앱 쪽 상태 — 준비 화면·업데이트 토스트·설정·투어가 읽는다 */
@@ -192,6 +193,8 @@ function assistantText(item: HistoryItem): string {
 export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {}): Store {
   // 창에 초점이 있는가 — 초점이 없으면 고른 에이전트의 결과도 못 본 것이다. document.hasFocus 가 없는 환경에선 본 것으로 친다
   const hasFocus = opts.hasFocus ?? (() => (typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true))
+  // 휴대폰 화면(wsApi) — PC 전용 메서드(고른 에이전트 알리기 · 앱 쪽 상태)는 부르지 않는다. 휴대폰의 고르기는 휴대폰 화면 상태로만(PC 의 고른 에이전트는 그대로)
+  const phone = onPhone(api)
   let state: UiState = {
     app: { info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false, phone: null },
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
@@ -584,6 +587,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
 
   /** 고른 에이전트를 엔진에 알린다 — 엔진이 claude 를 미리 띄운다. 알리기가 실패해도(끊김·없는 길) 고르기는 그대로 */
   const tellSelected = (id: AgentId | null) => {
+    if (phone) return
     try {
       api.setSelected(id).catch(() => {})
     } catch {
@@ -666,7 +670,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       subscribeEvents()
       subscribeAppEvents()
       // 앱 상태는 기다리지 않는다 — 응답이 오는 대로 칸이 채워지고, 안 와도 처음 상태는 스냅샷만으로 끝난다
-      void loadApp().catch(() => {})
+      if (!phone) void loadApp().catch(() => {})
       await fetchSnapshot()
     },
     async setPrefs(p) {

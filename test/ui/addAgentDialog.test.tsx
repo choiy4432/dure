@@ -261,6 +261,79 @@ describe('AddAgentDialog', () => {
   })
 })
 
+describe('AddAgentDialog — 휴대폰(폴더 고르기 창 없음)', () => {
+  beforeEach(() => {
+    // 휴대폰의 window.dure(wsApi) — uploadFile 이 있다. pickFolder 는 PC 전용이라 부르면 안 된다
+    ;(window as any).dure.uploadFile = vi.fn()
+    snapshot = {
+      ...snapshot,
+      agents: [
+        { ...agent('a1', 'r1', '기획', { x: 64, y: 64 }), folder: 'C:\\work\\summer' },
+        { ...agent('a2', 'r1', '웹 화면', { x: 424, y: 64 }), folder: 'C:\\work\\web' },
+        { ...agent('a3', 'r1', '문구', { x: 784, y: 64 }), folder: 'C:\\work\\summer' },
+        { ...agent('b1', 'r2', '서버', { x: 64, y: 64 }), folder: 'D:\\autumn' },
+      ],
+    }
+  })
+
+  async function renderDialog() {
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { AddAgentDialog } = await import('../../src/renderer/shell/AddAgentDialog')
+    await act(async () => { await getStore().init() })
+    render(<AddAgentDialog roomId="r1" onClose={() => {}} />)
+    return screen.getByRole('dialog', { name: '에이전트 추가' })
+  }
+  const folderInput = (dlg: HTMLElement) => within(dlg).getByRole('textbox', { name: '폴더' }) as HTMLInputElement
+  const add = (dlg: HTMLElement) => act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '추가' })) })
+
+  it('pickFolder 없음 — 경로 입력·방 폴더 고르기, 없는 폴더 오류는 폴더 칸', async () => {
+    const dlg = await renderDialog()
+    expect(within(dlg).queryByRole('button', { name: '폴더 고르기' })).toBeNull()
+    const input = folderInput(dlg)
+    expect(input.classList.contains('mono')).toBe(true)
+    expect(document.activeElement).toBe(input) // 폴더가 첫 칸
+    // 다른 에이전트가 쓰는 폴더 — 이 방 것 먼저, 겹치지 않게
+    const picks = within(dlg).getByRole('group', { name: '다른 에이전트가 쓰는 폴더' })
+    expect(within(picks).getAllByRole('button').map(b => b.textContent)).toEqual(['C:\\work\\summer', 'C:\\work\\web', 'D:\\autumn'])
+    fireEvent.click(within(picks).getByRole('button', { name: 'C:\\work\\web' }))
+    expect(input.value).toBe('C:\\work\\web')
+    expect(within(picks).getByRole('button', { name: 'C:\\work\\web' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '디자인' } })
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '역할' }), { target: { value: '시안' } })
+    await add(dlg)
+    await settle()
+    expect(api.addAgent).toHaveBeenCalledWith({ roomId: 'r1', name: '디자인', role: '시안', folder: 'C:\\work\\web' })
+    expect(api.pickFolder).not.toHaveBeenCalled()
+  })
+
+  it('없는 폴더 — 폴더 칸 아래 해요체 안내, 칸에 포커스 · 칸을 고치면 지운다', async () => {
+    const dlg = await renderDialog()
+    const input = folderInput(dlg)
+    fireEvent.change(input, { target: { value: ' C:\\gone ' } })
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '디자인' } })
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '역할' }), { target: { value: '시안' } })
+    await add(dlg)
+    await settle()
+    expect(api.addAgent).toHaveBeenCalledWith({ roomId: 'r1', name: '디자인', role: '시안', folder: 'C:\\gone' })
+    const err = within(dlg).getByText('폴더를 찾을 수 없어요 — PC 에 있는 폴더 경로를 넣어 주세요')
+    expect(err.classList.contains('fe')).toBe(true)
+    expect(err.closest('.fld')!.contains(input)).toBe(true)
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(document.activeElement).toBe(input)
+    fireEvent.change(input, { target: { value: 'C:\\work\\new' } })
+    expect(within(dlg).queryByText(/폴더를 찾을 수 없어요/)).toBeNull()
+  })
+
+  it('경로가 비면 추가가 꺼져 있다', async () => {
+    const dlg = await renderDialog()
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '이름' }), { target: { value: '디자인' } })
+    fireEvent.change(within(dlg).getByRole('textbox', { name: '역할' }), { target: { value: '시안' } })
+    expect((within(dlg).getByRole('button', { name: '추가' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(folderInput(dlg), { target: { value: '   ' } })
+    expect((within(dlg).getByRole('button', { name: '추가' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
 describe('AddAgentDialog — 서버 방', () => {
   beforeEach(() => {
     snapshot = { ...snapshot, rooms: snapshot.rooms.map(r => (r.id === 'r1' ? { ...r, remote: { host: 'dev' } } : r)) }
@@ -355,6 +428,24 @@ describe('AddAgentDialog — 서버 방', () => {
     await check(dlg)
     await settle()
     expect(within(dlg).getByRole('alert').textContent).toBe('dev 에 claude 가 없어요')
+  })
+
+  it('휴대폰 — 그 서버 방 에이전트들의 폴더를 고를 수 있고, 고르면 경로 칸에 들어가 확인을 거친다', async () => {
+    ;(window as any).dure.uploadFile = vi.fn()
+    snapshot = { ...snapshot, agents: snapshot.agents.map(a => (a.roomId === 'r1' ? { ...a, folder: a.id === 'a1' ? '/srv/plan' : '/srv/web' } : a)) }
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { AddAgentDialog } = await import('../../src/renderer/shell/AddAgentDialog')
+    await act(async () => { await getStore().init() })
+    render(<AddAgentDialog roomId="r1" onClose={() => {}} />)
+    const dlg = screen.getByRole('dialog', { name: '에이전트 추가' })
+    // 다른 방(이 PC 방)의 폴더는 서버에 없다 — 이 방 것만
+    const picks = within(dlg).getByRole('group', { name: '다른 에이전트가 쓰는 폴더' })
+    expect(within(picks).getAllByRole('button').map(b => b.textContent)).toEqual(['/srv/plan', '/srv/web'])
+    fireEvent.click(within(picks).getByRole('button', { name: '/srv/web' }))
+    expect(folderInput(dlg).value).toBe('/srv/web')
+    await check(dlg)
+    await settle()
+    expect(api.checkRemoteFolder).toHaveBeenCalledWith('r1', '/srv/web')
   })
 
   it('갈래는 지금처럼 폴더 고정 — 서버 알약은 보이고 확인은 없다', async () => {

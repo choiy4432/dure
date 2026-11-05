@@ -11,13 +11,13 @@ import { StrictMode, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { LucideProvider } from 'lucide-react'
 import { Splash } from '../shell/Splash'
-import { BrandMark } from '../shell/BrandMark'
-import { getStore, useDure } from '../state/store'
+import { getStore } from '../state/store'
 import { followClockBack } from '../lib/animeClock'
 import { PHONE_PATHS } from '../../shared/phoneWire'
 import { createWsApi } from './wsApi'
-import { onPhoneConn, useConn } from './connection'
+import { onPhoneConn } from './connection'
 import { PairScreen } from './PairScreen'
+import { MobileApp } from './MobileApp'
 import { detectPairEnv } from './pairEnv'
 import { checkMe, copyText, pairWith, subscribePush } from './phoneHttp'
 
@@ -101,27 +101,9 @@ function startApp(): void {
   followClockBack()
   setInterval(() => getStore().followClock(), 1000)
   show(<Splash />)
+  // 처음 상태를 못 받았어도(PC 가 꺼짐·끊김) 화면은 띄운다 — 끊김 띠와 안내가 보이고, 이어지면 스냅샷부터 다시 받는다(onPhoneConn → resync)
   getStore()
     .init()
-    .catch(err => console.error('두레: 처음 상태를 받지 못했어요', err))
-    .finally(() => show(<Connected />))
-}
-
-/** 짝을 맺고 이어진 뒤 — 휴대폰 화면(방 고르기·판·대화)이 들어오기 전까지 자리만 지킨다 */
-function Connected() {
-  const conn = useConn()
-  const rooms = useDure(s => s.rooms.length)
-  const loaded = useDure(s => s.loadError === null)
-  const live = conn === 'open' && loaded
-  return (
-    <main className="pr">
-      <div className="pr-body">
-        <div className="pr-head">
-          <span className="pr-mark"><BrandMark /></span>
-          <h1 className="pr-title">{live ? '연결됐어요' : '다시 잇는 중…'}</h1>
-          <p className="pr-hint" role="status">{live ? `방 ${rooms}개` : 'PC 의 두레가 켜져 있는지 확인해 주세요'}</p>
-        </div>
-      </div>
-    </main>
-  )
+    .catch(() => {})
+    .finally(() => show(<MobileApp />))
 }

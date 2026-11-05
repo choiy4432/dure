@@ -7,6 +7,7 @@ import { errorMessage, josa, RENEW_CONFIRM, SLEEP_BLOCK_WORD, SLEEP_NOW } from '
 import { moveMenuFocus, useDismiss } from '../lib/popover'
 import { MotionDiv, Presence } from '../lib/presence'
 import { MOTION } from '../lib/motion'
+import { onPhone } from '../lib/phone'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
 import { conversationMarkdown, exportFileName } from '../lib/exportConversation'
 import { AlwaysAllowDialog } from './AlwaysAllowDialog'
@@ -21,6 +22,12 @@ interface Props {
   onNotice: (message: string | null) => void
   /** 메뉴 버튼 — 바꾸기를 마친 뒤 포커스를 돌려받는 자리 */
   buttonRef?: Ref<HTMLButtonElement>
+  /**
+   * 휴대폰 설정 판 안 — 메뉴 버튼·떠 있는 목록 없이 항목을 그대로 늘어놓는다(보이는 동안 늘 열린 것). 확인 대화상자는 같다
+   */
+  inline?: boolean
+  /** inline — 고른 일을 마쳤다(새 대화·지우기는 확인 뒤, 재우기는 보낸 뒤). 설정 판을 닫는 데 쓴다 */
+  onDone?: () => void
 }
 
 type Ask = 'renew' | 'remove' | 'always' | null
@@ -30,8 +37,11 @@ const EXPORT_EMPTY = '내보낼 대화가 아직 없어요'
 /** 재울 수 있나 — undefined 는 아직 묻는 중, 'no-session' 은 재울 게 없음, null 은 지금 재울 수 있음 */
 type SleepCheck = SleepBlock | 'no-session' | null | undefined
 
-/** 패널 머리의 … 메뉴 — 이름·역할 바꾸기 · 새 대화 · 지금 재우기 · 폴더 열기 · 대화 내보내기 · 항상 허용한 일 · 지우기 */
-export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef }: Props) {
+/**
+ * 패널 머리의 … 메뉴 — 이름·역할 바꾸기 · 새 대화 · 지금 재우기 · 폴더 열기 · 대화 내보내기 · 항상 허용한 일 · 지우기.
+ * 휴대폰에선 폴더 열기·대화 내보내기를 뺀다(PC 의 탐색기·저장 창을 여는 일 — 휴대폰에서 부를 수 없다)
+ */
+export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef, inline, onDone }: Props) {
   const [open, setOpen] = useState(false)
   const [ask, setAsk] = useState<Ask>(null)
   const [sleepCheck, setSleepCheck] = useState<SleepCheck>(undefined)
@@ -40,6 +50,8 @@ export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef }: Props
   const menu = useRef<HTMLDivElement>(null)
   const close = useCallback(() => setOpen(false), [])
   useDismiss(open, wrap, close)
+  const pcOnly = !onPhone()
+  const listing = inline === true || open
 
   useEffect(() => {
     if (open) menu.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus()
@@ -50,7 +62,7 @@ export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef }: Props
   const agentId = agent.id
   const asleep = agent.asleep
   useEffect(() => {
-    if (!open) return
+    if (!listing) return
     let stale = false
     setSleepCheck(asleep ? 'no-session' : undefined)
     Promise.resolve()
@@ -58,7 +70,7 @@ export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef }: Props
       .then(r => { if (!stale) setSleepCheck(r) })
       .catch(() => { if (!stale) setSleepCheck('no-session') }) // 못 물으면 항목을 감춘다 — 재우기는 편의라 막혀도 해롭지 않다
     return () => { stale = true }
-  }, [open, agentId, asleep])
+  }, [listing, agentId, asleep])
 
   const setButton = (el: HTMLButtonElement | null) => {
     btn.current = el
@@ -66,10 +78,12 @@ export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef }: Props
     else if (buttonRef) buttonRef.current = el
   }
 
-  // 항목을 고르면 메뉴를 닫고 포커스를 메뉴 버튼에 — 대화상자가 닫힐 때 그리로 돌아온다
+  // 항목을 고르면 메뉴를 닫고 포커스를 메뉴 버튼에 — 대화상자가 닫힐 때 그리로 돌아온다(목록으로 늘어놓은 판에선 누른 항목 그대로)
   const choose = (fn: () => void) => () => {
-    setOpen(false)
-    btn.current?.focus()
+    if (!inline) {
+      setOpen(false)
+      btn.current?.focus()
+    }
     fn()
   }
 
@@ -99,17 +113,20 @@ export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef }: Props
       .sleep(agent.id)
       .then(() => getStore().refresh())
       .catch(e => onError(errorMessage(e)))
+    onDone?.()
   }
 
   const renew = async () => {
     await window.dure.newConversation(agent.id) // 실패하면 대화상자에 문구
     setAsk(null)
+    onDone?.()
     await getStore().refresh().catch(e => onError(errorMessage(e)))
   }
 
   const remove = async () => {
     await window.dure.removeAgent(agent.id)
     setAsk(null)
+    onDone?.()
     // 지운 에이전트는 스냅샷에서 빠지고 선택도 풀린다 — 패널은 '내가 할 일' 로
     await getStore().refresh().catch(e => onError(errorMessage(e)))
   }
@@ -129,62 +146,57 @@ export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef }: Props
     moveMenuFocus(e)
   }
 
-  return (
-    <span className="mp" ref={wrap}>
-      <button
-        ref={setButton}
-        type="button"
-        className="ib"
-        aria-label="메뉴"
-        title="메뉴"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen(o => !o)}
-      >
-        <Ellipsis className="i" aria-hidden="true" />
+  // 떠 있는 목록이면 menuitem, 늘어놓은 판이면 보통 버튼
+  const role = inline ? undefined : 'menuitem'
+  const items = (
+    <>
+      <button type="button" role={role} className="mi" onClick={choose(onEdit)}>
+        <Pencil className="i" aria-hidden="true" />
+        이름·역할 바꾸기
       </button>
-      <Presence show={open}>
-        <MotionDiv motion={MOTION.pop} origin="top right" ref={menu} className="pop end" role="menu" aria-label="메뉴" onKeyDown={onKey}>
-          <button type="button" role="menuitem" className="mi" onClick={choose(onEdit)}>
-            <Pencil className="i" aria-hidden="true" />
-            이름·역할 바꾸기
-          </button>
-          <button type="button" role="menuitem" className="mi" onClick={choose(() => setAsk('renew'))}>
-            <MessageSquarePlus className="i" aria-hidden="true" />새 대화
-          </button>
-          {sleepCheck !== 'no-session' && (
-            <button
-              type="button"
-              role="menuitem"
-              className="mi"
-              disabled={sleepCheck !== null}
-              title={sleepCheck ? SLEEP_BLOCK_WORD[sleepCheck] : undefined}
-              onClick={choose(sleepNow)}
-            >
-              <Moon className="i" aria-hidden="true" />
-              {SLEEP_NOW}
-            </button>
-          )}
-          <button type="button" role="menuitem" className="mi" onClick={choose(openFolder)}>
-            <FolderOpen className="i" aria-hidden="true" />
-            폴더 열기
-          </button>
-          <button type="button" role="menuitem" className="mi" onClick={choose(() => void exportChat())}>
-            <FileDown className="i" aria-hidden="true" />
-            대화 내보내기
-          </button>
-          <button type="button" role="menuitem" className="mi" onClick={choose(() => setAsk('always'))}>
-            <ShieldCheck className="i" aria-hidden="true" />
-            <span className="mi-tx">항상 허용한 일</span>
-            {agent.alwaysAllow.length > 0 && <span className="mi-n">{agent.alwaysAllow.length}</span>}
-          </button>
-          <div className="pop-sep" role="separator" />
-          <button type="button" role="menuitem" className="mi dng-t" onClick={choose(() => setAsk('remove'))}>
-            <Trash2 className="i" aria-hidden="true" />
-            지우기
-          </button>
-        </MotionDiv>
-      </Presence>
+      <button type="button" role={role} className="mi" onClick={choose(() => setAsk('renew'))}>
+        <MessageSquarePlus className="i" aria-hidden="true" />새 대화
+      </button>
+      {sleepCheck !== 'no-session' && (
+        <button
+          type="button"
+          role={role}
+          className="mi"
+          disabled={sleepCheck !== null}
+          title={sleepCheck ? SLEEP_BLOCK_WORD[sleepCheck] : undefined}
+          onClick={choose(sleepNow)}
+        >
+          <Moon className="i" aria-hidden="true" />
+          {SLEEP_NOW}
+        </button>
+      )}
+      {pcOnly && (
+        <button type="button" role={role} className="mi" onClick={choose(openFolder)}>
+          <FolderOpen className="i" aria-hidden="true" />
+          폴더 열기
+        </button>
+      )}
+      {pcOnly && (
+        <button type="button" role={role} className="mi" onClick={choose(() => void exportChat())}>
+          <FileDown className="i" aria-hidden="true" />
+          대화 내보내기
+        </button>
+      )}
+      <button type="button" role={role} className="mi" onClick={choose(() => setAsk('always'))}>
+        <ShieldCheck className="i" aria-hidden="true" />
+        <span className="mi-tx">항상 허용한 일</span>
+        {agent.alwaysAllow.length > 0 && <span className="mi-n">{agent.alwaysAllow.length}</span>}
+      </button>
+      <div className="pop-sep" role="separator" />
+      <button type="button" role={role} className="mi dng-t" onClick={choose(() => setAsk('remove'))}>
+        <Trash2 className="i" aria-hidden="true" />
+        지우기
+      </button>
+    </>
+  )
+
+  const dialogs = (
+    <>
       <ConfirmDialog
         open={ask === 'renew'}
         title={RENEW_CONFIRM.title}
@@ -203,6 +215,38 @@ export function AgentMenu({ agent, onEdit, onError, onNotice, buttonRef }: Props
         onCancel={() => setAsk(null)}
       />
       <AlwaysAllowDialog open={ask === 'always'} agent={agent} onClose={() => setAsk(null)} />
+    </>
+  )
+
+  if (inline) {
+    return (
+      <div className="am-list">
+        {items}
+        {dialogs}
+      </div>
+    )
+  }
+
+  return (
+    <span className="mp" ref={wrap}>
+      <button
+        ref={setButton}
+        type="button"
+        className="ib"
+        aria-label="메뉴"
+        title="메뉴"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(o => !o)}
+      >
+        <Ellipsis className="i" aria-hidden="true" />
+      </button>
+      <Presence show={open}>
+        <MotionDiv motion={MOTION.pop} origin="top right" ref={menu} className="pop end" role="menu" aria-label="메뉴" onKeyDown={onKey}>
+          {items}
+        </MotionDiv>
+      </Presence>
+      {dialogs}
     </span>
   )
 }

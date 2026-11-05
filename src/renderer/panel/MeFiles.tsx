@@ -4,6 +4,7 @@ import type { AgentId } from '../../engine/types'
 import type { SentFile } from '../state/transcript'
 import { opensAsDocument } from '../../shared/attachments'
 import { errorMessage, formatBytes, splitName } from '../lib/words'
+import { onPhone } from '../lib/phone'
 
 /** 줄 끝에서도 지워지지 않는 빈칸(nbsp) */
 const NBSP = String.fromCharCode(0xa0)
@@ -30,6 +31,22 @@ export function FileName({ name }: { name: string }) {
  */
 export function MeFiles({ agentId, files }: { agentId?: AgentId; files: SentFile[] }) {
   const [error, setError] = useState<string | null>(null)
+  // 휴대폰 — 사본은 PC 에 있어 휴대폰에서 열 수 없다(openAttachment 는 PC 전용). 이름 · 크기만 보인다
+  if (onPhone()) {
+    return (
+      <>
+        {files.map((f, i) => (
+          <span key={i} className="me-file" title={f.name}>
+            <FileText className="i af-i" aria-hidden="true" />
+            <span className="af-tx">
+              <FileName name={f.name} />
+              <span className="af-m">{formatBytes(f.bytes)}</span>
+            </span>
+          </span>
+        ))}
+      </>
+    )
+  }
   const open = async (f: SentFile) => {
     setError(null)
     if (!agentId) return

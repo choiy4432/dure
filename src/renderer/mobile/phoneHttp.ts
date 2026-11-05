@@ -1,6 +1,7 @@
 // 휴대폰 → PC 휴대폰 서버의 HTTP 길 — 짝 여부(/api/me) · 짝 맺기(/api/pair) · 알림 구독(/api/vapid → /api/subscribe).
 // 기기 토큰은 HttpOnly 쿠키라 이 코드는 토큰을 보지 못한다(credentials: same-origin 으로 브라우저가 실어 보낸다)
-import { PHONE_PATHS, type PhonePairResponse, type PhoneVapidResponse } from '../../shared/phoneWire'
+import { PHONE_PATHS, type PhoneMeResponse, type PhonePairResponse, type PhoneVapidResponse } from '../../shared/phoneWire'
+import type { PhoneDevice } from '../../shared/phoneTypes'
 
 export const PAIR_OFFLINE = '두레에 닿지 못했어요 — PC 가 켜져 있는지 확인해 주세요'
 export const PAIR_FAILED = '짝을 맺지 못했어요 — 다시 해 주세요'
@@ -17,6 +18,18 @@ export async function checkMe(o: Http = {}): Promise<'paired' | 'unpaired' | 'un
     return r.ok ? 'paired' : 'unknown'
   } catch {
     return 'unknown'
+  }
+}
+
+/** 이 휴대폰(PC 가 기억하는 이름 등) — 짝을 안 맺었거나 끊겼거나 서버 오류면 null */
+export async function meDevice(o: Http = {}): Promise<PhoneDevice | null> {
+  try {
+    const r = await fetchOf(o)(`${baseOf(o)}${PHONE_PATHS.me}`, { credentials: 'same-origin', cache: 'no-store' })
+    if (!r.ok) return null
+    const body = (await r.json()) as PhoneMeResponse
+    return body && body.ok && body.device && typeof body.device.name === 'string' ? body.device : null
+  } catch {
+    return null
   }
 }
 

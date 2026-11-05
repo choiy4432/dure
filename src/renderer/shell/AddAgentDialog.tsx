@@ -5,6 +5,7 @@ import { getStore, useDure, type ForkDraft } from '../state/store'
 import { errorMessage, fieldError, FORK_DIALOG, REMOTE } from '../lib/words'
 import { placeMissing } from '../map/layout'
 import { markFresh } from '../map/freshNodes'
+import { onPhone } from '../lib/phone'
 import { FormDialog } from './FormDialog'
 import { RemoteCheckLine, ServerTag, useRemoteCheck } from './RemoteCheck'
 
@@ -15,6 +16,30 @@ function fieldOf(message: string): Field {
   if (message.startsWith('폴더')) return 'folder'
   if (message.includes('이름')) return 'name'
   return 'other'
+}
+
+/** 휴대폰 — 친 경로가 PC 에 없다(엔진 '폴더를 찾을 수 없습니다: …') */
+export const FOLDER_MISSING = '폴더를 찾을 수 없어요 — PC 에 있는 폴더 경로를 넣어 주세요'
+/** 휴대폰의 이 PC 폴더 칸 자리표시 */
+const PC_FOLDER_EXAMPLE = 'C:\\Users\\<사용자>\\projects\\web'
+/** 휴대폰에서 고를 수 있는 폴더 수 — 그 너머는 칠 수 있다 */
+const PICKS_MAX = 6
+const NO_PICKS: string[] = []
+
+/**
+ * 휴대폰의 폴더 고르기 — 다른 에이전트들이 쓰는 폴더(스냅샷 agents[].folder), 이 방 것 먼저 · 겹치지 않게.
+ * 서버 방은 그 방 것만(다른 방 폴더는 그 서버에 없다), 이 PC 방은 이 PC 방들의 것만
+ */
+function folderPicks(s: { rooms: { id: RoomId; remote?: { host: string } | null }[]; agents: { roomId: RoomId; folder: string }[] }, roomId: RoomId, server: boolean): string[] {
+  const local = new Set(s.rooms.filter(r => !r.remote).map(r => r.id))
+  const here = s.agents.filter(a => a.roomId === roomId)
+  const others = server ? [] : s.agents.filter(a => a.roomId !== roomId && local.has(a.roomId))
+  const out: string[] = []
+  for (const a of [...here, ...others]) {
+    if (a.folder && !out.includes(a.folder)) out.push(a.folder)
+    if (out.length === PICKS_MAX) break
+  }
+  return out
 }
 
 interface Props {
@@ -32,6 +57,10 @@ interface Props {
 export function AddAgentDialog({ roomId, fork, onClose }: Props) {
   const remote = useDure(s => s.rooms.find(r => r.id === roomId)?.remote ?? null)
   const serverMode = remote !== null && !fork
+  // 휴대폰엔 폴더 고르기 창이 없다(pickFolder 는 PC 전용) — 이 PC 방도 경로를 쳐서 넣는다. 다른 에이전트가 쓰는 폴더를 눌러 채울 수 있다
+  const phone = onPhone()
+  const typedMode = phone && !serverMode && !fork
+  const picks = useDure(s => (phone && !fork ? folderPicks(s, roomId, serverMode) : NO_PICKS))
   const [folder, setFolder] = useState<string | null>(fork?.folder ?? null)
   const [path, setPath] = useState('')
   const [name, setName] = useState(fork?.name ?? '')
@@ -90,7 +119,7 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
   }
 
   const submit = async () => {
-    const chosen = serverMode ? serverFolder : folder
+    const chosen = serverMode ? serverFolder : typedMode ? target || null : folder
     if (!chosen) return
     setBusy(true)
     setError(null)
@@ -112,9 +141,11 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
       // 어느 칸인지는 엔진 원문으로 가리고, 보이는 글은 해요체 안내로(이름 겹침)
       const raw = errorMessage(e)
       const field = fieldOf(raw)
-      setError({ field, message: fieldError(raw) })
+      // 휴대폰에서 친 경로가 없으면 해요체로(엔진 원문엔 친 경로가 그대로 붙어 온다)
+      const message = typedMode && raw.startsWith('폴더를 찾을 수 없') ? FOLDER_MISSING : fieldError(raw)
+      setError({ field, message })
       setBusy(false)
-      if (field === 'folder') (serverMode ? pathInput : folderButton).current?.focus()
+      if (field === 'folder') (serverMode || typedMode ? pathInput : folderButton).current?.focus()
       else if (field === 'name') nameInput.current?.focus()
       return
     }
@@ -128,7 +159,7 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
     onClose()
   }
 
-  const canSubmit = (serverMode ? serverFolder !== null : folder !== null) && name.trim() !== '' && role.trim() !== ''
+  const canSubmit = (serverMode ? serverFolder !== null : typedMode ? target !== '' : folder !== null) && name.trim() !== '' && role.trim() !== ''
   const folderError = errorOf('folder')
   const nameError = errorOf('name')
   const pathDescribed = [shown.state !== 'idle' && checkId, folderError && errorId].filter(Boolean).join(' ') || undefined
@@ -145,7 +176,7 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
     >
       <div className="fld">
         <div className="fld-lr">
-          {serverMode ? (
+          {serverMode || typedMode ? (
             <label className="fld-l" htmlFor={`${id}-fi`}>
               폴더
             </label>
@@ -182,6 +213,23 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
             </div>
             <RemoteCheckLine id={checkId} check={shown} okText={REMOTE.folderOk} />
           </>
+        ) : typedMode ? (
+          <input
+            ref={pathInput}
+            id={`${id}-fi`}
+            className="inp mono"
+            placeholder={PC_FOLDER_EXAMPLE}
+            value={path}
+            onChange={e => {
+              setPath(e.target.value)
+              clear('folder')
+            }}
+            aria-invalid={folderError ? true : undefined}
+            aria-describedby={folderError ? errorId : undefined}
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+          />
         ) : (
           <div className="fld-row">
             <span
@@ -211,6 +259,31 @@ export function AddAgentDialog({ roomId, fork, onClose }: Props) {
           <p className="fe" id={errorId}>
             {folderError}
           </p>
+        )}
+        {picks.length > 0 && (
+          <div className="fld-picks" role="group" aria-labelledby={`${id}-pk`}>
+            <span className="fld-pk-l" id={`${id}-pk`}>
+              다른 에이전트가 쓰는 폴더
+            </span>
+            {picks.map(p => (
+              <button
+                key={p}
+                type="button"
+                className="fld-pick mono"
+                aria-pressed={p === target}
+                title={p}
+                disabled={busy}
+                onClick={() => {
+                  setPath(p)
+                  clear('folder')
+                  if (serverMode && !settled(p)) reset()
+                  pathInput.current?.focus()
+                }}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
         )}
       </div>
       <div className="fld">

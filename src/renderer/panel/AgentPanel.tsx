@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import type { AgentId, HistoryItem } from '../../engine/types'
 import { getStore, useDure, type PanelTab } from '../state/store'
 import { messagesOf, unreadFor } from '../state/selectors'
@@ -217,11 +217,22 @@ function PanelBody({ agentId, name, pins, chat, composer, seen }: {
   )
 }
 
+/** 머리 자리에 넘기는 것 — PanelHeader 의 props 와 같다(모델 목록의 describe·열림은 패널이 들고 있다: 입력창의 /model 이 연다) */
+export interface PanelHeaderSlot {
+  agentId: AgentId
+  description: Described
+  onLoadDescription: () => void
+  onRetryDescribe: () => void
+  modelOpen: boolean
+  onModelOpenChange: (open: boolean) => void
+}
+
 /**
  * 오른쪽 패널 — 고른 에이전트 하나.
  * 위에서부터: 머리(PanelHeader) → 탭(서브에이전트가 있을 때) → 고정 카드 자리(.pnl-pins) → 대화 목록(ChatList) 또는 서브에이전트 지도 → 입력창(Composer, 대화 탭에만).
+ * header — 머리를 갈아 끼운다(휴대폰 대화 화면: ‹ · 이름 · 상태 · ⋯ 설정 판). 없으면 PanelHeader
  */
-export function AgentPanel() {
+export function AgentPanel({ header }: { header?: (slot: PanelHeaderSlot) => ReactNode } = {}) {
   const sel = useDure(s => {
     const a = s.agents.find(x => x.id === s.selectedAgentId)
     return a ? { id: a.id, name: a.name } : null
@@ -267,17 +278,18 @@ export function AgentPanel() {
     )
   }
 
+  const slot: PanelHeaderSlot = {
+    agentId: sel.id,
+    description: described[sel.id] ?? IDLE,
+    onLoadDescription: ensureDescribed,
+    onRetryDescribe: retryDescribe,
+    modelOpen: modelOpenFor === sel.id,
+    onModelOpenChange: open => setModelOpenFor(open ? sel.id : null),
+  }
+
   return (
     <aside className="pnl" aria-label={sel.name}>
-      <PanelHeader
-        key={sel.id}
-        agentId={sel.id}
-        description={described[sel.id] ?? IDLE}
-        onLoadDescription={ensureDescribed}
-        onRetryDescribe={retryDescribe}
-        modelOpen={modelOpenFor === sel.id}
-        onModelOpenChange={open => setModelOpenFor(open ? sel.id : null)}
-      />
+      {header ? <Fragment key={sel.id}>{header(slot)}</Fragment> : <PanelHeader key={sel.id} {...slot} />}
       <PanelBody
         agentId={sel.id}
         name={sel.name}

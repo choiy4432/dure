@@ -2,6 +2,7 @@
 
 import type { MessageState, SleepBlock, SshHostEntry, UsageWindow } from '../../engine/types'
 import { hasBatchim } from '../../shared/josa'
+import { onPhone } from './phone'
 import type { DisplayStatus, Phase } from '../state/selectors'
 
 // 조사 규칙은 엔진도 쓴다(새 에이전트를 만든 결과 글) — 정본은 shared/josa, 화면은 여기서 그대로 가져다 쓴다
@@ -65,6 +66,11 @@ export const FRESH_WORD = '끝남 · 새 결과'
 /** 질문(AskUserQuestion)이 떠 있는 카드의 링크 문구 */
 export const QUESTION_LINK = '내 답 필요 · 패널에서 답하기'
 
+/** 고른 에이전트가 열리는 곳 — PC 는 오른쪽 패널, 휴대폰은 대화 화면('패널에서 자세히' → '대화에서 자세히') */
+export function panelWord(): string {
+  return onPhone() ? '대화' : '패널'
+}
+
 /** 차례의 단계 — 대화 맨 아래 작업 중 줄과 관계도 카드 한 줄이 같은 말을 쓴다(생각 중·흐르는 글이 먼저) */
 export const PHASE_WORD: Record<Phase, string> = {
   preparing: '준비하는 중…',
@@ -86,6 +92,8 @@ export const ATTACH_NO_PATH = '이 파일은 붙일 수 없어요 — 저장한 
 export const ATTACH_FOLDER = '폴더는 보낼 수 없어요'
 /** 첨부가 든 보내기(사본·서버 올리기) — 큰 파일은 몇 분 걸릴 수 있다 */
 export const ATTACH_SENDING = '보내는 중…'
+/** 휴대폰 — 붙인 파일을 PC 로 올리는 중(칩의 크기 자리) */
+export const ATTACH_UPLOADING = '올리는 중…'
 
 /** 파일 크기 — 1024 단위, 소수 한 자리(.0 은 뗀다): 512 B · 1.2 KB · 3.4 MB. 반올림해 1024 가 되면 다음 단위로 */
 export function formatBytes(n: number): string {

@@ -8,7 +8,8 @@ import { ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../../shared/attachments'
 import { getStore, useDure } from '../state/store'
 import { displayStatus } from '../state/selectors'
 import { ContextRing } from './ContextRing'
-import { ATTACH_FOLDER, ATTACH_NO_PATH, ATTACH_SENDING, ATTACH_WORD, errorMessage, formatBytes, RENEW_CONFIRM } from '../lib/words'
+import { ATTACH_FOLDER, ATTACH_NO_PATH, ATTACH_SENDING, ATTACH_UPLOADING, ATTACH_WORD, errorMessage, formatBytes, RENEW_CONFIRM } from '../lib/words'
+import { phoneUpload } from '../lib/phone'
 import { isImageType, prepareImage } from '../lib/image'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
 import type { Described } from './ModelPicker'
@@ -62,6 +63,16 @@ function fileChip(key: number, file: File): FileChip | null {
   const path = window.dure.pathForFile(file)
   if (!path) return null
   return { key, state: 'file', name: file.name, bytes: file.size, path, ...(file.size > ATTACH_MAX_BYTES ? { error: ATTACH_TOO_BIG } : {}) }
+}
+
+/**
+ * 휴대폰의 파일 칩 — 휴대폰 파일엔 PC 경로가 없어 붙일 때 PC 의 받은 폴더로 올린다(올리는 동안 '올리는 중…', 보내기는 막힘).
+ * 100MB 를 넘으면 올리지 않고 PC 처럼 오류 칩. PC 창이면 null(경로를 모르는 파일은 지금처럼 안내)
+ */
+function uploadChip(key: number, file: File): FileChip | null {
+  if (!phoneUpload()) return null
+  const base = { key, state: 'file' as const, name: file.name, bytes: file.size, path: '' }
+  return file.size > ATTACH_MAX_BYTES ? { ...base, error: ATTACH_TOO_BIG } : { ...base, uploading: true }
 }
 
 /**
@@ -145,7 +156,7 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
   }, [newest])
   // 보내는 중(첨부는 몇 분 걸릴 수 있다)이거나 /model 을 바꾸는 중 — 글을 바꾸거나 또 보내지 않는다
   const locked = busy || sending !== undefined
-  const canSend = !locked && preparing === 0 && !files.some(f => f.error) && (text.trim() !== '' || images.length > 0 || files.length > 0)
+  const canSend = !locked && preparing === 0 && !files.some(f => f.error || f.uploading) && (text.trim() !== '' || images.length > 0 || files.length > 0)
 
   const edit = (next: string) => {
     setText(next)
@@ -285,15 +296,40 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
     }
   }
 
+  /** 휴대폰 — 올리기를 시작한다. 다 올리면 받은 PC 경로로 칩을 채우고, 못 올리면 칩을 빼고 오류 줄(어느 파일인지). 그사이 뺀 칩은 그대로 둔다 */
+  const startUpload = (key: number, file: File) => {
+    const upload = phoneUpload()
+    if (!upload) return
+    const alive = () => getDraft(agentId).attached.some(x => x.key === key)
+    upload(file).then(
+      r => {
+        if (!alive()) return
+        setAttached(a => a.map(x => (x.key === key ? { key, state: 'file', name: r.name || file.name, bytes: r.bytes, path: r.path } : x)))
+      },
+      e => {
+        if (!alive()) return
+        setAttached(a => a.filter(x => x.key !== key))
+        setError(`${file.name} — ${errorMessage(e)}`)
+      },
+    )
+  }
+
+  /** 파일 칩 하나 — PC 는 경로로, 휴대폰은 올려서. 둘 다 안 되면 null. at 이 있으면 그 칩(그림 준비 자리)을 갈음한다 */
+  const putFileChip = (key: number, file: File, at?: number): boolean => {
+    const chip = fileChip(key, file) ?? uploadChip(key, file)
+    if (!chip) return false
+    setAttached(a => (at === undefined ? [...a, chip] : a.map(x => (x.key === at ? chip : x))))
+    if (chip.uploading) startUpload(key, file)
+    return true
+  }
+
   const addFiles = (list: File[]) => {
     if (list.length === 0) return
     setError(null)
     for (const file of list) {
       const key = nextAttachKey()
       if (!isImageType(file.type)) {
-        const chip = fileChip(key, file)
-        if (chip) setAttached(a => [...a, chip])
-        else setError(ATTACH_NO_PATH)
+        if (!putFileChip(key, file)) setError(ATTACH_NO_PATH)
         continue
       }
       setAttached(a => [...a, { key, state: 'loading' }])
@@ -301,10 +337,11 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
         // 그사이 다른 에이전트로 갔어도 이 에이전트의 입력에 넣는다(setAttached 는 agentId 로 drafts 를 고친다)
         if (!getDraft(agentId).attached.some(x => x.key === key)) return // 그사이 버려졌다(에이전트 지움)
         if ('error' in r) {
-          // 그림 길로 못 가는 그림(줄여도 상한을 넘음·못 읽음) — 디스크 파일이면 거절하지 않고 파일 첨부로 내린다(경로 줄)
-          const chip = fileChip(key, file)
-          setAttached(a => (chip ? a.map(x => (x.key === key ? chip : x)) : a.filter(x => x.key !== key)))
-          if (!chip) setError(r.error)
+          // 그림 길로 못 가는 그림(줄여도 상한을 넘음·못 읽음) — 디스크 파일이면 거절하지 않고 파일 첨부로 내린다(경로 줄 · 휴대폰은 올려서)
+          if (!putFileChip(key, file, key)) {
+            setAttached(a => a.filter(x => x.key !== key))
+            setError(r.error)
+          }
           return
         }
         // 미리보기 주소는 붙일 때 한 번 — 글자를 칠 때마다 몇 MB 짜리 data: 주소를 다시 만들지 않는다
@@ -378,13 +415,13 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
               a.state === 'loading' ? (
                 <span key={a.key} className="att wait" role="status" aria-label="이미지 준비 중" />
               ) : a.state === 'file' ? (
-                // 파일 칩 — 이름(가운데 줄임) · 크기, 100MB 를 넘으면 크기 자리에 오류
-                <span key={a.key} className={`att-file${a.error ? ' bad' : ''}`} title={a.name}>
+                // 파일 칩 — 이름(가운데 줄임) · 크기, 100MB 를 넘으면 크기 자리에 오류 · 휴대폰에서 올리는 동안은 '올리는 중…'
+                <span key={a.key} className={`att-file${a.error ? ' bad' : ''}${a.uploading ? ' up' : ''}`} title={a.name}>
                   {a.error ? <FileX className="i af-i" aria-hidden="true" /> : <FileText className="i af-i" aria-hidden="true" />}
                   <span className="af-tx">
                     <FileName name={a.name} />
-                    <span className="af-m" role={a.error ? 'alert' : undefined}>
-                      {a.error ?? formatBytes(a.bytes)}
+                    <span className="af-m" role={a.error ? 'alert' : a.uploading ? 'status' : undefined}>
+                      {a.error ?? (a.uploading ? ATTACH_UPLOADING : formatBytes(a.bytes))}
                     </span>
                   </span>
                   <button
@@ -434,7 +471,8 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
           rows={2}
           value={text}
           readOnly={locked}
-          placeholder={planOn ? `${name}에게 계획부터 세워 달라고 하기…` : `${name}에게 일 시키기… ( / 명령 )`}
+          // 휴대폰 자판엔 / 명령을 찾아 쓸 일이 드물다 — 자리표시는 짧게(명령은 그대로 된다)
+          placeholder={planOn ? `${name}에게 계획부터 세워 달라고 하기…` : phoneUpload() ? `${name}에게 일 시키기…` : `${name}에게 일 시키기… ( / 명령 )`}
           aria-label={`${name}에게 보낼 메시지`}
           aria-autocomplete="list"
           aria-controls={menuOpen ? listId : undefined}

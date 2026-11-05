@@ -1194,3 +1194,65 @@ describe('Composer — 계획 먼저 · Esc 멈추기', () => {
     expect(api.interrupt).toHaveBeenCalledWith('w')
   })
 })
+
+describe('Composer — 휴대폰 첨부', () => {
+  /** 휴대폰의 window.dure(wsApi) — PC 경로가 없어(pathForFile '') 파일 바이트를 PC 의 받은 폴더로 올린다 */
+  const phone = (upload: (f: File) => Promise<{ path: string; name: string; bytes: number }>) => {
+    const uploadFile = vi.fn(upload)
+    ;(window as any).dure.pathForFile = () => ''
+    ;(window as any).dure.uploadFile = uploadFile
+    return uploadFile
+  }
+
+  it('휴대폰 — uploadFile 로 얻은 path 로 보냄', async () => {
+    let finish!: () => void
+    const uploadFile = phone(f => new Promise(r => { finish = () => r({ path: `C:\\dure\\inbox\\x-${f.name}`, name: f.name, bytes: f.size }) }))
+    const { container } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [pdf('보고서.pdf', 2048)] } })
+    await settle()
+    expect(uploadFile).toHaveBeenCalledTimes(1)
+    // 올리는 동안 — 칩은 있되 '올리는 중…', 보내기는 막힘
+    expect(fileChips()).toHaveLength(1)
+    expect(chipText(fileChips()[0])).toEqual(['보고서.pdf', '올리는 중…'])
+    type('읽어 줘')
+    expect(sendButton()).toBeDisabled()
+    await act(async () => { finish() })
+    await settle()
+    expect(chipText(fileChips()[0])).toEqual(['보고서.pdf', '2 KB'])
+    expect(sendButton()).toBeEnabled()
+    key('Enter')
+    await settle()
+    expect(api.sendUser).toHaveBeenCalledWith('w', [
+      { type: 'text', text: '읽어 줘' },
+      { type: 'file', path: 'C:\\dure\\inbox\\x-보고서.pdf', name: '보고서.pdf', bytes: 2048 },
+    ])
+  })
+
+  it('휴대폰 — 올리기 실패는 칩을 빼고 오류 줄 · 100MB 넘으면 올리지 않고 오류 칩', async () => {
+    const uploadFile = phone(async () => { throw new Error('파일을 올리지 못했어요') })
+    const { container } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [pdf('a.pdf')] } })
+    await settle()
+    expect(fileChips()).toHaveLength(0)
+    expect(screen.getByRole('alert')).toHaveTextContent('a.pdf — 파일을 올리지 못했어요')
+    fireEvent.change(fileInput(container), { target: { files: [sized('big.zip', ATTACH_MAX_BYTES + 1)] } })
+    await settle()
+    expect(uploadFile).toHaveBeenCalledTimes(1) // 큰 파일은 올리지 않는다
+    expect(chipText(fileChips()[0])).toEqual(['big.zip', ATTACH_TOO_BIG])
+    expect(sendButton()).toBeDisabled()
+  })
+
+  it('휴대폰 — 그림은 그림 길 그대로(올리지 않음), 그림 길로 못 가는 그림은 올려서 파일로', async () => {
+    const uploadFile = phone(async f => ({ path: `C:\\inbox\\${f.name}`, name: f.name, bytes: f.size }))
+    prep.mockResolvedValueOnce(ready()).mockResolvedValueOnce({ error: IMAGE_TOO_BIG })
+    const { container } = await renderPanel()
+    fireEvent.change(fileInput(container), { target: { files: [png('a.png')] } })
+    await settle()
+    expect(chips()).toHaveLength(1)
+    expect(uploadFile).not.toHaveBeenCalled()
+    fireEvent.change(fileInput(container), { target: { files: [png('huge.png')] } })
+    await settle()
+    expect(uploadFile).toHaveBeenCalledTimes(1)
+    expect(chipText(fileChips()[0])).toEqual(['huge.png', '10 B'])
+  })
+})

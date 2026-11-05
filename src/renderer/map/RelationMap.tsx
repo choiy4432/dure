@@ -4,10 +4,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type RefObject,
 } from 'react'
 import {
-  Background, BackgroundVariant, ReactFlow, ReactFlowProvider, applyNodeChanges, useReactFlow,
+  Background, BackgroundVariant, ReactFlow, ReactFlowProvider, applyNodeChanges, useNodesInitialized, useReactFlow,
   type EdgeTypes, type NodeChange, type NodeTypes,
 } from '@xyflow/react'
-import { ArrowLeftRight, ArrowRight, Plus } from 'lucide-react'
+import { ArrowLeftRight, ArrowRight, Maximize, Plus } from 'lucide-react'
 import type { AgentId, RoomId } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { edges as edgeViews, pairMessages, type EdgeView } from '../state/selectors'
@@ -15,7 +15,7 @@ import { ago, MESSAGE_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { MotionDiv, Presence, useLeaving } from '../lib/presence'
 import { MOTION, easeOut5, moveMs } from '../lib/motion'
-import { AgentNode, type AgentFlowNode } from './AgentNode'
+import { AgentNode, TouchNode, type AgentFlowNode } from './AgentNode'
 import { HandoffEdge, MARKER_TONES, markerId, type HandoffFlowEdge } from './HandoffEdge'
 import { SummaryChips } from './SummaryChips'
 import { OffscreenPill } from './OffscreenPill'
@@ -26,10 +26,19 @@ import { AUTO_FIT_MIN, arrange, columnsFor, isUnplaced, placeMissing, type Point
 
 /** 처음 그릴 때와 자동 맞춤 — 모두 보기와 같되 너무 작아지지 않게 하한을 둔다 */
 const AUTO_FIT = { ...FIT_OPTIONS, minZoom: AUTO_FIT_MIN }
+/**
+ * 휴대폰(touch) 맞춤 — 판 전체가 들어오면 가운데, 안 들어오면 글이 읽히는 배율(TOUCH_READ_ZOOM)에서 왼쪽 위부터 보인다
+ * (나머지는 한 손가락으로 끌어 보고, 화면 밖 할 일은 가장자리 알약이 알린다). 아래 여백은 맞춤 단추 자리
+ */
+const TOUCH_PAD = { x: 16, top: 20, bottom: 80 }
+/** 작은 카드(TouchCard)는 배율 1 에서 글이 12px 넘게 읽힌다 — 맞춤은 이보다 작게 하지 않는다(두 손가락으로는 더 줄일 수 있다) */
+const TOUCH_READ_ZOOM = 1
+/** 휴대폰 판의 자리 = PC 자리 × 이 값 — PC 칸(256 + 사이 104)의 반에 작은 카드(168)가 들어간다 */
+const TOUCH_SCALE = 0.5
 /** 마지막 크기 변화 뒤 이만큼 가만하면 맞춘다(창·경계선 끌기 중에는 기다린다) */
 const RESIZE_SETTLE_MS = 150
 
-const nodeTypes: NodeTypes = { agent: AgentNode }
+const nodeTypes: NodeTypes = { agent: AgentNode, touch: TouchNode }
 const edgeTypes: EdgeTypes = { handoff: HandoffEdge }
 
 /** 같은 두 카드를 반대로 잇는 선이 비키는 거리 */
@@ -47,17 +56,25 @@ const ARIA = {
   'edge.a11yDescription.default': '',
   'handle.ariaLabel': '연결점',
 }
+/** 휴대폰 — 카드를 옮길 수 없고, 누르면 대화가 화면 전체로 열린다 */
+const ARIA_TOUCH = {
+  ...ARIA,
+  'node.a11yDescription.default': '누르면 대화가 열려요.',
+  'node.a11yDescription.keyboardDisabled': '누르면 대화가 열려요.',
+}
 
 /**
  * 관계도 — 그 방의 에이전트 카드와 넘김 엣지. 방을 바꾸면 처음부터 다시 그린다(화면 맞춤 포함).
  * onAddAgent — 오른쪽 아래 '에이전트 추가'(App 이 추가 대화상자를 연다)
+ * touch — 휴대폰: 카드 끌기 끔(한 손가락 끌기는 판 이동, 두 손가락은 확대·축소) · 요약 칩·확대 조절·선 보기 대신 맞춤 단추 하나 ·
+ * 화면 밖 할 일 알약은 그 카드로 옮겨 가기만(누르면 대화가 화면을 덮으니 고르지 않는다)
  */
-export function RelationMap({ onAddAgent }: { onAddAgent?: () => void } = {}) {
+export function RelationMap({ onAddAgent, touch = false }: { onAddAgent?: () => void; touch?: boolean } = {}) {
   const roomId = useDure(s => s.roomId)
   if (!roomId) return null
   return (
     <ReactFlowProvider key={roomId}>
-      <MapCanvas roomId={roomId} onAddAgent={onAddAgent} />
+      <MapCanvas roomId={roomId} onAddAgent={onAddAgent} touch={touch} />
     </ReactFlowProvider>
   )
 }
@@ -86,7 +103,7 @@ interface PairAt {
   y: number
 }
 
-function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => void }) {
+function MapCanvas({ roomId, onAddAgent, touch }: { roomId: RoomId; onAddAgent?: () => void; touch: boolean }) {
   const seats = useDure(
     s => s.agents.filter(a => a.roomId === roomId).map(a => ({ id: a.id, name: a.name, role: a.role, pos: a.pos })),
     seatsEqual,
@@ -118,11 +135,13 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
   const build = (prev: AgentFlowNode[]): AgentFlowNode[] => {
     const byId = new Map(prev.map(n => [n.id, n]))
     return seats.map(a => {
-      const position = posOf(a)
+      const p = posOf(a)
+      // 휴대폰 — 작은 카드를 PC 자리의 반에 놓는다(PC 배치 그대로, 저장한 자리는 건드리지 않는다)
+      const position = touch ? { x: p.x * TOUCH_SCALE, y: p.y * TOUCH_SCALE } : p
       const ariaLabel = a.role ? `${a.name} · ${a.role}` : a.name
       const old = byId.get(a.id)
       if (old && old.ariaLabel === ariaLabel && (old.dragging || (old.position.x === position.x && old.position.y === position.y))) return old
-      return { ...(old ?? { id: a.id, type: 'agent' as const, data: {} }), position, ariaLabel }
+      return { ...(old ?? { id: a.id, type: touch ? ('touch' as const) : ('agent' as const), data: {} }), position, ariaLabel }
     })
   }
   const [nodes, setNodes] = useState<AgentFlowNode[]>(() => build([]))
@@ -166,11 +185,31 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
   // 자동 맞춤 상태 — 사건마다 fitPolicy 가 다음 상태와 맞출지를 정한다
   const fitState = useRef<FitState>({ userMoved: false })
   const moveFrom = useRef<Viewport | null>(null) // 사용자가 움직이기 시작할 때의 화면
+  /** 휴대폰 맞춤(TOUCH_PAD · TOUCH_READ_ZOOM 참고) — 카드 크기를 잰 뒤에만(재기 전엔 아무것도 안 한다) */
+  const touchFit = useCallback((duration?: number) => {
+    const el = wrap.current
+    const ns = flow.getNodes()
+    if (!el || ns.length === 0) return
+    const b = flow.getNodesBounds(ns)
+    const availW = el.clientWidth - 2 * TOUCH_PAD.x
+    const availH = el.clientHeight - TOUCH_PAD.top - TOUCH_PAD.bottom
+    if (availW <= 0 || availH <= 0 || b.width <= 0 || b.height <= 0) return
+    const zoom = Math.min(1, Math.max(TOUCH_READ_ZOOM, Math.min(availW / b.width, availH / b.height)))
+    const w = b.width * zoom
+    // 가로는 들어오면 가운데, 세로는 늘 위부터(머리 바로 아래에서 읽기 시작한다)
+    const x = (w <= availW ? TOUCH_PAD.x + (availW - w) / 2 : TOUCH_PAD.x) - b.x * zoom
+    const y = TOUCH_PAD.top - b.y * zoom
+    void flow.setViewport({ x, y, zoom }, duration ? { duration, ease: easeOut5 } : undefined)
+  }, [flow])
+
   const fitOn = useCallback((reason: FitReason) => {
     const r = fitPolicy(fitState.current, reason)
     fitState.current = r.state
-    if (r.fit) void flow.fitView({ ...AUTO_FIT, duration: moveMs(260), ease: easeOut5 })
-  }, [flow])
+    if (!r.fit) return
+    if (touch) touchFit(moveMs(260))
+    else void flow.fitView({ ...AUTO_FIT, duration: moveMs(260), ease: easeOut5 })
+  }, [flow, touch, touchFit])
+
 
   // 카드 수가 바뀌면 다시 맞춘다(처음 그릴 때는 fitView prop 이 맞춘다)
   const count = seats.length
@@ -335,11 +374,11 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
           if (from && movedEnough(from, vp)) fitOn('user-move')
         }}
         onPaneClick={() => getStore().selectAgent(null)}
-        fitView
+        fitView={!touch}
         fitViewOptions={AUTO_FIT}
         minZoom={0.25}
         maxZoom={2}
-        nodesDraggable
+        nodesDraggable={!touch}
         nodesConnectable={false}
         elementsSelectable={false}
         edgesFocusable={false}
@@ -347,18 +386,34 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
         deleteKeyCode={null}
         selectionKeyCode={null}
         multiSelectionKeyCode={null}
-        ariaLabelConfig={ARIA}
+        ariaLabelConfig={touch ? ARIA_TOUCH : ARIA}
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={16} size={3} color="var(--dot)" bgColor="var(--canvas)" />
       </ReactFlow>
-      <SummaryChips roomId={roomId} />
-      <OffscreenPill roomId={roomId} nodes={nodes} wrap={wrap} />
-      {/* 왼쪽 아래 한 줄 — 확대 조절 · 선 보기 */}
-      <div className="mbl">
-        <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => fitOn('fit-all')} onUserZoom={() => fitOn('user-move')} />
-        <EdgeModeControl />
-      </div>
+      {touch && <FirstFit fit={touchFit} />}
+      {!touch && <SummaryChips roomId={roomId} />}
+      <OffscreenPill roomId={roomId} nodes={nodes} wrap={wrap} select={!touch} />
+      {touch ? (
+        // 휴대폰 — 오른쪽 아래 맞춤 하나(확대·축소는 두 손가락)
+        <button
+          type="button"
+          className="btn sec rm-fit"
+          onClick={() => {
+            touchFit(moveMs(200))
+            fitOn('fit-all')
+          }}
+        >
+          <Maximize className="i" aria-hidden="true" />
+          맞춤
+        </button>
+      ) : (
+        // 왼쪽 아래 한 줄 — 확대 조절 · 선 보기
+        <div className="mbl">
+          <ZoomControls onArrange={() => void arrangeAll()} onFitAll={() => fitOn('fit-all')} onUserZoom={() => fitOn('user-move')} />
+          <EdgeModeControl />
+        </div>
+      )}
       {/* 오른쪽 아래 — 에이전트 추가(주 동작, 보기 도구와 떨어뜨린다) */}
       {onAddAgent && (
         <button type="button" className="btn pri mbr" data-tour="add-agent-map" onClick={onAddAgent}>
@@ -372,6 +427,21 @@ function MapCanvas({ roomId, onAddAgent }: { roomId: RoomId; onAddAgent?: () => 
       </Presence>
     </div>
   )
+}
+
+/**
+ * 휴대폰 — 처음 그릴 때의 맞춤(fitView prop 대신): 카드 크기를 잰 뒤 한 번. 재는 동안의 다시 그리기가 이 칸에만 머물게 따로 둔다
+ * (관계도 전체가 다시 그려지면 PC 판의 맞춤 움직임이 늦어진다 — PC 에선 그리지 않는다)
+ */
+function FirstFit({ fit }: { fit: () => void }) {
+  const measured = useNodesInitialized()
+  const done = useRef(false)
+  useEffect(() => {
+    if (!measured || done.current) return
+    done.current = true
+    fit()
+  }, [measured, fit])
+  return null
 }
 
 const POP_W = 320

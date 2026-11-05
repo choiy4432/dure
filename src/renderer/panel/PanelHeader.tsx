@@ -37,9 +37,9 @@ interface Props {
   onModelOpenChange?: (open: boolean) => void
 }
 
-/** 패널 머리(시안 .ph) — 아바타·이름·역할·멈추기·메뉴 / 상태 알약·모델 칩·자동 스위치(허용이 켜져 있으면 끔·자동·묻지 않음 세 칸) + 서버 문제·오류·묻지 않음 띠 */
-export function PanelHeader({ agentId, description, onLoadDescription, onRetryDescribe, modelOpen, onModelOpenChange }: Props) {
-  const v = useDure(s => {
+/** 머리가 그리는 에이전트 모습 — 상태(승인 기다림 포함) · 알약 모습 · 서버 방이면 그 서버. 휴대폰 대화 머리도 같은 것을 쓴다 */
+export function useHeaderView(agentId: AgentId) {
+  return useDure(s => {
     const agent = s.agents.find(a => a.id === agentId)
     // 서버 방이면 그 서버 — 안내 띠 글에 쓴다
     const host = agent ? s.rooms.find(r => r.id === agent.roomId)?.remote?.host ?? null : null
@@ -49,6 +49,117 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
     const look: DisplayStatus = host && shownIssue(agent, s.requests) && status !== 'error' ? 'error' : status
     return { agent, status, look, host }
   })
+}
+
+/** 상태 알약 — 작업 중·승인 기다림·쉬는 중·멈춤 · 잠듦·깨우는 중(관계도 카드와 같은 말) */
+export function StatusPill({ agent, look }: { agent: AgentView; look: DisplayStatus }) {
+  const pill = PILL[look]
+  const sleep = sleepLook(agent, look)
+  return (
+    <span
+      className={`pill${sleep === 'waking' ? ' wake' : pill.tone ? ` ${pill.tone}` : ''}`}
+      title={sleep === 'asleep' ? SLEEP_HINT : undefined}
+    >
+      {sleep === 'asleep' ? (
+        <Moon className="st-moon" size={13} aria-hidden="true" />
+      ) : (
+        <i className={`dot ${sleep === 'waking' ? 'wake' : pill.dot}`} aria-hidden="true" />
+      )}
+      {sleep ? SLEEP_WORD[sleep] : STATUS_WORD[look]}
+    </span>
+  )
+}
+
+/** 자동 스위치 — 받은 메시지를 바로 시작(묻지 않고 실행 허용이 꺼져 있을 때의 한 칸 스위치) */
+export function AutoSwitch({ agent, onError }: { agent: AgentView; onError: (message: string | null) => void }) {
+  const saving = useRef(false)
+  const toggle = async () => {
+    if (saving.current) return
+    saving.current = true
+    onError(null)
+    try {
+      await window.dure.updateAgent(agent.id, { auto: !agent.auto })
+      await getStore().refresh()
+    } catch (e) {
+      onError(errorMessage(e))
+    } finally {
+      saving.current = false
+    }
+  }
+  return (
+    <button
+      type="button"
+      className="sw"
+      data-tour="auto"
+      role="switch"
+      aria-checked={agent.auto}
+      title="받은 메시지를 바로 시작해요"
+      onClick={toggle}
+    >
+      자동
+      <span className="tg" aria-hidden="true" />
+    </button>
+  )
+}
+
+/** 머리 아래 띠 — 서버 방 문제 · 엔진 오류 · 묻지 않음 경고(닫으면 그 에이전트에선 다시 뜨지 않는다) */
+export function PanelBands({ agent, status, host, onError }: {
+  agent: AgentView
+  status: DisplayStatus
+  host: string | null
+  onError: (message: string | null) => void
+}) {
+  const issue = host ? agent.remoteIssue : null
+  // 묻지 않음 경고 닫기 — 그 에이전트에 저장해 다시 띄우지 않는다(주황 테두리·스위치로는 계속 보인다)
+  const closeNotice = async () => {
+    onError(null)
+    try {
+      await window.dure.updateAgent(agent.id, { bypassNoticeClosed: true })
+      await getStore().refresh()
+    } catch (e) {
+      onError(errorMessage(e))
+    }
+  }
+  return (
+    <>
+      {/* 서버 방 문제(로그인 만료·끊김·접속 실패 …) — 로그인은 제목 + 할 일 두 줄, 나머지는 한 줄. 일하는 도중 생겨도 읽히게 status */}
+      {issue && host && (
+        <div className="band warn rmt" role="status">
+          <TriangleAlert className="i" aria-hidden="true" />
+          <div className="band-tx">
+            <span className="band-t">{remoteIssueText(host, issue)}</span>
+            {issue.kind === 'login' && <span className="band-h">{REMOTE_LOGIN_HELP}</span>}
+          </div>
+        </div>
+      )}
+      {status === 'error' && (
+        <div className="band err">
+          <CircleAlert className="i" aria-hidden="true" />
+          <div className="band-tx">
+            <span className="band-t">{agent.errorText || '오류로 멈췄어요'}</span>
+            <span className="band-h">다음에 일을 시키면 다시 켜져요</span>
+          </div>
+        </div>
+      )}
+      {/* 닫거나 묻지 않음이 꺼지면 높이로 접히며 사라지고, 켜지면 펼쳐진다(움직임 줄이기면 바로) */}
+      <Presence show={agent.bypass && !agent.bypassNoticeClosed}>
+        <ExpandBox as="div" outer="band-xp" className="band warn">
+          <ShieldAlert className="i" aria-hidden="true" />
+          <span className="band-t">
+            {agent.bypassBySettings ? '이 에이전트는 묻지 않고 실행해요 (Claude 설정의 전부 허용)' : '이 에이전트는 묻지 않고 실행해요'}
+          </span>
+          <button type="button" className="ib band-x" aria-label="경고 닫기" title="닫으면 이 에이전트에선 다시 뜨지 않아요" onClick={closeNotice}>
+            <X className="i" size={14} aria-hidden="true" />
+          </button>
+        </ExpandBox>
+      </Presence>
+    </>
+  )
+}
+
+/** 패널 머리(시안 .ph) — 아바타·이름·역할·멈추기·메뉴 / 상태 알약·모델 칩·자동 스위치(허용이 켜져 있으면 끔·자동·묻지 않음 세 칸) + 서버 문제·오류·묻지 않음 띠 */
+export function PanelHeader({ agentId, description, onLoadDescription, onRetryDescribe, modelOpen, onModelOpenChange }: Props) {
+  const v = useHeaderView(agentId)
   const allowBypass = useDure(s => s.allowBypass)
   // 첨부를 보내는 중(사본·서버 올리기, 몇 분 걸릴 수 있다) — 쉬는 에이전트여도 멈추기로 끊는다(서버 방은 올리기를 끊고 글·칩은 입력창에 남는다)
   const sendingFiles = useSendingFiles(agentId)
@@ -57,7 +168,6 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
   // 잘 끝난 일 한 줄(대화를 저장함) — 잠깐 보이고 사라진다. 오류가 있으면 오류가 먼저
   const [notice, setNotice] = useState<string | null>(null)
   const [stopping, setStopping] = useState(false)
-  const savingAuto = useRef(false)
   const menuButton = useRef<HTMLButtonElement>(null)
   const refocus = useRef(false)
 
@@ -76,9 +186,6 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
 
   if (!v) return null
   const { agent, status, look, host } = v
-  const issue = host ? agent.remoteIssue : null
-  const pill = PILL[look]
-  const sleep = sleepLook(agent, look)
   const canStop = (status === 'working' || status === 'awaiting' || sendingFiles) && !stopping
 
   const stop = async () => {
@@ -90,31 +197,6 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
       setError(errorMessage(e))
     } finally {
       setStopping(false)
-    }
-  }
-
-  const toggleAuto = async () => {
-    if (savingAuto.current) return
-    savingAuto.current = true
-    setError(null)
-    try {
-      await window.dure.updateAgent(agent.id, { auto: !agent.auto })
-      await getStore().refresh()
-    } catch (e) {
-      setError(errorMessage(e))
-    } finally {
-      savingAuto.current = false
-    }
-  }
-
-  // 묻지 않음 경고 닫기 — 그 에이전트에 저장해 다시 띄우지 않는다(주황 테두리·스위치로는 계속 보인다)
-  const closeNotice = async () => {
-    setError(null)
-    try {
-      await window.dure.updateAgent(agent.id, { bypassNoticeClosed: true })
-      await getStore().refresh()
-    } catch (e) {
-      setError(errorMessage(e))
     }
   }
 
@@ -155,17 +237,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
           )}
         </div>
         <div className="ph-row ph-r2">
-          <span
-            className={`pill${sleep === 'waking' ? ' wake' : pill.tone ? ` ${pill.tone}` : ''}`}
-            title={sleep === 'asleep' ? SLEEP_HINT : undefined}
-          >
-            {sleep === 'asleep' ? (
-              <Moon className="st-moon" size={13} aria-hidden="true" />
-            ) : (
-              <i className={`dot ${sleep === 'waking' ? 'wake' : pill.dot}`} aria-hidden="true" />
-            )}
-            {sleep ? SLEEP_WORD[sleep] : STATUS_WORD[look]}
-          </span>
+          <StatusPill agent={agent} look={look} />
           <ModelPicker
             agentId={agent.id}
             model={agent.model}
@@ -186,22 +258,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
             onRetry={onRetryDescribe}
             onError={setError}
           />
-          {allowBypass ? (
-            <LevelSwitch agent={agent} onError={setError} />
-          ) : (
-            <button
-              type="button"
-              className="sw"
-              data-tour="auto"
-              role="switch"
-              aria-checked={agent.auto}
-              title="받은 메시지를 바로 시작해요"
-              onClick={toggleAuto}
-            >
-              자동
-              <span className="tg" aria-hidden="true" />
-            </button>
-          )}
+          {allowBypass ? <LevelSwitch agent={agent} onError={setError} /> : <AutoSwitch agent={agent} onError={setError} />}
         </div>
         {error && (
           <p className="ph-msg" role="alert">
@@ -214,37 +271,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
           </p>
         )}
       </div>
-      {/* 서버 방 문제(로그인 만료·끊김·접속 실패 …) — 로그인은 제목 + 할 일 두 줄, 나머지는 한 줄. 일하는 도중 생겨도 읽히게 status */}
-      {issue && host && (
-        <div className="band warn rmt" role="status">
-          <TriangleAlert className="i" aria-hidden="true" />
-          <div className="band-tx">
-            <span className="band-t">{remoteIssueText(host, issue)}</span>
-            {issue.kind === 'login' && <span className="band-h">{REMOTE_LOGIN_HELP}</span>}
-          </div>
-        </div>
-      )}
-      {status === 'error' && (
-        <div className="band err">
-          <CircleAlert className="i" aria-hidden="true" />
-          <div className="band-tx">
-            <span className="band-t">{agent.errorText || '오류로 멈췄어요'}</span>
-            <span className="band-h">다음에 일을 시키면 다시 켜져요</span>
-          </div>
-        </div>
-      )}
-      {/* 닫거나 묻지 않음이 꺼지면 높이로 접히며 사라지고, 켜지면 펼쳐진다(움직임 줄이기면 바로) */}
-      <Presence show={agent.bypass && !agent.bypassNoticeClosed}>
-        <ExpandBox as="div" outer="band-xp" className="band warn">
-          <ShieldAlert className="i" aria-hidden="true" />
-          <span className="band-t">
-            {agent.bypassBySettings ? '이 에이전트는 묻지 않고 실행해요 (Claude 설정의 전부 허용)' : '이 에이전트는 묻지 않고 실행해요'}
-          </span>
-          <button type="button" className="ib band-x" aria-label="경고 닫기" title="닫으면 이 에이전트에선 다시 뜨지 않아요" onClick={closeNotice}>
-            <X className="i" size={14} aria-hidden="true" />
-          </button>
-        </ExpandBox>
-      </Presence>
+      <PanelBands agent={agent} status={status} host={host} onError={setError} />
     </>
   )
 }

@@ -8,7 +8,7 @@ import { useNow } from '../lib/useNow'
 import { PresenceList, useMotion } from '../lib/presence'
 import { MOTION } from '../lib/motion'
 import { createAgentPlan, requestTitle } from '../lib/toolSummary'
-import { FRESH_WORD, PHASE_WORD, ago, elapsed } from '../lib/words'
+import { FRESH_WORD, PHASE_WORD, ago, elapsed, panelWord } from '../lib/words'
 import { Clamp } from '../lib/Clamp'
 import { MessageCard } from './cards/MessageCard'
 import { PlanCard } from './cards/PlanCard'
@@ -57,7 +57,7 @@ function CreateItem({ request, name, now }: { request: PendingRequest; name: str
       {who && <p className="ib-line">{who}</p>}
       <div className="ab">
         <button type="button" className="btn pri sm" onClick={() => select(request.agentId)}>
-          패널에서 확인하기
+          {panelWord()}에서 확인하기
         </button>
       </div>
     </section>
