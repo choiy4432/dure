@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      CSP 는 PC 의 휴대폰 서버가 머리글로 준다(src/main/phone/phoneServer.ts cspFor — connect-src 에 그 wss 주소가 든다).
+      meta CSP 는 두지 않는다: 둘 다 적용되는데 여기선 그 호스트를 모른다
+    -->
+    <!-- resizes-content — 안드로이드 크롬이 자판을 열 때 화면을 줄여 맨 아래 단추가 자판 위에 남게 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta name="referrer" content="no-referrer" />
+    <!-- 위 띠 색 — tokens.css 의 --bg 거울(라이트 #FFFFFF · 다크 #111827) -->
+    <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111827" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="apple-mobile-web-app-title" content="두레" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/dure-192.png" />
+    <link rel="apple-touch-icon" href="/icons/dure-192.png" />
+    <title>두레</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./mobile/main.tsx"></script>
+  </body>
+</html>

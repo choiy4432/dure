@@ -1,0 +1,401 @@
+/*
+ * 휴대폰 짝 맺기(PairScreen) — 시안 B2: 위에 큰 제목, 할 일 단추는 엄지가 닿는 맨 아래에 고정.
+ * 값은 tokens.css 변수만(라이트·다크는 휴대폰 설정 따라감). 누르는 곳은 44px 이상, 글은 12px 이상, 입력 칸 글은 16px(아이폰이 확대하지 않게).
+ */
+.pr {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.pr-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: calc(env(safe-area-inset-top) + 40px) 20px 20px;
+}
+
+.pr-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.pr-mark .brand {
+  width: 44px;
+  height: 44px;
+}
+
+.pr-title {
+  margin: 0;
+  font-size: 26px;
+  line-height: 34px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.pr-title:focus {
+  outline: none;
+}
+
+.pr-hint {
+  margin: 0;
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--text-3);
+}
+
+.pr-mid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pr-foot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px calc(env(safe-area-inset-bottom) + 16px);
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* 단추 — 맨 아래 한 줄을 다 쓴다 */
+.pr-btn {
+  width: 100%;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  border-radius: var(--radius-box);
+  font-size: 16px;
+  font-weight: 700;
+  transition: background-color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pr-btn:disabled {
+  opacity: 0.45;
+}
+
+/* 기다리는 중 — 흐리게 하지 않는다('아직 못 누름'과 다르게 보이게) */
+.pr-btn[aria-busy="true"] {
+  opacity: 1;
+}
+
+.pr-spin {
+  animation: pr-spin 0.9s linear infinite;
+}
+
+@keyframes pr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 읽어 주는 프로그램만 — 기다림·복사함 알림 */
+.pr-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.pr-pri {
+  background: var(--primary);
+  color: var(--on-primary);
+  box-shadow: var(--shadow-pri);
+}
+
+.pr-pri:active:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.pr-sec {
+  background: var(--bg);
+  color: var(--text-2);
+  border: 1px solid var(--border-strong);
+}
+
+.pr-sec:active:not(:disabled) {
+  background: var(--hover);
+}
+
+.pr-link {
+  min-height: 48px;
+  color: var(--primary-text);
+  font-weight: 600;
+}
+
+.pr-link:active:not(:disabled) {
+  background: var(--hover);
+}
+
+/* 이름 칸 */
+.pr-field label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.pr-input {
+  width: 100%;
+  min-height: 52px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-box);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.pr-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: var(--ring-soft);
+}
+
+.pr-note {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--muted);
+}
+
+.pr-field .pr-note:first-child {
+  margin: 0 0 8px;
+}
+
+.pr-addr {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+/* 6칸 — 보이지 않는 입력 하나가 칸 전체를 덮는다(누르면 숫자 자판) */
+.pr-pin {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.pr-pin-in {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  font-size: 16px;
+  color: transparent;
+  caret-color: transparent;
+  background: transparent;
+}
+
+.pr-box {
+  width: 48px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-box);
+  background: var(--bg);
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* PC 창처럼 3 + 3 */
+.pr-box:nth-of-type(3) {
+  margin-right: 8px;
+}
+
+.pr-box.on {
+  border-color: var(--primary);
+  box-shadow: var(--ring-soft);
+}
+
+.pr-pin.bad .pr-box {
+  border-color: var(--danger);
+}
+
+/* 오류 줄 */
+.pr-err {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-ctl);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* 사용자 탓이 아닌 안내(지난 QR 코드) — 빨강 대신 노랑 */
+.pr-err.warn {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+/* 차례 안내 */
+.pr-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pr-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 15px;
+  line-height: 24px;
+  color: var(--text-2);
+}
+
+.pr-n {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-dot);
+  background: var(--primary-soft);
+  color: var(--primary-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* 글 안의 단추 그림 — 휴대폰 화면의 그 단추를 알아보게 작은 칸에 */
+.pr-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  margin: 0 1px;
+  vertical-align: -5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--subtle);
+  color: var(--text-2);
+}
+
+/* 짝을 맺었어요 */
+.pr-ok {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-dot);
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+/* 삼성 팝업 설정 — 접은 줄 */
+.pr-fold {
+  width: 100%;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pr-fold[aria-expanded="true"] {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.pr-fold-i {
+  color: var(--warn-text);
+}
+
+.pr-fold-t {
+  flex: 1;
+}
+
+.pr-fold-c {
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+
+.pr-fold[aria-expanded="true"] .pr-fold-c {
+  transform: rotate(180deg);
+}
+
+.pr-fold-body {
+  padding: 12px 16px 14px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-box) var(--radius-box);
+}
+
+.pr-fold-lead {
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--muted);
+}
+
+.pr-fold-steps {
+  margin: 0;
+  padding: 0 0 0 20px;
+  font-size: 14px;
+  line-height: 26px;
+  color: var(--text-2);
+}
+
+.pr-fold-steps b {
+  font-weight: 700;
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pr-btn,
+  .pr-fold-c {
+    transition: none;
+  }
+
+  .pr-spin {
+    animation: none;
+  }
+}

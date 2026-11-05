@@ -110,6 +110,11 @@ export interface Store {
   init(): Promise<void>
   /** 방·에이전트를 바꾸는 호출(addRoom 등) 뒤에 스냅샷을 다시 받는다 */
   refresh(): Promise<void>
+  /**
+   * 사건 흐름이 끊겼다 다시 이어졌다(휴대폰 WebSocket) — 그사이 놓친 사건을 메운다: 스냅샷을 다시 받고, 고른 에이전트의 기록은
+   * 다시 받아 자리에서 갈음한다(불러오는 중 표시 없이). 다른 에이전트의 불러 둔 기록·흐르는 글은 잊는다(열 때 다시 받는다)
+   */
+  resync(): Promise<void>
   selectAgent(id: AgentId | null): void
   selectRoom(id: RoomId): void
   setPanelTab(id: AgentId, tab: PanelTab): void
@@ -586,10 +591,12 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     }
   }
 
-  const loadHistory = async (id: AgentId) => {
-    if (state.history[id] || loading.has(id)) return
+  /** again — 이미 불러온 기록도 다시 받는다(resync): 받는 동안 지금 목록을 그대로 두고(불러오는 중 표시 없음) 받으면 갈음, 실패하면 그대로 */
+  const loadHistory = async (id: AgentId, again = false) => {
+    if ((!again && state.history[id]) || loading.has(id)) return
+    const keep = again && !!state.history[id]
     loading.set(id, [])
-    set({ ...state, historyStatus: { ...state.historyStatus, [id]: { state: 'loading' } } })
+    if (!keep) set({ ...state, historyStatus: { ...state.historyStatus, [id]: { state: 'loading' } } })
     try {
       const loaded = await api.history(id)
       const pending = loading.get(id) ?? []
@@ -620,6 +627,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       }
     } catch (e) {
       loading.delete(id)
+      if (keep && state.history[id]) return // 다시 받기 실패 — 지금 목록 그대로(다음 resync 가 메운다)
       const error = e instanceof Error ? e.message : String(e)
       set({ ...state, historyStatus: { ...state.historyStatus, [id]: { state: 'error', error } } })
     }
@@ -689,6 +697,24 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     endTour,
     async refresh() {
       await fetchSnapshot()
+    },
+    async resync() {
+      await fetchSnapshot()
+      const keep = state.selectedAgentId
+      const only = <T,>(rec: Record<AgentId, T>): Record<AgentId, T> => {
+        const out: Record<AgentId, T> = {}
+        for (const id of Object.keys(rec)) if (id === keep || loading.has(id)) out[id] = rec[id]
+        return out
+      }
+      // 끊긴 사이 끝난 차례 — 생각 중·단계 표시는 쉬는 에이전트에서 내린다. 흐르던 글은 앞부분을 놓쳤을 수 있어 비운다
+      let { thinking, phase } = state
+      for (const id of [...Object.keys(thinking), ...Object.keys(phase)]) {
+        if (busy(state.agents.find(a => a.id === id)?.status)) continue
+        thinking = without(thinking, id)
+        phase = without(phase, id)
+      }
+      set({ ...state, history: only(state.history), historyStatus: only(state.historyStatus), streaming: {}, thinking, phase })
+      if (keep) await loadHistory(keep, true)
     },
     selectAgent(id) {
       set({ ...state, selectedAgentId: id, fresh: id ? without(state.fresh, id) : state.fresh })

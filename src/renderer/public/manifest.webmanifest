@@ -1,0 +1,17 @@
+{
+  "id": "/mobile.html",
+  "name": "두레",
+  "short_name": "두레",
+  "description": "PC 의 두레를 휴대폰에서 — 에이전트 일 보기·보내기·승인",
+  "lang": "ko",
+  "dir": "ltr",
+  "start_url": "/mobile.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FFFFFF",
+  "theme_color": "#FFFFFF",
+  "icons": [
+    { "src": "/icons/dure-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/dure-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
