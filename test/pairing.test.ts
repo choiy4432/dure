@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { cleanDeviceName, createPairing, PAIR_FAIL_MAX, PAIR_LOCK_MS } from '../src/main/phone/pairing';
-import { openPhoneStore } from '../src/main/phone/phoneStore';
+import {
+  cleanDeviceName, createPairing, PAIR_FAIL_MAX, PAIR_LOCK_MS, PAIR_TOTAL_FAIL_MAX, TOUCH_MIN_MS,
+} from '../src/main/phone/pairing';
+import { openPhoneStore, type PhoneStore } from '../src/main/phone/phoneStore';
 import { PAIR_TTL_MS, PHONE_NAME_DEFAULT, PHONE_NAME_MAX, type PhoneDevice } from '../src/shared/phoneTypes';
 
 let dir: string;
@@ -15,6 +17,7 @@ beforeEach(() => {
   t = 1_000_000;
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -26,6 +29,11 @@ function counterBytes() {
 const fileText = () => fs.readFileSync(path.join(dir, 'phone.json'), 'utf8');
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const wrongPin = (pin: string) => (pin === '000000' ? '111111' : '000000');
+/** 쓰기 수를 세는 store — 안은 진짜 store */
+function counting(store: PhoneStore) {
+  const c = { writes: 0, store: { read: () => store.read(), write: (patch) => { c.writes++; store.write(patch); } } as PhoneStore };
+  return c;
+}
 
 function ok(r: ReturnType<ReturnType<typeof createPairing>['redeem']>): { token: string; device: PhoneDevice } {
   if ('error' in r) throw new Error(`redeem 실패: ${r.error}`);
@@ -129,9 +137,8 @@ test('틀림 5번 — 60초 막음', () => {
     expect(p.redeem(bad, '공격', 'evil')).toEqual({ error: 'wrong' });
     t += 1000;
   }
-  // 막힌 동안엔 맞는 숫자·코드도 locked
+  // 막힌 동안엔 맞는 숫자도 locked(QR 코드는 막지 않는다 — 아래 시험)
   expect(p.redeem(s.pin, '공격', 'evil')).toEqual({ error: 'locked' });
-  expect(p.redeem(s.code, '공격', 'evil')).toEqual({ error: 'locked' });
   // 다른 곳(from)은 막히지 않음
   expect(p.redeem(bad, '남', 'other')).toEqual({ error: 'wrong' });
 
@@ -142,22 +149,163 @@ test('틀림 5번 — 60초 막음', () => {
   ok(p.redeem(s.pin, '되찾음', 'evil'));
 });
 
-test('틀림은 1분 안의 것만 셈 — 띄엄띄엄 틀리면 안 막힘, 풀린 뒤엔 다시 5번', () => {
+test('틀림은 1분 안의 것만 셈 — 띄엄띄엄 틀리면 안 막힘', () => {
   const p = createPairing(openPhoneStore(dir), { now });
   const s = p.start();
   const bad = wrongPin(s.pin);
   for (let i = 0; i < 4; i++) expect(p.redeem(bad, 'x', 'a')).toEqual({ error: 'wrong' });
   t += 60_000; // 앞의 4번은 1분 밖
   for (let i = 0; i < 4; i++) expect(p.redeem(bad, 'x', 'a')).toEqual({ error: 'wrong' });
-  expect(p.redeem('a'.repeat(64), 'x', 'a')).toEqual({ error: 'wrong' }); // 5번째(틀린 코드도 셈)
+  expect(p.redeem(bad, 'x', 'a')).toEqual({ error: 'wrong' }); // 1분 안의 5번째 — 여기서 막힘
+  expect(p.redeem(bad, 'x', 'a')).toEqual({ error: 'locked' });
+  expect(p.redeem(s.pin, 'x', 'a')).toEqual({ error: 'locked' });
+});
+
+test('막힘이 풀린 뒤엔 셈이 처음부터', () => {
+  const p = createPairing(openPhoneStore(dir), { now });
+  const s = p.start();
+  const bad = wrongPin(s.pin);
+  for (let i = 0; i < 5; i++) p.redeem(bad, 'x', 'a');
   expect(p.redeem(bad, 'x', 'a')).toEqual({ error: 'locked' });
   t += PAIR_LOCK_MS;
   for (let i = 0; i < 4; i++) expect(p.redeem(bad, 'x', 'a')).toEqual({ error: 'wrong' });
-  // 맞으면 그 곳의 틀림 셈은 지워짐
   ok(p.redeem(s.pin, 'x', 'a'));
+});
+
+test('from 을 바꿔도 짝 하나당 10번', () => {
+  const p = createPairing(openPhoneStore(dir), { now });
+  // 9번까지는 짝 코드가 살아 있다
+  const a = p.start();
+  for (let i = 0; i < 9; i++) expect(p.redeem(wrongPin(a.pin), 'x', `from-${i}`)).toEqual({ error: 'wrong' });
+  ok(p.redeem(a.pin, '살아 있음', 'other'));
+
+  // 10번째 틀림에서 닫힌다 — 그 뒤엔 맞는 숫자·코드도 expired(다시 start 해야 함)
+  const b = p.start();
+  for (let i = 0; i < 10; i++) expect(p.redeem(wrongPin(b.pin), 'x', `from-${i}`)).toEqual({ error: 'wrong' });
+  expect(p.redeem(b.pin, 'x', 'fresh')).toEqual({ error: 'expired' });
+  expect(p.redeem(b.code, 'x', 'fresh')).toEqual({ error: 'expired' });
+
+  // 새 start 면 셈이 처음부터
+  const c = p.start();
+  ok(p.redeem(c.pin, '새 짝', 'from-0'));
+  expect(PAIR_TOTAL_FAIL_MAX).toBe(10);
+});
+
+test('QR 코드 꼴·숫자 아닌 글은 셈에 안 듦 · 막혀도 맞는 QR 코드는 됨 · start 하면 셈 지움', () => {
+  const p = createPairing(openPhoneStore(dir), { now });
+  const s = p.start();
+  const otherCode = (s.code[0] === 'a' ? 'b' : 'a') + s.code.slice(1);
+  // 틀린 QR 코드(64 hex — 256비트라 맞혀 볼 수 없다)·6자리 숫자가 아닌 글은 몇 번이든 셈에 안 든다
+  for (let i = 0; i < 30; i++) expect(p.redeem(otherCode, 'x', 'a')).toEqual({ error: 'wrong' });
+  for (const junk of ['', 'abc', '12345', '1234567', '12345a', '１２３４５６', s.code.toUpperCase()]) {
+    for (let i = 0; i < 3; i++) expect(p.redeem(junk, 'x', 'a')).toEqual({ error: 'wrong' });
+  }
+  // 6자리 숫자 틀림만 센다 — 5번째에 막힘
+  for (let i = 0; i < 5; i++) expect(p.redeem(wrongPin(s.pin), 'x', 'a')).toEqual({ error: 'wrong' });
+  expect(p.redeem(s.pin, 'x', 'a')).toEqual({ error: 'locked' });
+  // 막힌 곳이라도 QR 코드는 막지 않는다 — 틀리면 wrong, 맞으면 짝이 맺힘
+  expect(p.redeem(otherCode, 'x', 'a')).toEqual({ error: 'wrong' });
+  ok(p.redeem(` ${s.code} `, 'QR', 'a'));
+
+  // 새 start 면 앞 짝의 셈·막힘이 지워진다
   const s2 = p.start();
-  for (let i = 0; i < 4; i++) expect(p.redeem(wrongPin(s2.pin), 'x', 'a')).toEqual({ error: 'wrong' });
-  ok(p.redeem(s2.code, 'y', 'a'));
+  for (let i = 0; i < 5; i++) p.redeem(wrongPin(s2.pin), 'x', 'b');
+  expect(p.redeem(s2.pin, 'x', 'b')).toEqual({ error: 'locked' });
+  const s3 = p.start();
+  ok(p.redeem(s3.pin, '새 짝', 'b'));
+});
+
+test('짝 코드가 없거나 지났거나 취소됐을 때 낸 것은 셈에 안 듦', () => {
+  const p = createPairing(openPhoneStore(dir), { now });
+  // 셈에 들었다면 5번째 뒤로 locked 가 나왔을 것
+  for (let i = 0; i < 12; i++) expect(p.redeem('000000', 'x', 'a')).toEqual({ error: 'expired' });
+  const s = p.start();
+  t += PAIR_TTL_MS;
+  for (let i = 0; i < 12; i++) expect(p.redeem(wrongPin(s.pin), 'x', 'a')).toEqual({ error: 'expired' });
+  const s2 = p.start();
+  p.cancel();
+  for (let i = 0; i < 12; i++) expect(p.redeem(wrongPin(s2.pin), 'x', 'a')).toEqual({ error: 'expired' });
+  const s3 = p.start();
+  for (let i = 0; i < 4; i++) expect(p.redeem(wrongPin(s3.pin), 'x', 'a')).toEqual({ error: 'wrong' });
+  ok(p.redeem(s3.pin, '됨', 'a'));
+});
+
+test('저장이 던지면 짝 코드는 살아 있고 셈에도 안 듦', () => {
+  const store = openPhoneStore(dir);
+  let failNext = true;
+  const flaky: PhoneStore = {
+    read: () => store.read(),
+    write: (patch) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error('디스크 가득');
+      }
+      store.write(patch);
+    },
+  };
+  const p = createPairing(flaky, { now });
+  const s = p.start();
+  expect(() => p.redeem(s.pin, '폰', 'a')).toThrow('디스크 가득');
+  expect(store.read().devices).toEqual([]);
+  const { token, device } = ok(p.redeem(s.pin, '폰', 'a'));
+  expect(p.verify(token)).toEqual(device);
+  expect(p.redeem(s.code, '또', 'a')).toEqual({ error: 'expired' });
+});
+
+test('단조 시계 — 벽시계가 바뀌어도 만료·막힘은 그대로(벽시계는 expiresAt·createdAt·lastSeen 만)', () => {
+  let wall = 1_700_000_000_000;
+  let mono = 5_000;
+  const p = createPairing(openPhoneStore(dir), { now: () => wall, clock: () => mono });
+  const a = p.start();
+  expect(a.expiresAt).toBe(wall + PAIR_TTL_MS);
+  wall += 3_600_000; // 벽시계가 1시간 앞으로 — 짝 코드는 살아 있음
+  const { device } = ok(p.redeem(a.pin, 'x', 'z'));
+  expect(device).toMatchObject({ createdAt: wall, lastSeen: wall });
+
+  const b = p.start();
+  wall -= 7_200_000; // 벽시계가 뒤로 — 그래도 단조 시계로 5분이면 만료
+  mono += PAIR_TTL_MS;
+  expect(p.redeem(b.pin, 'x', 'z')).toEqual({ error: 'expired' });
+
+  const c = p.start();
+  for (let i = 0; i < 5; i++) p.redeem(wrongPin(c.pin), 'x', 'z');
+  wall += 10 * PAIR_LOCK_MS; // 벽시계가 앞으로 가도 막힘은 그대로
+  expect(p.redeem(c.pin, 'x', 'z')).toEqual({ error: 'locked' });
+  mono += PAIR_LOCK_MS;
+  ok(p.redeem(c.pin, 'x', 'z'));
+});
+
+test('touch — 기기마다 60초에 한 번만 씀 · verify 는 디스크를 다시 읽지 않음', () => {
+  const c = counting(openPhoneStore(dir));
+  const p = createPairing(c.store, { now });
+  const a = ok(p.redeem(p.start().pin, 'a', 'x'));
+  expect(c.writes).toBe(1);
+  p.touch(a.device.id); // 방금 짝 맺음(lastSeen = 지금) — 안 씀
+  t += TOUCH_MIN_MS - 1;
+  p.touch(a.device.id);
+  expect(c.writes).toBe(1);
+  t += 1;
+  p.touch(a.device.id);
+  expect(c.writes).toBe(2);
+  expect(p.verify(a.token)?.lastSeen).toBe(t);
+  p.touch(a.device.id);
+  expect(c.writes).toBe(2);
+
+  // 기기마다 따로 · 없는 id 는 안 씀
+  const b = ok(p.redeem(p.start().pin, 'b', 'x'));
+  expect(c.writes).toBe(3);
+  t += TOUCH_MIN_MS;
+  p.touch(a.device.id);
+  p.touch(b.device.id);
+  expect(c.writes).toBe(5);
+  p.touch('없는-id');
+  expect(c.writes).toBe(5);
+
+  // verify 는 store 의 캐시를 본다 — 디스크를 다시 읽지 않음
+  const readFile = vi.spyOn(fs, 'readFileSync');
+  for (let i = 0; i < 20; i++) expect(p.verify(a.token)?.id).toBe(a.device.id);
+  expect(readFile).not.toHaveBeenCalled();
+  expect(TOUCH_MIN_MS).toBe(60_000);
 });
 
 test('끊기 — 그 토큰 verify null', () => {
@@ -198,6 +346,25 @@ test('기기 이름 — 앞뒤 빈칸·제어 문자 빼고 40자, 비면 휴대
   expect(cleanDeviceName(undefined as never)).toBe('휴대폰');
   expect(cleanDeviceName('가'.repeat(50))).toBe('가'.repeat(40));
   expect(cleanDeviceName('😀'.repeat(41))).toBe('😀'.repeat(40)); // 서로게이트 쌍을 자르지 않음
+
+  // 안 보이는 서식 문자(\p{Cf}) — 너비 없는 빈칸·단어 잇기·소프트 하이픈·BOM·태그 문자는 지움
+  expect(cleanDeviceName('갤\u200B럭\u2060시\u00AD폰\uFEFF')).toBe('갤럭시폰');
+  expect(cleanDeviceName('폰\u{E0041}\u{E0001}\u{E007F}')).toBe('폰');
+  expect(cleanDeviceName('\u200B \u2060\u00AD')).toBe('휴대폰');
+  // 짝 없는 서로게이트는 지움
+  expect(cleanDeviceName('가\uD800나\uDC00다')).toBe('가나다');
+  expect(cleanDeviceName('\uDBFF')).toBe('휴대폰');
+  // ZWJ·변형 선택자는 남김(이어 붙인 이모지) — 앞뒤에 홀로 있는 ZWJ 는 지움
+  const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}';
+  expect(cleanDeviceName(`내 ${family}`)).toBe(`내 ${family}`);
+  expect(cleanDeviceName('❤\uFE0F 폰')).toBe('❤\uFE0F 폰');
+  expect(cleanDeviceName('\u200D폰\u200D')).toBe('폰');
+  expect(cleanDeviceName('\u200D')).toBe('휴대폰');
+  // 40자는 글자(그래핌) 단위 — 이어 붙인 이모지·결합 문자를 자르지 않음
+  expect(cleanDeviceName(`${'가'.repeat(39)}${family}나`)).toBe(`${'가'.repeat(39)}${family}`);
+  expect(cleanDeviceName(`${'가'.repeat(40)}${family}`)).toBe('가'.repeat(40));
+  expect(cleanDeviceName('e\u0301'.repeat(41))).toBe('e\u0301'.repeat(40));
+  expect(cleanDeviceName(`${'가'.repeat(39)} \u200D나`)).toBe(`${'가'.repeat(39)}`); // 자른 끝의 빈칸·ZWJ 도 지움
 
   const p = createPairing(openPhoneStore(dir), { now });
   expect(ok(p.redeem(p.start().pin, ' \n ', 'x')).device.name).toBe('휴대폰');
