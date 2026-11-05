@@ -350,6 +350,14 @@ test('시작 때 남은 길 정리 — phone.json 에 적어 둔 짝만(꺼져 �
   const cc = make({ ts: tsC, dataDir: dC })
   await cc.c.ready
   expect(saved(dC).serve).toEqual({ httpsPort: 443, localPort: 47615, dnsName: DNS })
+  expect(cc.c.state()).toMatchObject({ settings: { enabled: false }, problem: expect.stringMatching(/정리하지 못했어요/) })
+  // 꺼진 채 check — Tailscale 을 켠 뒤 '확인' 이면 기다리지 않고 다시 꺼 본다
+  tsC.offError = null
+  tsC.routes.set(443, { localPort: 47615, dnsName: DNS })
+  await cc.c.check()
+  expect(saved(dC).serve).toBeUndefined()
+  expect(tsC.routes.size).toBe(0)
+  expect(cc.c.state().problem).toBeNull()
 })
 
 test('시작 때 켜져 있으면 — 적어 둔 길을 정리하고 다시 연다(지난 포트 먼저)', async () => {
@@ -375,6 +383,187 @@ test('켜져 있는데 Tailscale 이 아직이면(로그인 전·안 켜짐) 잠
   const n = ts.status.mock.calls.length
   await new Promise((r) => setTimeout(r, 120))
   expect(ts.status.mock.calls.length).toBe(n)
+})
+
+test('no-https — 받은 켜기 링크는 다시 해 보기·check 뒤에도 남음 · 링크를 받으러 다시 열지 않음(로그아웃을 거치면 다시 받음)', async () => {
+  const ts = fakeTailscale({ kind: 'no-https', enableUrl: null })
+  ts.onResult = { kind: 'no-https', enableUrl: LINK }
+  const { c, emitted } = make({ ts, retryMs: 20 })
+  await c.set({ enabled: true })
+  expect(c.state().tailscale).toEqual({ kind: 'no-https', enableUrl: LINK })
+  const n = emitted.length
+  await vi.waitFor(() => expect(ts.status.mock.calls.length).toBeGreaterThanOrEqual(4), { timeout: 3000 })
+  expect(c.state().tailscale).toEqual({ kind: 'no-https', enableUrl: LINK })
+  expect(emitted.slice(n)).toEqual([]) // 링크가 사라졌다 돌아오는 깜박임도 없다
+  expect(await c.check()).toEqual({ kind: 'no-https', enableUrl: LINK })
+  expect(ts.serveOn).toHaveBeenCalledTimes(1)
+  // 로그아웃을 거치면(다른 기기일 수 있다) 링크를 잊고 check 때 다시 받는다
+  ts.state = { kind: 'logged-out' }
+  expect(await c.check()).toEqual({ kind: 'logged-out' })
+  ts.state = { kind: 'no-https', enableUrl: null }
+  expect(await c.check()).toEqual({ kind: 'no-https', enableUrl: LINK })
+  expect(ts.serveOn).toHaveBeenCalledTimes(2)
+})
+
+test('다시 해 보기 — 까닭은 끝날 때 한 번 정함(null 로 깜박이지 않음 · 같으면 사건도 없음)', async () => {
+  const ts = fakeTailscale()
+  ts.others.add(443).add(47615)
+  const { c, emitted } = make({ ts, retryMs: 20 })
+  await c.ready
+  await c.set({ enabled: true })
+  expect(c.state().problem).toMatch(/443.*47615/)
+  const n = emitted.length
+  await vi.waitFor(() => expect(ts.status.mock.calls.length).toBeGreaterThanOrEqual(4), { timeout: 3000 })
+  expect(emitted.slice(n)).toEqual([])
+  expect(emitted.filter((s) => s.settings.enabled).map((s) => s.problem)).not.toContain(null)
+})
+
+test('끄기 — serve 를 못 끄면 까닭 · 꺼진 채로도 잠시 뒤 다시 꺼 봄 · 끄면 그만', async () => {
+  const ts = fakeTailscale()
+  const { c, servers, power, emitted } = make({ ts, retryMs: 20 })
+  await c.set({ enabled: true })
+  ts.offError = new Error('tailscale 이 답하지 않아요')
+  await c.set({ enabled: false })
+  expect(c.state()).toMatchObject({ settings: { enabled: false }, url: null, problem: expect.stringMatching(/정리하지 못했어요/) })
+  expect(saved().serve).toEqual({ httpsPort: 443, localPort: 47615, dnsName: DNS })
+  expect(servers.last().closed).toBe(true)
+  expect(power.on.size).toBe(0)
+  await vi.waitFor(() => expect(ts.serveOff.mock.calls.length).toBeGreaterThanOrEqual(3), { timeout: 3000 })
+  expect(ts.routes.size).toBe(1)
+  ts.offError = null
+  await vi.waitFor(() => expect(c.state().problem).toBeNull(), { timeout: 3000 })
+  expect(ts.routes.size).toBe(0)
+  expect(saved().serve).toBeUndefined()
+  expect(ts.status).toHaveBeenCalledTimes(1) // 정리엔 status 가 필요 없다 · 꺼진 채라 다시 열지도 않는다
+  expect(ts.serveOn).toHaveBeenCalledTimes(1)
+  const k = ts.serveOff.mock.calls.length
+  await new Promise((r) => setTimeout(r, 120))
+  expect(ts.serveOff.mock.calls.length).toBe(k)
+  expect(emitted.at(-1)).toEqual(c.state())
+})
+
+test('경로가 든 오류는 화면·로그에 옮기지 않음 · 포트 기억을 못 적어도 길은 열림 · 길 기록을 못 적으면 열지 않음', async () => {
+  const NAME = '홍길동' // 한국어 Windows 사용자 이름 — 경로에 들면 예전엔 '한국어 글' 로 보고 그대로 옮겼다
+  // 길 기록(serve)을 못 적음(phone.json.tmp 자리에 폴더) — serveOn 을 부르지 않고 까닭은 고정된 글
+  const dA = path.join(dir, 'a', NAME)
+  const tmpA = path.join(dA, 'phone.json.tmp')
+  const a = make({ dataDir: dA })
+  a.ts.httpsPortFree.mockImplementation(async () => {
+    fs.mkdirSync(tmpA, { recursive: true })
+    return true
+  })
+  await a.c.set({ enabled: true })
+  expect(a.ts.serveOn).not.toHaveBeenCalled()
+  expect(a.c.state()).toMatchObject({ settings: { enabled: true }, url: null, problem: '휴대폰 연결을 켜지 못했어요' })
+  expect(JSON.stringify(a.emitted)).not.toContain(NAME)
+  expect(a.servers.last().closed).toBe(true)
+  expect(a.power.start).not.toHaveBeenCalled()
+  fs.rmSync(tmpA, { recursive: true, force: true })
+
+  // 서버가 옮긴 포트·마지막 https 포트를 못 적음 — 길은 그대로 연다(다음엔 지난 값부터일 뿐) · 로그엔 고정된 글만
+  const dB = path.join(dir, 'b', NAME)
+  const tmpB = path.join(dB, 'phone.json.tmp')
+  const servers = fakeServers({ bump: 1 })
+  const start0 = servers.start.getMockImplementation()!
+  servers.start.mockImplementation(async (opts: PhoneServerOptions) => {
+    const s = await start0(opts)
+    fs.mkdirSync(tmpB, { recursive: true })
+    return s
+  })
+  const log = vi.fn()
+  const b = make({ dataDir: dB, servers, log })
+  b.ts.httpsPortFree.mockImplementation(async () => {
+    fs.rmSync(tmpB, { recursive: true, force: true })
+    return true
+  })
+  const on0 = b.ts.serveOn.getMockImplementation()!
+  b.ts.serveOn.mockImplementation(async (h: number, l: number, d?: string) => {
+    const r = await on0(h, l, d)
+    fs.mkdirSync(tmpB, { recursive: true })
+    return r
+  })
+  await b.c.set({ enabled: true })
+  expect(b.c.state()).toMatchObject({ url: `https://${DNS}/mobile.html`, problem: null })
+  expect(b.power.on.size).toBe(1)
+  expect(saved(dB).serve).toEqual({ httpsPort: 443, localPort: 47616, dnsName: DNS })
+  expect(saved(dB).settings.port).toBe(47615)
+  expect(saved(dB).httpsPort).toBeUndefined()
+  expect(log).toHaveBeenCalledTimes(2)
+  expect(JSON.stringify(log.mock.calls)).not.toContain(NAME)
+  fs.rmSync(tmpB, { recursive: true, force: true })
+
+  // 서버가 던진 시스템 오류(code·syscall·path) — 한국어 경로가 들어도 고정된 글
+  const err = Object.assign(new Error(`EACCES: permission denied, open 'C:\\Users\\${NAME}\\x'`), { code: 'EACCES', syscall: 'open', path: `C:\\Users\\${NAME}\\x` })
+  const cc = make({ dataDir: path.join(dir, 'c'), startServer: vi.fn(async () => { throw err }) })
+  await cc.c.set({ enabled: true })
+  expect(cc.c.state().problem).toBe('휴대폰 연결을 켜지 못했어요')
+})
+
+/** serveOn 을 붙잡아 두는 가짜 — release() 하면 진짜처럼(길을 열고 'on') 끝난다 */
+function holdServeOn(ts: ReturnType<typeof fakeTailscale>) {
+  const on0 = ts.serveOn.getMockImplementation()!
+  const held = { release: () => {} }
+  ts.serveOn.mockImplementationOnce(async (h: number, l: number, d?: string) => {
+    await new Promise<void>((r) => (held.release = r))
+    return on0(h, l, d)
+  })
+  return held
+}
+
+test('끄기는 바로 — 켜는 중(serveOn 기다림)이어도 꺼짐을 바로 적고, 켜기는 멈추며 연 것을 거둠(절전 안 막음)', async () => {
+  const ts = fakeTailscale()
+  const held = holdServeOn(ts)
+  const { c, servers, power, emitted } = make({ ts })
+  const turningOn = c.set({ enabled: true })
+  await vi.waitFor(() => expect(ts.serveOn).toHaveBeenCalledTimes(1))
+  const turningOff = c.set({ enabled: false })
+  expect(saved().settings.enabled).toBe(false) // 기다리지 않고 바로 적는다
+  held.release()
+  await turningOn
+  await turningOff
+  expect(power.start).not.toHaveBeenCalled()
+  expect(ts.routes.size).toBe(0)
+  expect(saved().serve).toBeUndefined()
+  expect(servers.last().closed).toBe(true)
+  expect(servers.last().opts.allowedHost()).toBeNull()
+  expect(c.state()).toMatchObject({ settings: { enabled: false }, url: null, problem: null })
+  expect(emitted.some((s) => s.url !== null)).toBe(false)
+  // 끈 뒤 다시 켜면 연다
+  await c.set({ enabled: true })
+  expect(c.state().url).toBe(`https://${DNS}/mobile.html`)
+})
+
+test('dispose — 켜는 중(serveOn 기다림)이어도 길·서버를 거두고 절전은 막지 않음 · 켜짐은 그대로', async () => {
+  const ts = fakeTailscale()
+  const held = holdServeOn(ts)
+  const { c, servers, power } = make({ ts })
+  const turningOn = c.set({ enabled: true })
+  await vi.waitFor(() => expect(ts.serveOn).toHaveBeenCalledTimes(1))
+  const done = c.dispose()
+  held.release()
+  await turningOn
+  await done
+  expect(power.start).not.toHaveBeenCalled()
+  expect(ts.routes.size).toBe(0)
+  expect(saved().serve).toBeUndefined()
+  expect(servers.last().closed).toBe(true)
+  expect(saved().settings.enabled).toBe(true)
+})
+
+test('dispose — 다시 해 보기 타이머가 걸려 있어도 풀고, 그 뒤로 tailscale 을 부르지 않음', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  seed({ settings: { ...DEFAULT_PHONE_SETTINGS, enabled: true } })
+  const ts = fakeTailscale({ kind: 'logged-out' })
+  const { c } = make({ ts, retryMs: 1000 })
+  await c.ready
+  expect(vi.getTimerCount()).toBe(1)
+  await c.dispose()
+  expect(vi.getTimerCount()).toBe(0)
+  ts.state = READY
+  vi.advanceTimersByTime(5000)
+  await new Promise<void>((r) => setImmediate(r))
+  expect(ts.status).toHaveBeenCalledTimes(1)
+  expect(ts.serveOn).not.toHaveBeenCalled()
 })
 
 test('check — 꺼져 있으면 status 만(서버·serve 없음)', async () => {

@@ -20,7 +20,7 @@ import type { ServeOnResult, Tailscale } from './tailscale'
 
 /** tailnet https 포트 차례 — 443 이면 주소에 포트가 없다(알림에 붙는 사이트 주소가 짧다), 남이 쓰면 서버 기본 포트와 같은 번호 */
 export const PHONE_HTTPS_PORTS: readonly number[] = Object.freeze([443, PHONE_PORT_DEFAULT])
-/** 켜져 있는데 길이 안 열렸으면(Tailscale 이 아직 안 켜짐·로그인 전·https 꺼짐 …) 이만큼 뒤에 다시 해 본다 — 열리면 그만 */
+/** 켜져 있는데 길이 안 열렸으면(Tailscale 이 아직 안 켜짐·로그인 전·https 꺼짐 …)·꺼졌는데 두레 길을 못 껐으면 이만큼 뒤에 다시 해 본다 — 열리면·정리되면 그만 */
 export const PHONE_RETRY_MS = 30_000
 /** 휴대폰이 올린 파일을 두는 폴더(<dataDir> 아래) — 시작·끄기·두레 끄기 때 비운다(올리기만 하고 안 보낸 것) */
 export const PHONE_INBOX = 'phone-inbox'
@@ -66,9 +66,9 @@ export interface PhoneController {
   /** 시작 정리(inbox 비우기 · 남은 길 정리 · 켜져 있으면 다시 열기)가 끝나면 풀린다 — 거절하지 않는다 */
   ready: Promise<void>
   state(): PhoneState
-  /** 칸을 저장하고 따른다 — 켜기는 길을 열어 보고(멈추면 켜 둔 채 까닭을 state 에), 끄기는 길·서버·절전 막기를 거둔다 */
+  /** 칸을 바로 저장하고 따른다 — 켜기는 길을 열어 보고(멈추면 켜 둔 채 까닭을 state 에), 끄기는 길·서버·절전 막기를 거둔다(열고 있던 켜기는 멈춤) */
   set(p: PhoneSettingsChange): Promise<void>
-  /** Tailscale 을 다시 본다 — 켜져 있고 길이 안 열렸으면 다시 열어 본다(https 가 꺼졌으면 켜기 링크까지) */
+  /** Tailscale 을 다시 본다 — 켜져 있고 길이 안 열렸으면 다시 열어 본다(https 가 꺼졌고 링크를 아직 모르면 켜기 링크까지) · 꺼져 있는데 두레 길이 남았으면 다시 꺼 본다 */
   check(): Promise<TailscaleState>
   /** 새 짝 코드·6자리 숫자 — 앞의 것은 무효. 길이 열려 있어야 한다 */
   pairStart(): Promise<PhonePairOffer>
@@ -85,10 +85,13 @@ export function phoneStaticDir(mainDir: string, packaged: boolean): string {
   return packaged ? dir.replace(/([\\/])app\.asar(?=[\\/])/, '$1app.asar.unpacked') : dir
 }
 
-/** 오류 글 — tailscale.ts·phoneServer 가 던지는 한국어 글은 그대로, 그 밖(영어 시스템 글·경로가 들 수 있음)은 fallback */
+/**
+ * 오류 글 — tailscale.ts·phoneServer 가 던지는 한국어 글은 그대로, 그 밖은 fallback.
+ * 시스템 오류(code·syscall·path 가 있음 — fs·net)는 한국어가 들어도 fallback: 한국어 Windows 사용자 이름이 경로에 들 수 있다
+ */
 function koreanOr(e: unknown, fallback: string): string {
-  const m = e instanceof Error ? e.message : ''
-  return /[가-힣]/.test(m) ? m : fallback
+  if (!(e instanceof Error) || 'code' in e || 'syscall' in e || 'path' in e) return fallback
+  return /[가-힣]/.test(e.message) ? e.message : fallback
 }
 
 export function createPhoneController(o: PhoneControllerOptions): PhoneController {
@@ -112,6 +115,8 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
   let blocker: number | null = null
   let disposed = false
   let disposing: Promise<void> | null = null
+  /** 끄기 요청 수 — 켜기는 시작 때 값을 쥐고, 기다림마다 뒤에 바뀌었으면(그 사이 끄기) 멈춘다 */
+  let stops = 0
   let lastSent = ''
 
   const settings = () => store.read().settings
@@ -239,7 +244,8 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
       throw new Error(E.failed)
     }
     server = s
-    if (s.port !== settings().port) store.write({ settings: { port: s.port } }) // 쓰이던 포트를 비켜 연 실제 포트 — 다음에도 여기부터
+    // 쓰이던 포트를 비켜 연 실제 포트 — 다음에도 여기부터(못 적어도 이번 켜기는 그대로)
+    if (s.port !== settings().port) safely('포트 적기', () => store.write({ settings: { port: s.port } }))
     return s
   }
 
@@ -278,107 +284,137 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
   }
 
   /**
-   * 길 열기 — Tailscale 이 ready 일 때만(wantLink 면 https 가 꺼진 tailnet 에서도 켜기 링크를 받으러 한 번 열어 본다).
-   * 멈추면 켜짐은 그대로 두고 까닭은 tailscale·problem 에
+   * status 의 no-https 엔 켜기 링크가 없다(링크는 serveOn 이 받는다) — 앞서 받은 링크가 있으면 그대로 둔다.
+   * 그 사이 다른 상태(로그아웃 등)를 거쳤으면 잊는다(다른 기기일 수 있다)
    */
-  const bringUp = async (wantLink: boolean): Promise<void> => {
-    if (open || disposed) return
-    problem = null
-    const ts = await o.tailscale.status()
+  const keepLink = (ts: TailscaleState): TailscaleState =>
+    ts.kind === 'no-https' && ts.enableUrl === null && tailscale?.kind === 'no-https' && tailscale.enableUrl !== null ? tailscale : ts
+
+  /**
+   * 길 열기 — Tailscale 이 ready 일 때만(wantLink 면 https 가 꺼진 tailnet 에서 켜기 링크를 아직 모를 때 받으러 한 번 열어 본다).
+   * 돌려주는 것 = 까닭(problem) — 멈추면 켜짐은 그대로 두고 까닭은 tailscale·이 값에.
+   * 기다림마다 뒤에 끄기·dispose 가 왔는지(my ≠ stops) 보고, 왔으면 그때까지 연 것(서버·길)을 거두고 그만둔다 — 절전은 막지 않는다
+   */
+  const bringUp = async (wantLink: boolean, my: number): Promise<string | null> => {
+    const halted = () => disposed || stops !== my
+    const quit = async (route: boolean) => {
+      if (route) await routeOff() // 못 끄면 기록이 남는다 — 뒤의 끄기·dispose 가 다시
+      await closeServer()
+      return null
+    }
+    if (open || halted()) return null
+    const ts = keepLink(await o.tailscale.status())
     tailscale = ts
-    publish()
-    if (disposed || ts.kind === 'missing' || ts.kind === 'logged-out') return
-    if (ts.kind === 'no-https' && (ts.enableUrl !== null || !wantLink)) return
+    if (halted() || ts.kind === 'missing' || ts.kind === 'logged-out') return null
+    if (ts.kind === 'no-https' && (ts.enableUrl !== null || !wantLink)) return null
     const dnsName = ts.kind === 'ready' ? ts.dnsName : undefined
     // 전에 연 길이 남아 있으면 먼저 그 짝만 — 못 끄면 새 길을 열지 않는다(기록을 덮어 그 길을 잃지 않게)
-    if (!(await routeOff())) {
-      problem = E.stale
-      return
-    }
+    const cleared = await routeOff()
+    if (halted()) return null
+    if (!cleared) return E.stale
     let s: PhoneServer
     try {
       s = await ensureServer()
     } catch (e) {
-      problem = koreanOr(e, E.failed)
-      return
+      return koreanOr(e, E.failed)
     }
-    if (disposed) return
+    if (halted()) return quit(false)
     const httpsPort = await pickHttpsPort()
+    if (halted()) return quit(false)
     if (httpsPort === null) {
-      problem = E.noHttpsPort
       await closeServer()
-      return
+      return E.noHttpsPort
     }
-    // 열기 전에 적는다 — serveOn 이 시간 상한으로 던져도·두레가 그 사이 꺼져도 그 짝만 정리할 수 있게
-    store.write({ serve: { httpsPort, localPort: s.port, ...(dnsName ? { dnsName } : {}) } })
+    // 열기 전에 적는다 — serveOn 이 시간 상한으로 던져도·두레가 그 사이 꺼져도 그 짝만 정리할 수 있게. 못 적으면 열지 않는다
+    try {
+      store.write({ serve: { httpsPort, localPort: s.port, ...(dnsName ? { dnsName } : {}) } })
+    } catch (e) {
+      await closeServer()
+      return koreanOr(e, E.failed)
+    }
     let r: ServeOnResult
     try {
       r = await o.tailscale.serveOn(httpsPort, s.port, dnsName)
     } catch (e) {
-      problem = koreanOr(e, E.failed)
-      await routeOff()
-      await closeServer()
-      return
+      await quit(true)
+      return koreanOr(e, E.failed)
     }
+    if (halted()) return quit(true)
     if (r.kind === 'no-https') {
       tailscale = r
-      await routeOff()
-      await closeServer()
-      return
+      return quit(true)
     }
     if (dnsName === undefined) {
       // https 가 꺼졌다더니 길이 열렸다 — 이름을 모르니 닫고 상태부터 다시(이번엔 링크를 받으러 열지 않는다)
-      await routeOff()
-      await closeServer()
-      return bringUp(false)
+      await quit(true)
+      return bringUp(false, my)
     }
-    if (disposed) return // dispose 가 적어 둔 짝을 끈다
-    store.write({ httpsPort })
+    safely('https 포트 적기', () => store.write({ httpsPort })) // 다음 켜기의 첫 포트 — 못 적어도 이번 길은 그대로
     const host = httpsPort === 443 ? dnsName : `${dnsName}:${httpsPort}`
     open = { host, url: `https://${host}/mobile.html` }
     syncPower()
+    return null
   }
 
-  /** 한 번 열어 보기 — 무엇이 던져도 까닭으로 남기고, 켜져 있는데 못 열었으면 잠시 뒤 다시 */
-  const attempt = async (wantLink: boolean): Promise<void> => {
+  /**
+   * 한 번 열어 보기 — 까닭은 끝날 때 한 번 정하고 한 번 알린다(다시 해 볼 때마다 null 로 깜박이지 않게).
+   * 무엇이 던져도 까닭으로 남기고, 켜져 있는데 못 열었으면 잠시 뒤 다시. 그 사이 끄기·dispose 가 왔으면 뒤는 그쪽이 맡는다
+   */
+  const attempt = async (wantLink: boolean, my = stops): Promise<void> => {
+    let reason: string | null
     try {
-      await bringUp(wantLink)
+      reason = await bringUp(wantLink, my)
     } catch (e) {
-      problem = koreanOr(e, E.failed)
+      reason = koreanOr(e, E.failed)
       await closeServer()
     }
+    if (disposed || stops !== my) return
+    problem = reason
     if (open) clearRetry()
     else scheduleRetry()
     publish()
   }
 
+  /** 꺼진 채 남은 두레 길 정리 — 못 끄면 까닭을 남기고 잠시 뒤 다시(기록이 없어질 때까지) */
+  const tidy = async (): Promise<void> => {
+    const ok = await routeOff()
+    problem = ok ? null : E.stale
+    if (!ok) scheduleRetry()
+    publish()
+  }
+
+  /** 잠시 뒤 다시 — 켜져 있는데 길이 안 열렸거나, 꺼져 있는데 두레 길 기록이 남았을 때(정리되면 그만) */
   const scheduleRetry = () => {
     if (retryTimer || disposed || open) return
-    let on = false
+    let need = false
     try {
-      on = settings().enabled
+      const f = store.read()
+      need = f.settings.enabled || f.serve !== undefined
     } catch {
-      on = false
+      need = false
     }
-    if (!on) return
+    if (!need) return
     retryTimer = setTimeout(() => {
       retryTimer = null
       void serial(async () => {
-        if (!disposed && !open && settings().enabled) await attempt(false)
+        if (disposed || open) return
+        if (settings().enabled) await attempt(false)
+        else await tidy()
       }).catch(() => {})
     }, retryMs)
     retryTimer.unref?.()
   }
 
-  /** 끄기 — 새 요청은 바로 거절 → 길 끄기 → 서버 닫기 → 절전 풀기 → inbox 비우기 */
+  /** 끄기 — 새 요청은 바로 거절 → 길 끄기 → 서버 닫기 → 절전 풀기 → inbox 비우기. 길을 못 끄면 까닭을 남기고 잠시 뒤 다시 */
   const bringDown = async () => {
     clearRetry()
     clearPairing()
     open = null
-    await routeOff()
+    const ok = await routeOff()
     await closeServer()
     await emptyInbox()
-    problem = null
+    problem = ok ? null : E.stale
+    if (!ok) scheduleRetry()
   }
 
   const notifier = o.engine
@@ -393,13 +429,22 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
     })
     : null
 
-  // 시작 — 올리기만 하고 안 보낸 파일 비우기 → 켜져 있으면 다시 열기(적어 둔 길은 그 안에서 먼저 정리), 꺼져 있으면 적어 둔 길만 정리.
-  // 꺼져 있고 기록이 없으면 tailscale 을 부르지 않는다
+  // 시작 — 올리기만 하고 안 보낸 파일 비우기 → 켜져 있으면 다시 열기(적어 둔 길은 그 안에서 먼저 정리), 꺼져 있으면 적어 둔 길만 정리
+  // (못 지우면 까닭을 남기고 잠시 뒤 다시). 꺼져 있고 기록이 없으면 tailscale 을 부르지 않는다.
+  // 켜짐은 만들 때 본 값으로 — 그 뒤 set 이 바로 적은 켜기·끄기는 set 이 맡는다(두 번 열어 보지 않게).
+  // 🟡 두레가 둘 떠 있으면(설치본과 개발 실행 — phone.json 이 따로) A 의 남은 기록이 B 가 지금 연 길과 같은 짝일 때 B 의 길을 끌 수 있다 — 드물어서 받아들인다
+  let startOn = false
+  try {
+    startOn = settings().enabled
+  } catch {
+    startOn = false // 못 읽음 — 아래에서 다시 읽다 던지면 로그
+  }
+  const startStops = stops
   const ready = serial(async () => {
     await emptyInbox()
     if (disposed) return
-    if (settings().enabled) await attempt(false)
-    else await routeOff()
+    if (startOn && settings().enabled) await attempt(false, startStops)
+    else await tidy()
     publish()
   }).catch(() => {
     log('[두레] 휴대폰 연결을 시작하지 못했어요')
@@ -411,15 +456,29 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
     state,
 
     set(p) {
-      return serial(async () => {
-        if (disposed) return
-        const change = pickPhoneChange(p)
+      if (disposed) return Promise.resolve()
+      // 칸은 바로 적는다 — 끄기는 기다리는 켜기(status·serveOn …) 뒤에 줄 서지 않고 바로 적히며, 그 켜기는 다음 기다림 뒤에 보고 멈춘다
+      let change: PhoneSettingsChange
+      let off: boolean
+      try {
+        change = pickPhoneChange(p)
         const before = settings()
         store.write({ settings: change })
         const after = settings()
         if (after.openAtLogin !== before.openAtLogin) safely('자동 켜기', () => o.loginItem.set(after.openAtLogin))
-        if (before.enabled && !after.enabled) await bringDown()
-        else if (after.enabled && !open && change.enabled === true) await attempt(true)
+        off = before.enabled && !after.enabled
+      } catch (e) {
+        return Promise.reject(e)
+      }
+      if (off) {
+        stops++
+        clearRetry()
+      }
+      const my = stops
+      return serial(async () => {
+        if (disposed) return
+        if (off) await bringDown()
+        else if (change.enabled === true && stops === my && settings().enabled && !open) await attempt(true, my)
         syncPower()
         publish()
       })
@@ -430,7 +489,9 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
         if (!disposed) {
           if (settings().enabled && !open) await attempt(true)
           else {
-            tailscale = await o.tailscale.status()
+            tailscale = keepLink(await o.tailscale.status())
+            // 꺼진 채 두레 길 기록이 남았으면 기다리지 않고 다시 꺼 본다(Tailscale 을 켠 뒤의 '확인')
+            if (!settings().enabled && store.read().serve) await tidy()
             publish()
           }
         }
