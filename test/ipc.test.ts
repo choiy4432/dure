@@ -107,6 +107,7 @@ const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true, 
 const PHONE_STATE: PhoneState = {
   settings: { ...DEFAULT_PHONE_SETTINGS, notify: { ...DEFAULT_PHONE_SETTINGS.notify } },
   devices: [],
+  online: [],
   connected: 0,
   tailscale: { kind: 'ready', dnsName: 'pc.tail0000.ts.net' },
   url: 'https://pc.tail0000.ts.net/mobile.html',

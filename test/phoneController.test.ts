@@ -711,9 +711,15 @@ test('connected — 소켓이 열린 기기 수 · 바뀔 때만 phone 사건', 
   expect(emitted.at(-1)?.connected).toBe(2)
   s.opts.onClients?.()
   expect(emitted.length).toBe(n + 1)
+  // 어느 기기가 접속 중인지(PC 설정의 기기 목록 점) — 겹치지 않게, 차례는 늘 같게
+  s.list = [{ deviceId: 'd2', visible: false }, { deviceId: 'd1', visible: true }, { deviceId: 'd2', visible: true }]
+  s.opts.onClients?.()
+  expect(c.state().online).toEqual(['d1', 'd2'])
+  expect(emitted.length).toBe(n + 1) // 같은 상태 — 다시 안 보냄
   s.list = []
   s.opts.onClients?.()
   expect(emitted.at(-1)?.connected).toBe(0)
+  expect(emitted.at(-1)?.online).toEqual([])
 })
 
 test('서버에 잇는 것 — 휴대폰 디스패처(휴대폰 메서드 거절) · 엔진 사건만 · VAPID·구독은 push · allowLocal', async () => {

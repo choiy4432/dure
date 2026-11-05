@@ -57,6 +57,8 @@ export type TailscaleState =
 export type PhoneState = {
   settings: PhoneSettings
   devices: PhoneDevice[]
+  /** 지금 소켓이 하나라도 열린 기기의 id — 겹치지 않고 정렬(PC 설정의 기기 목록 점) */
+  online: string[]
   /** 지금 소켓이 하나라도 열린 기기 수 */
   connected: number
   /** 마지막으로 본 Tailscale 상태 — null = 아직 안 봄(꺼져 있으면 시작 때 tailscale 을 부르지 않는다 · phoneCheck 로 본다) */

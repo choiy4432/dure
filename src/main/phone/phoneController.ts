@@ -138,10 +138,12 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
 
   const state = (): PhoneState => {
     const f = store.read()
+    const online = server ? [...new Set(server.clients().map((c) => c.deviceId))].sort() : []
     return {
       settings: f.settings,
       devices: f.devices.map(publicDevice),
-      connected: server ? new Set(server.clients().map((c) => c.deviceId)).size : 0,
+      online,
+      connected: online.length,
       tailscale,
       url: open?.url ?? null,
       pairing: pair ? { ...pair } : null,

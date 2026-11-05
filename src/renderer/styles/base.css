@@ -6323,3 +6323,382 @@ code {
     animation: none;
   }
 }
+
+/* ── 휴대폰으로 쓰기 — 설정의 휴대폰 칸 · 휴대폰 창 · 짝 맺기 창 · 위 띠 알약(시안 C2 + D1) ── */
+
+/* 설정 칸 — 상태 알약 + [열기] 한 줄. 주소가 열려 있으면 초록, 켜졌지만 아직이거나 꺼짐이면 옅은 회색 */
+.phn-row {
+  justify-content: space-between;
+}
+
+.phn-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: var(--radius-pill);
+  background: var(--hover);
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.phn-stat.on {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.phn-stat .dot {
+  width: 6px;
+  height: 6px;
+}
+
+/* 위 띠 알약 — 설정 톱니 왼쪽, 켜져 있을 때만 */
+.phn-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.phn-top:hover {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+
+.phn-top .dot {
+  width: 6px;
+  height: 6px;
+}
+
+.phn-top .i {
+  color: var(--text-3);
+}
+
+/* 휴대폰 창 — 설정 창보다 넓게. 낮은 창에선 안이 스크롤되고 [닫기] 줄은 아래에 붙는다(.dlg-form) */
+.dlg-form.phn-dlg {
+  width: 520px;
+}
+
+/* 한국어는 낱말 사이에서만 줄을 바꾼다(주소 칸은 .phn-url 이 아무 데서나) */
+.phn-dlg,
+.phn-pair-dlg {
+  word-break: keep-all;
+}
+
+.phn-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.phn-head .dlg-t {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.phn-head .dlg-t .i {
+  color: var(--text-3);
+}
+
+.phn-master {
+  flex: none;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Tailscale 확인 판 — 깔림 → 로그인 → 주소, 막힌 단계엔 할 일 */
+.phn-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  background: var(--subtle);
+}
+
+.phn-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.phn-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-2);
+}
+
+.phn-step > .i {
+  margin-top: 2px;
+}
+
+.phn-step[data-step="ok"] {
+  color: var(--ok-text);
+}
+
+.phn-step[data-step="need"] {
+  color: var(--warn-text);
+  font-weight: 500;
+}
+
+.phn-step[data-step="todo"] {
+  color: var(--muted);
+}
+
+.phn-step-b {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.phn-step-l {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 12px;
+}
+
+.phn-step-h {
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* 바깥 브라우저로 여는 글 단추(내려받기 · 켜러 가기) */
+.phn-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 20px;
+  border-radius: var(--radius-xs);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--primary-text);
+}
+
+.phn-link:hover {
+  text-decoration: underline;
+}
+
+.phn-problem {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--warn-text);
+  overflow-wrap: anywhere;
+}
+
+.phn-url {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.phn-tip {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.phn-recheck {
+  align-self: flex-start;
+}
+
+/* 묶음 머리(짝 맺은 휴대폰 · 알림 · 전원) */
+.phn-sub {
+  margin: 20px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 700;
+  color: var(--text-3);
+}
+
+.phn-devs {
+  margin: 8px 0 0;
+  padding: 0 12px;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  background: var(--subtle);
+}
+
+.phn-dev {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.phn-dev:first-child {
+  border-top: 0;
+}
+
+.phn-dev-nm {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.phn-dev-nm b {
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phn-dev-nm span {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.phn-empty {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.phn-pair {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.fld.phn-sws {
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.phn-sws .fld-d {
+  margin: -2px 0 4px;
+}
+
+/* 짝 맺기 창 — QR(흰 바탕 그림 그대로) + 6자리 + 남은 시간 */
+.phn-qrbox {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin-top: 16px;
+}
+
+.phn-qr {
+  display: block;
+  flex: none;
+  width: 156px;
+  height: 156px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+}
+
+.phn-qr.wait {
+  background: var(--subtle);
+  border-style: dashed;
+}
+
+.phn-pin-l {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.phn-pin {
+  margin-top: 2px;
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.phn-left {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.phn-side {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.phn-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: var(--radius-box);
+  background: var(--hover);
+  color: var(--text-2);
+}
+
+.phn-result.ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+}
+
+.phn-result > .i {
+  margin-top: 1px;
+}
+
+.phn-result-t {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.phn-result-d {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--text-3);
+}

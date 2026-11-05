@@ -4,6 +4,7 @@ import { getStore, useDure } from '../state/store'
 import { workingCount } from '../state/selectors'
 import { errorMessage, SETTINGS_UPDATE as W, SLEEP_CHOICE_WORD, SLEEP_SETTING, updateErrorWhy } from '../lib/words'
 import { FormDialog } from './FormDialog'
+import { PhoneField } from './PhoneSettings'
 
 /** 자동 전달 상한으로 적을 수 있는 수 */
 const LIMIT_MIN = 1
@@ -28,16 +29,20 @@ function parseLimit(text: string): number | null {
  * 설정(위 띠 톱니) — 화면 테마 · 자동 전달 상한 · 묻지 않고 실행 허용 · 알림.
  * 화면 테마는 누르는 즉시 바꿔 뒤 화면으로 비교하게 한다 — 저장 없이 닫으면(취소·Esc·바깥) 열 때의 테마로 되돌린다.
  * 허용을 켜고 저장하면 설정 창을 닫은 뒤 onAskAllow 로 확인 창을 부른다(두 창을 겹쳐 띄우지 않는다).
+ * 휴대폰 칸의 [열기]는 이 창을 둔 채 그 위에 휴대폰 창을 띄운다(onOpenPhone) — 여기서 바꾸던 값은 휴대폰 창을 닫아도 그대로다.
  */
 export function SettingsDialog({
   onClose,
   onAskAllow,
   onReplayTour,
+  onOpenPhone,
   cancelRequest = 0,
 }: {
   onClose: () => void
   onAskAllow: () => void
   onReplayTour: () => void
+  /** 휴대폰 칸 [열기] — 없으면 칸도 없다 */
+  onOpenPhone?: () => void
   /** 바깥(투어 카드)이 "취소해 줘" 할 때마다 1 씩 커지는 수 — 바뀌면 스스로 취소한다(저장 중이면 저장이 끝나며 닫으니 기다린다) */
   cancelRequest?: number
 }) {
@@ -320,6 +325,7 @@ export function SettingsDialog({
           창이 가려져 있을 때 일을 끝내면 알려 줘요
         </p>
       </div>
+      {onOpenPhone && <PhoneField onOpen={onOpenPhone} />}
       <div className="fld">
         <span className="fld-l">{W.tourLabel}</span>
         <div className="fld-row">

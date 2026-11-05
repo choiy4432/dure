@@ -1313,7 +1313,7 @@ describe('store 앱 상태', () => {
   it('처음 값은 확인 중·대기 · init 뒤 api 값', async () => {
     const { api } = fake({ setupState: async () => ({ phase: 'needs', install: { state: 'todo' }, login: { state: 'locked' } }) })
     const s = createStore(api)
-    expect(s.getState().app).toEqual({ info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false })
+    expect(s.getState().app).toEqual({ info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false, phone: null })
     await s.init()
     expect(s.getState().app.setup.phase).toBe('needs')
     expect(s.getState().app.info).toEqual({ version: '1.0.0', packaged: true })

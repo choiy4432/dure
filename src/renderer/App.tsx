@@ -11,6 +11,7 @@ import { SetupScreen } from './shell/SetupScreen'
 import { NewRoomDialog } from './shell/RoomSwitcher'
 import { AddAgentDialog } from './shell/AddAgentDialog'
 import { SettingsDialog } from './shell/SettingsDialog'
+import { PhoneDialog } from './shell/PhoneSettings'
 import { ConfirmDialog } from './shell/ConfirmDialog'
 import { Presence } from './lib/presence'
 import { RelationMap } from './map/RelationMap'
@@ -38,6 +39,8 @@ export function App() {
   const fork = useDure(s => s.forkDraft)
   const [dialog, setDialog] = useState<Dialog>(null)
   const [askAllow, setAskAllow] = useState(false)
+  /** 휴대폰 창 — 위 띠 알약이나 설정의 휴대폰 칸에서. 설정 창 위에 겹쳐 뜰 수 있어 dialog 와 따로 둔다 */
+  const [phoneOpen, setPhoneOpen] = useState(false)
   const close = () => setDialog(null)
   /** 투어 카드가 설정 창을 닫을 때마다 +1 — 창이 스스로 취소한다(바꿔 본 테마 되돌림 · 저장 중엔 기다림) */
   const [settingsCancel, setSettingsCancel] = useState(0)
@@ -86,7 +89,12 @@ export function App() {
   return (
     <LucideProvider size={16} strokeWidth={1.75}>
       <div className="app">
-        <TopBar hasRoom={!blocked && v.roomId !== null} settingsDisabled={blocked} onSettings={() => setDialog('settings')} />
+        <TopBar
+          hasRoom={!blocked && v.roomId !== null}
+          settingsDisabled={blocked}
+          onSettings={() => setDialog('settings')}
+          onPhone={() => setPhoneOpen(true)}
+        />
         {body}
         <StatusBar />
         <Announcer {...announced} />
@@ -105,11 +113,16 @@ export function App() {
             onClose={close}
             cancelRequest={settingsCancel}
             onAskAllow={() => setAskAllow(true)}
+            onOpenPhone={() => setPhoneOpen(true)}
             onReplayTour={() => {
               close()
               getStore().startTour(getStore().getState().rooms.length > 0)
             }}
           />
+        </Presence>
+        {/* 설정 창 다음에 — 겹치면 위에 뜬다 */}
+        <Presence show={phoneOpen}>
+          <PhoneDialog onClose={() => setPhoneOpen(false)} />
         </Presence>
         <ConfirmDialog
           open={askAllow}
@@ -124,7 +137,11 @@ export function App() {
           onCancel={() => setAskAllow(false)}
         />
         {/* 안내 투어·승인 한 번 — 대화상자 위 겹. 열린 창을 보고 단계를 넘기고, 새 방·에이전트 추가 창이 떠 있는 동안은 숨는다 */}
-        <TourLayer dialog={dialog} onCloseDialog={() => (dialog === 'settings' ? setSettingsCancel(n => n + 1) : close())} />
+        <TourLayer
+          dialog={dialog}
+          covered={phoneOpen}
+          onCloseDialog={() => (dialog === 'settings' ? setSettingsCancel(n => n + 1) : close())}
+        />
       </div>
     </LucideProvider>
   )

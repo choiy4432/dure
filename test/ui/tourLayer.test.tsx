@@ -337,7 +337,8 @@ describe('TourLayer — 진행', () => {
     const c = screen.getByRole('dialog', { name: '설정 안에는' })
     expect(c.style.left).toBe('736px') // 창 오른쪽 + 16px
     expect(c.style.top).toBe('100px')
-    expect(within(c).getAllByRole('listitem')).toHaveLength(5)
+    expect(within(c).getAllByRole('listitem')).toHaveLength(6)
+    expect(within(c).getByText(/밖에서 휴대폰으로 에이전트 일을 보고 승인해요/)).toBeTruthy()
     expect(within(c).queryByText(/켤 때 claude 최신으로/)).toBeNull()
     expect(within(c).getByText(/켜면 에이전트마다 승인 없이 실행하게/)).toBeTruthy()
     expect(within(c).getByText(/Windows 알림으로 알려 줘요/)).toBeTruthy()
@@ -351,6 +352,20 @@ describe('TourLayer — 진행', () => {
     fireEvent.click(within(done).getByRole('button', { name: '시작하기' }))
     expect(store.getState().tour).toBeNull()
     expect(setPrefs).toHaveBeenCalledWith({ tourDone: true })
+  })
+
+  it('settings 단계 — 그 위에 휴대폰 창이 뜨면(covered) 카드를 숨기고, 단계는 그대로 · 닫히면 다시', async () => {
+    withAgent()
+    place('settings-dialog', { left: 300, top: 100, width: 420, height: 500 }, { tag: 'div' })
+    const { store, rerender, closeDialog } = await mount('settings')
+    act(() => store.setTour(at('settings', { rooms: 1, agents: 1 })))
+    expect(screen.getByRole('dialog', { name: '설정 안에는' })).toBeTruthy()
+    const { TourLayer } = await import('../../src/renderer/tour/TourLayer')
+    rerender(<TourLayer dialog="settings" covered onCloseDialog={closeDialog} />)
+    expect(card()).toBeNull()
+    expect(store.getState().tour?.step).toBe('settings')
+    rerender(<TourLayer dialog="settings" onCloseDialog={closeDialog} />)
+    expect(screen.getByRole('dialog', { name: '설정 안에는' })).toBeTruthy()
   })
 
   it('settings 단계 — 오른쪽에 자리가 없으면 왼쪽', async () => {

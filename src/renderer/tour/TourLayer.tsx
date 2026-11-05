@@ -152,7 +152,16 @@ function listItem(text: string) {
   return at < 0 ? <b>{text}</b> : <><b>{text.slice(0, at)}</b>{text.slice(at)}</>
 }
 
-export function TourLayer({ dialog, onCloseDialog }: { dialog: Dialog; onCloseDialog: () => void }) {
+export function TourLayer({
+  dialog,
+  covered = false,
+  onCloseDialog,
+}: {
+  dialog: Dialog
+  /** 그 위에 따로 뜬 창이 있다(휴대폰 창) — 그동안 겹을 숨긴다(단계 판정은 dialog 그대로) */
+  covered?: boolean
+  onCloseDialog: () => void
+}) {
   const v = useDure(s => ({
     tour: s.tour,
     // tourAdvance 가 읽는 것 — 바뀌면 다시 판정한다
@@ -186,7 +195,7 @@ export function TourLayer({ dialog, onCloseDialog }: { dialog: Dialog; onCloseDi
   const step = v.tour ? stepFor(v.tour.step, v.tour.replay) : null
 
   let mode: Mode | null = null
-  if (v.ready && !v.fork) {
+  if (v.ready && !v.fork && !covered) {
     if (tip && dialog === null) mode = 'tip'
     else if (step?.id === 'settings') mode = dialog === 'settings' && hiddenTour !== v.tour ? 'beside' : null
     else if (step && dialog === null) mode = step.kind

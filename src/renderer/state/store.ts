@@ -2,6 +2,7 @@ import { useRef, useSyncExternalStore } from 'react'
 import { SLEEP_DEFAULT_MIN, type AgentId, type AgentStatus, type EngineEventMap, type HistoryItem, type RoomId } from '../../engine/types'
 import type { DureApi, Snapshot } from '../../shared/ipcContract'
 import type { AppEventMap, AppInfo, AppPrefs, ClaudeUpdateState, SetupState, UpdateState } from '../../shared/appTypes'
+import type { PhoneState } from '../../shared/phoneTypes'
 import { displayStatus, effectiveSetup, type EdgeMode, type Phase } from './selectors'
 import { markFresh } from '../map/freshNodes'
 import { nextStep, tourAt, type TourState } from '../tour/tourSteps'
@@ -17,6 +18,8 @@ export interface AppState {
   claudeUpdate: ClaudeUpdateState
   /** 업데이트 토스트를 이번 실행 동안 닫았다 — 저장하지 않는다 */
   toastHidden: boolean
+  /** 휴대폰으로 쓰기(PC 설정의 휴대폰 칸·위 띠 알약) — 처음 phoneState 와 'phone' 사건으로만 바뀐다. 못 받았으면(휴대폰 화면 등) null */
+  phone: PhoneState | null
 }
 
 export type UiState = Snapshot & {
@@ -151,7 +154,7 @@ const EVENTS: (keyof EngineEventMap)[] = [
   'usage', 'context', 'effort', 'model-now', 'subagents', 'agent-added', 'plan-mode', 'hold', 'always-allow', 'sleep',
 ]
 
-const APP_EVENTS = ['setup', 'update', 'claude-update'] as const
+const APP_EVENTS = ['setup', 'update', 'claude-update', 'phone'] as const
 
 const sameItem = (a: HistoryItem, b: HistoryItem) => JSON.stringify(a) === JSON.stringify(b)
 
@@ -185,7 +188,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   // 창에 초점이 있는가 — 초점이 없으면 고른 에이전트의 결과도 못 본 것이다. document.hasFocus 가 없는 환경에선 본 것으로 친다
   const hasFocus = opts.hasFocus ?? (() => (typeof document !== 'undefined' && typeof document.hasFocus === 'function' ? document.hasFocus() : true))
   let state: UiState = {
-    app: { info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false },
+    app: { info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false, phone: null },
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
     statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, mapFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null,
@@ -495,7 +498,12 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     for (const name of APP_EVENTS) {
       api.on(name, (payload: AppEventMap[typeof name]) => {
         appSeen.add(name)
-        setApp(name === 'claude-update' ? { claudeUpdate: payload as ClaudeUpdateState } : name === 'setup' ? { setup: payload as SetupState, setupLoadFailed: false } : { update: payload as UpdateState })
+        setApp(
+          name === 'claude-update' ? { claudeUpdate: payload as ClaudeUpdateState }
+            : name === 'setup' ? { setup: payload as SetupState, setupLoadFailed: false }
+            : name === 'phone' ? { phone: payload as PhoneState }
+            : { update: payload as UpdateState },
+        )
       })
     }
   }
@@ -514,6 +522,8 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       take(() => api.setupState(), setup => ({ setup, setupLoadFailed: false }), 'setup', () => setApp({ setupLoadFailed: true })),
       take(() => api.updateState(), update => ({ update }), 'update'),
       take(() => api.claudeUpdateState(), claudeUpdate => ({ claudeUpdate }), 'claude-update'),
+      // 휴대폰 화면(wsApi)은 PC 메서드라 거절한다 — null 그대로
+      take(() => api.phoneState(), phone => ({ phone }), 'phone'),
     ])
   }
 
