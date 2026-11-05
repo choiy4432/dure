@@ -5,7 +5,7 @@ import type { AgentId } from './types';
 
 // 사람이 보낸 그림 — 다시 볼 수 있게 에이전트마다 한 칸(images/<에이전트>/)에 둔다. 기록에는 파일 이름만 남는다
 
-/** 형식 ↔ 확장자 — 입력창이 받는 넷(renderer lib/image IMAGE_TYPES)과 같다 */
+/** 형식 ↔ 확장자 — 입력창이 받는 넷(shared/attachments IMAGE_TYPES)과 같다 */
 const EXT_OF: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
 const TYPE_OF: Record<string, string> = Object.fromEntries(Object.entries(EXT_OF).map(([t, e]) => [e, t]));
 

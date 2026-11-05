@@ -1,8 +1,10 @@
 // 붙여 넣은 이미지 준비 — Claude 에 보낼 수 있는 크기로 줄인다(Review Focus 4).
 // 원본이 너무 크면 줄인 것만 보낸다. 못 줄이면 안내 문구 — 원본은 절대 그대로 보내지 않는다.
 
-/** 그림 블록으로 보낼 수 있는 형식 — 이 밖의 파일(그림이라도)은 파일 첨부(경로 줄)로 */
-export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const
+import { IMAGE_TYPES } from '../../shared/attachments'
+
+/** 그림 블록으로 보낼 수 있는 형식 — main 의 sendUser 검사와 같은 목록(shared/attachments) */
+export { IMAGE_TYPES }
 
 /** 그림 길(미리보기·줄여 보내기)로 갈 파일인가 */
 export const isImageType = (type: string): boolean => (IMAGE_TYPES as readonly string[]).includes(type)

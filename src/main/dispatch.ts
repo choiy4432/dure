@@ -5,10 +5,10 @@ import {
   APP_METHODS, BEFORE_START, CLAUDE_MISSING_ERROR, METHODS,
   type AgentView, type DureApi, type InvokeResult, type Snapshot,
 } from '../shared/ipcContract'
-import { ATTACH_FAILED, ATTACH_NOT_FOUND, ATTACH_OPEN_FAILED, opensAsDocument } from '../shared/attachments'
+import { ATTACH_FAILED, ATTACH_NOT_FOUND, ATTACH_OPEN_FAILED, IMAGE_TYPES, opensAsDocument } from '../shared/attachments'
 import { PHONE_DENIED, phoneAllows } from '../shared/phoneAccess'
 import { REALPATH_FATAL } from '../engine/attachmentStore'
-import { SLEEP_DEFAULT_MIN, type ThemePref, type UserPart } from '../engine/types'
+import { SLEEP_DEFAULT_MIN, type AgentPatch, type ThemePref, type UserPart } from '../engine/types'
 import { pickPrefs } from './appPrefs'
 
 // IPC(창)와 휴대폰 서버가 같이 타는 디스패처 — 메서드 이름 + 인자 → 앱 쪽·엔진·창 쪽 일. 누가 불렀는지(창 프레임·휴대폰 기기)는
@@ -66,31 +66,101 @@ export function saveName(name: string): string {
 const CONV_BAD = '지난 대화를 부를 수 없어요'
 const PARTS_BAD = '보낼 내용이 올바르지 않아요'
 const FILE_PART_BAD = `${ATTACH_FAILED} — 첨부 정보가 올바르지 않아요`
-/** 화면이 보내는 file part 의 칸 — 이것뿐(준비된 꼴의 file·sendPath·remotePath 를 꾸며 넣지 못하게) */
-const FILE_PART_KEYS: ReadonlySet<string> = new Set(['type', 'path', 'name', 'bytes'])
+const AGENT_BAD = '에이전트 정보가 올바르지 않아요'
+const HISTORY_BAD = '대화 기록을 부를 수 없어요'
+
+/** 칸이 꼭 이 이름들뿐인 보통 객체인가(목록·null 아님) — 부르는 쪽이 꾸민 칸을 엔진에 넘기지 않게 */
+function hasOnlyKeys(v: unknown, keys: readonly string[]): v is Record<string, unknown> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false
+  const own = Object.keys(v)
+  return own.length === keys.length && own.every((k) => keys.includes(k))
+}
 
 /** file part 꼴인가(칸 검사 전) — checkedParts·phoneDispatcher 가 같은 기준으로 가른다 */
 function isFilePart(p: unknown): p is Record<string, unknown> {
   return !!p && typeof p === 'object' && (p as { type?: unknown }).type === 'file'
 }
 
+const IMAGE_TYPE_SET: ReadonlySet<string> = new Set(IMAGE_TYPES)
+
 /**
- * sendUser 의 칸 목록을 거른다 — 목록이 아니면 거절. file part 는 type·path(절대 경로, NUL 없음)·name(글)·bytes(0 이상 정수)만,
- * 다른 칸·틀린 값이면 거절(엔진에 닿지 않는다). 글·그림 칸은 지금처럼 그대로 엔진으로(엔진이 다룬다).
+ * sendUser 의 칸 목록을 거른다 — 목록이 아니면 거절. 받는 칸은 셋뿐(허용 목록): 글 {type,text} · 그림 {type,mediaType(IMAGE_TYPES),base64} ·
+ * 파일 {type,path(절대 경로, NUL 없음),name(글),bytes(0 이상 정수)}. 다른 칸·틀린 값·모르는 type 이면 거절(엔진에 닿지 않는다) —
+ * 엔진은 글·그림이 아닌 칸을 준비된 첨부(sendPath·inline)로 읽으니 그 꼴을 꾸며 경로 줄·문서 블록을 넣지 못하게.
  * bytes 는 화면이 본 크기일 뿐 — 상한(100MB)은 엔진이 원본을 fs.stat 으로 다시 재서 막는다
  */
 function checkedParts(parts: unknown): UserPart[] {
   if (!Array.isArray(parts)) throw new Error(PARTS_BAD)
-  return parts.map((p) => {
-    if (!isFilePart(p)) return p as UserPart
-    const keys = Object.keys(p)
-    if (keys.length !== FILE_PART_KEYS.size || !keys.every((k) => FILE_PART_KEYS.has(k))) throw new Error(FILE_PART_BAD)
-    const { path: at, name, bytes } = p
-    if (typeof at !== 'string' || at.includes('\u0000') || !path.isAbsolute(at)) throw new Error(FILE_PART_BAD)
-    if (typeof name !== 'string') throw new Error(FILE_PART_BAD)
-    if (typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes < 0) throw new Error(FILE_PART_BAD)
-    return { type: 'file', path: at, name, bytes }
+  return parts.map((p): UserPart => {
+    if (isFilePart(p)) {
+      if (!hasOnlyKeys(p, ['type', 'path', 'name', 'bytes'])) throw new Error(FILE_PART_BAD) // 준비된 꼴의 file·sendPath·remotePath 를 꾸며 넣지 못하게
+      const { path: at, name, bytes } = p
+      if (typeof at !== 'string' || at.includes('\u0000') || !path.isAbsolute(at)) throw new Error(FILE_PART_BAD)
+      if (typeof name !== 'string') throw new Error(FILE_PART_BAD)
+      if (typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes < 0) throw new Error(FILE_PART_BAD)
+      return { type: 'file', path: at, name, bytes }
+    }
+    if (hasOnlyKeys(p, ['type', 'text']) && p.type === 'text' && typeof p.text === 'string') return { type: 'text', text: p.text }
+    if (hasOnlyKeys(p, ['type', 'mediaType', 'base64']) && p.type === 'image' && typeof p.mediaType === 'string' && IMAGE_TYPE_SET.has(p.mediaType) && typeof p.base64 === 'string') {
+      return { type: 'image', mediaType: p.mediaType, base64: p.base64 }
+    }
+    throw new Error(PARTS_BAD)
   })
+}
+
+/** addAgent 의 입력 — 화면(에이전트 추가 대화상자)이 보내는 글 넷뿐 */
+function checkedNewAgent(i: unknown): { roomId: string; name: string; role: string; folder: string } {
+  if (!hasOnlyKeys(i, ['roomId', 'name', 'role', 'folder'])) throw new Error(AGENT_BAD)
+  const { roomId, name, role, folder } = i
+  if (typeof roomId !== 'string' || typeof name !== 'string' || typeof role !== 'string' || typeof folder !== 'string') throw new Error(AGENT_BAD)
+  return { roomId, name, role, folder }
+}
+
+type UiPatch = Pick<AgentPatch, 'name' | 'role' | 'auto' | 'pos' | 'color' | 'bypassNoticeClosed'>
+const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+/** updateAgent 가 받는 칸과 그 값 — Engine.updateAgent 가 store 로 넘기는 것과 같다(model·alwaysAllow·sessionId 등은 엔진이 따로) */
+const PATCH_FIELDS: Record<keyof UiPatch, (v: unknown) => boolean> = {
+  name: (v) => typeof v === 'string',
+  role: (v) => typeof v === 'string',
+  auto: (v) => typeof v === 'boolean',
+  pos: (v) => hasOnlyKeys(v, ['x', 'y']) && isFiniteNumber(v.x) && isFiniteNumber(v.y),
+  color: (v) => v === null || typeof v === 'string',
+  bypassNoticeClosed: (v) => typeof v === 'boolean',
+}
+
+/**
+ * updateAgent 의 고칠 칸 — 보통 객체 · 아는 칸(PATCH_FIELDS)만 · 칸마다 맞는 꼴(값이 undefined 면 없는 것으로). 모르는 칸이 하나라도 있으면 거절.
+ * 틀린 꼴(pos:null · role:{} …)이 state.json 에 남아 창을 깨뜨리지 않게
+ */
+function checkedPatch(p: unknown): UiPatch {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error(AGENT_BAD)
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(p)) {
+    if (!Object.hasOwn(PATCH_FIELDS, k)) throw new Error(AGENT_BAD)
+    if (v === undefined) continue
+    if (!PATCH_FIELDS[k as keyof UiPatch](v)) throw new Error(AGENT_BAD)
+    out[k] = k === 'pos' ? { x: (v as { x: number }).x, y: (v as { y: number }).y } : v
+  }
+  return out as UiPatch
+}
+
+/** history 의 o — 없음, 또는 { all?: 참거짓, limit?: 1 이상 정수 · Infinity(내보내기) }. 값이 undefined 인 칸은 없는 것으로 */
+function checkedHistoryOpts(o: unknown): { all?: boolean; limit?: number } | undefined {
+  if (o === undefined) return undefined
+  if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error(HISTORY_BAD)
+  const out: { all?: boolean; limit?: number } = {}
+  for (const [k, v] of Object.entries(o)) {
+    if (k !== 'all' && k !== 'limit') throw new Error(HISTORY_BAD)
+    if (v === undefined) continue
+    if (k === 'all') {
+      if (typeof v !== 'boolean') throw new Error(HISTORY_BAD)
+      out.all = v
+    } else {
+      if (typeof v !== 'number' || !(v === Infinity || (Number.isSafeInteger(v) && v >= 1))) throw new Error(HISTORY_BAD)
+      out.limit = v
+    }
+  }
+  return out
 }
 
 function agentViews(engine: Engine): AgentView[] {
@@ -158,8 +228,11 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   },
   renameRoom: (e, _d, id, name) => e.renameRoom(id, name),
   removeRoom: (e, _d, id) => e.removeRoom(id),
-  addAgent: (e, _d, i) => e.addAgent(i),
-  updateAgent: (e, _d, id, p) => e.updateAgent(id, p),
+  addAgent: (e, _d, i) => e.addAgent(checkedNewAgent(i)),
+  updateAgent: (e, _d, id, p) => {
+    if (typeof id !== 'string') throw new Error(AGENT_BAD)
+    return e.updateAgent(id, checkedPatch(p))
+  },
   removeAgent: (e, _d, id) => e.removeAgent(id),
   setSelected: (e, _d, id) => e.setSelected(id),
   sendUser: (e, _d, id, parts, o) => e.sendUser(id, checkedParts(parts), (o as { plan?: unknown } | undefined)?.plan === true ? { plan: true } : undefined),
@@ -174,7 +247,10 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   setEffort: (e, _d, id, level) => e.setEffort(id, level),
   refreshUsage: (e) => e.refreshUsage(),
   describe: (e, _d, id) => e.describe(id),
-  history: (e, _d, id, o) => e.history(id, o),
+  history: (e, _d, id, o) => {
+    if (typeof id !== 'string') throw new Error(HISTORY_BAD)
+    return e.history(id, checkedHistoryOpts(o))
+  },
   conversations: (e, _d, id) => {
     if (typeof id !== 'string') throw new Error(CONV_BAD)
     return e.conversations(id)

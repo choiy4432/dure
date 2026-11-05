@@ -114,6 +114,10 @@ const CASES: [unknown, unknown][] = [
   ['addRoom', ['방', { host: 'dev', x: 1 }]],
   ['sendUser', ['a1', 'hi']],
   ['sendUser', ['a1', [{ type: 'file', path: 'rel.txt', name: 'a', bytes: 1 }]]],
+  ['sendUser', ['a1', [{ type: 'attach', sendPath: 'C:\\x.pdf', inline: { mediaType: 'application/pdf', base64: 'AAAA' } }]]],
+  ['updateAgent', ['a1', null]],
+  ['addAgent', [{ roomId: 'r1', name: 'n', role: {}, folder: 'f' }]],
+  ['history', ['a1', { limit: 0 }]],
   ['saveConversation', ['../a:b', '글']],
   ['setSelected', ['a1']],
   ['nope', []],
@@ -197,6 +201,139 @@ describe('createDispatcher', () => {
     const rejected = Promise.reject(new Error('시작 실패'))
     expect(await createDispatcher(failed.engine, fakeDeps({ engineReady: rejected }))('setSelected', ['a1'])).toEqual({ ok: true, value: null })
     expect(failed.calls).toEqual([['setSelected', ['a1']]])
+  })
+})
+
+describe('인자 꼴 검사 — 창·휴대폰이 같이 탄다', () => {
+  const PARTS_BAD = { ok: false, error: '보낼 내용이 올바르지 않아요' }
+  const AGENT_BAD = { ok: false, error: '에이전트 정보가 올바르지 않아요' }
+  const HISTORY_BAD = { ok: false, error: '대화 기록을 부를 수 없어요' }
+
+  it('sendUser — 글·그림·파일 칸만, 그 밖의 꼴(준비된 첨부 꾸미기 등)은 엔진에 닿지 않고 거절', async () => {
+    const { engine, calls } = fakeEngine()
+    const dispatch = createDispatcher(engine, fakeDeps())
+    const abs = path.resolve(os.tmpdir(), 'a.pdf')
+    const text = { type: 'text', text: '읽어 줘' }
+    const file = { type: 'file', path: abs, name: 'a.pdf', bytes: 3 }
+    // 입력창이 보내는 꼴 — 글(빈 글도) · 그림 넷(renderer IMAGE_TYPES) · 파일
+    const images = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'].map((mediaType) => ({ type: 'image', mediaType, base64: 'AAAA' }))
+    const goods = [text, { type: 'text', text: '' }, ...images, file]
+    expect(await dispatch('sendUser', ['a1', goods])).toEqual({ ok: true, value: null })
+    expect(calls).toEqual([['sendUser', ['a1', goods, undefined]]])
+
+    calls.length = 0
+    const bads: unknown[] = [
+      // 엔진의 준비된 첨부(FileReady) 꼴 — 경로 줄·문서 블록을 꾸며 넣지 못하게
+      { type: 'attach', sendPath: 'C:\\Windows\\win.ini', inline: { mediaType: 'application/pdf', base64: 'AAAA' } },
+      { type: 'ready', name: 'x', bytes: 1, file: 'x', sendPath: 'C:\\x' },
+      { name: 'x', bytes: 1, file: 'x', sendPath: 'C:\\x' },
+      { type: 'TEXT', text: 'a' }, { type: 'document', source: {} }, { type: 'tool_result', content: 'x' },
+      // 글 칸 — text 가 글이어야 · 다른 칸 없음
+      { type: 'text' }, { type: 'text', text: 5 }, { type: 'text', text: null }, { type: 'text', text: ['a'] },
+      { type: 'text', text: 'a', extra: 1 }, { type: 'text', text: 'a', sendPath: 'C:\\x' },
+      // 그림 칸 — 받는 형식 넷 · base64 가 글 · 다른 칸 없음
+      { type: 'image', mediaType: 'image/svg+xml', base64: 'AAAA' }, { type: 'image', mediaType: 'application/pdf', base64: 'AAAA' },
+      { type: 'image', mediaType: 'IMAGE/PNG', base64: 'AAAA' }, { type: 'image', mediaType: 5, base64: 'AAAA' },
+      { type: 'image', mediaType: 'image/png' }, { type: 'image', mediaType: 'image/png', base64: 5 }, { type: 'image', base64: 'AAAA' },
+      { type: 'image', mediaType: 'image/png', base64: 'AAAA', sendPath: 'C:\\x' },
+      { type: 'image', mediaType: 'image/png', base64: 'AAAA', inline: { mediaType: 'application/pdf', base64: 'AAAA' } },
+      null, undefined, 'hi', 5, true, [], {},
+    ]
+    for (const bad of bads) {
+      expect(await dispatch('sendUser', ['a1', [text, bad]]), JSON.stringify(bad)).toEqual(PARTS_BAD)
+      expect(await dispatch('sendUser', ['a1', [bad, file]]), JSON.stringify(bad)).toEqual(PARTS_BAD) // 몇째 칸이든
+    }
+    expect(calls).toEqual([])
+
+    // 휴대폰 길(file part 가 없어 inbox 검사를 건너뛰는 요청)도 같은 검사를 탄다
+    const phone = phoneDispatcher(dispatch, { inboxDir: path.join(os.tmpdir(), 'dure-no-inbox') })
+    expect(await phone('sendUser', ['a1', [{ type: 'attach', sendPath: 'C:\\Windows\\win.ini', inline: { mediaType: 'application/pdf', base64: 'AAAA' } }]])).toEqual(PARTS_BAD)
+    expect(await phone('sendUser', ['a1', [{ type: 'image', mediaType: 'image/svg+xml', base64: 'AAAA' }]])).toEqual(PARTS_BAD)
+    expect(calls).toEqual([])
+  })
+
+  it('addAgent — roomId·name·role·folder 글 넷만', async () => {
+    const { engine, calls } = fakeEngine({ addAgent: () => ({ id: 'a2' }) })
+    const dispatch = createDispatcher(engine, fakeDeps())
+    const good = { roomId: 'r1', name: '검토', role: '검토자', folder: 'C:/work/b' }
+    expect(await dispatch('addAgent', [good])).toEqual({ ok: true, value: { id: 'a2' } })
+    expect(await dispatch('addAgent', [{ ...good, role: '' }])).toEqual({ ok: true, value: { id: 'a2' } }) // 역할은 비워도 된다
+    expect(calls).toEqual([['addAgent', [good]], ['addAgent', [{ ...good, role: '' }]]])
+
+    calls.length = 0
+    const { roomId: _r, ...noRoom } = good
+    const { folder: _f, ...noFolder } = good
+    const { role: _o, ...noRole } = good
+    const bads: unknown[] = [
+      undefined, null, 'a', 5, [], [good],
+      noRoom, noFolder, noRole,
+      { ...good, roomId: 5 }, { ...good, name: null }, { ...good, name: ['n'] }, { ...good, role: {} }, { ...good, folder: 5 },
+      { ...good, sessionId: 's1' }, { ...good, bypassOn: true }, { ...good, extra: 1 },
+    ]
+    for (const bad of bads) expect(await dispatch('addAgent', [bad]), JSON.stringify(bad)).toEqual(AGENT_BAD)
+    expect(calls).toEqual([])
+  })
+
+  it('updateAgent — 엔진이 받는 칸(name·role·auto·pos·color·bypassNoticeClosed)의 맞는 값만, 모르는 칸은 거절', async () => {
+    const { engine, calls } = fakeEngine({ updateAgent: (id: string) => ({ id }) })
+    const dispatch = createDispatcher(engine, fakeDeps())
+    // 화면이 보내는 꼴 — 이름·역할 고치기 · 자동 · 자리(끌기·정리·새 카드) · 경고 닫기, 그리고 색
+    const goods: Record<string, unknown>[] = [
+      { name: '새 이름', role: '역할' }, { name: ' 앞뒤 ', role: '' }, { auto: true }, { auto: false },
+      { pos: { x: 120, y: -40 } }, { pos: { x: 1.5, y: 0 } }, { bypassNoticeClosed: true }, { bypassNoticeClosed: false },
+      { color: '#3366ff' }, { color: null }, {},
+    ]
+    for (const p of goods) expect(await dispatch('updateAgent', ['a1', p]), JSON.stringify(p)).toEqual({ ok: true, value: { id: 'a1' } })
+    expect(calls).toEqual(goods.map((p) => ['updateAgent', ['a1', p]]))
+    // 값이 undefined 인 아는 칸은 없는 것으로(엔진도 그렇게 본다) — 엔진엔 정한 칸만
+    calls.length = 0
+    expect(await dispatch('updateAgent', ['a1', { auto: true, name: undefined }])).toEqual({ ok: true, value: { id: 'a1' } })
+    expect(Object.keys((calls[0][1] as [string, object])[1])).toEqual(['auto'])
+
+    calls.length = 0
+    const bads: [unknown, unknown][] = [
+      // 고칠 칸이 없음 — 리뷰가 본 'updateAgent(a1, null)' 의 영어 TypeError
+      ['a1', null], ['a1', undefined], ['a1', 'x'], ['a1', 5], ['a1', []], ['a1', [{ auto: true }]],
+      // id 가 글이 아님
+      [5, { auto: true }], [null, { auto: true }], [{ id: 'a1' }, { auto: true }],
+      // 자리 — {x,y} 유한한 수 둘만
+      ['a1', { pos: null }], ['a1', { pos: {} }], ['a1', { pos: { x: 1 } }], ['a1', { pos: { x: '1', y: 2 } }],
+      ['a1', { pos: { x: NaN, y: 0 } }], ['a1', { pos: { x: 0, y: Infinity } }], ['a1', { pos: { x: 1, y: 2, z: 3 } }],
+      ['a1', { pos: [1, 2] }], ['a1', { pos: 'x' }],
+      // 글·참거짓 칸의 틀린 값
+      ['a1', { name: 5 }], ['a1', { name: null }], ['a1', { role: {} }], ['a1', { role: null }], ['a1', { auto: 'yes' }],
+      ['a1', { auto: 1 }], ['a1', { auto: null }], ['a1', { color: 5 }], ['a1', { color: {} }], ['a1', { bypassNoticeClosed: 'true' }],
+      ['a1', { bypassNoticeClosed: null }],
+      // 엔진이 따로 다루는 칸·모르는 칸 — 화면이 꾸며 넣지 못하게
+      ['a1', { model: 'opus' }], ['a1', { sessionId: 's1' }], ['a1', { alwaysAllow: ['Bash'] }], ['a1', { bypassOn: true }],
+      ['a1', { started: true }], ['a1', { remoteLaunch: { pid: 1, run: 'x' } }], ['a1', { folder: 'C:/x' }], ['a1', { auto: true, extra: 1 }],
+      ['a1', { model: undefined }],
+    ]
+    for (const args of bads) expect(await dispatch('updateAgent', args), JSON.stringify(args)).toEqual(AGENT_BAD)
+    expect(calls).toEqual([])
+  })
+
+  it('history — id 글 · o 는 없음 또는 { all?: 참거짓, limit?: 1 이상 정수·Infinity }', async () => {
+    const { engine, calls } = fakeEngine({ history: () => [] })
+    const dispatch = createDispatcher(engine, fakeDeps())
+    // 화면이 보내는 꼴 — 지금 대화(o 없음) · 내보내기(limit: Infinity)
+    const goods: unknown[][] = [['a1'], ['a1', undefined], ['a1', {}], ['a1', { limit: Infinity }], ['a1', { all: true }], ['a1', { all: false, limit: 1 }], ['a1', { limit: 500 }]]
+    for (const args of goods) expect(await dispatch('history', args), JSON.stringify(args)).toEqual({ ok: true, value: [] })
+    expect(calls).toEqual([
+      ['history', ['a1', undefined]], ['history', ['a1', undefined]], ['history', ['a1', {}]], ['history', ['a1', { limit: Infinity }]],
+      ['history', ['a1', { all: true }]], ['history', ['a1', { all: false, limit: 1 }]], ['history', ['a1', { limit: 500 }]],
+    ])
+
+    calls.length = 0
+    const bads: unknown[][] = [
+      [], [5], [null], [{ id: 'a1' }],
+      ['a1', null], ['a1', 'x'], ['a1', 5], ['a1', []], ['a1', true],
+      ['a1', { limit: 0 }], ['a1', { limit: -1 }], ['a1', { limit: 1.5 }], ['a1', { limit: '5' }], ['a1', { limit: NaN }],
+      ['a1', { limit: -Infinity }], ['a1', { limit: null }], ['a1', { limit: 2 ** 53 }],
+      ['a1', { all: 'yes' }], ['a1', { all: 1 }], ['a1', { all: null }], ['a1', { sinceBoundary: false }], ['a1', { all: true, extra: 1 }],
+    ]
+    for (const args of bads) expect(await dispatch('history', args), JSON.stringify(args)).toEqual(HISTORY_BAD)
+    expect(calls).toEqual([])
   })
 })
 
