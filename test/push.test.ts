@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { parse as legacyParse } from 'node:url'
 import webpush from 'web-push'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import {
@@ -72,14 +73,87 @@ test('VAPID 한 번 만들어 저장', () => {
   }
 })
 
+/** 던진 오류 — 안 던지면 시험이 실패한다 */
+function thrownBy(fn: () => void): Error {
+  try {
+    fn()
+  } catch (e) {
+    return e as Error
+  }
+  throw new Error('던지지 않았어요')
+}
+
+/**
+ * WHATWG URL 은 알려진 서버라고 읽지만 web-push 가 접속하는 옛 url.parse 는 다른 호스트로 읽는 주소들(SSRF 우회).
+ * 호스트 자리의 ; ' ` { } " 와 %-escape 에서 url.parse 가 호스트를 끊는다 — 앞의 것이 접속할 곳이 된다
+ */
+const PARSER_SPLIT_BYPASSES = [
+  'https://127.0.0.1;.fcm.googleapis.com/x',
+  "https://192.168.0.1'.fcm.googleapis.com/fcm/send/x",
+  'https://localhost%3B.fcm.googleapis.com/x',
+  'https://evil.example%7B.push.apple.com/x',
+  'https://evil.com%41.fcm.googleapis.com/x',
+  'https://127.0.0.1`.fcm.googleapis.com/x',
+  'https://127.0.0.1{.fcm.googleapis.com/x',
+  'https://127.0.0.1}.fcm.googleapis.com/x',
+  'https://127.0.0.1".fcm.googleapis.com/x',
+]
+
+test('두 URL 해석이 같은 호스트일 때만 — url.parse 가 다른 곳으로 접속할 주소는 거절', () => {
+  // 시험의 전제: 이 주소들은 WHATWG 로는 알려진 서버 아래 이름인데, 옛 url.parse 로는 다른 호스트다
+  for (const bad of PARSER_SPLIT_BYPASSES) {
+    const whatwg = new URL(bad).hostname
+    expect(whatwg.endsWith('.fcm.googleapis.com') || whatwg.endsWith('.push.apple.com'), bad).toBe(true)
+    expect(legacyParse(bad).hostname, bad).not.toBe(whatwg)
+    expect(isPushEndpoint(bad), bad).toBe(false)
+  }
+  for (const bad of [
+    'https://FCM.googleapis.com/fcm/send/x', // 대문자 — 브라우저는 소문자로 직렬화한다
+    'https://fcm.googleapis.com\\@evil.example.com/x', // 역슬래시
+    'https://evil.example.com\\.fcm.googleapis.com/x',
+    'https://fcm.googleapis.com:443/x', // 기본 포트라도 쓰여 있으면
+    'https://fcm.googleapis.com', // 경로 없음
+    'https://fcm.googleapis.com?x', // 호스트 뒤가 / 가 아님
+    'https://fcm.googleapis.com#x',
+    'https://fcm.googleapis.com/x y', // 빈칸
+    'https://fcm.googleapis.com/x\t',
+    'https://fcm.googleapis.com/x\n',
+    "https://fcm.googleapis.com/x'y", // 따옴표 — 경로에 있어도
+    'https://fcm.googleapis.com/x"y',
+    'https://fcm.googleapis.com/x`y',
+    'https://fcm.googleapis.com/{x}',
+    'https://fcm.googleapis.com/x\\y',
+    'https://fcm.googleapis.com/x<y>',
+    'https://fcm.googleapis.com/x^y|',
+    'https://ｆｃｍ.googleapis.com/x', // 전각 — WHATWG 는 fcm 으로 바꾼다
+    'https://fcm.googleapis.com。/x',
+    'https://[::ffff:127.0.0.1]/x',
+    'https://0x7f.0.0.1/x',
+    'https://fcm..googleapis.com/x',
+    'https://a_b.fcm.googleapis.com/x', // 호스트 꼴 — 소문자·숫자·하이픈 낱말만(두 해석 모두 받아 주는 글자라도)
+    'https://a+b.fcm.googleapis.com/x',
+  ]) expect(isPushEndpoint(bad), JSON.stringify(bad)).toBe(false)
+  // 진짜 브라우저가 주는 꼴은 그대로 통과 — 경로·질의의 %-escape · 콜론 · 밑줄도
+  for (const ok of [
+    'https://fcm.googleapis.com/fcm/send/dFake0000:APA91bFake_-0000',
+    'https://wns2-par02p.notify.windows.com/w/?token=BQYAAAFake%2b%2fFake%3d',
+    'https://web.push.apple.com/QFake0000-_~.',
+  ]) {
+    expect(isPushEndpoint(ok), ok).toBe(true)
+    expect(legacyParse(ok).hostname).toBe(new URL(ok).hostname)
+  }
+})
+
 test('알려진 알림 서버만 — 그 밖은 subscribe 가 거절, 보내지도 않음', async () => {
   for (const ok of [
     FCM,
+    'https://fcm.googleapis.com/fcm/send/fake-endpoint-0002',
     'https://web.push.apple.com/QFake0000',
     'https://updates.push.services.mozilla.com/wpush/v2/gAAAAFake',
     'https://wns2-par02p.notify.windows.com/w/?token=BQYAAAFake',
   ]) expect(isPushEndpoint(ok), ok).toBe(true)
   for (const bad of [
+    ...PARSER_SPLIT_BYPASSES,
     'http://fcm.googleapis.com/fcm/send/x',
     'https://evil.example.com/fcm/send/x',
     'https://fcm.googleapis.com.evil.example.com/x',
@@ -99,18 +173,25 @@ test('알려진 알림 서버만 — 그 밖은 subscribe 가 거절, 보내지�
   store.write({ devices: [dev('d1')] })
   const { send, calls } = fakeSend()
   const push = createPush(store, { send })
-  for (const endpoint of ['https://evil.example.com/x', 'https://127.0.0.1:47615/api/pair']) {
-    expect(() => push.subscribe('d1', sub(endpoint))).toThrow('알려진 알림 서버가 아니에요')
+  for (const endpoint of ['https://evil.example.com/x', 'https://127.0.0.1:47615/api/pair', ...PARSER_SPLIT_BYPASSES]) {
+    const e = thrownBy(() => push.subscribe('d1', sub(endpoint)))
+    expect(e.message).toBe('알려진 알림 서버가 아니에요')
+    expect(e.message).not.toContain(endpoint) // 오류 글에 주소를 싣지 않는다
   }
-  expect(() => push.subscribe('d1', { endpoint: FCM, keys: { p256dh: 'P', auth: 'A' } })).toThrow('알림 구독 꼴이 틀렸어요')
+  const malformed = thrownBy(() => push.subscribe('d1', { endpoint: FCM, keys: { p256dh: 'P', auth: 'A' } }))
+  expect(malformed.message).toBe('알림 구독 꼴이 틀렸어요')
+  expect(malformed.message).not.toContain(FCM)
   expect(store.read().devices[0].subscription).toBeUndefined()
 
-  // 파일을 손대 알려지지 않은 주소가 들어 있어도 보내지 않는다
-  store.write({ devices: [dev('d1', { subscription: sub('https://evil.example.com/x') })] })
+  // 파일을 손대 알려지지 않은 주소가 들어 있어도 보내지 않는다(우회 꼴도)
   const log = vi.fn()
-  await createPush(store, { send, log }).sendTo('d1', NOTICE)
+  for (const endpoint of ['https://evil.example.com/x', ...PARSER_SPLIT_BYPASSES]) {
+    store.write({ devices: [dev('d1', { subscription: sub(endpoint) })] })
+    await createPush(store, { send, log }).sendTo('d1', NOTICE)
+  }
   expect(calls).toHaveLength(0)
-  expect(JSON.stringify(log.mock.calls)).not.toContain('evil.example.com')
+  const logged = JSON.stringify(log.mock.calls)
+  for (const s of ['evil.example', '127.0.0.1', '192.168.0.1', 'localhost', 'evil.com']) expect(logged).not.toContain(s)
 })
 
 test('subscribe — 그 기기에 저장(push 켜짐) · 모르는 기기는 무시 · 같은 주소의 다른 기기 구독은 뺌', () => {

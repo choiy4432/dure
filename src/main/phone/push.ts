@@ -1,3 +1,4 @@
+import { parse as legacyUrlParse } from 'node:url'
 import webpush, { type RequestOptions } from 'web-push'
 import { pickSubscription, type PhonePushSubscription, type PhoneStore, type StoredPhoneDevice, type VapidKeys } from './phoneStore'
 
@@ -52,8 +53,22 @@ export const PUSH_HOSTS: readonly string[] = Object.freeze([
   'notify.windows.com',
 ])
 
-/** https · 기본 포트 · 사용자 칸 없음 · 호스트가 PUSH_HOSTS 의 하나이거나 그 아래 */
+/**
+ * 주소에 쓸 수 있는 글자 — RFC 3986 의 글자에서 작은따옴표를 뺀 것.
+ * 빈칸·제어 문자·따옴표·역슬래시·중괄호·백틱·<>^| ·ASCII 밖 글자는 안 된다(옛 url.parse 가 호스트를 거기서 끊는다)
+ */
+const ENDPOINT_SAFE = /^[A-Za-z0-9\-._~:/?#[\]@!$&()*+,;=%]+$/
+/** 호스트 — 소문자·숫자·하이픈 낱말을 점으로 이은 것(둘 이상). IP v6·끝 점·빈 낱말·%·대문자는 안 된다 */
+const PUSH_HOST_RE = /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/
+
+/**
+ * https · 기본 포트 · 사용자 칸 없음 · 호스트가 PUSH_HOSTS 의 하나이거나 그 아래.
+ * 🔴 web-push 는 옛 url.parse 의 호스트로 접속한다(web-push-lib.js sendNotification) — WHATWG URL 로만 보면
+ * 'https://127.0.0.1;.fcm.googleapis.com/x' 같은 주소가 통과하고 127.0.0.1 로 간다. 그래서 두 해석이 같은 호스트이고,
+ * 쓴 글자 그대로 'https://<그 호스트>/' 로 시작할 때만 참(%-escape·대문자·역슬래시·사용자 칸·포트가 호스트 자리에 끼지 않게)
+ */
 export function isPushEndpoint(endpoint: string): boolean {
+  if (typeof endpoint !== 'string' || !ENDPOINT_SAFE.test(endpoint)) return false
   let u: URL
   try {
     u = new URL(endpoint)
@@ -62,6 +77,14 @@ export function isPushEndpoint(endpoint: string): boolean {
   }
   if (u.protocol !== 'https:' || u.port !== '' || u.username !== '' || u.password !== '') return false
   const host = u.hostname
+  if (!PUSH_HOST_RE.test(host) || !endpoint.startsWith(`https://${host}/`)) return false
+  let legacy: ReturnType<typeof legacyUrlParse>
+  try {
+    legacy = legacyUrlParse(endpoint)
+  } catch {
+    return false
+  }
+  if (legacy.protocol !== 'https:' || legacy.hostname !== host || legacy.port !== null || legacy.auth !== null) return false
   return PUSH_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))
 }
 

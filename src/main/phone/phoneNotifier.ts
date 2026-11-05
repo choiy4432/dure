@@ -1,4 +1,4 @@
-import type { AgentId, EngineEventMap, RoomId } from '../../engine/types'
+import type { AgentId, EngineEventMap, RemoteIssue, RoomId } from '../../engine/types'
 import type { PhoneDevice, PhoneSettings } from '../../shared/phoneTypes'
 import { ASK_DELIVERY, FINISHED_DELIVERY, type Push, type PhoneNotice, type PushDelivery } from './push'
 
@@ -6,14 +6,15 @@ import { ASK_DELIVERY, FINISHED_DELIVERY, type Push, type PhoneNotice, type Push
 // PC 의 Windows 알림(렌더러 useAttention)은 그대로 두고, 휴대폰에 필요한 규칙만 여기 따로 둔다.
 // 🔴 알림 글은 '<에이전트 이름> · <짧은 말>' 뿐 — 명령·파일 경로·질문·메시지 글은 넣지 않는다
 
-/** 알림 종류 — tag 에 들어간다 */
-export type NoticeKind = 'approval' | 'question' | 'handoff' | 'finished'
+/** 알림 종류 — tag 에 들어간다. remote = 서버(SSH) 방 문제(끊김·로그인 만료 …) */
+export type NoticeKind = 'approval' | 'question' | 'handoff' | 'remote' | 'finished'
 
-/** 본문의 말(해요체) — 승인·질문·넘기기는 notify.asks, 끝남은 notify.finished */
+/** 본문의 말(해요체) — 승인·질문·넘기기·서버 문제는 notify.asks, 끝남은 notify.finished. 서버 문제엔 서버 이름·ssh 글을 넣지 않는다 */
 export const NOTICE_WORDS: Readonly<Record<NoticeKind, string>> = Object.freeze({
   approval: '승인을 기다려요',
   question: '답을 기다려요',
   handoff: '넘기기 승인을 기다려요',
+  remote: '서버에 문제가 있어요',
   finished: '일을 마쳤어요',
 })
 
@@ -24,6 +25,8 @@ export interface NotifierEngine {
   agents(): { id: AgentId; name: string }[]
   /** 보낼 차례를 기다리는 내 입력 수 — 있으면 차례가 끝나도 곧 다음 일을 한다 */
   heldInput(id: AgentId): number
+  /** 지금 서버 방 문제 — 만들 때 한 번 읽어 이미 있던 문제를 본 것으로 친다(없으면 건너뜀) */
+  remoteIssue?(id: AgentId): RemoteIssue | null
 }
 
 export interface PhoneNotifierOptions {
@@ -58,7 +61,9 @@ export function phoneNotice(agent: { id: AgentId; name: string }, kind: NoticeKi
  * - 'message' pending(넘기는 메시지 승인 기다림, 받는 에이전트) → 넘기기 승인을 기다려요(메시지 id 로 한 번)
  * - 'message' held(이어 보내기 한도) → 넘기기 승인을 기다려요 — 방마다 묶음 하나(한 번에 풀어 준다). 그 방에 걸린 게 다 풀린 뒤 다시 걸리면 또
  * - 'hold' 붙잡힌 입력 → 넘기기 승인을 기다려요 — 붙잡힐 때 한 번(항목이 늘어도 다시 안 울림), 풀린 뒤 다시 붙잡히면 또
- * - 'history' result(차례 끝) → 일을 마쳤어요 — 기다리던 내 입력이 남았으면(곧 다음 일을 한다) 안 보낸다
+ * - 'status' remoteIssue(서버 방 문제 — 끊김·로그인 만료 …) → 서버에 문제가 있어요 — 문제(종류·자세한 글)마다 한 번, 풀린 뒤 다시 생기면 또.
+ *   PC 의 Windows 알림(useAttention)처럼 notify.asks. 만들 때 이미 있던 문제는 본 것으로 친다
+ * - 'history' result(차례 끝) → 일을 마쳤어요 — 기다리던 내 입력이 남았거나(곧 다음 일을 한다) 서버 방 문제가 있으면(문제 알림이 대신) 안 보낸다
  * 안 보내는 때: 휴대폰으로 쓰기 꺼짐 · 그 종류의 알림 꺼짐 · PC 쓰는 중 · 그 기기가 화면을 보는 중 · 모르는 에이전트
  */
 export function createPhoneNotifier(o: PhoneNotifierOptions): { dispose(): void } {
@@ -71,6 +76,18 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): { dispose(): void 
   const heldByRoom = new Map<RoomId, Set<string>>() // 방마다 지금 held 인 메시지 id
   const holding = new Set<AgentId>() // 지금 붙잡혀 있는 에이전트
   const lastResult = new Map<AgentId, number>() // 에이전트마다 마지막으로 본 차례 끝의 시각
+  const issues = new Map<AgentId, string>() // 에이전트마다 지금 서버 방 문제(issueKey) — 풀리면 뺀다
+
+  /** 같은 문제인지 — 엔진이 알림 줄을 또 남기는 기준(종류·자세한 글)과 같다 */
+  const issueKey = (i: RemoteIssue) => `${i.kind}\n${i.detail ?? ''}`
+  try {
+    for (const a of o.engine.agents()) {
+      const now = o.engine.remoteIssue?.(a.id)
+      if (now) issues.set(a.id, issueKey(now))
+    }
+  } catch {
+    log('[두레] 휴대폰 알림이 서버 방 문제를 읽지 못했어요')
+  }
 
   const pcInUse = (): boolean => {
     try {
@@ -147,10 +164,25 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): { dispose(): void 
       notify(agentId, 'handoff')
     }),
 
+    // 서버 방 에이전트만 remoteIssue 칸을 싣는다(문제 또는 null) — 칸이 없으면 이 PC 방. 상태만 바뀌고 문제가 같으면 다시 안 울린다
+    status: guarded<'status'>(({ agentId, remoteIssue }) => {
+      if (remoteIssue === undefined) return
+      if (!remoteIssue) {
+        issues.delete(agentId)
+        return
+      }
+      const key = issueKey(remoteIssue)
+      if (issues.get(agentId) === key) return
+      issues.set(agentId, key)
+      notify(agentId, 'remote')
+    }),
+
     history: guarded<'history'>(({ agentId, item }) => {
       if (item.kind !== 'result' || lastResult.get(agentId) === item.t) return
       lastResult.set(agentId, item.t)
       if (o.engine.heldInput(agentId) > 0) return // 곧 기다리던 내 입력을 보낸다 — 아직 안 끝났다
+      // 서버 방 문제가 남았다(로그인 만료 답 — 엔진은 그 result 를 기록하기 전에 문제를 알린다) — 문제 알림이 대신, PC 와 같게
+      if (issues.has(agentId)) return
       notify(agentId, 'finished')
     }),
   }
@@ -167,6 +199,7 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): { dispose(): void 
       heldByRoom.clear()
       holding.clear()
       lastResult.clear()
+      issues.clear()
     },
   }
 }

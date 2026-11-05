@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, expect, test, vi } from 'vitest'
-import type { HistoryItem, Hold, PendingRequest, RelayMessage } from '../src/engine/types'
+import type { AgentStatus, EngineEventMap, HistoryItem, Hold, PendingRequest, RelayMessage, RemoteIssue } from '../src/engine/types'
 import { createPhoneNotifier, type NotifierEngine } from '../src/main/phone/phoneNotifier'
 import type { PhoneNotice, PushDelivery } from '../src/main/phone/push'
 import { DEFAULT_PHONE_SETTINGS, type PhoneDevice, type PhoneSettings } from '../src/shared/phoneTypes'
@@ -18,16 +18,18 @@ const RELAY_TEXT = '프런트야 이 토큰을 써: sk-fake-0000'
 
 type Sent = { deviceId: string; notice: PhoneNotice; delivery: PushDelivery | undefined }
 
-function setup(o: { settings?: Partial<PhoneSettings>; devices?: PhoneDevice[] } = {}) {
+function setup(o: { settings?: Partial<PhoneSettings>; devices?: PhoneDevice[]; issues?: Record<string, RemoteIssue> } = {}) {
   const agents = [
     { id: 'a1', roomId: 'r1', name: '백엔드' },
     { id: 'a2', roomId: 'r1', name: '프런트' },
     { id: 'b1', roomId: 'r2', name: '문서' },
   ]
   const held: Record<string, number> = {}
+  const issues: Record<string, RemoteIssue> = { ...o.issues }
   const engine = Object.assign(new EventEmitter(), {
     agents: () => agents,
     heldInput: (id: string) => held[id] ?? 0,
+    remoteIssue: (id: string) => issues[id] ?? null,
   }) satisfies NotifierEngine
   let settings: PhoneSettings = {
     ...DEFAULT_PHONE_SETTINGS,
@@ -69,6 +71,11 @@ function setup(o: { settings?: Partial<PhoneSettings>; devices?: PhoneDevice[] }
       } satisfies RelayMessage),
     hold: (agentId: string, hold: Hold | null) => engine.emit('hold', { agentId, hold }),
     history: (agentId: string, item: HistoryItem) => engine.emit('history', { agentId, item }),
+    /** 상태 사건 — 서버 방 에이전트는 remoteIssue 칸(문제 또는 null)을 싣고, 이 PC 방은 칸이 없다(undefined) */
+    status: (agentId: string, remoteIssue: RemoteIssue | null | undefined, status: AgentStatus = 'idle') =>
+      engine.emit('status', {
+        agentId, status, errorText: null, ...(remoteIssue !== undefined ? { remoteIssue } : {}),
+      } satisfies EngineEventMap['status']),
   }
 }
 
@@ -174,6 +181,85 @@ test('finished 기본 꺼짐', async () => {
   expect(JSON.stringify(on.sent)).not.toContain('비밀')
 })
 
+const SSH_DETAIL = 'ssh: connect to host lab-fake.example.edu port 22: Connection timed out'
+
+test('서버 방 문제도 asks — 문제마다 한 번 · 서버 이름·ssh 글 없음', async () => {
+  const t = setup()
+  t.status('a1', { kind: 'disconnected', detail: null })
+  t.status('a1', { kind: 'disconnected', detail: null }, 'stopped') // 같은 문제가 이어진다 — 상태만 바뀜
+  t.status('a2', { kind: 'unreachable', detail: SSH_DETAIL })
+  t.status('a1', { kind: 'login', detail: null }) // 다른 문제가 됐다
+  t.status('a1', null) // 풀렸다
+  t.status('a1', null)
+  t.status('a1', { kind: 'login', detail: null }) // 다시 생겼다 — 또
+  t.status('b1', undefined) // 이 PC 방 — 문제 칸이 없다
+  t.status('b1', undefined, 'error')
+  await flush()
+  expect(t.sent.map((s) => s.notice)).toEqual([
+    { title: '두레', body: '백엔드 · 서버에 문제가 있어요', tag: expect.stringMatching(/^dure-a1-remote-\d+$/), url: '/#agent=a1' },
+    { title: '두레', body: '프런트 · 서버에 문제가 있어요', tag: expect.stringMatching(/^dure-a2-remote-\d+$/), url: '/#agent=a2' },
+    { title: '두레', body: '백엔드 · 서버에 문제가 있어요', tag: expect.stringMatching(/^dure-a1-remote-\d+$/), url: '/#agent=a1' },
+    { title: '두레', body: '백엔드 · 서버에 문제가 있어요', tag: expect.stringMatching(/^dure-a1-remote-\d+$/), url: '/#agent=a1' },
+  ])
+  expect(new Set(t.sent.map((s) => s.notice.tag)).size).toBe(t.sent.length)
+  expect(t.sent.every((s) => s.delivery?.urgency === 'high' && s.delivery.ttl === 3600)).toBe(true)
+  const all = JSON.stringify(t.sent)
+  for (const secret of ['lab-fake', 'example.edu', 'ssh', 'port 22', 'timed out', 'login', 'disconnected', 'unreachable']) expect(all).not.toContain(secret)
+
+  // 승인·질문 알림을 끄면 안 울린다(PC 의 Windows 알림과 같은 칸)
+  const off = setup({ settings: { notify: { asks: false, finished: true } } })
+  off.status('a1', { kind: 'disconnected', detail: null })
+  await flush()
+  expect(off.sent).toHaveLength(0)
+
+  // 휴대폰으로 쓰기 꺼짐 · 모르는 에이전트 · 화면 보는 기기 — 안 보냄
+  const no = setup({ settings: { enabled: false } })
+  no.status('a1', { kind: 'disconnected', detail: null })
+  const unknown = setup()
+  unknown.status('지운-에이전트', { kind: 'disconnected', detail: null })
+  const seen = setup()
+  seen.visible.add('d1')
+  seen.status('a1', { kind: 'disconnected', detail: null })
+  await flush()
+  expect([...no.sent, ...unknown.sent, ...seen.sent]).toHaveLength(0)
+})
+
+test('서버 방 문제 — PC 앞이라 안 보낸 문제는 다시 안 보냄 · 켤 때 이미 있던 문제도', async () => {
+  const t = setup()
+  t.setIdle('active')
+  t.status('a1', { kind: 'disconnected', detail: null })
+  t.setIdle('locked')
+  t.status('a1', { kind: 'disconnected', detail: null }, 'stopped') // 같은 문제 — 한 번 판단했다
+  await flush()
+  expect(t.sent).toHaveLength(0)
+  t.status('a1', { kind: 'hostkey', detail: null })
+  await flush()
+  expect(bodies(t.sent)).toEqual(['백엔드 · 서버에 문제가 있어요'])
+
+  // 알림 판단을 켜기 전부터 있던 문제 — 상태가 바뀌어 다시 실려 와도 새 문제가 아니다
+  const late = setup({ issues: { a1: { kind: 'login', detail: null } } })
+  late.status('a1', { kind: 'login', detail: null }, 'working')
+  late.status('a1', { kind: 'login', detail: null })
+  await flush()
+  expect(late.sent).toHaveLength(0)
+  late.status('a1', null)
+  late.status('a1', { kind: 'login', detail: null })
+  await flush()
+  expect(bodies(late.sent)).toEqual(['백엔드 · 서버에 문제가 있어요'])
+})
+
+test('서버 방 문제가 있는 에이전트의 차례 끝은 일을 마쳤어요 대신 문제만', async () => {
+  const t = setup({ settings: { notify: { asks: true, finished: true } } })
+  // 서버 claude 로그인이 풀렸다는 답 — 엔진은 그 result 를 기록하기 전에 login 문제를 상태 사건으로 알린다
+  t.status('a1', { kind: 'login', detail: null }, 'working')
+  t.history('a1', { t: 20, kind: 'result', ok: false, subtype: 'success' })
+  // 다음 정상 답 — 문제가 먼저 지워지고 차례 끝
+  t.status('a1', null, 'working')
+  t.history('a1', { t: 21, kind: 'result', ok: true, subtype: 'success' })
+  await flush()
+  expect(bodies(t.sent)).toEqual(['백엔드 · 서버에 문제가 있어요', '백엔드 · 일을 마쳤어요'])
+})
+
 test('화면 보는 기기는 건너뜀', async () => {
   const dev = (id: string, push = true): PhoneDevice => ({ id, name: id, createdAt: 1, lastSeen: null, push })
   const t = setup({ devices: [dev('d1'), dev('d2'), dev('d3', false)] })
@@ -252,12 +338,13 @@ test('판단·보내기가 던져도 엔진으로 안 던짐 · 로그에 내용
 
 test('dispose — 엔진 사건을 더 듣지 않음', async () => {
   const t = setup({ settings: { notify: { asks: true, finished: true } } })
-  const names = ['request', 'request-resolved', 'message', 'hold', 'history']
+  const names = ['request', 'request-resolved', 'message', 'hold', 'history', 'status']
   for (const name of names) expect(t.engine.listenerCount(name), name).toBe(1)
   t.notifier.dispose()
   for (const name of names) expect(t.engine.listenerCount(name), name).toBe(0)
   t.request('r1')
   t.history('a1', { t: 1, kind: 'result', ok: true, subtype: 'success' })
+  t.status('a1', { kind: 'disconnected', detail: null })
   await flush()
   expect(t.sent).toHaveLength(0)
   t.notifier.dispose() // 두 번 불러도 괜찮다
