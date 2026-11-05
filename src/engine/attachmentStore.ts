@@ -83,8 +83,11 @@ function fitBytes(s: string, max: number): string {
   return out;
 }
 
-/** 안전한 이름 — 금지·제어 글자는 _, 앞 공백·뒤 공백과 점 정리, 길면 확장자를 남기고 줄인다, 비면(점뿐이었으면) file */
-function safeName(name: string): string {
+/**
+ * 안전한 이름 — 금지·제어 글자는 _, 앞 공백·뒤 공백과 점 정리, 길면 확장자를 남기고 줄인다, 비면(점뿐이었으면) file.
+ * 휴대폰 올리기(phoneServer)도 받은 파일 이름을 이걸로 다듬는다
+ */
+export function safeName(name: string): string {
   const s = trimEnds(String(name ?? '').replace(UNSAFE, '_'));
   if (!s) return 'file';
   if (Buffer.byteLength(s) <= NAME_MAX_BYTES) return s;
