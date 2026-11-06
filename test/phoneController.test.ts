@@ -1068,6 +1068,51 @@ test('알림 — PC 쓰는 중(idle active)이면 안 보냄 · 화면 보는 �
   await vi.waitFor(() => expect(sentTo()).toEqual(['d1', 'd2', 'd2']))
 })
 
+test('알림 — PC 쓰는 중이라 미룬 것은 잠그면(lock-screen) 보냄 · 화면 보던 휴대폰이 나가면(onVisible) 그 휴대폰에 · dispose 면 잠금 신호를 풂', async () => {
+  seed({
+    devices: [
+      { id: 'd1', name: '폰1', createdAt: 1, lastSeen: null, tokenHash: HASH, subscription: SUB },
+      { id: 'd2', name: '폰2', createdAt: 1, lastSeen: null, tokenHash: 'b'.repeat(64), subscription: { ...SUB, endpoint: 'https://fcm.googleapis.com/fcm/send/def' } },
+    ],
+  })
+  const engine = Object.assign(new EventEmitter(), { agents: () => [{ id: 'a1', name: '백엔드' }], heldInput: () => 0 })
+  const away = new Set<() => void>()
+  const polls: (() => void)[] = []
+  const { c, servers, push, idle } = make({
+    engine,
+    pcAway: (fn) => {
+      away.add(fn)
+      return () => away.delete(fn)
+    },
+    every: (_ms, fn) => {
+      polls.push(fn)
+      return () => polls.splice(polls.indexOf(fn), 1)
+    },
+  })
+  await c.set({ enabled: true })
+  expect(away.size).toBe(1)
+  const sentTo = () => push.sendTo.mock.calls.map((x) => (x as unknown[])[0])
+
+  idle.now = 'active' // PC 앞에서 승인 요청이 왔다
+  engine.emit('request', { id: 'q1', agentId: 'a1', toolName: 'Bash', input: { command: 'rm -rf x' }, kind: 'permission', createdAt: 1 })
+  await new Promise((r) => setTimeout(r, 0))
+  expect(sentTo()).toEqual([])
+  expect(polls).toHaveLength(1)
+
+  servers.last().list = [{ deviceId: 'd1', visible: true }] // d1 은 두레 화면을 보는 중
+  for (const f of [...away]) f() // 잠갔다 — 그 순간 idle 이 아직 active 로 읽혀도
+  await vi.waitFor(() => expect(sentTo()).toEqual(['d2']))
+  idle.now = 'locked' // 잠긴 뒤엔 getSystemIdleState 도 locked
+  servers.last().list = [{ deviceId: 'd1', visible: false }]
+  servers.last().opts.onVisible?.('d1', false) // d1 이 화면을 떠났다
+  await vi.waitFor(() => expect(sentTo()).toEqual(['d2', 'd1']))
+  expect(polls).toHaveLength(0)
+  expect(JSON.stringify(push.sendTo.mock.calls)).not.toContain('rm -rf')
+
+  await c.dispose()
+  expect(away.size).toBe(0)
+})
+
 test('phoneStaticDir — 개발은 out/renderer · 설치본은 app.asar.unpacked 안', () => {
   const dev = path.join('C:\\work\\dure', 'out', 'main')
   expect(phoneStaticDir(dev, false)).toBe(path.join('C:\\work\\dure', 'out', 'renderer'))

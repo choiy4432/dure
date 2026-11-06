@@ -52,8 +52,12 @@ export interface PhoneControllerOptions {
   tailscale: Pick<Tailscale, 'status' | 'serveOn' | 'serveOff' | 'httpsPortFree' | 'funnelOn'>
   /** 절전 막기 — 진짜는 powerSaveBlocker('prevent-app-suspension') */
   power: { start(): number; stop(id: number): void }
-  /** 진짜는 powerMonitor.getSystemIdleState(120) — 'active' 면 PC 를 쓰는 중이라 휴대폰은 안 울린다 */
+  /** 진짜는 powerMonitor.getSystemIdleState(120) — 'active' 면 PC 를 쓰는 중이라 휴대폰은 안 울린다(미뤘다가 자리를 비우면 보낸다) */
   idle: () => IdleState
+  /** PC 를 떠났다는 신호 — 진짜는 powerMonitor 'lock-screen'. 오면 PC 를 쓰는 중이라 미룬 알림을 보낸다. 돌려준 함수로 푼다 */
+  pcAway?: (fn: () => void) => () => void
+  /** 시험만 — 미룬 알림의 다시 보기 타이머(기본 setInterval) */
+  every?: (ms: number, fn: () => void) => () => void
   /** Windows 를 켜면 두레도 켜기 — 진짜는 설치본에서만 app.setLoginItemSettings, 개발 실행·시험은 가짜 */
   loginItem: { set(open: boolean): void }
   /** 앱 사건 'phone' — PC 창으로만 */
@@ -259,6 +263,10 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
         publish()
       },
       onClients: () => publish(),
+      // 화면을 보던 휴대폰이 떠났다(다른 앱·화면 끔·끊김) — 그 휴대폰이라 미룬 알림을 보낸다
+      onVisible: (id, visible) => {
+        if (!visible) notifier?.deviceHidden(id)
+      },
       allowLocal: o.allowLocal === true,
     })
     if (disposed) {
@@ -541,6 +549,8 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
       isVisible: (id) => server?.clients().some((c) => c.deviceId === id && c.visible) ?? false,
       push,
       log,
+      pcAway: o.pcAway,
+      every: o.every,
     })
     : null
 

@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, expect, test, vi } from 'vitest'
 import type { AgentStatus, EngineEventMap, HistoryItem, Hold, PendingRequest, RelayMessage, RemoteIssue } from '../src/engine/types'
-import { createPhoneNotifier, type NotifierEngine } from '../src/main/phone/phoneNotifier'
+import { createPhoneNotifier, PC_RECHECK_MS, type NotifierEngine } from '../src/main/phone/phoneNotifier'
 import type { PhoneNotice, PushDelivery } from '../src/main/phone/push'
 import { DEFAULT_PHONE_SETTINGS, type PhoneDevice, type PhoneSettings } from '../src/shared/phoneTypes'
 
@@ -47,6 +47,9 @@ function setup(o: { settings?: Partial<PhoneSettings>; devices?: PhoneDevice[]; 
     }),
   }
   const log = vi.fn()
+  // PC 를 떠났다는 신호(진짜는 powerMonitor 'lock-screen')·다시 보기 타이머 — 가짜로, 시험이 손으로 부른다
+  const away = new Set<() => void>()
+  const polls: { ms: number; fn: () => void }[] = []
   const notifier = createPhoneNotifier({
     engine,
     settings: () => settings,
@@ -55,11 +58,28 @@ function setup(o: { settings?: Partial<PhoneSettings>; devices?: PhoneDevice[]; 
     isVisible: (id) => visible.has(id),
     push,
     log,
+    pcAway: (fn) => {
+      away.add(fn)
+      return () => away.delete(fn)
+    },
+    every: (ms, fn) => {
+      const p = { ms, fn }
+      polls.push(p)
+      return () => polls.splice(polls.indexOf(p), 1)
+    },
   })
   disposers.push(() => notifier.dispose())
   return {
-    engine, notifier, sent, push, log, visible, held, devices,
+    engine, notifier, sent, push, log, visible, held, devices, agents, away, polls,
     setIdle: (s: typeof idle) => (idle = s),
+    /** PC 를 잠갔다(lock-screen) — 그 순간 idle 상태가 아직 active 로 읽혀도 */
+    lock: () => {
+      for (const f of [...away]) f()
+    },
+    /** 다시 보기 한 번 — 돌고 있지 않으면 아무것도 안 한다 */
+    tick: () => {
+      for (const p of [...polls]) p.fn()
+    },
     set: (p: Partial<PhoneSettings>) => (settings = { ...settings, ...p }),
     request: (id: string, over: Partial<PendingRequest> = {}) =>
       engine.emit('request', {
@@ -112,7 +132,7 @@ test('PC 쓰는 중이면 안 보냄 · 잠금이면 보냄 · 본문에 명령 
   const all = JSON.stringify(t.sent)
   for (const secret of ['rm -rf', '비밀', 'curl', 'example.com', 'AskUserQuestion', 'Bash', '지우기', '새것']) expect(all).not.toContain(secret)
 
-  // PC 앞이라 안 보낸 기다림은 나중에 자리를 떠도 다시 보내지 않는다(한 번만 판단)
+  // 같은 요청이 다시 와도 또 판단하지 않는다(PC 앞이라 미룬 것은 자리를 비울 때 — 아래 시험들)
   t.request('r1')
   await flush()
   expect(t.sent).toHaveLength(5)
@@ -224,7 +244,7 @@ test('서버 방 문제도 asks — 문제마다 한 번 · 서버 이름·ssh �
   expect([...no.sent, ...unknown.sent, ...seen.sent]).toHaveLength(0)
 })
 
-test('서버 방 문제 — PC 앞이라 안 보낸 문제는 다시 안 보냄 · 켤 때 이미 있던 문제도', async () => {
+test('서버 방 문제 — PC 앞이라 미룬 문제가 또 실려 와도 그 자리에서 안 보냄 · 켤 때 이미 있던 문제도', async () => {
   const t = setup()
   t.setIdle('active')
   t.status('a1', { kind: 'disconnected', detail: null })
@@ -293,6 +313,246 @@ test('같은 기다림 한 번만', async () => {
   expect(new Set(t.sent.map((s) => s.notice.tag)).size).toBe(5)
 })
 
+const dev = (id: string, push = true): PhoneDevice => ({ id, name: id, createdAt: 1, lastSeen: null, push })
+const DONE: HistoryItem = { t: 30, kind: 'result', ok: true, subtype: 'success' }
+
+test('PC 쓰는 중에 생긴 승인 — 잠그면 보냄', async () => {
+  const t = setup({ settings: { notify: { asks: true, finished: true } } })
+  expect(t.polls).toHaveLength(0) // 미룬 것이 없으면 다시 보기도 없다
+  t.setIdle('active') // 승인 요청이 왔을 때 PC 앞에 있었다
+  t.request('r1')
+  t.request('q1', { kind: 'question', toolName: 'AskUserQuestion', input: { questions: [{ question: QUESTION, options: [] }] } })
+  t.message('m1', 'pending')
+  t.message('m2', 'held', { roomId: 'r2', from: 'b1', to: 'b1' })
+  t.hold('a1', HOLD)
+  t.status('a2', { kind: 'unreachable', detail: SSH_DETAIL })
+  t.history('a1', DONE) // 끝남은 기다림이 아니다 — 미루지 않는다(PC 앞에서 봤다)
+  await flush()
+  expect(t.sent).toHaveLength(0)
+  expect(t.polls.map((p) => p.ms)).toEqual([PC_RECHECK_MS])
+
+  t.lock() // 잠갔다 — 그 순간 idle 상태가 아직 active 로 읽혀도 자리를 떴다
+  await flush()
+  expect(bodies(t.sent)).toEqual([
+    '백엔드 · 승인을 기다려요',
+    '백엔드 · 답을 기다려요',
+    '프런트 · 넘기기 승인을 기다려요',
+    '문서 · 넘기기 승인을 기다려요',
+    '백엔드 · 넘기기 승인을 기다려요',
+    '프런트 · 서버에 문제가 있어요',
+  ])
+  expect(t.sent.map((s) => s.notice.url)).toEqual(['/#agent=a1', '/#agent=a1', '/#agent=a2', '/#agent=b1', '/#agent=a1', '/#agent=a2'])
+  expect(new Set(t.sent.map((s) => s.notice.tag)).size).toBe(t.sent.length)
+  expect(t.sent.every((s) => s.deviceId === 'd1' && s.delivery?.urgency === 'high' && s.delivery.ttl === 3600)).toBe(true)
+  const all = JSON.stringify(t.sent)
+  for (const secret of ['rm -rf', '비밀', 'sk-fake', '토큰', 'lab-fake', 'ssh', 'AskUserQuestion', 'Bash']) expect(all).not.toContain(secret)
+  expect(t.polls).toHaveLength(0) // 다 보냈다 — 다시 보기를 멈춘다
+
+  // 잠근 뒤엔 미룬 것이 없다 — 또 잠가도 그대로
+  t.lock()
+  await flush()
+  expect(t.sent).toHaveLength(6)
+})
+
+test('자리를 비워 2분 지나면 보냄', async () => {
+  const t = setup()
+  t.setIdle('active')
+  t.request('r1')
+  t.tick() // 아직 PC 앞(마지막 입력 뒤 2분 안)
+  await flush()
+  expect(t.sent).toHaveLength(0)
+  expect(t.polls).toHaveLength(1)
+
+  t.setIdle('idle') // 잠그지 않고 떠났다 — getSystemIdleState(120) 이 idle
+  t.tick()
+  await flush()
+  expect(bodies(t.sent)).toEqual(['백엔드 · 승인을 기다려요'])
+  expect(t.sent[0].notice.tag).toMatch(/^dure-a1-approval-\d+$/)
+  expect(t.polls).toHaveLength(0)
+
+  // PC 상태를 못 읽어도(던짐) 안 쓰는 중으로 친다 — 미룬 것도 보낸다
+  const u = setup()
+  let reads = 0
+  const engine = Object.assign(new EventEmitter(), { agents: () => [{ id: 'a1', name: '백엔드' }], heldInput: () => 0 })
+  const sent: string[] = []
+  const poll: { fn: (() => void) | null } = { fn: null }
+  const n = createPhoneNotifier({
+    engine,
+    settings: () => ({ ...DEFAULT_PHONE_SETTINGS, enabled: true }),
+    devices: () => u.devices,
+    isPcInUse: () => {
+      if (reads++ === 0) return true
+      throw new Error('idle 상태를 못 읽음')
+    },
+    isVisible: () => false,
+    push: { sendTo: async (_d: string, notice: PhoneNotice) => void sent.push(notice.body) },
+    log: () => {},
+    every: (_ms, fn) => {
+      poll.fn = fn
+      return () => (poll.fn = null)
+    },
+  })
+  disposers.push(() => n.dispose())
+  engine.emit('request', { id: 'x', agentId: 'a1', toolName: 'Bash', input: {}, kind: 'permission', createdAt: 1 })
+  expect(sent).toEqual([])
+  poll.fn?.()
+  await flush()
+  expect(sent).toEqual(['백엔드 · 승인을 기다려요'])
+  expect(poll.fn).toBeNull()
+})
+
+test('그새 풀린 승인은 안 보냄', async () => {
+  const t = setup()
+  t.setIdle('active')
+  t.request('r1')
+  t.request('r2')
+  t.message('m1', 'pending')
+  t.message('m2', 'held')
+  t.message('m3', 'held')
+  t.hold('a1', HOLD)
+  t.status('a2', { kind: 'disconnected', detail: null })
+  t.request('r3', { agentId: 'b1' })
+  // PC 앞에서 다 풀었다 — 승인함 · 넘기기 승인 · 이어 보내기 · 붙잡기 풀림 · 서버 다시 이음 · 에이전트 지움
+  t.engine.emit('request-resolved', { id: 'r1', agentId: 'a1' })
+  t.message('m1', 'delivered')
+  t.message('m2', 'queued')
+  t.message('m3', 'queued')
+  t.hold('a1', null)
+  t.status('a2', null)
+  t.agents.splice(t.agents.findIndex((a) => a.id === 'b1'), 1)
+  t.lock()
+  await flush()
+  expect(bodies(t.sent)).toEqual(['백엔드 · 승인을 기다려요']) // r2 만 아직 기다린다
+  expect(t.polls).toHaveLength(0)
+
+  // 다 풀리면 다시 보기도 멈춘다
+  const u = setup()
+  u.setIdle('active')
+  u.request('r1')
+  expect(u.polls).toHaveLength(1)
+  u.engine.emit('request-resolved', { id: 'r1', agentId: 'a1' })
+  expect(u.polls).toHaveLength(0)
+
+  // 지운 에이전트의 미룬 것은 PC 앞에 있어도 다시 볼 때 버린다(다시 보기가 계속 돌지 않게)
+  const gone = setup()
+  gone.setIdle('active')
+  gone.request('r1', { agentId: 'b1' })
+  gone.agents.splice(gone.agents.findIndex((a) => a.id === 'b1'), 1)
+  gone.tick()
+  expect(gone.polls).toHaveLength(0)
+
+  // 그 사이 휴대폰으로 쓰기를 껐거나 승인·질문 알림을 껐으면 안 보낸다
+  const off = setup()
+  off.setIdle('active')
+  off.request('r1')
+  off.set({ enabled: false })
+  off.lock()
+  const asks = setup()
+  asks.setIdle('active')
+  asks.request('r1')
+  asks.set({ notify: { asks: false, finished: false } })
+  asks.lock()
+  await flush()
+  expect([...off.sent, ...asks.sent]).toHaveLength(0)
+  expect([...off.polls, ...asks.polls]).toHaveLength(0)
+})
+
+test('화면 보던 기기가 나가면 그 기기에 보냄', async () => {
+  const t = setup({ devices: [dev('d1'), dev('d2'), dev('d3', false)] })
+  const sentTo = () => t.sent.map((s) => s.deviceId)
+  t.visible.add('d1') // d1 은 승인이 올 때 두레 화면을 보고 있었다
+  t.request('r1')
+  await flush()
+  expect(sentTo()).toEqual(['d2'])
+  t.visible.delete('d1') // 화면을 떠났다(다른 앱 · 화면 끔 · 끊김)
+  t.notifier.deviceHidden('d1')
+  await flush()
+  expect(sentTo()).toEqual(['d2', 'd1'])
+  expect(t.sent[1].notice.body).toBe('백엔드 · 승인을 기다려요')
+  expect(t.polls).toHaveLength(0)
+
+  // 보던 중에 풀었으면(휴대폰에서 승인) 나가도 안 보낸다
+  t.visible.add('d1')
+  t.request('r2')
+  t.engine.emit('request-resolved', { id: 'r2', agentId: 'a1' })
+  t.visible.delete('d1')
+  t.notifier.deviceHidden('d1')
+  await flush()
+  expect(sentTo()).toEqual(['d2', 'd1', 'd2'])
+
+  // 나갈 때 PC 를 쓰는 중이면 아직 — 자리를 비울 때
+  t.visible.add('d2')
+  t.request('r3')
+  await flush()
+  expect(sentTo()).toEqual(['d2', 'd1', 'd2', 'd1'])
+  t.setIdle('active')
+  t.visible.delete('d2')
+  t.notifier.deviceHidden('d2')
+  await flush()
+  expect(sentTo()).toHaveLength(4)
+  t.lock()
+  await flush()
+  expect(sentTo()).toEqual(['d2', 'd1', 'd2', 'd1', 'd2'])
+
+  // 짝을 끊은 기기엔 보내지 않는다
+  const u = setup({ devices: [dev('d1')] })
+  u.visible.add('d1')
+  u.request('r1')
+  u.devices.splice(0)
+  u.visible.delete('d1')
+  u.notifier.deviceHidden('d1')
+  await flush()
+  expect(u.sent).toHaveLength(0)
+  expect(u.polls).toHaveLength(0)
+})
+
+test('두 번 안 보냄', async () => {
+  const t = setup({ devices: [dev('d1'), dev('d2')] })
+  const sentTo = () => t.sent.map((s) => s.deviceId)
+  t.setIdle('active')
+  t.request('r1')
+  t.visible.add('d1')
+  t.lock() // d2 엔 지금, 화면을 보는 d1 은 나갈 때
+  await flush()
+  expect(sentTo()).toEqual(['d2'])
+  t.lock()
+  t.setIdle('locked')
+  t.tick()
+  t.request('r1') // 같은 요청이 다시 와도
+  await flush()
+  expect(sentTo()).toEqual(['d2'])
+  t.visible.delete('d1')
+  t.notifier.deviceHidden('d1')
+  t.notifier.deviceHidden('d1')
+  t.lock()
+  t.tick()
+  t.request('r1')
+  await flush()
+  expect(sentTo()).toEqual(['d2', 'd1'])
+  expect(t.polls).toHaveLength(0)
+
+  // 미룬 사이 서버 방 문제가 바뀌었다 — 지금 문제 하나만
+  const u = setup()
+  u.setIdle('active')
+  u.status('a1', { kind: 'disconnected', detail: null })
+  u.status('a1', { kind: 'login', detail: null })
+  u.lock()
+  u.tick()
+  await flush()
+  expect(bodies(u.sent)).toEqual(['백엔드 · 서버에 문제가 있어요'])
+  // 미뤘던 문제가 PC 를 안 쓸 때 바뀌면 새 문제를 그 자리에서 — 앞의 것은 버린다
+  const w = setup()
+  w.setIdle('active')
+  w.status('a1', { kind: 'disconnected', detail: null })
+  w.setIdle('locked')
+  w.status('a1', { kind: 'login', detail: null })
+  w.lock()
+  w.tick()
+  await flush()
+  expect(bodies(w.sent)).toEqual(['백엔드 · 서버에 문제가 있어요'])
+  expect(w.polls).toHaveLength(0)
+})
+
 test('휴대폰으로 쓰기 꺼짐이면 안 보냄 · 모르는 에이전트는 건너뜀', async () => {
   const t = setup({ settings: { enabled: false } })
   t.request('r1')
@@ -334,17 +594,39 @@ test('판단·보내기가 던져도 엔진으로 안 던짐 · 로그에 내용
   engine.emit('request', { id: 'x', agentId: 'a1', toolName: 'Bash', input: {}, kind: 'permission', createdAt: 1 })
   await flush()
   expect(sent).toEqual(['백엔드 · 승인을 기다려요'])
+
+  // 잠금 신호·다시 보기·기기 나감(powerMonitor·타이머·서버 안에서 돈다)도 던지지 않는다
+  const v = setup()
+  v.setIdle('active')
+  v.request('r1')
+  v.engine.agents = () => {
+    throw new Error(`목록 못 읽음 ${COMMAND}`)
+  }
+  v.log.mockClear()
+  expect(() => v.lock()).not.toThrow()
+  expect(() => v.tick()).not.toThrow()
+  expect(() => v.notifier.deviceHidden('d1')).not.toThrow()
+  expect(v.log).toHaveBeenCalledTimes(3)
+  expect(JSON.stringify(v.log.mock.calls)).not.toContain('rm -rf')
 })
 
 test('dispose — 엔진 사건을 더 듣지 않음', async () => {
   const t = setup({ settings: { notify: { asks: true, finished: true } } })
   const names = ['request', 'request-resolved', 'message', 'hold', 'history', 'status']
   for (const name of names) expect(t.engine.listenerCount(name), name).toBe(1)
+  expect(t.away.size).toBe(1)
+  t.setIdle('active')
+  t.request('r0') // 미룬 것이 있다 — 다시 보기가 돈다
+  expect(t.polls).toHaveLength(1)
   t.notifier.dispose()
   for (const name of names) expect(t.engine.listenerCount(name), name).toBe(0)
+  expect(t.away.size).toBe(0) // 잠금 신호도 푼다
+  expect(t.polls).toHaveLength(0) // 다시 보기도 멈춘다
+  t.setIdle('locked')
   t.request('r1')
   t.history('a1', { t: 1, kind: 'result', ok: true, subtype: 'success' })
   t.status('a1', { kind: 'disconnected', detail: null })
+  t.notifier.deviceHidden('d1')
   await flush()
   expect(t.sent).toHaveLength(0)
   t.notifier.dispose() // 두 번 불러도 괜찮다

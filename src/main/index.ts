@@ -556,6 +556,11 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
           stop: (id) => powerSaveBlocker.stop(id),
         },
         idle: () => powerMonitor.getSystemIdleState(PHONE_IDLE_S),
+        // PC 를 잠그면 — PC 앞이라 미룬 휴대폰 알림을 그 자리에서(잠그지 않고 떠나면 2분 뒤 다시 보기가)
+        pcAway: (fn) => {
+          powerMonitor.on('lock-screen', fn)
+          return () => powerMonitor.off('lock-screen', fn)
+        },
         loginItem: { set: (open) => setLoginItem(open) },
         emit: (s) => {
           emitApp('phone', s)
