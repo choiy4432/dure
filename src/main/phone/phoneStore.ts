@@ -29,7 +29,8 @@ export type PhoneServeRecord = { httpsPort: number; localPort: number; dnsName?:
 /**
  * serve — 지금 열려 있을 수 있는 두레 길(PhoneServeRecord) ·
  * httpsPort — 휴대폰이 아는 https 포트(마지막으로 길을 연 포트). 끈 뒤에도 남겨 다음 켜기에서 먼저 쓴다 — 주소가 바뀌면 홈 화면 앱·알림 구독이 끊긴다 ·
- * funnelPort — Funnel(인터넷 공개) 때문에 비켜 간 https 포트. 비고 공개가 아니면 다음 켜기·확인 때 그리로 돌아간다(그 포트로 열거나, 남이 써서 비켜 갔으면 지움)
+ * funnelPort — Funnel(인터넷 공개) 때문에 비켜 간 https 포트. 비고 공개가 아니면 다음 켜기·확인 때 그리로 돌아간다(그 포트로 열거나, 남이 써서 비켜 갔으면 지움) ·
+ * dnsName — 휴대폰이 아는 PC 이름(마지막으로 길을 연 이름). 끈 뒤에도 남겨, 다시 켰을 때 Tailscale 에서 PC 이름이 바뀌었으면 알린다
  */
 export type PhoneFile = {
   settings: PhoneSettings
@@ -38,6 +39,7 @@ export type PhoneFile = {
   serve?: PhoneServeRecord
   httpsPort?: number
   funnelPort?: number
+  dnsName?: string
 }
 
 /** 설정은 칸별로 합친다(notify 도 칸별로) — 꼴이 틀린 칸은 무시하고 지금 값 그대로 */
@@ -51,6 +53,7 @@ export type PhoneFilePatch = {
   serve?: PhoneServeRecord | null
   httpsPort?: number
   funnelPort?: number | null
+  dnsName?: string
 }
 
 export interface PhoneStore {
@@ -229,6 +232,7 @@ function fileFrom(raw: Record<string, unknown>): PhoneFile {
   if (serve) out.serve = serve
   if (isPort(raw.httpsPort)) out.httpsPort = raw.httpsPort
   if (isPort(raw.funnelPort)) out.funnelPort = raw.funnelPort
+  if (typeof raw.dnsName === 'string' && DNS_NAME_RE.test(raw.dnsName)) out.dnsName = raw.dnsName
   return out
 }
 
@@ -299,6 +303,9 @@ export function openPhoneStore(dir: string, o: { now?: () => number } = {}): Pho
       if (patch.funnelPort != null && !isPort(patch.funnelPort)) throw new Error('https 포트 꼴이 틀렸어요')
       const funnelPort = patch.funnelPort === null ? undefined : (patch.funnelPort ?? cur.funnelPort)
       if (funnelPort !== undefined) next.funnelPort = funnelPort
+      if (patch.dnsName !== undefined && !(typeof patch.dnsName === 'string' && DNS_NAME_RE.test(patch.dnsName))) throw new Error('PC 이름 꼴이 틀렸어요')
+      const dnsName = patch.dnsName ?? cur.dnsName
+      if (dnsName !== undefined) next.dnsName = dnsName
       fs.mkdirSync(dir, { recursive: true })
       const tmp = `${file}.tmp`
       fs.writeFileSync(tmp, fileText(next))

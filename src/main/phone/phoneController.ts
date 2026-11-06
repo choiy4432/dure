@@ -36,6 +36,8 @@ const E = {
   failed: '휴대폰 연결을 켜지 못했어요',
   /** 다시 연 주소가 앞서 연 주소와 다르다 — 짝 맺은 휴대폰은 예전 주소(그 주소의 쿠키)만 안다 */
   moved: '주소가 바뀌었어요 — 휴대폰을 다시 짝 맺어 주세요',
+  /** 예전 PC 이름 아래 남은 두레 길 — 다른 serve 설정이 있어 지우지 않았다(serveOff 'left'). 그 이름으로는 이제 닿지 않는다 */
+  left: '예전 PC 이름으로 연 두레 길은 Tailscale 의 다른 serve 설정이 있어 지우지 않고 남겨 뒀어요',
 } as const
 
 export type IdleState = 'active' | 'idle' | 'locked' | 'unknown'
@@ -301,14 +303,16 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
   /**
    * phone.json 에 적어 둔 두레 길만 끈다(offRecordedRoute — 그 짝이 두레 꼴일 때만 끄고, 없거나 남의 것이면 그대로.
    * PC 이름이 바뀌어 그 길이 지금 이름 아래로 옮겨졌으면 지금 이름으로).
-   * 껐거나 이미 없으면 기록을 지우고 true · 끄지 못하면(설정 못 읽음·끄기 실패) 기록을 남기고 false — 다음에 다시
+   * 껐거나 이미 없으면 기록을 지우고 true · 끄지 못하면(설정 못 읽음·끄기 실패) 기록을 남기고 false — 다음에 다시.
+   * 예전 PC 이름 아래의 길을 다른 serve 설정 때문에 남겨 뒀으면('left') 기록은 지우고(더 할 수 있는 게 없다 — 그 이름으로는 닿지 않는다) PC 화면에 알린다
    */
   const routeOff = async (): Promise<boolean> => {
     const rec = store.read().serve
     if (!rec) return true
     try {
-      await offRecordedRoute(o.tailscale, rec)
+      const r = await offRecordedRoute(o.tailscale, rec)
       store.write({ serve: null })
+      if (r === 'left') notice = E.left
       return true
     } catch {
       return false
@@ -405,20 +409,23 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
       return bringUp(false, my)
     }
     const host = httpsPort === 443 ? dnsName : `${dnsName}:${httpsPort}`
-    // 앞서 연 주소와 다르면(이 실행에서 연 Host — 처음이면 phone.json 의 httpsPort 와 포트만) 짝 맺은 휴대폰에 알릴 것 — 예전 주소의 쿠키만 안다
+    // 앞서 연 주소와 다르면(이 실행에서 연 Host — 처음이면 phone.json 의 httpsPort·dnsName: 두레가 꺼진 사이·다시 켜기 전에 PC 이름을 바꿨을 수 있다)
+    // 짝 맺은 휴대폰에 알릴 것 — 예전 주소의 쿠키만 안다
     let paired = false
     let known: string | null = lastHost
     try {
       const f = store.read()
       paired = f.devices.length > 0
-      if (known === null && f.httpsPort !== undefined) known = f.httpsPort === 443 ? dnsName : `${dnsName}:${f.httpsPort}`
+      const name = f.dnsName ?? dnsName
+      if (known === null && f.httpsPort !== undefined) known = f.httpsPort === 443 ? name : `${name}:${f.httpsPort}`
     } catch {
       // 못 읽음 — 알리지 않는다
     }
     lastHost = host
-    if (known !== null && known !== host && paired) notice = E.moved
+    // 예전 이름의 길을 남겨 뒀다는 알림이 이번 열기에서 나왔으면 둘 다 — 다시 짝 맺기가 먼저
+    if (known !== null && known !== host && paired) notice = notice === E.left ? `${E.moved}. ${E.left}` : E.moved
     // 다음 켜기의 첫 포트 · Funnel 때문에 비켜 갔으면 그 포트(아니면 지움) — 못 적어도 이번 길은 그대로
-    safely('https 포트 적기', () => store.write({ httpsPort, funnelPort: picked.funnel ?? null }))
+    safely('https 포트 적기', () => store.write({ httpsPort, funnelPort: picked.funnel ?? null, dnsName }))
     open = { host, url: `https://${host}/mobile.html`, dnsName, httpsPort }
     syncPower()
     return null

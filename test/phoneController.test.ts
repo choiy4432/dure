@@ -93,12 +93,18 @@ function fakeTailscale(start: TailscaleState = READY, order: string[] = []) {
       if (r instanceof Error) throw r
       return { kind: 'on' as const }
     }),
-    serveOff: vi.fn(async (h: number, l: number, d?: string) => {
+    /** 참이면 — 예전 PC 이름 아래의 두레 길을 다른 serve 설정 때문에 남겨 둔다('left' · 그 포트는 쓰이는 채) */
+    leave: false,
+    serveOff: vi.fn(async (h: number, l: number, d?: string): Promise<boolean | 'left'> => {
       log(`off ${h} ${l} ${d ?? '-'}`)
       if (t.offError) throw t.offError
       const r = routes.get(h)
       if (!r || r.localPort !== l || (d !== undefined && r.dnsName !== d)) return false
       routes.delete(h)
+      if (t.leave && t.state.kind === 'ready' && r.dnsName !== undefined && r.dnsName !== t.state.dnsName) {
+        others.add(h)
+        return 'left'
+      }
       return true
     }),
   }
@@ -717,6 +723,55 @@ test('Funnel 때문에 포트를 옮겨 다시 열면 — 짝 맺은 휴대폰�
   expect(emitted.at(-1)?.notice).toBeNull()
   c.noticeSeen() // 없으면 아무 일 없음
   expect(c.state().notice).toBeNull()
+})
+
+test("켜진 채 PC 이름을 바꿨는데 예전 이름의 길을 다른 serve 설정 때문에 못 지우면('left') — 멈추지 않고 비어 있는 포트로 다시 열고 둘 다 알린다", async () => {
+  const LEFT = '예전 PC 이름으로 연 두레 길은 Tailscale 의 다른 serve 설정이 있어 지우지 않고 남겨 뒀어요'
+  const NEW = 'renamed-pc.tail0000.ts.net'
+  seed({ devices: [DEVICE] })
+  const ts = fakeTailscale()
+  ts.leave = true
+  const { c, emitted } = make({ ts, retryMs: 30 })
+  await c.set({ enabled: true })
+  ts.state = { kind: 'ready', dnsName: NEW }
+  await c.check()
+  // 예전 길(443)은 남았다 — 443 은 쓰이는 채라 47615 로
+  await vi.waitFor(() => expect(c.state().url).toBe(`https://${NEW}:47615/mobile.html`), { timeout: 3000 })
+  expect(c.state()).toMatchObject({ problem: null, notice: `${MOVED}. ${LEFT}` })
+  expect(emitted.at(-1)?.notice).toBe(`${MOVED}. ${LEFT}`)
+  expect(saved().serve).toEqual({ httpsPort: 47615, localPort: 47615, dnsName: NEW }) // 예전 길의 기록은 지웠다(더 할 수 있는 게 없다)
+  // 다시 확인해도 그 길을 또 건드리지 않는다(같은 까닭으로 계속 다시 해 보지 않음)
+  const offs = ts.serveOff.mock.calls.length
+  await c.check()
+  expect(ts.serveOff.mock.calls.length).toBe(offs)
+})
+
+test('두레가 꺼진 사이(또는 다시 켜기 전에) PC 이름이 바뀌었으면 — 켤 때 주소가 바뀌었다고 알린다(phone.json 의 dnsName) · 같은 이름이면 안 알림', async () => {
+  seed({ devices: [DEVICE], httpsPort: 443, dnsName: 'old-pc.tail0000.ts.net' })
+  const { c } = make({ ts: fakeTailscale() })
+  await c.set({ enabled: true })
+  expect(c.state()).toMatchObject({ url: `https://${DNS}/mobile.html`, notice: MOVED })
+  expect(saved().dnsName).toBe(DNS) // 이제 휴대폰이 알 이름
+  await c.dispose()
+})
+
+test('켤 때 이름이 그대로면(phone.json 의 dnsName 과 같음) 주소가 바뀌었다는 알림 없음', async () => {
+  seed({ devices: [DEVICE], httpsPort: 443, dnsName: DNS })
+  const { c } = make({ ts: fakeTailscale() })
+  await c.set({ enabled: true })
+  expect(c.state()).toMatchObject({ url: `https://${DNS}/mobile.html`, notice: null })
+})
+
+test("PC 이름을 바꾼 뒤 끄는데 예전 이름의 길을 못 지우면('left') — 멈추지 않고(까닭 없음) 남겨 뒀다는 알림만 · 기록은 지운다", async () => {
+  const LEFT = '예전 PC 이름으로 연 두레 길은 Tailscale 의 다른 serve 설정이 있어 지우지 않고 남겨 뒀어요'
+  const ts = fakeTailscale()
+  ts.leave = true
+  const { c } = make({ ts, retryMs: 30 })
+  await c.set({ enabled: true })
+  ts.state = { kind: 'ready', dnsName: 'renamed-pc.tail0000.ts.net' }
+  await c.set({ enabled: false })
+  expect(c.state()).toMatchObject({ url: null, problem: null, notice: LEFT })
+  expect(saved().serve).toBeUndefined()
 })
 
 test('주소가 바뀌었다는 알림 — 짝을 다시 맺으면(pairStart)·끄면 지운다 · 짝 맺은 휴대폰이 없으면 띄우지 않는다', async () => {

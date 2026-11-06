@@ -440,7 +440,9 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
       await page.evaluate(() => window.dispatchEvent(new Event('focus')))
       await expect(dlg.locator('.phn-url-t')).toHaveText(`https://${RENAMED}/mobile.html`)
       const calls = tailscaleCalls(tsLog).slice(before)
-      expect(calls).toContain('serve --https=443 off')
+      // 예전 이름의 길은 `serve --https=443 off` 로 못 지운다(지금 이름만 찾는다 — 실측) — serve 설정이 그 두레 길뿐이라 serve reset
+      expect(calls).toContain('serve reset')
+      expect(calls).not.toContain('serve --https=443 off')
       expect(calls).toContain(`serve --bg --https=443 http://127.0.0.1:${port}`)
       const serve = JSON.parse(fs.readFileSync(path.join(tsRoot, 'serve.json'), 'utf8')) as { Web?: Record<string, unknown> }
       expect(Object.keys(serve.Web ?? {})).toEqual([`${RENAMED}:443`])
@@ -465,7 +467,7 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
 
     await test.step('트레이 메뉴 휴대폰 연결 끄기 → serve off · 서버 닫힘 · 창 다시 보임', async () => {
       const offs = () => tailscaleCalls(tsLog).filter((c) => c === 'serve --https=443 off').length
-      const offsBefore = offs() // 이름을 바꿀 때 한 번 껐다
+      const offsBefore = offs()
       await app.evaluate(() => {
         const items = (globalThis as unknown as { __e2e: { tray: { label?: string; click?: () => void }[] } }).__e2e.tray
         items.find((i) => i.label === '휴대폰 연결 끄기')!.click!()
@@ -482,7 +484,8 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
       await expect.poll(() => httpStatus(port, { path: '/mobile.html', headers: { host: `127.0.0.1:${port}` } }).catch((e: NodeJS.ErrnoException) => e.code)).toBe('ECONNREFUSED')
       // 사용자의 다른 serve 항목은 없었다 — 두레가 연 것만 지우고 남은 것 없음
       expect(JSON.parse(fs.readFileSync(path.join(tsRoot, 'serve.json'), 'utf8'))).toEqual({})
-      expect(tailscaleCalls(tsLog).some((c) => /\b(reset|funnel)\b/.test(c))).toBe(false)
+      expect(tailscaleCalls(tsLog).some((c) => /\bfunnel\b/.test(c))).toBe(false)
+      expect(tailscaleCalls(tsLog).filter((c) => /\breset\b/.test(c))).toEqual(['serve reset']) // 이름을 바꿨을 때 한 번뿐
     })
 
     // 절전 막기는 끈 채였다 — 한 번도 불리지 않았다

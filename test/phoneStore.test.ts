@@ -311,3 +311,17 @@ test('funnelPort(Funnel 때문에 비켜 간 https 포트) — 쓰고 다시 읽
   seed({ settings: {}, devices: [], funnelPort: 'x' });
   expect(openPhoneStore(dir).read().funnelPort).toBeUndefined();
 });
+
+test('dnsName(휴대폰이 아는 PC 이름) — 쓰고 다시 읽힘 · 다른 칸을 써도 그대로 · 꼴이 틀리면 던짐 · 손댄 칸은 버림', () => {
+  const s = openPhoneStore(dir);
+  s.write({ httpsPort: 443, dnsName: 'fake-pc.tail0000.ts.net' });
+  expect(saved()).toMatchObject({ httpsPort: 443, dnsName: 'fake-pc.tail0000.ts.net' });
+  expect(openPhoneStore(dir).read().dnsName).toBe('fake-pc.tail0000.ts.net');
+  s.write({ httpsPort: 47615 }); // 주지 않으면 그대로
+  expect(saved().dnsName).toBe('fake-pc.tail0000.ts.net');
+  for (const bad of ['', 'bad host', 'a/b.ts.net', 7]) expect(() => s.write({ dnsName: bad as never }), String(bad)).toThrow('PC 이름 꼴이 틀렸어요');
+  expect(saved().dnsName).toBe('fake-pc.tail0000.ts.net');
+
+  seed({ settings: {}, devices: [], dnsName: 'not a host' });
+  expect(openPhoneStore(dir).read().dnsName).toBeUndefined();
+});

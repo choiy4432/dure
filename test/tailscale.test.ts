@@ -213,11 +213,13 @@ describe('tailscale — 가짜 tailscale', () => {
     expect(t3.serve()).toEqual({})
     expect(await t3.ts.serveOff(47615, 47615, DNS)).toBe(false) // 이미 꺼짐
 
-    // 이름을 안 주면 지금 규칙(그 https 포트의 '/' 하나가 그 127.0.0.1 포트)
+    // 이름을 안 주면 지금 규칙(그 https 포트의 '/' 하나가 그 127.0.0.1 포트) — 그 길의 이름은 그 포트의 Web 항목 하나의 이름.
+    // 예전 이름(지금 이름 아님)이라 `serve off` 로는 못 지운다 — 설정이 그 길뿐이라 serve reset
     const t4 = setup('ready', { serve: oursAt(OLD) })
     expect(await t4.ts.cleanup(47615, 47615)).toBe(true)
     expect(t4.serve()).toEqual({})
-    noForbidden([...t.calls(), ...t2.calls(), ...t3.calls(), ...t4.calls()])
+    expect(t4.calls().map((c) => c.argv)).toContainEqual(['serve', 'reset'])
+    noForbidden([...t.calls(), ...t2.calls(), ...t3.calls()])
   }, 60_000)
 
   it('serveOff — 그 https 포트가 남의 길이면 건드리지 않음', async () => {
@@ -373,11 +375,40 @@ describe('tailscale — 가짜 tailscale', () => {
     expect(await t.ts.status()).toEqual({ kind: 'ready', dnsName: NEW })
     expect(await offRecordedRoute(t.ts, { httpsPort: 47615, localPort: 47615, dnsName: DNS })).toBe(true)
     expect(t.serve()).toEqual({})
-    // 옮겨지지 않고 예전 이름 그대로 남았으면 그 이름으로 끈다(status 를 부르지 않는다)
+    // 예전 이름 그대로 남았다(진짜 Tailscale 이 이렇다 — 실측 2026-11-06). `serve --https=… off` 는 지금 이름의 길만 찾아 못 지운다:
+    // serve 설정 전체가 그 두레 길 하나뿐이면 serve reset
     const t2 = setup('ready', { serve: oursAt(DNS), extra: { FAKE_TAILSCALE_DNS: NEW } })
     expect(await offRecordedRoute(t2.ts, { httpsPort: 47615, localPort: 47615, dnsName: DNS })).toBe(true)
     expect(t2.serve()).toEqual({})
-    expect(t2.calls().some((c) => c.argv[0] === 'status')).toBe(false)
+    expect(t2.calls().map((c) => c.argv)).toContainEqual(['serve', 'reset'])
+    expect(t2.calls().some((c) => c.argv.includes('off'))).toBe(false)
+    // 실측 꼴 그대로(443 → 127.0.0.1:47615, 예전 이름) — 같다
+    const real = { TCP: { '443': { HTTPS: true } }, Web: { [`${DNS}:443`]: { Handlers: OURS_HANDLERS } } }
+    const t2r = setup('ready', { serve: real, extra: { FAKE_TAILSCALE_DNS: NEW } })
+    expect(await offRecordedRoute(t2r.ts, { httpsPort: 443, localPort: 47615, dnsName: DNS })).toBe(true)
+    expect(t2r.serve()).toEqual({})
+    // 다른 serve 설정이 하나라도 있으면 지우지 않는다 — 'left'(그 이름으로는 이제 닿지 않는다)
+    const others: Record<string, unknown>[] = [
+      { ...oursAt(DNS), TCP: { ...oursAt(DNS).TCP, '443': { HTTPS: true } }, Web: { ...oursAt(DNS).Web, [`${NEW}:443`]: { Handlers: { '/': { Proxy: 'http://127.0.0.1:3000' } } } } },
+      { ...oursAt(DNS), TCP: { '47615': { HTTPS: true }, '5432': { TCPForward: '127.0.0.1:5432' } } },
+      { ...oursAt(DNS), Foreground: { abc: { TCP: { '8443': { HTTPS: true } } } } },
+      { ...oursAt(DNS), AllowFunnel: { [`${NEW}:8443`]: false } },
+      { ...oursAt(DNS), Services: { 'svc:web': { TCP: { '443': { HTTPS: true } } } } },
+    ]
+    for (const conf of others) {
+      const tl = setup('ready', { serve: conf, extra: { FAKE_TAILSCALE_DNS: NEW } })
+      expect(await offRecordedRoute(tl.ts, { httpsPort: 47615, localPort: 47615, dnsName: DNS })).toBe('left')
+      expect(await tl.ts.cleanup(47615, 47615, DNS)).toBe(false)
+      expect(tl.serve()).toEqual(conf)
+      noForbidden(tl.calls())
+      expect(tl.calls().some((c) => c.argv.includes('off'))).toBe(false)
+    }
+    // 지금 이름을 못 읽으면(로그아웃 등) 하던 대로 `serve off` — 못 지우면 던진다(기록이 남아 다음에 다시)
+    const t2o = setup('ready', { serve: oursAt(DNS), extra: { FAKE_TAILSCALE_DNS: NEW } })
+    fs.writeFileSync(path.join(t2o.root, 'dns-name'), 'bad host name')
+    await expect(offRecordedRoute(t2o.ts, { httpsPort: 47615, localPort: 47615, dnsName: DNS })).rejects.toThrow(/[가-힣]/)
+    expect(t2o.serve()).toEqual(oursAt(DNS))
+    noForbidden(t2o.calls())
     // 지금 이름 아래라도 로컬 포트가 다르거나 사용자가 길을 더 붙였으면 남의 것
     const added = { TCP: oursAt(NEW).TCP, Web: { [`${NEW}:47615`]: { Handlers: { ...OURS_HANDLERS, '/docs': { Path: '/srv' } } } } }
     const t3 = setup('ready', { serve: added, extra: { FAKE_TAILSCALE_DNS: NEW } })
@@ -394,8 +425,8 @@ describe('tailscale — 가짜 tailscale', () => {
     expect(await t5.ts.status()).toEqual({ kind: 'ready', dnsName: NEW })
     expect(await t5.ts.serveOn(443, 47615, NEW)).toEqual({ kind: 'on' })
     expect(Object.keys((t5.serve() as { Web: object }).Web)).toEqual([`${NEW}:443`])
-    noForbidden([...t.calls(), ...t2.calls(), ...t3.calls(), ...t4.calls(), ...t5.calls()])
-  }, 60_000)
+    noForbidden([...t.calls(), ...t3.calls(), ...t4.calls(), ...t5.calls()])
+  }, 120_000)
 
   it('남은 길 정리 — 두레 포트만', async () => {
     const ours = { '/': { Proxy: 'http://127.0.0.1:47615' } }

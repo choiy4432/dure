@@ -4,9 +4,12 @@
 //   serve status --json                          → serve 설정 JSON(아무것도 없으면 {}), 코드 0
 //   serve --bg --https=<P> http://127.0.0.1:<L>  → 바로 끝남(0), 'Available within your tailnet: …' 안내.
 //                                                  Serve 가 꺼진 tailnet 이면 끝나지 않고 켜기 링크를 찍은 채 기다린다
-//   serve --https=<P> off                        → 코드 0, 출력 없음(그 포트의 '/' 길만 지움)
-// 실측 안 한 꼴(그럴듯하게만): 서비스가 안 돌 때의 글 · 로그인 안 됐을 때 serve 의 글 · 없는 길을 off 할 때의 글.
-// 🔴 두레는 `serve reset`·`funnel` 을 쓰지 않는다 — 들어오면 코드 3 으로 크게 실패한다(시험이 잡게).
+//   serve --https=<P> off                        → 코드 0, 출력 없음(지금 이름의 그 포트 '/' 길만 지움).
+//                                                  지금 이름의 길이 없으면(PC 이름을 바꿔 길이 예전 이름 아래 남음) 코드 1
+//                                                  'error: failed to remove web serve: handler does not exist'(실측 2026-11-06)
+//   serve reset                                  → serve 설정 전체를 지운다(두레는 설정이 예전 이름의 두레 길 하나뿐일 때만 부른다)
+// 실측 안 한 꼴(그럴듯하게만): 서비스가 안 돌 때의 글 · 로그인 안 됐을 때 serve 의 글 · serve reset 의 출력.
+// 🔴 두레는 `funnel` 을 쓰지 않는다 — 들어오면 코드 3 으로 크게 실패한다(시험이 잡게). reset 은 시험마다 불렸는지 따로 본다.
 //
 // 손잡이(환경 변수):
 //   FAKE_TAILSCALE_STATE      missing | logged-out | no-https | ready(기본)
@@ -119,8 +122,17 @@ const portOf = (flag) => {
 };
 
 function main() {
-  if (argv.includes('reset') || argv.includes('funnel')) return fail(3, `가짜 tailscale: 두레는 이 명령을 쓰면 안 돼요 — ${argv.join(' ')}`);
+  if (argv.includes('funnel')) return fail(3, `가짜 tailscale: 두레는 이 명령을 쓰면 안 돼요 — ${argv.join(' ')}`);
   if (state === 'missing') return fail(1, NOT_RUNNING);
+
+  // serve reset — 설정 전체를 지운다
+  if (argv.length === 2 && argv[0] === 'serve' && argv[1] === 'reset') {
+    const file = servePath();
+    if (!file) return;
+    writeServe(file, {});
+    return;
+  }
+  if (argv.includes('reset')) return fail(2, `가짜 tailscale: 모르는 명령 — ${argv.join(' ')}`);
 
   if (argv.length === 2 && argv[0] === 'status' && argv[1] === '--json') {
     out(JSON.stringify(status(), null, 2) + '\n');
@@ -171,8 +183,9 @@ function main() {
     const file = servePath();
     if (!file) return;
     const conf = readServe(file);
-    const key = Object.keys(conf.Web ?? {}).find((k) => k.endsWith(`:${port}`));
-    if (!key || !conf.Web[key].Handlers?.['/']) return fail(1, 'error: handler does not exist');
+    // 지금 이름의 길만 — 예전 이름 아래 남은 길은 찾지 못한다(실측)
+    const key = Object.keys(conf.Web ?? {}).find((k) => k.toLowerCase() === `${DNS}:${port}`.toLowerCase());
+    if (!key || !conf.Web[key].Handlers?.['/']) return fail(1, 'error: failed to remove web serve: handler does not exist');
     const handlers = { ...conf.Web[key].Handlers };
     delete handlers['/'];
     if (Object.keys(handlers).length) conf.Web[key] = { ...conf.Web[key], Handlers: handlers };

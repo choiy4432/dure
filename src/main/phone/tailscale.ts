@@ -7,8 +7,10 @@ import { jsonArgs } from '../claudeCommand'
 
 // Tailscale 감싸기 — 사용자 PC 의 tailscale CLI 를 불러 상태를 보고, 두레 포트 하나만 `tailscale serve` 로 tailnet 안에 연다.
 // 명령·칸 이름은 실측 그대로(probe28 — .superpowers/sdd/2026-11-04-dure-phone-remote/task-1-report.md).
-// 🔴 `serve reset`·`funnel` 은 쓰지 않는다. 지우는 건 두레가 연 꼴(그 https 포트의 '/' 하나가 http://127.0.0.1:<두레 포트>)일 때만.
+// 🔴 `funnel` 은 쓰지 않는다. 지우는 건 두레가 연 꼴(그 https 포트의 '/' 하나가 http://127.0.0.1:<두레 포트>)일 때만.
 //    켜는 것도 그 https 포트가 비었거나 이미 두레 꼴일 때만(`serve --bg` 는 그 포트의 사용자 길을 덮어쓴다).
+// 🔴 `serve reset`(serve 설정 전체 지우기)은 한 경우만: 두레 길이 예전 PC 이름 아래 남았고(Tailscale 에서 PC 이름을 바꿈 — `serve off` 는
+//    지금 이름의 길만 찾는다, 실측 'handler does not exist') serve 설정 전체가 그 두레 길 하나뿐일 때. 다른 설정이 하나라도 있으면 남겨 둔다(2026-11-06 사용자 결정)
 // 🔴 status 출력에서 BackendState·Self.DNSName·CertDomains 길이만 꺼낸다 — User·CurrentTailnet(로그인 이름·이메일이 든다)은 읽지 않는다.
 //    CLI 의 출력은 결과·오류 글·로그에 옮기지 않는다(이 파일은 아무것도 로그에 쓰지 않는다). 셸 없이, 인자는 배열로, 창 없이.
 
@@ -178,27 +180,31 @@ export interface Tailscale {
   serveOn(httpsPort: number, localPort: number, dnsName?: string): Promise<ServeOnResult>
   /**
    * 그 https 포트가 두레 길(→ http://127.0.0.1:<localPort>)이면 `serve --https=<httpsPort> off` 하고 true(Funnel 이 켜져 있어도 끈다 — 공개된 길을 남기지 않게).
-   * 없거나 남의 것이면 그대로 false. 설정을 못 읽거나 끄기 실패는 던진다
+   * 없거나 남의 것이면 그대로 false. dnsName 이 지금 PC 이름과 다르면(Tailscale 에서 이름을 바꿈) `serve off` 로는 못 지운다 —
+   * serve 설정 전체가 그 길 하나뿐이면 `serve reset` 하고 true, 다른 설정이 있으면 손대지 않고 'left'(그 이름으로는 이제 닿지 않는다).
+   * 설정을 못 읽거나 끄기 실패는 던진다
    */
-  serveOff(httpsPort: number, localPort: number, dnsName?: string): Promise<boolean>
+  serveOff(httpsPort: number, localPort: number, dnsName?: string): Promise<boolean | 'left'>
   /** serve 설정(앞쪽 세션 포함)에 그 https 포트가 없고 Funnel 도 아니다 — 설정을 못 읽으면 한국어 오류로 던진다('쓰이고 있음'과 다른 까닭) */
   httpsPortFree(httpsPort: number): Promise<boolean>
   /** serve 설정(앞쪽 세션 포함)의 AllowFunnel 에 그 https 포트가 공개(true)로 있다 — 읽지 못하면 false(모르면 열린 길을 닫지 않는다) */
   funnelOn(httpsPort: number): Promise<boolean>
-  /** 비정상 종료로 남은 두레 길만 끈다(serveOff 와 같은 규칙) — 껐으면 true. 던지지 않는다 */
+  /** 비정상 종료로 남은 두레 길만 끈다(serveOff 와 같은 규칙) — 껐으면 true('left' 는 false). 던지지 않는다 */
   cleanup(httpsPort: number, localPort: number, dnsName?: string): Promise<boolean>
 }
 
 /**
- * 적어 둔 두레 길(phone.json 의 serve — 켤 때 적은 {httpsPort, localPort, dnsName})을 끈다 — 껐으면 true, 이미 없거나 남의 것이면 false.
- * PC 이름을 Tailscale 에서 바꾸면 그 길이 지금 이름 아래로 옮겨질 수 있다 — 적어 둔 이름으로 두레 꼴이 아니면 status 의 지금 이름으로 한 번 더
- * (같은 https 포트 · 그 이름의 Web 항목 하나 · '/' 하나가 그 127.0.0.1 포트). 설정을 못 읽거나 끄기가 실패하면 던진다
+ * 적어 둔 두레 길(phone.json 의 serve — 켤 때 적은 {httpsPort, localPort, dnsName})을 끈다 — 껐으면 true, 이미 없거나 남의 것이면 false,
+ * 예전 PC 이름 아래 남은 길을 다른 serve 설정 때문에 남겨 뒀으면 'left'(serveOff).
+ * 적어 둔 이름으로 두레 꼴이 아니면 status 의 지금 이름으로 한 번 더(그 이름 아래로 옮겨진 길 — 같은 https 포트 · 그 이름의 Web 항목 하나 · '/' 하나가 그 127.0.0.1 포트).
+ * 설정을 못 읽거나 끄기가 실패하면 던진다
  */
 export async function offRecordedRoute(
   t: Pick<Tailscale, 'status' | 'serveOff'>,
   rec: { httpsPort: number; localPort: number; dnsName?: string },
-): Promise<boolean> {
-  if (await t.serveOff(rec.httpsPort, rec.localPort, rec.dnsName)) return true
+): Promise<boolean | 'left'> {
+  const first = await t.serveOff(rec.httpsPort, rec.localPort, rec.dnsName)
+  if (first !== false) return first
   if (rec.dnsName === undefined) return false
   const now = await t.status()
   if (now.kind !== 'ready' || now.dnsName === rec.dnsName.toLowerCase()) return false
@@ -251,6 +257,33 @@ function oursIn(conf: Record<string, unknown>, httpsPort: number, localPort: num
   })
 }
 
+/** 그 https 포트의 Web 항목이 하나뿐이면 그 이름(소문자, ':<포트>' 뗌) — 없거나 여럿이면 undefined */
+function onlyWebHost(conf: Record<string, unknown>, httpsPort: number): string | undefined {
+  const keys = isRecord(conf.Web) ? Object.keys(conf.Web).filter((k) => k.endsWith(`:${httpsPort}`)) : []
+  return keys.length === 1 ? keys[0].slice(0, -`:${httpsPort}`.length).toLowerCase() : undefined
+}
+
+/** 비었나 — 없음·null·false·빈 객체·빈 배열 */
+const emptyValue = (v: unknown): boolean =>
+  v === undefined || v === null || v === false || (isRecord(v) && Object.keys(v).length === 0) || (Array.isArray(v) && v.length === 0)
+
+/**
+ * serve 설정 전체가 그 https 포트의 길 하나뿐인가 — TCP 는 그 포트 하나({ HTTPS: true } 말고 다른 칸 없음), Web 은 항목 하나,
+ * 그 밖의 칸(Foreground · AllowFunnel · Services …)은 모두 비었다. 그 길이 두레 꼴인지는 oursIn 이 먼저 본다
+ */
+function onlyRouteIn(conf: Record<string, unknown>, httpsPort: number): boolean {
+  for (const [k, v] of Object.entries(conf)) {
+    if (k === 'TCP') {
+      if (!isRecord(v) || Object.keys(v).length !== 1) return false
+      const tcp = v[String(httpsPort)]
+      if (!isRecord(tcp) || tcp.HTTPS !== true || Object.entries(tcp).some(([f, x]) => f !== 'HTTPS' && !emptyValue(x))) return false
+    } else if (k === 'Web') {
+      if (!isRecord(v) || Object.keys(v).length !== 1) return false
+    } else if (!emptyValue(v)) return false
+  }
+  return true
+}
+
 export function createTailscale(o: { command: string; args: string[]; run?: Runner }): Tailscale {
   const run: Runner = o.run ?? ((command, args, ro) => runCommand(command, args, ro))
   const cli = (args: string[], ro: RunOptions): Promise<RunResult> => run(o.command, [...o.args, ...args], ro)
@@ -273,26 +306,46 @@ export function createTailscale(o: { command: string; args: string[]; run?: Runn
   /** `serve status --json` — 못 읽으면 null */
   const serveConfig = (): Promise<Record<string, unknown> | null> => readServeConfig().catch(() => null)
 
-  /** 두레 길이면 끈다 — 껐으면 true, 없거나 남의 것이면 false. 설정을 못 읽거나 끄기가 실패하면 던진다 */
-  const offIfOurs = async (httpsPort: number, localPort: number, dnsName?: string): Promise<boolean> => {
+  const readStatus = async (): Promise<TailscaleState> => {
+    const r = await cli(['status', '--json'], { timeoutMs: TAILSCALE_STATUS_TIMEOUT_MS })
+    if (r.kind !== 'exit') return { kind: 'missing' }
+    // 로그인 안 됐어도 JSON 은 나온다 — 코드보다 출력을 본다. 알 수 없는 출력(서비스가 안 돎 등) = 쓸 수 없음
+    return stateFromStatus(r.stdout) ?? { kind: 'missing' }
+  }
+
+  /** 끄는 명령 하나 — 실패·시간 초과는 던진다 */
+  const offCommand = async (args: string[]): Promise<void> => {
+    const r = await cli(args, { timeoutMs: TAILSCALE_STATUS_TIMEOUT_MS })
+    if (r.kind === 'missing') throw new Error(E.missing)
+    if (r.kind !== 'exit') throw new Error(E.timeout)
+    if (r.code !== 0) throw new Error(E.offFailed(r.code))
+  }
+
+  /**
+   * 두레 길이면 끈다 — 껐으면 true, 없거나 남의 것이면 false. 예전 PC 이름 아래의 길이면 serve 설정 전체가 그 길뿐일 때만 `serve reset`,
+   * 아니면 'left'. 설정을 못 읽거나 끄기가 실패하면 던진다
+   */
+  const offIfOurs = async (httpsPort: number, localPort: number, dnsName?: string): Promise<boolean | 'left'> => {
     checkPort(httpsPort)
     checkPort(localPort)
     const conf = await readServeConfig()
     if (!oursIn(conf, httpsPort, localPort, dnsName)) return false
-    const r = await cli(['serve', `--https=${httpsPort}`, 'off'], { timeoutMs: TAILSCALE_STATUS_TIMEOUT_MS })
-    if (r.kind === 'missing') throw new Error(E.missing)
-    if (r.kind !== 'exit') throw new Error(E.timeout)
-    if (r.code !== 0) throw new Error(E.offFailed(r.code))
+    // 그 길의 이름 — 적어 둔 이름, 없으면 그 포트의 Web 항목이 하나뿐일 때 그 이름
+    const name = dnsName?.toLowerCase() ?? onlyWebHost(conf, httpsPort)
+    if (name !== undefined) {
+      const now = await readStatus()
+      if (now.kind === 'ready' && now.dnsName !== name) {
+        if (!onlyRouteIn(conf, httpsPort)) return 'left'
+        await offCommand(['serve', 'reset'])
+        return true
+      }
+    }
+    await offCommand(['serve', `--https=${httpsPort}`, 'off'])
     return true
   }
 
   return {
-    async status() {
-      const r = await cli(['status', '--json'], { timeoutMs: TAILSCALE_STATUS_TIMEOUT_MS })
-      if (r.kind !== 'exit') return { kind: 'missing' }
-      // 로그인 안 됐어도 JSON 은 나온다 — 코드보다 출력을 본다. 알 수 없는 출력(서비스가 안 돎 등) = 쓸 수 없음
-      return stateFromStatus(r.stdout) ?? { kind: 'missing' }
-    },
+    status: readStatus,
 
     async serveOn(httpsPort, localPort, dnsName) {
       checkPort(httpsPort)
@@ -333,7 +386,7 @@ export function createTailscale(o: { command: string; args: string[]; run?: Runn
 
     async cleanup(httpsPort, localPort, dnsName) {
       try {
-        return await offIfOurs(httpsPort, localPort, dnsName)
+        return (await offIfOurs(httpsPort, localPort, dnsName)) === true
       } catch {
         return false
       }
