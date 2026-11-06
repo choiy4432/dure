@@ -13,6 +13,7 @@ const base = (): PhoneState => ({
   url: null,
   pairing: null,
   problem: null,
+  notice: null,
 })
 
 let phone: PhoneState

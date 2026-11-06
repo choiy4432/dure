@@ -49,10 +49,30 @@ export function loginItemSettings(open: boolean, name: string, exe: string): { o
 
 /**
  * 로그인 항목 이름 — 빌드에 실린 package.json 의 name(진짜 두레 'dure' · 시험 빌드는 CLAUDE.md 대로 -c.extraMetadata.name=dure-… 라 늘 다르다).
- * app.getName() 을 바로 쓰지 않는다: productName 을 먼저 보는데, package.json 의 productName('Dure')은 -c.productName 으로는 안 바뀐다(2026-11-05 시험 빌드 실측).
- * 못 읽었거나 꼴이 틀리면 fallback(app.getName())
+ * app.getName() 을 쓰지 않는다: productName 을 먼저 보는데, package.json 의 productName('Dure')은 -c.productName 으로는 안 바뀐다(2026-11-05 시험 빌드 실측).
+ * 꼴이 틀리면 null — 그때는 로그인 항목을 건드리지 않는다(app.getName() 으로 대신하면 시험 빌드가 진짜 두레의 값을 덮거나 지울 수 있다)
  */
-export function loginItemName(pkg: unknown, fallback: string): string {
+export function loginItemName(pkg: unknown): string | null {
   const name = pkg && typeof pkg === 'object' && !Array.isArray(pkg) ? (pkg as { name?: unknown }).name : undefined
-  return typeof name === 'string' && name.trim() !== '' ? name.trim() : fallback
+  return typeof name === 'string' && name.trim() !== '' ? name.trim() : null
+}
+
+/**
+ * 로그인 항목 이름을 처음 한 번만 읽어 둔다 — read = 빌드의 package.json 글. 못 읽거나(파일 없음·JSON 아님) 이름이 없으면 null 이고
+ * 로그는 한 번만(고정된 글 — 경로·오류 글 없이). 빌드 안의 파일이라 한 번 못 읽으면 그 실행 동안 계속 null
+ */
+export function loginItemNamer(read: () => string, log: (msg: string) => void): () => string | null {
+  let done = false
+  let name: string | null = null
+  return () => {
+    if (done) return name
+    done = true
+    try {
+      name = loginItemName(JSON.parse(read()))
+    } catch {
+      name = null
+    }
+    if (name === null) log("[두레] 빌드 이름을 읽지 못해 'Windows 를 켜면 두레도 켜기'를 건드리지 않았어요")
+    return name
+  }
 }

@@ -28,7 +28,8 @@ export type PhoneServeRecord = { httpsPort: number; localPort: number; dnsName?:
 
 /**
  * serve — 지금 열려 있을 수 있는 두레 길(PhoneServeRecord) ·
- * httpsPort — 휴대폰이 아는 https 포트(마지막으로 길을 연 포트). 끈 뒤에도 남겨 다음 켜기에서 먼저 쓴다 — 주소가 바뀌면 홈 화면 앱·알림 구독이 끊긴다
+ * httpsPort — 휴대폰이 아는 https 포트(마지막으로 길을 연 포트). 끈 뒤에도 남겨 다음 켜기에서 먼저 쓴다 — 주소가 바뀌면 홈 화면 앱·알림 구독이 끊긴다 ·
+ * funnelPort — Funnel(인터넷 공개) 때문에 비켜 간 https 포트. 비고 공개가 아니면 다음 켜기·확인 때 그리로 돌아간다(그 포트로 열거나, 남이 써서 비켜 갔으면 지움)
  */
 export type PhoneFile = {
   settings: PhoneSettings
@@ -36,18 +37,20 @@ export type PhoneFile = {
   vapid?: VapidKeys
   serve?: PhoneServeRecord
   httpsPort?: number
+  funnelPort?: number
 }
 
 /** 설정은 칸별로 합친다(notify 도 칸별로) — 꼴이 틀린 칸은 무시하고 지금 값 그대로 */
 export type PhoneSettingsPatch = Partial<Omit<PhoneSettings, 'notify'>> & { notify?: Partial<PhoneSettings['notify']> }
 
-/** devices·vapid·serve 는 주면 통째로 바뀐다(serve: null 은 지움) — 꼴이 틀리면 write 가 던진다 */
+/** devices·vapid·serve 는 주면 통째로 바뀐다(serve·funnelPort: null 은 지움) — 꼴이 틀리면 write 가 던진다 */
 export type PhoneFilePatch = {
   settings?: PhoneSettingsPatch
   devices?: StoredPhoneDevice[]
   vapid?: VapidKeys
   serve?: PhoneServeRecord | null
   httpsPort?: number
+  funnelPort?: number | null
 }
 
 export interface PhoneStore {
@@ -225,6 +228,7 @@ function fileFrom(raw: Record<string, unknown>): PhoneFile {
   const serve = serveFrom(raw.serve)
   if (serve) out.serve = serve
   if (isPort(raw.httpsPort)) out.httpsPort = raw.httpsPort
+  if (isPort(raw.funnelPort)) out.funnelPort = raw.funnelPort
   return out
 }
 
@@ -292,6 +296,9 @@ export function openPhoneStore(dir: string, o: { now?: () => number } = {}): Pho
       if (patch.httpsPort !== undefined && !isPort(patch.httpsPort)) throw new Error('https 포트 꼴이 틀렸어요')
       const httpsPort = patch.httpsPort ?? cur.httpsPort
       if (httpsPort !== undefined) next.httpsPort = httpsPort
+      if (patch.funnelPort != null && !isPort(patch.funnelPort)) throw new Error('https 포트 꼴이 틀렸어요')
+      const funnelPort = patch.funnelPort === null ? undefined : (patch.funnelPort ?? cur.funnelPort)
+      if (funnelPort !== undefined) next.funnelPort = funnelPort
       fs.mkdirSync(dir, { recursive: true })
       const tmp = `${file}.tmp`
       fs.writeFileSync(tmp, fileText(next))

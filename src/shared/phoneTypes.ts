@@ -69,6 +69,11 @@ export type PhoneState = {
   pairing: { pin: string; expiresAt: number } | null
   /** 켜기가 Tailscale 상태 밖의 까닭으로 멈췄다(https 포트가 다 쓰임·serve 실패·서버 포트 없음) — 한국어 한 줄, 없으면 null */
   problem: string | null
+  /**
+   * 다시 연 휴대폰 주소가 앞서 연 주소와 다르다(PC 이름이 바뀜·Funnel 때문에 https 포트를 옮김·공개가 풀려 돌아감) — 짝 맺은 휴대폰이 있을 때만.
+   * 한국어 한 줄, 없으면 null. 휴대폰 창이 보고 phoneNoticeSeen 하거나, 짝을 다시 맺거나(phonePairStart), 끄면 지워진다
+   */
+  notice: string | null
 }
 
 /** setPhone 이 받는 것 — 화면이 바꾸는 칸만(포트는 main 이 정한다). 꼴이 틀린 칸은 pickPhoneChange 가 버린다 */

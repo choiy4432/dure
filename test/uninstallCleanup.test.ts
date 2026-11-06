@@ -4,7 +4,9 @@ import path from 'node:path'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { TailscaleState } from '../src/shared/phoneTypes'
 import { DEFAULT_PHONE_SETTINGS } from '../src/shared/phoneTypes'
-import { UNINSTALL_CLEANUP_ARG, uninstallCleanup } from '../src/main/uninstallCleanup'
+import {
+  UNINSTALL_CLEANUP_ARG, UNINSTALL_HARD_CAP_MS, UNINSTALL_ROUTE_WAIT_MS, uninstallCleanup, uninstallHardCap,
+} from '../src/main/uninstallCleanup'
 
 // 제거 프로그램이 부르는 정리(`Dure.exe --uninstall-cleanup`) — 두레가 연 tailscale serve 길 · 그 빌드의 로그인 항목만.
 // 🔴 가짜 tailscale·가짜 로그인 항목만, 임시 폴더만(진짜 %APPDATA%\Dure·레지스트리는 건드리지 않는다)
@@ -117,4 +119,35 @@ test('phone.json 이 깨졌거나·로그인 항목 지우기가 던져도 — �
   expect(ts.order).toEqual([])
   expect(log).toHaveBeenCalled()
   expect(JSON.stringify(log.mock.calls)).not.toContain(dir) // 경로를 로그에 싣지 않는다
+})
+
+test('전체 상한 — 무엇이 멈춰도(whenReady·로그인 항목 …) 15초 뒤엔 0 으로 나간다 · 길 끄기 상한보다 길다', () => {
+  vi.useFakeTimers()
+  try {
+    const exit = vi.fn()
+    uninstallHardCap(exit)
+    vi.advanceTimersByTime(UNINSTALL_HARD_CAP_MS - 1)
+    expect(exit).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(exit).toHaveBeenCalledWith(0)
+    expect(exit).toHaveBeenCalledTimes(1)
+  } finally {
+    vi.useRealTimers()
+  }
+  expect(UNINSTALL_HARD_CAP_MS).toBe(15_000)
+  expect(UNINSTALL_HARD_CAP_MS).toBeGreaterThan(UNINSTALL_ROUTE_WAIT_MS)
+})
+
+test('index.ts — --uninstall-cleanup 갈래는 맨 먼저 전체 상한을 건다(정리가 멈춰도 제거 프로그램의 ExecWait 를 붙잡지 않게)', () => {
+  const main = fs.readFileSync(path.resolve('src/main/index.ts'), 'utf8')
+  const at = main.indexOf('if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {')
+  expect(at).toBeGreaterThan(-1)
+  // 주석 줄을 빼면 갈래의 첫 문장이 상한
+  const first = main
+    .slice(at)
+    .split(/\r?\n/)
+    .slice(1)
+    .map((l) => l.trim())
+    .find((l) => l !== '' && !l.startsWith('//'))
+  expect(first).toBe('uninstallHardCap((code) => app.exit(code))')
 })

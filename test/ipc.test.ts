@@ -113,6 +113,7 @@ const PHONE_STATE: PhoneState = {
   url: 'https://pc.tail0000.ts.net/mobile.html',
   pairing: null,
   problem: null,
+  notice: null,
 }
 const PAIR_OFFER = { qr: 'data:image/png;base64,AA', pin: '123456', url: 'https://pc.tail0000.ts.net/mobile.html#pair=x', expiresAt: 9 }
 
@@ -125,6 +126,7 @@ function fakeApp() {
     phonePairStart: vi.fn(async () => PAIR_OFFER),
     phonePairCancel: vi.fn(async () => {}),
     phoneUnpair: vi.fn(async (_id: string) => {}),
+    phoneNoticeSeen: vi.fn(async () => {}),
     appInfo: vi.fn(async () => ({ version: '1.2.3', packaged: false })),
     prefs: vi.fn(async () => PREFS),
     setPrefs: vi.fn(async (p: object) => ({ ...PREFS, ...p })),
@@ -280,10 +282,10 @@ describe('registerIpc', () => {
     }
   })
 
-  it('APP_METHODS 20개(휴대폰 6개 포함) · 엔진 메서드와 겹치지 않는다 · BEFORE_START 는 엔진 메서드 중에서 · 앱 사건 이름 넷', () => {
+  it('APP_METHODS 21개(휴대폰 7개 포함) · 엔진 메서드와 겹치지 않는다 · BEFORE_START 는 엔진 메서드 중에서 · 앱 사건 이름 넷', () => {
     expect([...APP_METHODS].sort()).toEqual([
       'appInfo', 'checkUpdate', 'claudeUpdateState', 'downloadUpdate', 'installClaude', 'installUpdate', 'loginClaude',
-      'openReleasePage', 'openSetupGuide', 'phoneCheck', 'phonePairCancel', 'phonePairStart', 'phoneState', 'phoneUnpair',
+      'openReleasePage', 'openSetupGuide', 'phoneCheck', 'phoneNoticeSeen', 'phonePairCancel', 'phonePairStart', 'phoneState', 'phoneUnpair',
       'prefs', 'setPhone', 'setPrefs', 'setTourVeil', 'setupState', 'updateState',
     ])
     for (const m of APP_METHODS) expect(METHODS as readonly string[], m).not.toContain(m)
@@ -315,13 +317,16 @@ describe('registerIpc', () => {
   })
 
   it('phone 메서드는 창에서만 — 앱 화면이면 deps.app 으로(엔진 없어도), 다른 프레임·휴대폰 디스패처는 거절', async () => {
-    const PHONE_METHODS = ['phoneState', 'setPhone', 'phoneCheck', 'phonePairStart', 'phonePairCancel', 'phoneUnpair'] as const
+    const PHONE_METHODS = ['phoneState', 'setPhone', 'phoneCheck', 'phonePairStart', 'phonePairCancel', 'phoneUnpair', 'phoneNoticeSeen'] as const
     const { call, callFrom, deps } = setup(false)
     expect(await call('phoneState')).toEqual({ ok: true, value: PHONE_STATE })
     expect(await call('phoneCheck')).toEqual({ ok: true, value: { kind: 'logged-out' } })
     expect(await call('phonePairStart')).toEqual({ ok: true, value: PAIR_OFFER })
     expect(await call('phonePairCancel', 'x')).toEqual({ ok: true, value: null })
     expect(deps.app.phonePairCancel).toHaveBeenCalledWith()
+    // phoneNoticeSeen — 주소가 바뀌었다는 알림을 봤다(인자는 넘기지 않는다)
+    expect(await call('phoneNoticeSeen', 'x')).toEqual({ ok: true, value: null })
+    expect(deps.app.phoneNoticeSeen).toHaveBeenCalledWith()
     // setPhone — 불리언인 아는 칸만(포트·모르는 칸·글은 버림)
     expect(await call('setPhone', { enabled: true, port: 1, keepAwake: 'y', notify: { asks: false, x: 1 }, extra: true })).toEqual({ ok: true, value: null })
     expect(deps.app.setPhone).toHaveBeenLastCalledWith({ enabled: true, notify: { asks: false } })

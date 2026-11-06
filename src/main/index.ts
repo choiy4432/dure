@@ -8,7 +8,7 @@ import { killTree } from '../engine/killTree'
 import { authStatus, claudeVersion, createEngine, locateClaude } from '../engine'
 import type { Engine } from '../engine'
 import type { AppEventMap, ClaudeUpdateState } from '../shared/appTypes'
-import { appEnv, appIconFor, appUserModelId, loginItemName, loginItemSettings } from './appEnv'
+import { appEnv, appIconFor, appUserModelId, loginItemNamer, loginItemSettings } from './appEnv'
 import { initAppPrefsSafe, writeAppPrefs } from './appPrefs'
 import { resolveClaudeCommand, resolveSshCommand, type ClaudeCommand } from './claudeCommand'
 import { cmdArgs, startWaitLine } from './cmdLine'
@@ -22,7 +22,7 @@ import { createDispatcher } from './dispatch'
 import { createPhoneController, phoneStaticDir, type PhoneController } from './phone/phoneController'
 import { createTailscale, resolveTailscaleCommand } from './phone/tailscale'
 import { createTrayControl, startHidden, trayTipOnce, TRAY_TIP, type TrayControl } from './tray'
-import { UNINSTALL_CLEANUP_ARG, uninstallCleanup } from './uninstallCleanup'
+import { UNINSTALL_CLEANUP_ARG, uninstallCleanup, uninstallHardCap } from './uninstallCleanup'
 import { appPageMatcher, focusExisting, guardNavigation, HIDDEN_ARG, withoutHiddenArg } from './window'
 import { TITLE_BAR_HEIGHT, veiledColor, windowColors } from './windowTheme'
 
@@ -170,13 +170,17 @@ function e2eFolders(raw: string | undefined): (() => string | null) | null {
 // Windows 알림·작업표시줄 묶음이 앱을 알아보게 — 설치본은 고정 ID, 개발 실행은 execPath
 if (process.platform === 'win32') app.setAppUserModelId(appUserModelId(app.isPackaged, process.execPath))
 
-/** 로그인 항목 이름 — 빌드에 실린 package.json 의 name(시험 빌드는 dure-…). 못 읽으면 app.getName() */
-function loginName(): string {
-  try {
-    return loginItemName(JSON.parse(readFileSync(join(app.getAppPath(), 'package.json'), 'utf8')), app.getName())
-  } catch {
-    return app.getName()
-  }
+/** 로그인 항목 이름 — 빌드에 실린 package.json 의 name(시험 빌드는 dure-…). 처음 한 번 읽고, 못 읽으면 null(로그 한 번) */
+const loginName = loginItemNamer(() => readFileSync(join(app.getAppPath(), 'package.json'), 'utf8'), console.error)
+
+/**
+ * 이 빌드의 'Windows 를 켜면 두레도 켜기' 켜기·끄기 — 🔴 설치본만(개발 실행·시험은 건드리지 않는다).
+ * 이름은 빌드마다(loginName) — 시험 빌드가 진짜 두레의 값을 덮거나 지우지 않게(loginItemSettings). 이름을 못 읽으면 건드리지 않는다
+ */
+function setLoginItem(open: boolean): void {
+  if (!app.isPackaged) return
+  const name = loginName()
+  if (name !== null) app.setLoginItemSettings(loginItemSettings(open, name, process.execPath))
 }
 
 const indexFile = join(__dirname, '../renderer/index.html')
@@ -258,15 +262,15 @@ function createWindow(o: { hidden: boolean }): BrowserWindow {
 if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
   // 제거 프로그램이 부른 정리(build/installer.nsh) — 창·트레이·엔진 없이 두레가 연 serve 길과 이 빌드의 로그인 항목만 끄고 늘 0 으로 나간다.
   // 한 인스턴스 잠금은 잡지 않는다(켜진 두레가 second-instance 로 창을 띄우지 않게). 🔴 로그인 항목은 설치본만(개발 실행·시험은 건드리지 않는다)
+  // 맨 먼저 전체 상한(15초) — 어디서 멈춰도 제거 프로그램(ExecWait)을 붙잡지 않는다
+  uninstallHardCap((code) => app.exit(code))
   void app
     .whenReady()
     .then(() =>
       uninstallCleanup({
         dataDir: app.getPath('userData'),
         tailscale: createTailscale(resolveTailscaleCommand(env)),
-        removeLoginItem: () => {
-          if (app.isPackaged) app.setLoginItemSettings(loginItemSettings(false, loginName(), process.execPath))
-        },
+        removeLoginItem: () => setLoginItem(false),
       }),
     )
     .catch(() => {})
@@ -421,6 +425,9 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
         async phoneUnpair(id) {
           phoneNow().unpair(id)
         },
+        async phoneNoticeSeen() {
+          phoneNow().noticeSeen()
+        },
       }
       // 저장한 화면 테마를 Windows 에 알린다 — 화면의 prefers-color-scheme·제목 표시줄 단추·스크롤바가 따른다(claude 가 없으면 Windows 따라감)
       nativeTheme.themeSource = engine?.theme() ?? 'system'
@@ -549,12 +556,7 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
           stop: (id) => powerSaveBlocker.stop(id),
         },
         idle: () => powerMonitor.getSystemIdleState(PHONE_IDLE_S),
-        loginItem: {
-          set(open) {
-            // 이름은 빌드마다(loginName — package.json name) — 시험 빌드가 진짜 두레의 값을 덮거나 지우지 않게(loginItemSettings)
-            if (app.isPackaged) app.setLoginItemSettings(loginItemSettings(open, loginName(), process.execPath))
-          },
-        },
+        loginItem: { set: (open) => setLoginItem(open) },
         emit: (s) => {
           emitApp('phone', s)
           tray?.sync(s.settings.enabled)

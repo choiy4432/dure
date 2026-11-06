@@ -294,3 +294,20 @@ test('serve 길 기록 · https 포트 — 쓰고 다시 읽힘 · serve:null �
   expect(f.serve).toBeUndefined();
   expect(f.httpsPort).toBeUndefined();
 });
+
+test('funnelPort(Funnel 때문에 비켜 간 https 포트) — 쓰고 다시 읽힘 · null 이면 지움 · 다른 칸을 써도 그대로 · 꼴이 틀리면 던짐 · 손댄 칸은 버림', () => {
+  const s = openPhoneStore(dir);
+  s.write({ httpsPort: 47615, funnelPort: 443 });
+  expect(saved()).toMatchObject({ httpsPort: 47615, funnelPort: 443 });
+  expect(openPhoneStore(dir).read()).toMatchObject({ httpsPort: 47615, funnelPort: 443 });
+  s.write({ httpsPort: 47615 }); // 주지 않으면 그대로
+  expect(saved().funnelPort).toBe(443);
+  s.write({ funnelPort: null });
+  expect(saved().funnelPort).toBeUndefined();
+  expect(saved().httpsPort).toBe(47615);
+  for (const bad of [0, 70000, 1.5, '443']) expect(() => s.write({ funnelPort: bad as never }), String(bad)).toThrow('https 포트 꼴이 틀렸어요');
+  expect(saved().funnelPort).toBeUndefined();
+
+  seed({ settings: {}, devices: [], funnelPort: 'x' });
+  expect(openPhoneStore(dir).read().funnelPort).toBeUndefined();
+});

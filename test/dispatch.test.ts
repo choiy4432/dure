@@ -82,6 +82,7 @@ function fakeDeps(over: Partial<DispatchDeps> = {}): DispatchDeps {
       phonePairStart: vi.fn(async () => ({ qr: 'data:,', pin: '000000', url: 'https://x/mobile.html#pair=y', expiresAt: 1 })),
       phonePairCancel: vi.fn(async () => {}),
       phoneUnpair: vi.fn(async () => {}),
+      phoneNoticeSeen: vi.fn(async () => {}),
     },
     engineReady: Promise.resolve(),
     pickFolder: vi.fn(async () => 'C:/picked'),

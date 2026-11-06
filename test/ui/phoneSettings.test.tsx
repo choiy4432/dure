@@ -19,6 +19,7 @@ const base = (): PhoneState => ({
   url: null,
   pairing: null,
   problem: null,
+  notice: null,
 })
 
 let phone: PhoneState
@@ -74,6 +75,11 @@ beforeEach(() => {
     }),
     phoneUnpair: vi.fn(async (id: string) => {
       phone = { ...phone, devices: phone.devices.filter(d => d.id !== id) }
+      handlers.phone?.(phone)
+    }),
+    // main 처럼 — 봤다고 하면 알림을 지우고 'phone' 사건
+    phoneNoticeSeen: vi.fn(async () => {
+      phone = { ...phone, notice: null }
       handlers.phone?.(phone)
     }),
     on: (n: string, h: (p: any) => void) => {
@@ -306,6 +312,43 @@ describe('휴대폰 창', () => {
     emit({ settings: { ...phone.settings, enabled: true }, problem: 'tailnet 의 https 포트 443·47615 가 모두 다른 곳에 쓰이고 있어요 — 하나를 비워 주세요' })
     expect(within(dlg).getByText('tailnet 의 https 포트 443·47615 가 모두 다른 곳에 쓰이고 있어요 — 하나를 비워 주세요')).toBeTruthy()
     expect(steps(dlg).at(-1)?.[1]).toBe('need')
+  })
+
+  it('주소가 바뀌었다는 알림(notice) — 창을 열면 보이고 main 엔 봤다고 알린다 · main 이 지워도 창이 열린 동안은 남고, 짝 맺기를 열면 사라진다', async () => {
+    const MOVED = '주소가 바뀌었어요 — 휴대폰을 다시 짝 맺어 주세요'
+    phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY, url: 'https://fake-pc.tail0000.ts.net:47615/mobile.html', notice: MOVED }
+    await renderApp()
+    expect(api.phoneNoticeSeen).not.toHaveBeenCalled() // 창을 열기 전엔 — 아직 아무도 못 봤다
+    const { dlg } = await openPhone()
+    expect(api.phoneNoticeSeen).toHaveBeenCalledTimes(1)
+    expect(phone.notice).toBeNull()
+    const line = within(dlg).getByText(MOVED)
+    expect(line.closest('.phn-panel')).not.toBeNull() // 주소와 같은 칸
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '휴대폰 짝 맺기' })) })
+    await settle()
+    expect(within(dlg).queryByText(MOVED)).toBeNull()
+    expect(api.phoneNoticeSeen).toHaveBeenCalledTimes(1)
+  })
+
+  it('창이 열린 채 주소가 바뀌면 그 자리에 알림 · 닫았다 다시 열면 없다(이미 봤다)', async () => {
+    const MOVED = '주소가 바뀌었어요 — 휴대폰을 다시 짝 맺어 주세요'
+    phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN }
+    await renderApp()
+    const { dlg } = await openPhone()
+    expect(within(dlg).queryByText(MOVED)).toBeNull()
+    emit({ url: 'https://fake-pc.tail0000.ts.net:47615/mobile.html', notice: MOVED })
+    await settle()
+    expect(within(dlg).getByText(MOVED)).toBeTruthy()
+    expect(api.phoneNoticeSeen).toHaveBeenCalledTimes(1)
+    expect(within(dlg).getByText(MOVED)).toBeTruthy() // main 이 지운 뒤에도
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '닫기' })) })
+    await settle()
+    expect(screen.queryByRole('dialog', { name: '휴대폰' })).toBeNull()
+    const settings = screen.getByRole('dialog', { name: '설정' })
+    await act(async () => { fireEvent.click(within(settings).getByRole('button', { name: '휴대폰 열기' })) })
+    await settle()
+    expect(within(screen.getByRole('dialog', { name: '휴대폰' })).queryByText(MOVED)).toBeNull()
+    expect(api.phoneNoticeSeen).toHaveBeenCalledTimes(1)
   })
 
   it('꺼진 채 까닭이 있으면(전에 연 길을 못 정리) [다시 확인] — 창으로 돌아와도 다시 확인, 풀리면 단추는 없다', async () => {

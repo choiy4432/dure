@@ -445,7 +445,7 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
       const serve = JSON.parse(fs.readFileSync(path.join(tsRoot, 'serve.json'), 'utf8')) as { Web?: Record<string, unknown> }
       expect(Object.keys(serve.Web ?? {})).toEqual([`${RENAMED}:443`])
       const rec = (JSON.parse(fs.readFileSync(path.join(userData, 'phone.json'), 'utf8')) as { serve?: { dnsName?: string; localPort: number } }).serve
-      expect(rec).toMatchObject({ dnsName: RENAMED, localPort: port }) // 같은 서버(포트) 그대로
+      expect(rec).toMatchObject({ dnsName: RENAMED, localPort: port }) // 예전 서버는 닫고(소켓 끊김) 같은 포트로 다시 열었다
       await expect(page.locator('button.phn-top')).toHaveText('휴대폰 · 0')
     })
 

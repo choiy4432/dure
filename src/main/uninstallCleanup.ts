@@ -10,6 +10,13 @@ import { offRecordedRoute, type Tailscale } from './phone/tailscale'
 export const UNINSTALL_CLEANUP_ARG = '--uninstall-cleanup'
 /** 길 끄기를 기다리는 상한 — 제거를 오래 붙잡지 않는다(못 끄면 그대로 둔다) */
 export const UNINSTALL_ROUTE_WAIT_MS = 5_000
+/** 정리 전체의 상한 — 길 끄기 밖에서 멈춰도(whenReady·로그인 항목 지우기 …) 이만큼 뒤엔 나간다. 제거 프로그램은 ExecWait 로 끝없이 기다린다 */
+export const UNINSTALL_HARD_CAP_MS = 15_000
+
+/** 전체 상한을 건다 — 시간이 다 되면 exit(0)(제거는 계속). index.ts 가 --uninstall-cleanup 갈래 맨 앞에서 부른다 */
+export function uninstallHardCap(exit: (code: number) => void, ms = UNINSTALL_HARD_CAP_MS): ReturnType<typeof setTimeout> {
+  return setTimeout(() => exit(0), ms)
+}
 
 export interface UninstallCleanupOptions {
   /** <userData> — phone.json 이 여기 */

@@ -91,6 +91,7 @@ export const PHONE_ACCESS: Readonly<Record<ApiMethod, PhoneAccess>> = Object.fre
   phonePairStart: 'pc',
   phonePairCancel: 'pc',
   phoneUnpair: 'pc',
+  phoneNoticeSeen: 'pc',
 })
 
 /** 휴대폰에서 부를 수 있는 이름인가 — 목록에 'phone' 으로 적힌 것만(프로토타입 이름·모르는 이름·글이 아닌 것은 false) */

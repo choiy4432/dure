@@ -176,6 +176,8 @@ export interface DureApi {
   phonePairCancel(): Promise<void>
   /** 그 기기를 끊는다 — 토큰 무효 + 열린 연결 바로 닫기 */
   phoneUnpair(id: string): Promise<void>
+  /** 휴대폰 창이 '주소가 바뀌었어요' 알림(PhoneState.notice)을 받아 보였다 — main 이 지운다(창은 열린 동안 그대로 보인다) */
+  phoneNoticeSeen(): Promise<void>
 
   /** 해제 함수를 돌려준다 */
   on<K extends keyof DureEventMap>(k: K, fn: (p: DureEventMap[K]) => void): () => void
@@ -197,7 +199,7 @@ export type ApiMethod = Exclude<keyof DureApi, PreloadOnly>
 export const APP_METHODS = [
   'appInfo', 'prefs', 'setPrefs', 'setupState', 'installClaude', 'loginClaude', 'openSetupGuide',
   'claudeUpdateState', 'updateState', 'checkUpdate', 'downloadUpdate', 'installUpdate', 'openReleasePage', 'setTourVeil',
-  'phoneState', 'setPhone', 'phoneCheck', 'phonePairStart', 'phonePairCancel', 'phoneUnpair',
+  'phoneState', 'setPhone', 'phoneCheck', 'phonePairStart', 'phonePairCancel', 'phoneUnpair', 'phoneNoticeSeen',
 ] as const satisfies readonly ApiMethod[]
 
 /** invoke 로 부를 수 있는 엔진 쪽 이름 — DureApi 의 메서드 중 on·pathForFile(preload 안에서 처리)과 APP_METHODS 가 빠진다 */

@@ -196,6 +196,17 @@ function Frame({ onClose }: { onClose: () => void }) {
   const [unpairing, setUnpairing] = useState<PhoneDevice | null>(null)
   /** 처음 켤 때 자동 켜기를 함께 켰다 — 말없이 바뀌지 않게 그 스위치 아래에 한 줄 */
   const [loginOfferedNow, setLoginOfferedNow] = useState(false)
+  /**
+   * 주소가 바뀌었다는 알림 — main 의 notice 를 받으면 이 창이 열린 동안 주소 칸에 보이고, main 엔 봤다고 알린다(main 은 지운다 — 다음에 열면 없다).
+   * 짝 맺기를 열면 할 일을 했으니 지운다
+   */
+  const [notice, setNotice] = useState<string | null>(null)
+  const mainNotice = p?.notice ?? null
+  useEffect(() => {
+    if (mainNotice === null) return
+    setNotice(mainNotice)
+    void window.dure.phoneNoticeSeen().catch(() => {})
+  }, [mainNotice])
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
@@ -369,12 +380,21 @@ function Frame({ onClose }: { onClose: () => void }) {
             </p>
           )}
 
-          <Checklist p={p} enabled={enabled} checking={checking} onRecheck={() => void recheck()} />
+          <Checklist p={p} enabled={enabled} checking={checking} notice={notice} onRecheck={() => void recheck()} />
 
           <h3 className="phn-sub">{PHONE.devices}</h3>
           <Devices p={p} onUnpair={setUnpairing} />
           <div className="phn-pair">
-            <button type="button" className="btn pri" data-pair disabled={p.url === null} onClick={() => setPairOpen(true)}>
+            <button
+              type="button"
+              className="btn pri"
+              data-pair
+              disabled={p.url === null}
+              onClick={() => {
+                setNotice(null)
+                setPairOpen(true)
+              }}
+            >
               {PHONE.pair}
             </button>
             {p.url === null && <span className="fld-note">{PHONE.pairWait}</span>}
@@ -477,7 +497,14 @@ function addressOpen(p: PhoneState): boolean {
   return p.settings.enabled && p.url !== null
 }
 
-function Checklist({ p, enabled, checking, onRecheck }: { p: PhoneState; enabled: boolean; checking: boolean; onRecheck: () => void }) {
+function Checklist({ p, enabled, checking, notice, onRecheck }: {
+  p: PhoneState
+  enabled: boolean
+  checking: boolean
+  /** 주소가 바뀌었다는 알림 — 주소 바로 위에 */
+  notice: string | null
+  onRecheck: () => void
+}) {
   const steps = stepsOf(p, enabled, checking)
   const canRecheck = stuck(p, enabled)
   return (
@@ -500,6 +527,7 @@ function Checklist({ p, enabled, checking, onRecheck }: { p: PhoneState; enabled
         })}
       </ul>
       {p.problem && <p className="phn-problem">{p.problem}</p>}
+      {notice && <p className="phn-problem">{notice}</p>}
       {p.url !== null && <UrlRow url={p.url} />}
       {/* 주소가 보일 때만 — 그 주소를 짧게 하는 법 */}
       {p.url !== null && <p className="phn-tip">{PHONE.tip}</p>}

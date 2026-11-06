@@ -409,6 +409,7 @@ const APP_HANDLERS: Record<AppMethod, (app: AppHost, ...a: unknown[]) => unknown
     if (typeof id !== 'string' || id === '') throw new Error(PHONE_DEVICE_BAD)
     return a.phoneUnpair(id)
   },
+  phoneNoticeSeen: (a) => a.phoneNoticeSeen(),
 }
 
 const STARTS_NOW: ReadonlySet<string> = new Set(BEFORE_START)

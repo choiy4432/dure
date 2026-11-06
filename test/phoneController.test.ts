@@ -223,6 +223,8 @@ test('https 포트 — 443 이 비면 443 · 남이 쓰면 47615 · 둘 다 쓰�
   tsA.others.delete(443)
   await a.c.set({ enabled: true })
   expect(tsA.serveOn).toHaveBeenLastCalledWith(47615, 47615, DNS)
+  expect(saved(path.join(dir, 'a')).funnelPort).toBeUndefined() // 남이 쓴 것(Funnel 아님)은 돌아갈 포트가 아니다
+  expect(a.c.state().notice).toBeNull()
 
   const tsB = fakeTailscale()
   tsB.others.add(443).add(47615)
@@ -594,6 +596,8 @@ test('Funnel(인터넷 공개)이 켜진 포트는 쓰지 않음 — 지난 포�
   await c.set({ enabled: true })
   expect(ts.serveOn).toHaveBeenCalledWith(47615, 47615, DNS)
   expect(c.state()).toMatchObject({ url: `https://${DNS}:47615/mobile.html`, problem: null })
+  // 공개 때문에 비켜 간 포트는 기억한다 — 공개가 풀리면 돌아간다
+  expect(saved()).toMatchObject({ httpsPort: 47615, funnelPort: 443 })
 
   const dB = path.join(dir, 'b')
   const tsB = fakeTailscale()
@@ -624,11 +628,11 @@ test('연 뒤에 그 포트에 Funnel 을 켜면 — 확인 때 두레 길·서�
   await vi.waitFor(() => expect(c.state().url).toBe(`https://${DNS}:47615/mobile.html`), { timeout: 3000 })
   expect(c.state().problem).toBeNull()
   expect(ts.routes.has(443)).toBe(false)
-  // 공개가 아니면 확인은 길을 건드리지 않는다
+  // 공개가 아니면 확인은 길을 건드리지 않는다(443 은 아직 공개 — 비었나만 본다)
   const offs = ts.serveOff.mock.calls.length
   await c.check()
   expect(ts.serveOff.mock.calls.length).toBe(offs)
-  expect(ts.calls.slice(-2)).toEqual(['status', 'funnel 47615'])
+  expect(ts.calls.slice(-3)).toEqual(['status', 'funnel 47615', 'free 443'])
 })
 
 test('켜진 채 PC 이름을 바꾸면 — 확인 때 예전 이름의 길을 닫고 지금 이름으로 다시 연다 · 예전 주소의 짝 맺기는 닫힘', async () => {
@@ -644,7 +648,10 @@ test('켜진 채 PC 이름을 바꾸면 — 확인 때 예전 이름의 길을 �
   expect(ts.routes.get(443)).toEqual({ localPort: 47615, dnsName: NEW })
   expect(saved().serve).toEqual({ httpsPort: 443, localPort: 47615, dnsName: NEW })
   expect(c.state()).toMatchObject({ tailscale: { kind: 'ready', dnsName: NEW }, url: `https://${NEW}/mobile.html`, pairing: null, problem: null })
-  expect(servers.made).toHaveLength(1) // 서버는 그대로 — Host 만 새 이름
+  // 예전 서버는 닫고(붙어 있던 휴대폰 소켓이 끊김) 같은 포트로 다시 — Host 는 새 이름
+  expect(servers.made).toHaveLength(2)
+  expect(servers.made[0].closed).toBe(true)
+  expect(servers.last().opts.port).toBe(47615)
   expect(servers.last().opts.allowedHost()).toBe(NEW)
   expect(emitted.at(-1)).toEqual(c.state())
   expect(emitted.some((s) => s.url === `https://${DNS}/mobile.html` && s.tailscale?.kind === 'ready' && s.tailscale.dnsName === NEW)).toBe(false)
@@ -652,6 +659,153 @@ test('켜진 채 PC 이름을 바꾸면 — 확인 때 예전 이름의 길을 �
   const offs = ts.serveOff.mock.calls.length
   await c.check()
   expect(ts.serveOff.mock.calls.length).toBe(offs)
+  expect(servers.made).toHaveLength(2)
+})
+
+test('켜진 채 PC 이름을 바꾸면 — 다시 열기 전에 문부터: 예전 주소를 거두어 알리고 서버를 닫는다(붙어 있던 휴대폰은 다시 여는 동안 아무것도 못 함)', async () => {
+  const NEW = 'renamed-pc.tail0000.ts.net'
+  const ts = fakeTailscale()
+  const power = fakePower()
+  const { c, servers, emitted } = make({ ts, power })
+  await c.set({ enabled: true })
+  const first = servers.last()
+  first.list = [{ deviceId: 'd1', visible: true }]
+  expect(c.state().connected).toBe(1)
+  // 새 이름으로 여는 serveOn 을 붙잡아 둔다 — 그 사이를 본다
+  const real = ts.serveOn.getMockImplementation()!
+  let release: (() => void) | null = null
+  ts.serveOn.mockImplementationOnce(async (h, l, d) => {
+    await new Promise<void>((r) => (release = r))
+    return real(h, l, d)
+  })
+  ts.state = { kind: 'ready', dnsName: NEW }
+  const checking = c.check()
+  await vi.waitFor(() => expect(release).not.toBeNull())
+  expect(first.closed).toBe(true) // 예전 서버가 닫혀 소켓이 끊겼다
+  expect(first.opts.allowedHost()).toBeNull() // 새 요청도 거절
+  expect(power.on.size).toBe(0)
+  expect(c.state()).toMatchObject({ url: null, connected: 0, pairing: null, tailscale: { kind: 'ready', dnsName: NEW } })
+  expect(emitted.at(-1)).toEqual(c.state()) // PC 화면도 예전 주소를 더 보이지 않는다
+  release!()
+  await checking
+  expect(c.state()).toMatchObject({ url: `https://${NEW}/mobile.html`, problem: null })
+  expect(emitted.at(-1)?.url).toBe(`https://${NEW}/mobile.html`)
+  expect(servers.made).toHaveLength(2)
+  expect(power.on.size).toBe(1)
+})
+
+const MOVED = '주소가 바뀌었어요 — 휴대폰을 다시 짝 맺어 주세요'
+const DEVICE = { id: 'd1', name: '폰1', createdAt: 1, lastSeen: null, tokenHash: HASH }
+
+test('Funnel 때문에 포트를 옮겨 다시 열면 — 짝 맺은 휴대폰이 있으면 주소가 바뀌었다는 알림 · 봤다고 하면 지운다', async () => {
+  seed({ devices: [DEVICE] })
+  const ts = fakeTailscale()
+  const { c, emitted } = make({ ts, retryMs: 30 })
+  await c.set({ enabled: true })
+  expect(c.state()).toMatchObject({ url: `https://${DNS}/mobile.html`, notice: null }) // 처음 연 주소는 바뀐 게 아니다
+  ts.funnels.add(443)
+  await c.check()
+  expect(c.state()).toMatchObject({ url: null, problem: FUNNEL, notice: null })
+  await vi.waitFor(() => expect(c.state().url).toBe(`https://${DNS}:47615/mobile.html`), { timeout: 3000 })
+  expect(c.state()).toMatchObject({ problem: null, notice: MOVED })
+  expect(emitted.at(-1)?.notice).toBe(MOVED)
+  // 알림은 휴대폰 창에서 보거나 짝을 다시 맺을 때까지 남는다 — 확인을 해도 그대로
+  await c.check()
+  expect(c.state().notice).toBe(MOVED)
+  c.noticeSeen()
+  expect(c.state().notice).toBeNull()
+  expect(emitted.at(-1)?.notice).toBeNull()
+  c.noticeSeen() // 없으면 아무 일 없음
+  expect(c.state().notice).toBeNull()
+})
+
+test('주소가 바뀌었다는 알림 — 짝을 다시 맺으면(pairStart)·끄면 지운다 · 짝 맺은 휴대폰이 없으면 띄우지 않는다', async () => {
+  seed({ devices: [DEVICE] })
+  const ts = fakeTailscale()
+  const { c } = make({ ts, retryMs: 30 })
+  await c.set({ enabled: true })
+  ts.funnels.add(443)
+  await c.check()
+  await vi.waitFor(() => expect(c.state().notice).toBe(MOVED), { timeout: 3000 })
+  await c.pairStart()
+  expect(c.state().notice).toBeNull()
+
+  // 끄면 지운다 — 주소가 없다
+  ts.funnels.delete(443)
+  await c.check() // 443 으로 돌아가며 다시 알림
+  expect(c.state()).toMatchObject({ url: `https://${DNS}/mobile.html`, notice: MOVED })
+  await c.set({ enabled: false })
+  expect(c.state()).toMatchObject({ url: null, notice: null })
+
+  // 기기가 없으면 알릴 휴대폰도 없다
+  const dB = path.join(dir, 'b')
+  const tsB = fakeTailscale()
+  const b = make({ ts: tsB, dataDir: dB, retryMs: 30 })
+  await b.c.set({ enabled: true })
+  tsB.funnels.add(443)
+  await b.c.check()
+  await vi.waitFor(() => expect(b.c.state().url).toBe(`https://${DNS}:47615/mobile.html`), { timeout: 3000 })
+  expect(b.c.state().notice).toBeNull()
+})
+
+test('Funnel 을 끄면 47615 에 머물지 않는다 — 다음 확인 때 443 이 비고 공개가 아니면 돌아간다(문부터 닫고) · 남이 쓰면 그대로', async () => {
+  seed({ devices: [DEVICE] })
+  const ts = fakeTailscale()
+  const { c, servers } = make({ ts, retryMs: 30 })
+  await c.set({ enabled: true })
+  ts.funnels.add(443)
+  await c.check()
+  await vi.waitFor(() => expect(c.state().url).toBe(`https://${DNS}:47615/mobile.html`), { timeout: 3000 })
+  expect(saved()).toMatchObject({ httpsPort: 47615, funnelPort: 443 }) // 휴대폰이 아는 포트 · Funnel 때문에 비켜 간 포트
+  c.noticeSeen()
+
+  // 아직 공개면 그대로 — 443 이 비었나만 본다
+  await c.check()
+  expect(ts.calls.slice(-3)).toEqual(['status', 'funnel 47615', 'free 443'])
+  expect(c.state().url).toBe(`https://${DNS}:47615/mobile.html`)
+  // 공개를 껐는데 남이 쓰면 그대로
+  ts.funnels.delete(443)
+  ts.others.add(443)
+  await c.check()
+  expect(c.state()).toMatchObject({ url: `https://${DNS}:47615/mobile.html`, notice: null })
+  // 비면 돌아간다 — 두레 길(47615)을 끄고 443 으로, 예전 서버는 닫는다
+  ts.others.delete(443)
+  const before = servers.last()
+  before.list = [{ deviceId: 'd1', visible: true }]
+  await c.check()
+  expect(ts.serveOff).toHaveBeenLastCalledWith(47615, 47615, DNS)
+  expect(ts.serveOn).toHaveBeenLastCalledWith(443, 47615, DNS)
+  expect(before.closed).toBe(true)
+  expect(ts.routes.has(47615)).toBe(false)
+  expect(c.state()).toMatchObject({ url: `https://${DNS}/mobile.html`, problem: null, notice: MOVED })
+  expect(saved().httpsPort).toBe(443)
+  expect(saved().funnelPort).toBeUndefined()
+  // 돌아온 뒤엔 확인이 길을 건드리지 않는다
+  const offs = ts.serveOff.mock.calls.length
+  await c.check()
+  expect(ts.serveOff.mock.calls.length).toBe(offs)
+  expect(ts.calls.slice(-2)).toEqual(['status', 'funnel 443'])
+})
+
+test('Funnel 때문에 비켜 간 채 다시 켜면(다음 시작도) — 그 포트가 비고 공개가 아니면 먼저 · 주소가 바뀌면 알림, 그대로면 없음', async () => {
+  // 아직 공개 — 지난 포트(47615) 그대로, 주소가 안 바뀌었으니 알림 없음, 비켜 간 포트는 계속 기억
+  seed({ settings: { ...DEFAULT_PHONE_SETTINGS, enabled: true }, devices: [DEVICE], httpsPort: 47615, funnelPort: 443 })
+  const ts = fakeTailscale()
+  ts.funnels.add(443)
+  const a = make({ ts })
+  await a.c.ready
+  expect(ts.calls).toEqual(['status', 'free 443', 'funnel 443', 'free 47615', `on 47615 47615 ${DNS}`])
+  expect(a.c.state()).toMatchObject({ url: `https://${DNS}:47615/mobile.html`, notice: null })
+  expect(saved()).toMatchObject({ httpsPort: 47615, funnelPort: 443 })
+  await a.c.set({ enabled: false })
+
+  // 공개를 끈 뒤 다시 켜면 443 — 휴대폰이 아는 주소(47615)와 다르니 알림
+  ts.funnels.delete(443)
+  await a.c.set({ enabled: true })
+  expect(ts.serveOn).toHaveBeenLastCalledWith(443, 47615, DNS)
+  expect(a.c.state()).toMatchObject({ url: `https://${DNS}/mobile.html`, notice: MOVED })
+  expect(saved().httpsPort).toBe(443)
+  expect(saved().funnelPort).toBeUndefined()
 })
 
 test('PC 이름이 바뀐 줄 모른 채 끄면 — 그 길이 지금 이름 아래로 옮겨졌어도 같은 짝(https 포트·로컬 포트)을 끈다', async () => {
@@ -867,7 +1021,7 @@ test('서버에 잇는 것 — 휴대폰 디스패처(휴대폰 메서드 거절
   expect(s.opts.inboxDir).toBe(inboxOf())
   expect(s.opts.staticDir).toBe(path.join(dir, 'static'))
 
-  for (const m of ['phoneState', 'setPhone', 'phoneCheck', 'phonePairStart', 'phonePairCancel', 'phoneUnpair', 'setPrefs', 'pickFolder']) {
+  for (const m of ['phoneState', 'setPhone', 'phoneCheck', 'phonePairStart', 'phonePairCancel', 'phoneUnpair', 'phoneNoticeSeen', 'setPrefs', 'pickFolder']) {
     expect(await s.opts.dispatch(m, [{ enabled: false }]), m).toEqual({ ok: false, error: PHONE_DENIED })
   }
   expect(inner).not.toHaveBeenCalled()
