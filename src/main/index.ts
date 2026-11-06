@@ -44,11 +44,11 @@ const phoneOn = (): boolean => {
     return false
   }
 }
-/** 트레이 — 휴대폰 연결을 켜 둔 동안만. 그동안 창을 닫으면 숨긴다(tray.ts) */
+/** 트레이 — 늘 있다. 창을 닫으면 숨긴다(tray.ts) */
 let tray: TrayControl | null = null
 /** 처음 숨을 때 안내 알림 — 누름을 받으려면 붙들어 둔다(안 그러면 GC 가 거둔다) */
 let trayTipNote: Notification | null = null
-/** 숨겨 시작(로그인 항목의 --hidden) — 휴대폰 연결이 켜져 있고 트레이가 정말 있을 때만 창을 띄우지 않는다(startHidden) */
+/** 숨겨 시작(로그인 항목의 --hidden) — 트레이가 정말 있을 때만 창을 띄우지 않는다(startHidden) */
 const launchedHidden = process.argv.includes(HIDDEN_ARG)
 /** 창이 생기기 전(엔진 준비 중)에 두레를 또 켰다 — 그러면 숨겨 시작이어도 창을 보인다 */
 let showRequested = false
@@ -506,19 +506,21 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
           appEventSinks.push(fn)
         },
       }
-      // 트레이 — 휴대폰 연결 켜짐을 따른다('phone' 사건·아래 sync). 아이콘은 창과 같은 앱 아이콘. [두레 끄기]는 app.quit() → before-quit 의 끄는 길 그대로
+      // 트레이 — 늘 있다. 메뉴·툴팁은 휴대폰 연결 켜짐을 따른다('phone' 사건·아래 sync). 아이콘은 창과 같은 앱 아이콘. [두레 끄기]는 app.quit() → before-quit 의 끄는 길 그대로
       tray = createTrayControl({
         makeTray(spec) {
           const t = new Tray(appIcon)
-          t.setToolTip(spec.tooltip)
-          t.setContextMenu(Menu.buildFromTemplate(spec.menu.map((m) => ({ label: m.label, click: () => m.click() }))))
+          const apply = (s: Pick<typeof spec, 'tooltip' | 'menu'>) => {
+            t.setToolTip(s.tooltip)
+            t.setContextMenu(Menu.buildFromTemplate(s.menu.map((m) => ({ label: m.label, click: () => m.click() }))))
+          }
+          apply(spec)
           t.on('click', () => spec.onClick())
-          return t
+          return { update: apply, destroy: () => t.destroy() }
         },
         showWindow: () => focusExisting(mainWindow),
-        isWindowVisible: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible(),
         phoneOff() {
-          // 끄기가 끝나면 'phone' 사건이 트레이를 거둔다 — 사건이 안 와도 지금 값으로 한 번 더 맞춘다
+          // 끄기가 끝나면 'phone' 사건이 메뉴를 맞춘다 — 사건이 안 와도 지금 값으로 한 번 더 맞춘다
           void phoneNow()
             .set({ enabled: false })
             .catch(() => console.error('[두레] 휴대폰 연결을 끄지 못했어요'))
@@ -568,7 +570,7 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
         },
         allowLocal: env.DURE_PHONE_ALLOW_LOCAL === '1',
       })
-      // 켜진 채 시작하면 길이 열리기 전(첫 'phone' 사건 전)에도 트레이가 있게
+      // 트레이를 지금 만든다(휴대폰 연결이 켜진 채 시작하면 길이 열리기 전에도 메뉴가 맞게)
       tray.sync(phoneOn())
       registerIpc(
         ipcMain,
@@ -580,12 +582,12 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
       )
       // 트레이를 못 만들었거나(기록만 남는다) 그사이 두레를 또 켰으면 숨기지 않는다 — 창도 트레이도 없는 두레가 되지 않게
       const win = createWindow({
-        hidden: startHidden({ launchedHidden, phoneOn: phoneOn(), trayActive: tray.active(), showRequested }),
+        hidden: startHidden({ launchedHidden, trayActive: tray.active(), showRequested }),
       })
       mainWindow = win
-      // 창 닫기(×) — 휴대폰 연결 중이면 막고 숨긴다(트레이로). 꺼져 있거나 끄는 중(before-quit 이 정리를 시작함 · 업데이트 설치)이면 지금처럼 닫힌다
+      // 창 닫기(×) — 막고 숨긴다(트레이로). 끄는 중(before-quit 이 정리를 시작함 · 업데이트 설치 · Windows 로그아웃)이면 닫힌다
       win.on('close', (e) => {
-        tray?.close(e, { phoneOn: phoneOn(), quitting: quitControl.started() || sessionEnding, hide: () => win.hide() })
+        tray?.close(e, { quitting: quitControl.started() || sessionEnding, hide: () => win.hide() })
       })
 
       const smokeMs = Number(env.DURE_SMOKE_EXIT_MS)

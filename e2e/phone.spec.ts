@@ -202,7 +202,7 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
       const build = Menu.buildFromTemplate.bind(Menu)
       Menu.buildFromTemplate = (t: Parameters<typeof Menu.buildFromTemplate>[0]) => {
         const items = t as Item[]
-        if (items.some((i) => i.label === '휴대폰 연결 끄기')) g.__e2e.tray = items
+        if (items.some((i) => i.label === '두레 끄기')) g.__e2e.tray = items // 트레이 메뉴(늘 있다) — 마지막으로 만든 것
         return build(t)
       }
       return powerSaveBlocker.start === start
@@ -465,15 +465,22 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
       await expect(phone.getByRole('textbox', { name: '숫자 6자리' })).toBeVisible()
     })
 
-    await test.step('트레이 메뉴 휴대폰 연결 끄기 → serve off · 서버 닫힘 · 창 다시 보임', async () => {
+    await test.step('트레이 메뉴 휴대폰 연결 끄기 → serve off · 서버 닫힘 · 트레이는 그대로(메뉴만) · 트레이에서 창 열기', async () => {
       const offs = () => tailscaleCalls(tsLog).filter((c) => c === 'serve --https=443 off').length
       const offsBefore = offs()
+      const trayMenu = () => app.evaluate(() => (globalThis as unknown as { __e2e: { tray: { label?: string }[] | null } }).__e2e.tray?.map((i) => i.label) ?? null)
       await app.evaluate(() => {
         const items = (globalThis as unknown as { __e2e: { tray: { label?: string; click?: () => void }[] } }).__e2e.tray
         items.find((i) => i.label === '휴대폰 연결 끄기')!.click!()
       })
       await expect.poll(offs).toBe(offsBefore + 1)
-      // 트레이가 없어지면 숨은 창을 보인다(창도 트레이도 없는 두레가 되지 않게)
+      // 트레이는 늘 있다 — '휴대폰 연결 끄기'만 빠지고, 숨은 창은 숨은 채
+      await expect.poll(trayMenu).toEqual(['두레 열기', '두레 끄기'])
+      expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => w.isVisible()))).toEqual([false])
+      await app.evaluate(() => {
+        const items = (globalThis as unknown as { __e2e: { tray: { label?: string; click?: () => void }[] } }).__e2e.tray
+        items.find((i) => i.label === '두레 열기')!.click!()
+      })
       await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => w.isVisible()))).toEqual([true])
       await expect(master).toHaveAttribute('aria-checked', 'false')
       await expect(page.locator('button.phn-top')).toHaveCount(0)

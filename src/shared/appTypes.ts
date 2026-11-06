@@ -3,7 +3,7 @@ import type { PhoneState } from './phoneTypes'
 
 /**
  * 앱 설정 — settings.json 에 엔진 설정과 나란히(main 의 appPrefs.ts)
- * trayTipSeen: 휴대폰 연결 중 창을 닫아 트레이로 숨었을 때의 첫 안내('두레는 트레이에서 계속 돌아요')를 봤다(main 이 써 둔다)
+ * trayTipSeen: 창을 닫아 트레이로 숨었을 때의 첫 안내('두레는 트레이에서 계속 돌아요')를 봤다(main 이 써 둔다)
  */
 export type AppPrefs = { tourDone: boolean; approvalTipSeen: boolean; claudeAutoUpdate: boolean; trayTipSeen: boolean }
 

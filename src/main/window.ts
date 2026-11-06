@@ -62,7 +62,7 @@ export interface WindowLike {
   focus(): void
 }
 
-/** 숨겨 시작 — 'Windows 를 켜면 두레도 켜기'(로그인 항목)가 붙인다. 휴대폰 연결이 켜져 있으면 창을 띄우지 않고 트레이로 시작 */
+/** 숨겨 시작 — 'Windows 를 켜면 두레도 켜기'(로그인 항목)가 붙인다. 창을 띄우지 않고 트레이로 시작 */
 export const HIDDEN_ARG = '--hidden'
 
 /**
@@ -74,7 +74,7 @@ export function withoutHiddenArg(argv: readonly string[]): string[] {
 }
 
 /**
- * 두레를 또 켰을 때·트레이를 눌렀을 때 — 창을 앞으로. 숨은 창(휴대폰 연결 중 닫기·숨겨 시작)은 보이고, 최소화된 창은 되살린다.
+ * 두레를 또 켰을 때·트레이를 눌렀을 때 — 창을 앞으로. 숨은 창(닫기 · 숨겨 시작)은 보이고, 최소화된 창은 되살린다.
  * 닫히는 중(이미 파괴된 창)이면 아무것도 하지 않는다
  */
 export function focusExisting(win: WindowLike | null): void {
