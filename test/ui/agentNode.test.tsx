@@ -602,6 +602,15 @@ describe('AgentNode — 흘끗 보기 카드', () => {
     expect(card.querySelector('.st.wake')).toBeTruthy()
   })
 
+  it('뒤에서 명령 도는 중 — 쉬는데 명령이 돌면 바닥 줄 · .dot.wake · .st.wake(아바타 달 없음)', async () => {
+    snapshot.agents = [agent('d', { status: 'idle', background: true })]
+    const { card } = await renderCard()
+    expect(card.querySelector('.st-l')!.textContent).toBe('뒤에서 명령 도는 중')
+    expect(card.querySelector('.dot.wake')).toBeTruthy()
+    expect(card.querySelector('.st.wake')).toBeTruthy()
+    expect(card.querySelector('.av-moon')).toBeNull()
+  })
+
   it('새 결과가 잠듦보다 먼저 — 바닥은 끝남 · 새 결과, 아바타 배지는 그대로', async () => {
     snapshot.agents = [agent('d', { status: 'idle', asleep: true })]
     const { card } = await renderCard()

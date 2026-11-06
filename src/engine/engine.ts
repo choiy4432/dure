@@ -190,6 +190,8 @@ export interface Engine extends EventEmitter {
    * (줄을 썼거나 기다리는 입력·전달 대기 메시지가 있다)
    */
   sleepState(id: AgentId): { asleep: boolean; waking: boolean };
+  /** 뒤에서 명령이 도는가(지금 세션의 마지막 background_tasks_changed — 서브에이전트 말고). 바뀌면 'background' 사건 */
+  backgroundRunning(id: AgentId): boolean;
   /** 지금 재울 수 없는 까닭(앞의 것부터 하나) — 살아 있는 세션이 없으면 'no-session', 재울 수 있으면 null. 메뉴를 열 때 묻는다 */
   sleepBlock(id: AgentId): SleepBlock | 'no-session' | null;
   /** 그 방에서 지금 재울 수 있는(sleepBlock 이 null 인) 에이전트 수 — 고른 에이전트도 센다 */
@@ -673,6 +675,8 @@ class EngineImpl extends EventEmitter implements Engine {
   private handSlept = new Set<AgentId>();
   private waking = new WeakSet<ClaudeSession>(); // 잠든 에이전트를 띄운 세션 — 첫 차례의 init 에서 빠진다(/effort 차례 것 말고. 그 전에 일거리가 있으면 깨우는 중)
   private shownSleep = new Map<AgentId, { asleep: boolean; waking: boolean }>(); // 마지막으로 알린 잠듦 — 바뀔 때만 'sleep'
+  private bgCommands = new WeakMap<ClaudeSession, number>(); // 그 세션이 마지막으로 알린 뒤에서 도는 명령 수(서브에이전트 말고) — 화면의 '뒤에서 명령 도는 중'
+  private shownBg = new Map<AgentId, boolean>(); // 마지막으로 알린 뒤에서 명령 돎 — 바뀔 때만 'background'
   private seen = new WeakMap<ClaudeSession, SeenToolUses>(); // 그 세션 스트림에서 본 하는 일 — 승인·두레 도구를 부른 쪽을 가른다(세션이 끝나면 비운다)
   // 결과를 기다리는 고친 일(EDIT_TOOLS) — tool_use id → 입력으로 만들어 기록용으로 줄인 바뀐 줄(못 만들면 null). 결과가 오면 빼고, 세션이 끝나면 비운다.
   // 결과에 structuredPatch 가 없을 때(서브에이전트 줄 등)만 쓴다. 입력 통째는 들고 있지 않는다
@@ -1524,6 +1528,26 @@ class EngineImpl extends EventEmitter implements Engine {
   sleepState(id: AgentId): { asleep: boolean; waking: boolean } {
     this.need(id);
     return this.sleepOf(id);
+  }
+
+  backgroundRunning(id: AgentId): boolean {
+    this.need(id);
+    return this.backgroundOf(id);
+  }
+
+  /** 지금 세션이 알린 뒤에서 도는 명령이 있나 — 세션이 없으면(잠듦·멈춤·끝남) 없다(세션을 끄면 그 명령도 함께 죽는다) */
+  private backgroundOf(id: AgentId): boolean {
+    const s = this.sessions.get(id);
+    return !!s && (this.bgCommands.get(s) ?? 0) > 0;
+  }
+
+  /** 뒤에서 명령 돎이 바뀌었으면 알린다 — 바뀔 때만. 지우는 중·지운 에이전트·끄는 중인 엔진엔 안 보낸다(emitSleep 과 같다) */
+  private emitBackground(id: AgentId): void {
+    if (this.closed || this.removing.has(id) || !this.store.agent(id)) return;
+    const now = this.backgroundOf(id);
+    if ((this.shownBg.get(id) ?? false) === now) return;
+    this.shownBg.set(id, now);
+    this.emit('background', { agentId: id, running: now });
   }
 
   sleepBlock(id: AgentId): SleepBlock | 'no-session' | null {
@@ -3078,9 +3102,11 @@ class EngineImpl extends EventEmitter implements Engine {
         if (ev.kind !== 'control-response') this.lastActive.set(s, performance.now());
         // 깨운 세션의 첫 차례의 init — 깨어났다. 엔진이 먼저 쓴 /effort 차례의 init 은 아니다: 그 뒤에 기다리는 입력·메시지가 남아 있다
         if (ev.kind === 'init' && !this.effortTurn.has(s) && this.waking.delete(s)) this.emitSleep(id);
-        // 뒤에서 도는 일 목록 — 세션마다 마지막 것만 든다(재우기가 비어 있을 때만 재운다). 기록·화면엔 안 보낸다
+        // 뒤에서 도는 일 목록 — 세션마다 마지막 것만 든다(재우기가 비어 있을 때만 재운다). 기록엔 안 보낸다 · 명령이 도는지는 화면에(바뀔 때만)
         if (ev.kind === 'background-tasks') {
           this.bgTasks.set(s, ev.taskIds);
+          this.bgCommands.set(s, ev.commands);
+          if (this.sessions.get(id) === s) this.guard(id, () => this.emitBackground(id));
           return;
         }
         if (ev.kind === 'replay') return; // 되돌림은 읽었다는 표시일 뿐 — 기록·화면엔 보낼 때 이미 있다
@@ -4046,6 +4072,8 @@ class EngineImpl extends EventEmitter implements Engine {
       this.emit('status', remote ? { agentId: id, status, errorText, remoteIssue: issue } : { agentId: id, status, errorText });
     } finally {
       this.guard(id, () => this.emitSleep(id));
+      // 세션이 끝나면(재움·멈춤·끝남) 그 세션의 명령도 없다 — 상태를 알리는 자리마다 견준다
+      this.guard(id, () => this.emitBackground(id));
     }
   }
 }

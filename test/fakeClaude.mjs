@@ -239,7 +239,7 @@ const subMs = Number(process.env.FAKE_SUB_MS ?? 150);
 const muteFile = process.env.FAKE_MUTE_FILE;
 const muted = () => !!muteFile && fs.existsSync(muteFile);
 const usageOf = (task) => ({ total_tokens: 1000 + 100 * task.tools, tool_uses: task.tools, duration_ms: Date.now() - task.startedAt });
-const backgroundTasks = () => [...tasks].filter((t) => t.background).map((t) => ({ task_id: t.taskId, description: t.description }));
+const backgroundTasks = () => [...tasks].filter((t) => t.background).map((t) => ({ task_id: t.taskId, task_type: 'local_agent', description: t.description }));
 // 서브에이전트 줄 — parent_tool_use_id = 부모의 Agent tool_use id
 const taskAssistant = (task, content) => assistant(content, { parent_tool_use_id: task.toolUseId });
 const taskToolResult = (task, id, text, isError = false) => toolResult(id, text, isError, { parent_tool_use_id: task.toolUseId });

@@ -4,9 +4,9 @@ import { Moon, ShieldAlert } from 'lucide-react'
 import type { AgentId, Decision, PendingRequest } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
-import { displayStatus, issueLine, sleepLook, unreadFor, type DisplayStatus } from '../state/selectors'
+import { displayStatus, issueLine, restLook, unreadFor, type DisplayStatus } from '../state/selectors'
 import { createAgentPlan, requestTarget, requestTitle } from '../lib/toolSummary'
-import { ago, FRESH_WORD, initial, josa, lasting, nodeModelLabel, PHASE_WORD, QUESTION_LINK, SLEEP_HINT, SLEEP_WORD, STATUS_LINE, STATUS_WORD } from '../lib/words'
+import { ago, FRESH_WORD, initial, josa, lasting, nodeModelLabel, PHASE_WORD, QUESTION_LINK, REST_WORD, SLEEP_HINT, STATUS_LINE, STATUS_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
 import { MOTION, popOnce, useRise } from '../lib/motion'
 import { useMotion } from '../lib/presence'
@@ -198,9 +198,10 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
   // 쉬는 에이전트가 못 본 결과를 냈다 — 바닥 상태를 '끝남 · 새 결과' 로
   const isFresh = (status === 'idle' || status === 'stopped') && fresh
   const st = STATUS[status]
-  // 잠듦 — 새 결과가 먼저(바닥 줄만, 아바타 달은 그대로)
-  const sleep = sleepLook(agent, status)
+  // 잠듦·깨우는 중·뒤에서 명령 도는 중 — 새 결과가 먼저(바닥 줄만, 아바타 달은 그대로)
+  const sleep = restLook(agent, status)
   const footSleep = isFresh ? null : sleep
+  const footBlue = footSleep === 'waking' || footSleep === 'background'
   const time = timeText(v, now)
   // 오류 글 — 엔진 오류면 그 글, 서버 문제로 오류처럼 보이면 그 한 줄
   const errorText = status !== 'error' ? null : agent.status === 'error' ? agent.errorText || null : v.issue
@@ -265,15 +266,15 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
 
       <div className="nf">
         <span
-          className={`st${isFresh ? ' n' : footSleep === 'waking' ? ' wake' : st.tone ? ` ${st.tone}` : ''}`}
+          className={`st${isFresh ? ' n' : footBlue ? ' wake' : st.tone ? ` ${st.tone}` : ''}`}
           title={footSleep === 'asleep' ? SLEEP_HINT : undefined}
         >
           {footSleep === 'asleep' ? (
             <Moon className="st-moon" size={13} aria-hidden="true" />
           ) : (
-            <i className={`dot ${isFresh ? 'n' : footSleep === 'waking' ? 'wake' : st.dot}`} aria-hidden="true" />
+            <i className={`dot ${isFresh ? 'n' : footBlue ? 'wake' : st.dot}`} aria-hidden="true" />
           )}
-          <span className="st-l">{isFresh ? FRESH_WORD : footSleep ? SLEEP_WORD[footSleep] : STATUS_WORD[status]}</span>
+          <span className="st-l">{isFresh ? FRESH_WORD : footSleep ? REST_WORD[footSleep] : STATUS_WORD[status]}</span>
           {errorText && (
             <span className="nf-err trunc" title={errorText}>
               {clip(errorText, ERROR_MAX)}
@@ -301,9 +302,9 @@ export function TouchCard({ agentId }: { agentId: AgentId }) {
   if (!v) return null
   const { agent, request, unread, status, fresh } = v
   const isFresh = (status === 'idle' || status === 'stopped') && fresh
-  const sleep = isFresh ? null : sleepLook(agent, status)
+  const sleep = isFresh ? null : restLook(agent, status)
   const st = STATUS[status]
-  const word = isFresh ? FRESH_WORD : sleep ? SLEEP_WORD[sleep] : STATUS_WORD[status]
+  const word = isFresh ? FRESH_WORD : sleep ? REST_WORD[sleep] : STATUS_WORD[status]
   const line = request
     ? request.kind === 'question'
       ? QUESTION_LINK.split(' · ')[0]
@@ -321,7 +322,7 @@ export function TouchCard({ agentId }: { agentId: AgentId }) {
       </span>
       {agent.role && <span className="tcd-r trunc">{agent.role}</span>}
       <span className={`tcd-st${isFresh ? ' n' : st.tone ? ` ${st.tone}` : ''}`}>
-        {sleep === 'asleep' ? <Moon className="st-moon" size={12} aria-hidden="true" /> : <i className={`dot ${isFresh ? 'n' : sleep === 'waking' ? 'wake' : st.dot}`} aria-hidden="true" />}
+        {sleep === 'asleep' ? <Moon className="st-moon" size={12} aria-hidden="true" /> : <i className={`dot ${isFresh ? 'n' : sleep === 'waking' || sleep === 'background' ? 'wake' : st.dot}`} aria-hidden="true" />}
         <span className="trunc">{word}</span>
         {unread > 0 && <span className="tcd-um">받은 메시지 {unread}</span>}
       </span>

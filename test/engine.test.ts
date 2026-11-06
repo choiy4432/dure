@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { createEngine, type Agent, type AgentStatus, type Engine, type EngineOptions, type HistoryItem, type Hold, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
+import { createEngine, type Agent, type AgentStatus, type Engine, type EngineEventMap, type EngineOptions, type HistoryItem, type Hold, type PendingRequest, type RelayMessage, type StreamEvent, type UserPart } from '../src/engine';
 import { newAgentFolder } from '../src/engine/engine';
 import { openMessageLog } from '../src/engine/messageLog';
 import { joinDeliveries } from '../src/engine/router';
@@ -3801,6 +3801,43 @@ test('background: 뒤에서 도는 명령(BGRUN)의 목록 줄은 화면 사건�
   await resultTextIs(e, a.id, 'BG DONE'); // 300ms 뒤 스스로 연 차례
   expect(seen.filter((ev) => ev.kind === 'background-tasks')).toEqual([]);
   expect(e.history(a.id).filter((x) => (x.kind as string) === 'background-tasks')).toEqual([]);
+});
+
+test("background: 뒤에서 명령이 돌면 'background' {running:true} · 끝나면 false — 바뀔 때만 · backgroundRunning 도 같다(화면의 '뒤에서 명령 도는 중')", async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const bg: boolean[] = [];
+  e.on('background', (x: EngineEventMap['background']) => {
+    if (x.agentId === a.id) bg.push(x.running);
+  });
+  expect(e.backgroundRunning(a.id)).toBe(false);
+  const started = resultTextIs(e, a.id, 'BG STARTED');
+  await e.sendUser(a.id, text('BGRUN 300'));
+  await started;
+  expect(e.status(a.id)).toBe('idle'); // 차례는 끝났다 — 명령만 돈다
+  expect(e.backgroundRunning(a.id)).toBe(true);
+  expect(bg).toEqual([true]);
+  await resultTextIs(e, a.id, 'BG DONE');
+  await vi.waitFor(() => expect(e.backgroundRunning(a.id)).toBe(false));
+  expect(bg).toEqual([true, false]);
+});
+
+test("background: 뒤에서 도는 서브에이전트만이면 명령이 아니다 — 'background' 사건 없음(서브에이전트는 따로 보인다)", async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const bg: boolean[] = [];
+  e.on('background', (x: EngineEventMap['background']) => {
+    if (x.agentId === a.id) bg.push(x.running);
+  });
+  const launched = new Promise<void>((resolve) => {
+    e.on('subagents', (x: { agentId: string; running: string[] }) => {
+      if (x.agentId === a.id && x.running.length > 0) resolve();
+    });
+  });
+  await e.sendUser(a.id, text('SUB 조사'));
+  await launched;
+  expect(e.backgroundRunning(a.id)).toBe(false);
+  expect(bg).toEqual([]);
 });
 
 test('subagent: 둘이 돌면 시작 순 [A, B] — A 가 끝나면 [B], 둘 다 끝나면 []', async () => {

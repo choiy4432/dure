@@ -114,6 +114,25 @@ describe('PanelHeader — 잠듦 알약', () => {
     expect(pill().textContent).toBe('깨우는 중')
     expect(pill().querySelector('.dot.wake')).toBeTruthy()
   })
+
+  it("쉬는데 뒤에서 명령이 돌면 '뒤에서 명령 도는 중'(파란 알약) · 안 돌면 쉬는 중 · 차례 중이면 작업 중이 먼저", async () => {
+    snapshot.agents = [
+      agent('w', { name: '웹 화면', status: 'idle', background: true }),
+      agent('r', { name: '기획', status: 'idle', background: false }),
+      agent('q', { name: '백엔드', status: 'working', background: true }),
+    ]
+    const { store } = await renderPanel()
+    const pill = () => document.querySelector('.ph .pill')!
+    await act(async () => store.selectAgent('w'))
+    expect(pill().textContent).toBe('뒤에서 명령 도는 중')
+    expect(pill().classList.contains('wake')).toBe(true)
+    expect(pill().querySelector('.dot.wake')).toBeTruthy()
+    await act(async () => store.selectAgent('r'))
+    expect(pill().textContent).toBe('쉬는 중')
+    expect(pill().classList.contains('wake')).toBe(false)
+    await act(async () => store.selectAgent('q'))
+    expect(pill().textContent).toBe('작업 중')
+  })
 })
 
 describe('PanelHeader — 멈추기', () => {

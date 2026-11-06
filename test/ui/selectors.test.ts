@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { displayStatus, edges, sleepLook, label, nextAgent, pairMessages, summary, unreadFor, workingCount, type EdgeView } from '../../src/renderer/state/selectors'
+import { displayStatus, edges, sleepLook, restLook, label, nextAgent, pairMessages, summary, unreadFor, workingCount, type EdgeView } from '../../src/renderer/state/selectors'
 import type { PendingRequest, RelayMessage, MessageState } from '../../src/engine/types'
 import type { AgentView } from '../../src/shared/ipcContract'
 
@@ -197,5 +197,19 @@ describe('sleepLook', () => {
     expect(sleepLook(agent('a', { asleep: true }), 'error')).toBeNull()
     expect(sleepLook(agent('a', { asleep: false }), 'idle')).toBeNull()
     expect(sleepLook(agent('a', { waking: true }), 'idle')).toBeNull()
+  })
+})
+
+describe('restLook', () => {
+  it('잠듦·깨우는 중이 먼저 · 아니면 쉬는·멈춤일 때 뒤에서 명령이 돌면 background · 작업 중·승인·오류엔 없음', () => {
+    expect(restLook(agent('a', { background: true }), 'idle')).toBe('background')
+    expect(restLook(agent('a', { background: true }), 'stopped')).toBe('background')
+    expect(restLook(agent('a', { background: true }), 'working')).toBeNull()
+    expect(restLook(agent('a', { background: true }), 'awaiting')).toBeNull()
+    expect(restLook(agent('a', { background: true }), 'error')).toBeNull()
+    expect(restLook(agent('a', { background: false }), 'idle')).toBeNull()
+    expect(restLook(agent('a'), 'idle')).toBeNull() // 칸이 없으면(옛 스냅샷) 안 돎
+    expect(restLook(agent('a', { asleep: true, background: true }), 'idle')).toBe('asleep')
+    expect(restLook(agent('a', { asleep: true, waking: true, background: true }), 'working')).toBe('waking')
   })
 })

@@ -224,6 +224,7 @@ function agentViews(engine: Engine): AgentView[] {
       heldInput: engine.heldInput(a.id),
       planMode: engine.planMode(a.id),
       ...engine.sleepState(a.id),
+      background: engine.backgroundRunning(a.id),
       hold: engine.hold(a.id),
       effortNow: engine.effortNow(a.id),
       modelNow: engine.modelNow(a.id),

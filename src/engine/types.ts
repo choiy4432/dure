@@ -167,8 +167,9 @@ export type StreamEvent =
   | { kind: 'tool-result'; toolUseId: string; isError: boolean; text: string; parent?: string; patch?: DiffHunk[] }
   | { kind: 'task-started'; taskId: string; toolUseId: string; description: string; subagentType: string | null; parentTaskId: string | null }
   | { kind: 'task-ended'; taskId: string; toolUseId: string; status: SubagentEnd; summary: string; toolUses: number | null; durationMs: number | null }
-  // 뒤에서 도는 일(백그라운드 명령 등)의 지금 목록(system/background_tasks_changed, probe18) — 비면 하나도 안 돈다. 기록·화면엔 안 나간다(엔진이 세션마다 들고 있다)
-  | { kind: 'background-tasks'; taskIds: string[] }
+  // 뒤에서 도는 일(백그라운드 명령 등)의 지금 목록(system/background_tasks_changed, probe18) — 비면 하나도 안 돈다. 기록엔 안 나간다(엔진이 세션마다 들고 있다).
+  // commands = 그중 명령(에이전트가 아닌 것 — task_type 에 'agent' 가 없음) 수 — 화면의 '뒤에서 명령 도는 중'(서브에이전트는 따로 보인다)
+  | { kind: 'background-tasks'; taskIds: string[]; commands: number }
   | { kind: 'local-output'; text: string } // 로컬 명령(/model 등) 출력 에코
   // 보낸 사람 말을 Claude 가 읽었다(--replay-user-messages 의 되돌림) — 글 조각만. 화면·기록엔 안 나간다(보낼 때 기록했다)
   | { kind: 'replay'; text: string }
@@ -305,6 +306,11 @@ export interface EngineEventMap {
    * 둘 중 하나라도 바뀔 때만. 상태(status)와 따로 — 잠든 에이전트의 상태는 그대로 idle
    */
   sleep: { agentId: AgentId; asleep: boolean; waking: boolean };
+  /**
+   * 뒤에서 명령이 도는가(그 에이전트의 지금 세션이 마지막으로 알린 background_tasks_changed 에 명령이 있다 — 서브에이전트 말고).
+   * 바뀔 때만. 상태(status)와 따로 — 차례가 끝나 쉬는 중이어도 명령은 돌 수 있다(화면은 '쉬는 중' 대신 '뒤에서 명령 도는 중')
+   */
+  background: { agentId: AgentId; running: boolean };
 }
 
 export interface AgentDescription {

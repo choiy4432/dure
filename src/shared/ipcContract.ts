@@ -23,6 +23,8 @@ export interface AgentView extends Agent {
   asleep: boolean
   /** 재운 에이전트를 깨우는 중인가 */
   waking: boolean
+  /** 뒤에서 명령이 도는가(서브에이전트 말고) — 'background' 사건이 바꾼다. 쉬는 중이면 화면은 '뒤에서 명령 도는 중'. 없으면 안 돎 */
+  background?: boolean
   /** 붙잡힌 입력 — 없으면 null */
   hold: Hold | null
   /** Claude 에게 마지막으로 읽은 지금 effort — 모르면 null */
@@ -231,7 +233,7 @@ const EVENT_FLAGS: Record<keyof EngineEventMap, true> = {
   'agent-event': true, status: true, message: true, held: true, request: true,
   'request-resolved': true, flags: true, 'engine-error': true, history: true, 'held-input': true,
   usage: true, context: true, effort: true, 'model-now': true, subagents: true, 'agent-added': true, 'plan-mode': true, hold: true,
-  'always-allow': true, sleep: true,
+  'always-allow': true, sleep: true, background: true,
 }
 export const EVENT_NAMES = Object.keys(EVENT_FLAGS) as (keyof EngineEventMap)[]
 

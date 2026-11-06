@@ -4,8 +4,8 @@ import type { AgentId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { REMOTE_LOGIN_HELP, remoteIssueText } from '../../shared/remoteTexts'
 import { getStore, useDure } from '../state/store'
-import { displayStatus, shownIssue, sleepLook, type DisplayStatus } from '../state/selectors'
-import { errorMessage, fieldError, initial, SLEEP_HINT, SLEEP_WORD, STATUS_WORD } from '../lib/words'
+import { displayStatus, restLook, shownIssue, type DisplayStatus } from '../state/selectors'
+import { errorMessage, fieldError, initial, REST_WORD, SLEEP_HINT, STATUS_WORD } from '../lib/words'
 import { ModelPicker, type Described } from './ModelPicker'
 import { EffortControl } from './EffortControl'
 import { AgentMenu } from './AgentMenu'
@@ -51,21 +51,23 @@ export function useHeaderView(agentId: AgentId) {
   })
 }
 
-/** 상태 알약 — 작업 중·승인 기다림·쉬는 중·멈춤 · 잠듦·깨우는 중(관계도 카드와 같은 말) */
+/** 상태 알약 — 작업 중·승인 기다림·쉬는 중·멈춤 · 잠듦·깨우는 중·뒤에서 명령 도는 중(관계도 카드와 같은 말) */
 export function StatusPill({ agent, look }: { agent: AgentView; look: DisplayStatus }) {
   const pill = PILL[look]
-  const sleep = sleepLook(agent, look)
+  const rest = restLook(agent, look)
+  // 깨우는 중·뒤에서 명령 도는 중 — 차례는 아니지만 무언가 돈다: 같은 파란 알약
+  const blue = rest === 'waking' || rest === 'background'
   return (
     <span
-      className={`pill${sleep === 'waking' ? ' wake' : pill.tone ? ` ${pill.tone}` : ''}`}
-      title={sleep === 'asleep' ? SLEEP_HINT : undefined}
+      className={`pill${blue ? ' wake' : pill.tone ? ` ${pill.tone}` : ''}`}
+      title={rest === 'asleep' ? SLEEP_HINT : undefined}
     >
-      {sleep === 'asleep' ? (
+      {rest === 'asleep' ? (
         <Moon className="st-moon" size={13} aria-hidden="true" />
       ) : (
-        <i className={`dot ${sleep === 'waking' ? 'wake' : pill.dot}`} aria-hidden="true" />
+        <i className={`dot ${blue ? 'wake' : pill.dot}`} aria-hidden="true" />
       )}
-      {sleep ? SLEEP_WORD[sleep] : STATUS_WORD[look]}
+      {rest ? REST_WORD[rest] : STATUS_WORD[look]}
     </span>
   )
 }

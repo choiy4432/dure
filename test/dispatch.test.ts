@@ -26,6 +26,7 @@ function fakeEngine(over: Record<string, (...a: any[]) => unknown> = {}) {
     heldInput: () => 2,
     planMode: () => true,
     sleepState: () => ({ asleep: false, waking: false }),
+    backgroundRunning: () => true,
     hold: () => null,
     effortNow: () => 'high',
     modelNow: () => null,
@@ -178,7 +179,7 @@ describe('createDispatcher', () => {
     const dispatch = createDispatcher(engine, fakeDeps())
     const snap = await dispatch('snapshot', [])
     expect(snap).toMatchObject({ ok: true, value: { claudeMissing: false, autoChainLimit: 8, theme: 'dark', sleepAfterMin: 45 } })
-    expect((snap as { value: { agents: { pastCount: number; bypassPending: boolean }[] } }).value.agents[0]).toMatchObject({ pastCount: 3, bypassPending: true })
+    expect((snap as { value: { agents: { pastCount: number; bypassPending: boolean }[] } }).value.agents[0]).toMatchObject({ pastCount: 3, bypassPending: true, background: true })
     expect(await dispatch('appInfo', [])).toEqual({ ok: true, value: { version: '1.2.3', packaged: false } })
     expect(await dispatch('nope', [])).toEqual({ ok: false, error: '허용되지 않은 요청이에요' })
     const none = createDispatcher(null, fakeDeps())

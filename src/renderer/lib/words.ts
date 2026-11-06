@@ -37,6 +37,8 @@ export const MESSAGE_WORD: Record<MessageState, string> = {
 
 /** 잠든 에이전트(프로세스를 꺼 둔 것) — 바닥 줄·패널 알약 낱말과 달 위에 올렸을 때 설명 */
 export const SLEEP_WORD = { asleep: '잠듦', waking: '깨우는 중' } as const
+/** 쉬는 상태 위의 모습(restLook) — 잠듦·깨우는 중 · 뒤에서 명령이 돎 */
+export const REST_WORD = { ...SLEEP_WORD, background: '뒤에서 명령 도는 중' } as const
 export const SLEEP_HINT = '지금은 꺼 두어 메모리를 쓰지 않아요 · 말을 걸면 몇 초 뒤 깨어나요'
 
 /** 패널 … 메뉴의 '지금 재우기' · 방 메뉴의 '쉬는 에이전트 모두 재우기' */

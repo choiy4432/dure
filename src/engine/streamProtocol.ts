@@ -154,8 +154,11 @@ function parseObject(obj: any): StreamEvent {
       if (obj.subtype === 'background_tasks_changed') {
         // tasks 가 없거나 배열이 아니면 빈 목록. task_id 가 글이 아닌 항목은 뺀다
         const tasks: unknown[] = Array.isArray(obj.tasks) ? obj.tasks : [];
-        const taskIds = tasks.flatMap((t: any) => (typeof t?.task_id === 'string' ? [t.task_id] : []));
-        return { kind: 'background-tasks', taskIds };
+        const valid = tasks.filter((t: any) => typeof t?.task_id === 'string') as { task_id: string; task_type?: unknown }[];
+        const taskIds = valid.map((t) => t.task_id);
+        // 명령 = 에이전트가 아닌 일(실측 'local_bash' — 모르는 종류도 명령으로 친다). 뒤에서 도는 서브에이전트는 따로 보인다
+        const commands = valid.filter((t) => !(typeof t.task_type === 'string' && /agent/i.test(t.task_type))).length;
+        return { kind: 'background-tasks', taskIds, commands };
       }
       return ignored(`system/${obj.subtype}`);
     case 'stream_event': {

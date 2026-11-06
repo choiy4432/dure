@@ -157,7 +157,7 @@ type Ev = { [K in keyof EngineEventMap]: { name: K; payload: EngineEventMap[K] }
 
 const EVENTS: (keyof EngineEventMap)[] = [
   'agent-event', 'status', 'message', 'request', 'request-resolved', 'flags', 'history', 'held-input',
-  'usage', 'context', 'effort', 'model-now', 'subagents', 'agent-added', 'plan-mode', 'hold', 'always-allow', 'sleep',
+  'usage', 'context', 'effort', 'model-now', 'subagents', 'agent-added', 'plan-mode', 'hold', 'always-allow', 'sleep', 'background',
 ]
 
 const APP_EVENTS = ['setup', 'update', 'claude-update', 'phone'] as const
@@ -297,6 +297,11 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       case 'sleep': {
         const p = ev.payload
         state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, asleep: p.asleep, waking: p.waking } : a)) }
+        break
+      }
+      case 'background': {
+        const p = ev.payload
+        state = { ...state, agents: state.agents.map(a => (a.id === p.agentId ? { ...a, background: p.running } : a)) }
         break
       }
       case 'hold': {

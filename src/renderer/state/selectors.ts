@@ -74,6 +74,17 @@ export function sleepLook(agent: AgentView, status: DisplayStatus): 'asleep' | '
   return null
 }
 
+/**
+ * 쉬는 상태 위에 덧씌우는 모습 — 잠듦·깨우는 중(sleepLook), 아니면 뒤에서 명령이 돎(쉬는·멈춤일 때만 — 차례는 끝났지만 명령은 돈다).
+ * '쉬는 중'만 보이면 뒤에서 일하는 에이전트가 손을 놓은 것처럼 헷갈렸다(2026-11-06 사용자)
+ */
+export function restLook(agent: AgentView, status: DisplayStatus): 'asleep' | 'waking' | 'background' | null {
+  const sleep = sleepLook(agent, status)
+  if (sleep) return sleep
+  if (agent.background && (status === 'idle' || status === 'stopped')) return 'background'
+  return null
+}
+
 export function unreadFor(agentId: AgentId, messages: RelayMessage[]): number {
   return messages.filter(m => m.to === agentId && isUnread(m)).length
 }

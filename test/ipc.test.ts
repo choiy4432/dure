@@ -41,6 +41,7 @@ function fakeEngine() {
     subagentsRunning: () => ['toolu_1', 'toolu_2'],
     planMode: () => true,
     sleepState: () => ({ asleep: true, waking: false }),
+    backgroundRunning: () => true,
     sleepAfter: () => 60,
     sleep: rec('sleep', Promise.resolve(true)),
     sleepRoom: rec('sleepRoom', Promise.resolve(2)),
@@ -448,7 +449,7 @@ describe('registerIpc', () => {
       notify: { asks: false, finished: true },
       theme: 'dark',
       rooms: [{ id: 'r1' }],
-      agents: [{ id: 'a1', status: 'idle', errorText: null, bypassOn: true, bypass: true, bypassBySettings: false, bypassPending: true, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5', subagentsRunning: ['toolu_1', 'toolu_2'], planMode: true, hold: { since: 1, items: [] }, asleep: true, waking: false }],
+      agents: [{ id: 'a1', status: 'idle', errorText: null, bypassOn: true, bypass: true, bypassBySettings: false, bypassPending: true, heldInput: 2, effortNow: 'high', modelNow: 'claude-opus-5-5', subagentsRunning: ['toolu_1', 'toolu_2'], planMode: true, hold: { since: 1, items: [] }, asleep: true, waking: false, background: true }],
       sleepAfterMin: 60,
       usage: { windows: [{ key: 'session', percent: 40 }] },
     })
@@ -456,7 +457,8 @@ describe('registerIpc', () => {
 
   it('forwards every engine event as dure:event { name, payload }', () => {
     const { engine, sent } = setup()
-    expect(EVENT_NAMES).toHaveLength(20)
+    expect(EVENT_NAMES).toHaveLength(21)
+    expect(EVENT_NAMES).toContain('background')
     expect(EVENT_NAMES).toContain('always-allow')
     expect(EVENT_NAMES).toContain('sleep')
     expect(EVENT_NAMES).toContain('subagents')
