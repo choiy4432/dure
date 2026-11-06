@@ -1,10 +1,14 @@
 <!doctype html>
 <!--
-  PC 에 닿지 않을 때 화면 — 서비스 워커(sw.js)가 설치 때 받아 두었다가, 화면 열기가 실패하면(PC 꺼짐·잠듦·두레 안 떠 있음·Tailscale 꺼짐) 내어 준다.
-  짝 맺기 화면(PairScreen · 시안 B2)과 같은 틀: 위에 큰 제목, 할 일 단추는 엄지가 닿는 맨 아래. 색은 tokens.css 값을 옮겨 적었다(라이트·다크는 휴대폰 설정 따라감).
+  PC 에 연결하는 동안·닿지 않을 때 화면 — 서비스 워커(sw.js)가 받아 두었다가, 화면 열기가 2초 넘게 걸리거나 실패하면(PC 꺼짐·잠듦·두레 안 떠 있음·Tailscale 꺼짐) 내어 준다.
+  두 모습(html 의 data-state):
+  - connecting 'PC 에 연결하고 있어요' (시안 A) — 시작 화면의 로고를 가운데 그대로 두고 아래에 회전 + 글. offline.js 가 그리기 전에 이 모습으로 바꾸고 뒤에서 PC 에 닿는지 본다
+  - offline 'PC 에 닿지 않아요' — 짝 맺기 화면(PairScreen · 시안 B2)과 같은 틀: 위에 큰 제목, 할 일 단추는 엄지가 닿는 맨 아래.
+    기본값이라 스크립트를 못 읽으면 이 모습이 보인다
+  색은 tokens.css 값을 옮겨 적었다(라이트·다크는 휴대폰 설정 따라감).
   CSP 는 script-src 'self' — 스크립트는 offline.js 로만(같이 받아 둔다). 글꼴은 받지 않는다(시스템 글꼴)
 -->
-<html lang="ko">
+<html lang="ko" data-state="offline">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -13,6 +17,8 @@
     <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#111827" media="(prefers-color-scheme: dark)" />
     <title>두레 — PC 에 닿지 않아요</title>
+    <!-- 그리기 전에 돈다 — '연결하고 있어요'로 바꾸고 PC 에 닿는지 보기 시작(받아 둔 것이라 바로 읽힌다) -->
+    <script src="/offline.js"></script>
     <style>
       :root {
         --bg: #FFFFFF;
@@ -107,11 +113,54 @@
       @media (prefers-reduced-motion: reduce) {
         button[aria-busy='true'] .spin { animation: none; }
       }
+      /* ── 연결하고 있어요(시안 A) — 로고는 화면 한가운데(시작 화면 자리), 회전 + 글은 그 아래. 로고가 밀리지 않게 둘 다 띄워 놓는다 ── */
+      .connecting { display: none; }
+      html[data-state='connecting'] main { display: none; }
+      html[data-state='connecting'] .connecting { display: block; position: fixed; inset: 0; }
+      .logo {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: var(--logo);
+        height: var(--logo);
+        transform: translate(-50%, -50%);
+      }
+      .connecting { --logo: min(36vw, 160px); }
+      .line {
+        position: absolute;
+        left: 20px;
+        right: 20px;
+        top: calc(50% + var(--logo) / 2 + 28px);
+        margin: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        font-size: 15px;
+        line-height: 24px;
+        color: var(--text-3);
+      }
+      .ring {
+        flex: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 2px solid var(--border);
+        border-top-color: var(--primary);
+        animation: spin 0.9s linear infinite;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .ring { animation: none; }
+      }
       .nb { white-space: nowrap; } /* 낱말과 조사를 한 줄에 */
       .sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     </style>
   </head>
   <body>
+    <div class="connecting">
+      <img class="logo" src="/icons/dure-512.png" alt="" />
+      <p class="line"><span class="ring" aria-hidden="true"></span><span>PC 에 연결하고 있어요</span></p>
+    </div>
     <main>
       <div class="body">
         <span class="mark" aria-hidden="true">
@@ -127,9 +176,9 @@
           <span class="again">다시 시도</span>
           <span class="busy">다시 잇는 중…</span>
         </button>
-        <span class="sr" role="status" id="status"></span>
       </div>
     </main>
-    <script src="/offline.js"></script>
+    <!-- 두 모습 모두에서 읽어 주는 곳(main 밖 — 연결하고 있어요 동안 main 은 숨는다) -->
+    <span class="sr" role="status" id="status"></span>
   </body>
 </html>

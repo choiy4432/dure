@@ -56,7 +56,7 @@ function load(o: { windows?: Win[]; fetch?: (u: string | FakeReq, init?: Request
     registration: { showNotification: vi.fn(async () => {}), pushManager: { subscribe } },
   }
   // 시계는 바깥 것을 그대로 — 시험이 가짜 시계로 바꾸면 sw 의 기다림도 따라간다
-  const ctx = { self, URL, JSON, Promise, Response, atob, fetch: fetchFn, caches, setTimeout: (f: () => void, ms: number) => setTimeout(f, ms), clearTimeout: (t: ReturnType<typeof setTimeout>) => clearTimeout(t) }
+  const ctx = { self, URL, JSON, Promise, Response, Date, atob, fetch: fetchFn, caches, setTimeout: (f: () => void, ms: number) => setTimeout(f, ms), clearTimeout: (t: ReturnType<typeof setTimeout>) => clearTimeout(t) }
   vm.runInNewContext(CODE, ctx)
   /** 사건을 보내고 waitUntil 에 맡긴 일을 기다린다 */
   const fire = async (name: string, e: Record<string, unknown> = {}) => {
@@ -64,14 +64,20 @@ function load(o: { windows?: Win[]; fetch?: (u: string | FakeReq, init?: Request
     handlers[name]({ ...e, waitUntil: (p: Promise<unknown>) => waits.push(p) })
     await Promise.all(waits)
   }
+  /** fetch 사건이 waitUntil 에 맡긴 뒷일(오프라인 화면 새로 받기) — 시험이 기다린다 */
+  const background: Promise<unknown>[] = []
   /** fetch 사건 — respondWith 로 준 답(안 주면 null: 브라우저가 늘 하던 대로 받는다) */
   const request = (url: string, init: Partial<FakeReq> = {}): Promise<Response> | null => {
     let responded: Promise<Response> | null = null
     const req: FakeReq = { url: new URL(url, ORIGIN).href, method: 'GET', mode: 'cors', ...init }
-    handlers.fetch({ request: req, respondWith: (p: Promise<Response>) => { responded = Promise.resolve(p) } })
+    handlers.fetch({
+      request: req,
+      respondWith: (p: Promise<Response>) => { responded = Promise.resolve(p) },
+      waitUntil: (p: Promise<unknown>) => { background.push(p) },
+    })
     return responded
   }
-  return { self, fire, handlers, fetch: fetchFn, caches, subscribe, request }
+  return { self, fire, handlers, fetch: fetchFn, caches, subscribe, request, background }
 }
 afterEach(() => {
   vi.useRealTimers()
@@ -190,13 +196,13 @@ describe('sw.js — PC 에 닿지 않을 때 화면(오프라인)', () => {
   let down = false
   const offlineWhenDown = () => serve(u => (down && !u.startsWith('/') ? Promise.reject(new TypeError('Failed to fetch')) : null))
 
-  it('install — 오프라인 화면(offline.html · offline.js)을 미리 받아 둔다 · 못 받아도 설치는 된다(알림이 먼저)', async () => {
+  it('install — 오프라인 화면(offline.html · offline.js · 연결 화면의 로고)을 미리 받아 둔다 · 못 받아도 설치는 된다(알림이 먼저)', async () => {
     const a = load({ fetch: serve() })
     await a.fire('install')
     expect(a.self.skipWaiting).toHaveBeenCalledTimes(1)
     const [name] = [...a.caches.store.keys()]
     expect(name).toMatch(/^dure-offline/)
-    expect([...a.caches.store.get(name)!.keys()].sort()).toEqual(['/offline.html', '/offline.js'])
+    expect([...a.caches.store.get(name)!.keys()].sort()).toEqual(['/icons/dure-512.png', '/offline.html', '/offline.js'])
 
     const b = load({ fetch: async () => { throw new TypeError('Failed to fetch') } })
     await expect(b.fire('install')).resolves.toBeUndefined()
@@ -235,17 +241,89 @@ describe('sw.js — PC 에 닿지 않을 때 화면(오프라인)', () => {
     expect(await (await a.request('/offline.js', { mode: 'no-cors' }))!.text()).toBe('/* retry */')
   })
 
-  it('화면 열기 — 8초 넘게 답이 없으면(PC 가 잠듦) 오프라인 화면', async () => {
+  it('화면 열기 — 2초 넘게 답이 없으면(PC 가 잠듦) 오프라인 화면(연결하고 있어요) — 시작 화면에 멈춘 것처럼 두지 않는다', async () => {
     vi.useFakeTimers()
     const a = load({ fetch: serve(u => (u.startsWith('/') ? null : new Promise<Response>(() => {}))) })
     await a.fire('install')
     const r = a.request('/mobile.html', { mode: 'navigate' })!
     let got: string | null = null
     void r.then(async x => { got = await x.text() })
-    await vi.advanceTimersByTimeAsync(7_999)
+    await vi.advanceTimersByTimeAsync(1_999)
     expect(got).toBeNull()
     await vi.advanceTimersByTimeAsync(1)
     await vi.waitFor(() => expect(got).toBe(OFFLINE_HTML))
+  })
+
+  it("화면 열기 — 연결 화면이 'dure:reconnect' 를 보낸 뒤 그 한 번은 10초까지 기다린다(느린 망에서 연결 화면 ↔ 다시 열기가 돌지 않게) · 다음은 다시 2초", async () => {
+    vi.useFakeTimers()
+    let answerAt = Infinity
+    const a = load({
+      fetch: serve(u => (u.startsWith('/') ? null : new Promise<Response>(res => {
+        const ms = answerAt - Date.now()
+        if (Number.isFinite(ms)) setTimeout(() => res(new Response('app', { status: 200 })), ms)
+      }))),
+    })
+    await a.fire('install')
+    // 알림 뒤 첫 화면 열기 — 5초 걸려도 앱
+    await a.fire('message', { data: { type: 'dure:reconnect' } })
+    answerAt = Date.now() + 5_000
+    const r1 = a.request('/mobile.html', { mode: 'navigate' })!
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(await (await r1).text()).toBe('app')
+    // 다음 화면 열기는 다시 2초
+    answerAt = Date.now() + 5_000
+    const r2 = a.request('/mobile.html', { mode: 'navigate' })!
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await (await r2).text()).toBe(OFFLINE_HTML)
+    // 알림이 오래전이면(15초 넘음) 2초
+    await a.fire('message', { data: { type: 'dure:reconnect' } })
+    await vi.advanceTimersByTimeAsync(15_001)
+    answerAt = Date.now() + 5_000
+    const r3 = a.request('/mobile.html', { mode: 'navigate' })!
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await (await r3).text()).toBe(OFFLINE_HTML)
+    // 모르는 메시지는 무시
+    await a.fire('message', { data: { type: 'other' } })
+    answerAt = Date.now() + 5_000
+    const r4 = a.request('/mobile.html', { mode: 'navigate' })!
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(await (await r4).text()).toBe(OFFLINE_HTML)
+  })
+
+  it('오프라인 화면 파일(스크립트·로고) — 캐시가 먼저(망을 또 기다리지 않음) · 없으면 망', async () => {
+    let netCalls = 0
+    const a = load({ fetch: serve(u => (u.startsWith('/') ? null : (netCalls++, new Promise<Response>(() => {})))) })
+    await a.fire('install')
+    expect(await (await a.request('/offline.js', { mode: 'no-cors' }))!.text()).toBe('/* retry */')
+    expect(await (await a.request('/icons/dure-512.png', { mode: 'no-cors' }))!.text()).toBe('page /icons/dure-512.png')
+    expect(netCalls).toBe(0)
+
+    const b = load({ fetch: serve() })
+    const r = await b.request('/offline.js', { mode: 'no-cors' })!
+    expect(await r.text()).toBe('/* retry */') // 받아 둔 것이 없다 — 망에서
+  })
+
+  it('화면이 PC 에서 잘 열리면 오프라인 화면 파일을 뒤에서 새로 받아 둔다 — 깨어 있는 동안 한 번 · 실패하면 다음에 다시', async () => {
+    let failRefresh = true
+    const a = load({ fetch: serve(u => (u.startsWith('/') && failRefresh ? Promise.reject(new TypeError('Failed to fetch')) : null)) })
+    // 설치 때 못 받았다
+    await a.fire('install')
+    const name = [...a.caches.store.keys()][0] ?? null
+    expect(name === null || a.caches.store.get(name)!.size === 0).toBe(true)
+    // 첫 화면 열기 — 앱은 그대로, 뒤에서 받기는 실패
+    expect(await (await a.request('/mobile.html', { mode: 'navigate' }))!.text()).toBe('page /mobile.html')
+    await Promise.all(a.background)
+    // 다음 화면 열기 — 이번엔 받아 둔다
+    failRefresh = false
+    await a.request('/mobile.html', { mode: 'navigate' })
+    await Promise.all(a.background)
+    const [cacheName] = [...a.caches.store.keys()]
+    expect([...a.caches.store.get(cacheName)!.keys()].sort()).toEqual(['/icons/dure-512.png', '/offline.html', '/offline.js'])
+    // 그 뒤로는 받지 않는다(깨어 있는 동안 한 번)
+    const before = a.fetch.mock.calls.length
+    await a.request('/mobile.html', { mode: 'navigate' })
+    await Promise.all(a.background)
+    expect(a.fetch.mock.calls.length - before).toBe(1) // 화면 하나만
   })
 
   it('API · WebSocket 길 · GET 이 아닌 것 · 다른 곳 · 보통 파일은 손대지 않는다(캐시하지 않음)', async () => {
@@ -264,13 +342,18 @@ describe('sw.js — PC 에 닿지 않을 때 화면(오프라인)', () => {
   it('오프라인 화면 파일 — 글 · [다시 시도] · 스크립트는 같은 곳 파일로만(CSP script-src self)', () => {
     const pub = path.join(__dirname, '../src/renderer/public')
     const html = fs.readFileSync(path.join(pub, 'offline.html'), 'utf8')
-    expect(html).toContain('<html lang="ko">')
     expect(html).toContain('PC 에 닿지 않아요')
     expect(html.replace(/<[^>]+>/g, '')).toContain('PC 가 켜져 있고 두레가 떠 있는지, 휴대폰의 Tailscale 이 켜져 있는지 봐 주세요.')
     expect(html).toContain('다시 시도')
     expect(html).toContain('<main>')
+    // 연결하고 있어요(시안 A) — 로고(받아 두는 그 파일) + 글. 기본 모습은 '닿지 않아요'(스크립트를 못 읽어도 할 일이 보이게)
+    expect(html).toContain('<html lang="ko" data-state="offline">')
+    expect(html.replace(/<[^>]+>/g, '')).toContain('PC 에 연결하고 있어요')
+    expect(html).toContain('src="/icons/dure-512.png"')
     const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)]
     expect(scripts.map(m => [m[1].trim(), m[2].trim()])).toEqual([['src="/offline.js"', '']])
+    // 그리기 전에 돈다 — head 안
+    expect(html.indexOf('<script src="/offline.js">')).toBeLessThan(html.indexOf('</head>'))
     const js = fs.readFileSync(path.join(pub, 'offline.js'), 'utf8')
     expect(js).toContain('location.reload()')
   })

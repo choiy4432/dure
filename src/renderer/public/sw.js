@@ -1,13 +1,24 @@
-// 두레 휴대폰 서비스 워커 — 웹 푸시 알림 · PC 에 닿지 않을 때 화면(offline.html).
-// 화면·API 는 캐시하지 않는다(늘 PC 의 지금 두레에서) — 미리 받아 두는 것은 오프라인 화면 두 파일뿐이고, 화면 열기(navigate)가 실패할 때만 쓴다.
+// 두레 휴대폰 서비스 워커 — 웹 푸시 알림 · PC 에 연결하는 동안·닿지 않을 때 화면(offline.html).
+// 화면·API 는 캐시하지 않는다(늘 PC 의 지금 두레에서) — 미리 받아 두는 것은 오프라인 화면 파일뿐이고, 화면 열기(navigate)가 늦거나 실패할 때만 쓴다.
 // 알림 글은 PC(main 의 phoneNotifier)가 정한 네 칸 { title, body, tag, url } 뿐 — 명령·대화 글은 오지 않는다.
 
 /** 오프라인 화면 캐시 — 판이 바뀌면 이름을 바꾼다(activate 가 옛 'dure-offline-*' 를 지운다) */
-const OFFLINE_CACHE = 'dure-offline-1'
+const OFFLINE_CACHE = 'dure-offline-2'
 const OFFLINE_PAGE = '/offline.html'
-const OFFLINE_FILES = [OFFLINE_PAGE, '/offline.js']
-/** 화면 열기를 이만큼 기다린다 — PC 가 잠들었거나 꺼져 있으면 Tailscale 너머 연결이 답도 실패도 없이 오래 걸린다 */
-const NAVIGATE_TIMEOUT_MS = 8000
+/** 오프라인 화면과 그 화면이 쓰는 것(스크립트 · '연결하고 있어요'의 로고) — 이 셋은 캐시가 먼저(PC 에 닿지 않을 때 또 기다리지 않게) */
+const OFFLINE_FILES = [OFFLINE_PAGE, '/offline.js', '/icons/dure-512.png']
+/**
+ * 화면 열기를 이만큼 기다린다 — 넘으면 오프라인 화면('PC 에 연결하고 있어요')을 먼저 보여 주고 그 화면이 계속 시도한다.
+ * PC 가 잠들었거나 꺼져 있으면 Tailscale 너머 연결이 답도 실패도 없이 오래 걸려, 시작 화면(로고)에 멈춘 것처럼 보였다(실측)
+ */
+const NAVIGATE_WAIT_MS = 2000
+/**
+ * 연결 화면이 PC 에 닿은 것을 보고 다시 열 때('dure:reconnect' 를 보낸 뒤) 그 한 번은 이만큼 기다린다 —
+ * 망이 느려 화면이 2초를 넘겨도 연결 화면 ↔ 다시 열기가 돌지 않게
+ */
+const RECONNECT_WAIT_MS = 10000
+/** 'dure:reconnect' 가 이만큼 안에 온 화면 열기에만 */
+const RECONNECT_WINDOW_MS = 15000
 
 // 새 판을 받으면 바로 맡는다 — 안 그러면 알림을 예전 판이 띄워 badge·icon 이 기본값으로 나온다(실측).
 // 오프라인 화면을 못 받아 둬도 설치는 한다(알림이 먼저 — 그때는 브라우저 기본 오류 화면)
@@ -52,31 +63,72 @@ function sameOriginPath(url) {
 
 // ── PC 에 닿지 않을 때 화면 ──
 
-/** 망이 먼저 — 닿으면 그 답 그대로. 못 닿음·8초 넘게 답 없음·502~504(Tailscale 은 닿았는데 두레가 안 떠 있음)면 미리 받아 둔 fallback */
-async function networkOr(request, fallback) {
+/** 미리 받아 둔 것 — 없거나 못 읽으면 null */
+async function cached(path) {
+  try {
+    const cache = await caches.open(OFFLINE_CACHE)
+    return (await cache.match(path)) || null
+  } catch {
+    return null
+  }
+}
+
+/** 이 서비스 워커가 깨어 있는 동안 한 번 — 화면이 PC 에서 잘 열렸을 때 오프라인 화면 파일을 새로 받아 둔다(설치 때 못 받았거나 파일이 바뀐 것을 메운다) */
+let refreshed = false
+async function refreshOffline() {
+  if (refreshed) return
+  refreshed = true
+  try {
+    const cache = await caches.open(OFFLINE_CACHE)
+    await cache.addAll(OFFLINE_FILES)
+  } catch {
+    refreshed = false // 다음 화면 열기 때 다시
+  }
+}
+
+/** 연결 화면이 PC 에 닿아 다시 열기 직전에 보낸다 — 이 시각까지 온 화면 열기 한 번은 RECONNECT_WAIT_MS 까지 기다린다 */
+let reconnectUntil = 0
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'dure:reconnect') reconnectUntil = Date.now() + RECONNECT_WINDOW_MS
+})
+
+/**
+ * 화면 열기 — 망이 먼저. 2초 안에 닿으면 그 답 그대로(뒤에서 오프라인 화면 파일을 새로 받아 둔다).
+ * 못 닿음·2초 넘게 답 없음·502~504(Tailscale 은 닿았는데 두레가 안 떠 있음)면 오프라인 화면 — 그 화면이 'PC 에 연결하고 있어요'로 시작해 계속 시도한다
+ */
+async function navigate(event) {
+  const wait = Date.now() < reconnectUntil ? RECONNECT_WAIT_MS : NAVIGATE_WAIT_MS
+  reconnectUntil = 0
   let res = null
   let timer
   try {
     res = await Promise.race([
-      fetch(request),
+      fetch(event.request),
       new Promise((_, reject) => {
-        timer = setTimeout(() => reject(new Error('timeout')), NAVIGATE_TIMEOUT_MS)
+        timer = setTimeout(() => reject(new Error('timeout')), wait)
       }),
     ])
-    if (res.status < 502 || res.status > 504) return res
+    if (res.status < 502 || res.status > 504) {
+      if (res.ok) {
+        try {
+          event.waitUntil(refreshOffline())
+        } catch {
+          // 이미 끝난 사건 — 다음 화면 열기 때
+        }
+      }
+      return res
+    }
   } catch {
     res = null
   } finally {
     clearTimeout(timer)
   }
-  try {
-    const cache = await caches.open(OFFLINE_CACHE)
-    const hit = await cache.match(fallback)
-    if (hit) return hit
-  } catch {
-    // 아래로
-  }
-  return res || Response.error()
+  return (await cached(OFFLINE_PAGE)) || res || Response.error()
+}
+
+/** 오프라인 화면 파일 — 캐시가 먼저(오프라인 화면이 스크립트·로고를 또 기다리지 않게), 없으면 망 */
+async function offlineFile(request, path) {
+  return (await cached(path)) || fetch(request)
 }
 
 self.addEventListener('fetch', (event) => {
@@ -90,8 +142,8 @@ self.addEventListener('fetch', (event) => {
   }
   // 다른 곳 · API(WebSocket 포함)는 손대지 않는다
   if (u.origin !== self.location.origin || u.pathname.startsWith('/api/')) return
-  if (req.mode === 'navigate') event.respondWith(networkOr(req, OFFLINE_PAGE))
-  else if (OFFLINE_FILES.includes(u.pathname)) event.respondWith(networkOr(req, u.pathname))
+  if (req.mode === 'navigate') event.respondWith(navigate(event))
+  else if (OFFLINE_FILES.includes(u.pathname)) event.respondWith(offlineFile(req, u.pathname))
 })
 
 // ── 알림 ──
