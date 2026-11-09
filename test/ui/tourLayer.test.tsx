@@ -354,7 +354,7 @@ describe('TourLayer — 진행', () => {
     expect(setPrefs).toHaveBeenCalledWith({ tourDone: true })
   })
 
-  it('settings 단계 — 그 위에 휴대폰 창이 뜨면(covered) 카드를 숨기고, 단계는 그대로 · 닫히면 다시', async () => {
+  it('settings 단계 — 그 위에 겹친 창이 뜨면(covered) 카드를 숨기고, 단계는 그대로 · 닫히면 다시', async () => {
     withAgent()
     place('settings-dialog', { left: 300, top: 100, width: 420, height: 500 }, { tag: 'div' })
     const { store, rerender, closeDialog } = await mount('settings')
@@ -366,6 +366,39 @@ describe('TourLayer — 진행', () => {
     expect(store.getState().tour?.step).toBe('settings')
     rerender(<TourLayer dialog="settings" onCloseDialog={closeDialog} />)
     expect(screen.getByRole('dialog', { name: '설정 안에는' })).toBeTruthy()
+  })
+
+  it('settingsStepPointsAtTabs — 넓어진 설정 창 옆에 카드가 겹치지 않게 뜨고, 자리가 모자라면 설정 창이 비킨다', async () => {
+    withAgent()
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get() { return this.classList?.contains('tour-card') ? 288 : 0 } })
+    const vw = window.innerWidth
+    try {
+      // 1280 폭 — 780 창이 가운데(왼쪽 250)면 오른쪽에 288 카드가 모자라 창을 66px 비킨다 → 카드는 창 오른쪽 끝 바로 옆
+      window.innerWidth = 1280
+      const dlg = place('settings-dialog', { left: 250, top: 100, width: 780, height: 560 }, { tag: 'div' })
+      const { store, show, closeDialog } = await mount('settings')
+      act(() => store.setTour(at('settings', { rooms: 1, agents: 1 })))
+      screen.getByRole('dialog', { name: '설정 안에는' })
+      await wait(50)
+      expect(dlg.style.translate).toBe('-66px 0')
+      // 자리가 넉넉하면(1600 폭) 비키지 않는다
+      window.innerWidth = 1600
+      window.dispatchEvent(new Event('resize'))
+      await wait(50)
+      expect(dlg.style.translate).toBe('')
+      const c = screen.getByRole('dialog', { name: '설정 안에는' })
+      expect(parseFloat(c.style.left)).toBe(250 + 780 + 16) // 창과 겹치지 않는다
+      // 설정 위에 겹친 창이 뜨면 카드가 숨고, 투어의 닫기 요청은 설정 창을 그냥 닫는다
+      show('settings')
+      fireEvent.click(within(screen.getByRole('dialog', { name: '설정 안에는' })).getByRole('button', { name: '확인했어요' }))
+      expect(closeDialog).toHaveBeenCalledTimes(1)
+      expect(dlg.style.translate).toBe('') // 카드가 사라지면 제자리
+    } finally {
+      window.innerWidth = vw
+      if (width) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width)
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).offsetWidth
+    }
   })
 
   it('settings 단계 — 오른쪽에 자리가 없으면 왼쪽', async () => {

@@ -1,5 +1,5 @@
 // E2E — 처음 켠 사람의 안내 투어를 실제 화면으로 끝까지: 환영 → 방 → 에이전트 → 카드 → 입력창 → 멈추기·자동 → 할 일 → 설정 → 끝.
-// 다시 켜면 투어가 없고, 설정의 [안내 다시 보기]는 방 단계가 방 고르기를 짚는다. markOnboarded 를 부르지 않는다(처음 쓰는 상태가 필요하다).
+// 다시 켜면 투어가 없고, 설정 → 두레 탭의 [다시 보기]는 방 단계가 방 고르기를 짚는다. markOnboarded 를 부르지 않는다(처음 쓰는 상태가 필요하다).
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -105,6 +105,14 @@ test('안내 투어 — 끝까지 · 다시 켜면 없음 · 다시 보기는 �
       await expect(dlg).toBeVisible()
       await title('설정 안에는')
       await expect.poll(lastOverlay).toBe(BG) // 설정 안 카드엔 막이 없다
+      // 넓어진 설정 창과 카드가 겹치지 않는다(자리가 모자라면 설정 창이 비킨다)
+      await expect
+        .poll(async () => {
+          const d = await dlg.boundingBox()
+          const c = await page.locator('.tour-card').boundingBox()
+          return !!d && !!c && (c.x >= d.x + d.width || c.x + c.width <= d.x)
+        })
+        .toBe(true)
       await ok() // [확인했어요] 가 설정 창을 닫고 끝 카드로 넘어간다
       await expect(dlg).toBeHidden()
     })
@@ -134,7 +142,8 @@ test('안내 투어 — 끝까지 · 다시 켜면 없음 · 다시 보기는 �
     await test.step('설정 → 안내 다시 보기 → 방 단계가 방 고르기를 짚는다 → 투어 끝내기', async () => {
       await page.getByRole('button', { name: '설정', exact: true }).click()
       const dlg = page.getByRole('dialog', { name: '설정', exact: true })
-      await dlg.getByRole('button', { name: '안내 다시 보기' }).click()
+      await dlg.getByRole('tab', { name: '두레', exact: true }).click()
+      await dlg.getByRole('button', { name: '다시 보기' }).click()
       const c = page.locator('.tour-card')
       await expect(c.locator('.tour-t')).toHaveText('두레에 오신 걸 환영해요')
       await c.getByRole('button', { name: '시작하기' }).click()

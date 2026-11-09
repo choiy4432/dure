@@ -716,7 +716,7 @@ test('Funnel 때문에 포트를 옮겨 다시 열면 — 짝 맺은 휴대폰�
   await vi.waitFor(() => expect(c.state().url).toBe(`https://${DNS}:47615/mobile.html`), { timeout: 3000 })
   expect(c.state()).toMatchObject({ problem: null, notice: MOVED })
   expect(emitted.at(-1)?.notice).toBe(MOVED)
-  // 알림은 휴대폰 창에서 보거나 짝을 다시 맺을 때까지 남는다 — 확인을 해도 그대로
+  // 알림은 설정의 휴대폰 탭에서 보거나 짝을 다시 맺을 때까지 남는다 — 확인을 해도 그대로
   await c.check()
   expect(c.state().notice).toBe(MOVED)
   c.noticeSeen()

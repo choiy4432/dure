@@ -1,4 +1,4 @@
-// E2E — 휴대폰으로 쓰기: PC 설정의 휴대폰 창에서 켜기 → 짝 맺기 숫자 → 휴대폰 크기 페이지(http://127.0.0.1:<포트>, DURE_PHONE_ALLOW_LOCAL)로
+// E2E — 휴대폰으로 쓰기: PC 설정의 휴대폰 탭에서 켜기 → 짝 맺기 숫자 → 휴대폰 크기 페이지(http://127.0.0.1:<포트>, DURE_PHONE_ALLOW_LOCAL)로
 // 숫자 넣기 → 방 고르기 → 판 → 카드 → 대화 → 보내기(가짜 claude 로그) → 승인 허용(PC 의 요청도 풀림) → PC 에서 끊기(휴대폰은 4401 → 짝 맺기 화면)
 // → 창 닫기(트레이로 숨고 연결은 그대로) → 트레이 메뉴 '휴대폰 연결 끄기'(가짜 tailscale 로그에 serve off). 짝 안 맺은 요청은 401/403.
 // 가짜 claude + 가짜 tailscale(ready) + 임시 user-data·HOME·CLAUDE_CONFIG_DIR — 진짜 Tailscale·로그인 항목(개발 실행이라 안 부름)·절전 막기(켜기 전에 끈다,
@@ -218,18 +218,19 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
       await addAgent(page, AGENT, folder)
     })
 
-    const dlg = page.getByRole('dialog', { name: '휴대폰', exact: true })
+    const dlg = page.getByRole('dialog', { name: '설정', exact: true }) // 휴대폰은 설정 창의 '휴대폰' 탭
     const master = dlg.getByRole('switch', { name: /^휴대폰으로 쓰기/ })
     let port = 0
     await test.step('PC 설정 → 휴대폰 → 절전 막기 끄기 → 휴대폰으로 쓰기 켜기 → 주소 열림', async () => {
       await page.getByRole('button', { name: '설정', exact: true }).click()
-      await page.getByRole('dialog', { name: '설정' }).getByRole('button', { name: '휴대폰 열기' }).click()
+      await dlg.getByRole('tab', { name: '휴대폰', exact: true }).click()
       await expect(dlg).toBeVisible()
       await expect(master).toHaveAttribute('aria-checked', 'false')
-      // 처음 열면 Tailscale 을 한 번 본다(가짜 ready)
-      await expect(dlg.getByText('로그인돼 있어요')).toBeVisible()
+      // 처음 열면 Tailscale 을 한 번 본다(가짜 ready) — 다 됐으면 단계는 접힌 한 줄
+      await expect(dlg.getByText('Tailscale 준비됨')).toBeVisible()
+      await expect(dlg.getByText('켜면 휴대폰 주소가 열려요')).toBeVisible()
 
-      const keepAwake = dlg.getByRole('switch', { name: '켜 둔 동안 PC 절전 막기' })
+      const keepAwake = dlg.getByRole('switch', { name: '켜 둔 동안 절전 막기' })
       await expect(keepAwake).toHaveAttribute('aria-checked', 'true') // 기본 켬
       await keepAwake.click()
       await expect(keepAwake).toHaveAttribute('aria-checked', 'false')
@@ -239,7 +240,7 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
       await master.click()
       await expect(master).toHaveAttribute('aria-checked', 'true')
       await expect(master).toHaveAccessibleName('휴대폰으로 쓰기 — 켜짐')
-      await expect(dlg.getByText('휴대폰 주소가 열렸어요')).toBeVisible({ timeout: 30_000 })
+      await expect(dlg.locator('.phn-url-t')).toBeVisible({ timeout: 30_000 }) // 주소가 열렸다
       await expect(dlg.locator('.phn-url-t')).toHaveText(`https://${DNS}/mobile.html`)
       // 처음 켤 때 자동 켜기도 켬으로(개발 실행이라 로그인 항목은 그대로)
       await expect(dlg.getByRole('switch', { name: 'Windows 를 켜면 두레도 켜기' })).toHaveAttribute('aria-checked', 'true')
@@ -434,6 +435,7 @@ test('휴대폰으로 쓰기 — 켜기 · 짝 맺기 · 방·판·대화 · 보
     })
 
     await test.step('켠 채 PC 이름을 바꿈 → 창으로 돌아오면 예전 이름의 길을 닫고 지금 이름으로 다시 연다', async () => {
+      await dlg.getByRole('button', { name: '주소 짧게 하기' }).click() // 접힌 상자의 팁
       await expect(dlg.getByText('바꾸기 전에 휴대폰 연결을 끄고, 바꾼 뒤 다시 켜 주세요', { exact: false })).toBeVisible()
       const before = tailscaleCalls(tsLog).length
       fs.writeFileSync(path.join(tsRoot, 'dns-name'), RENAMED) // Tailscale 대시보드에서 바꾼 꼴

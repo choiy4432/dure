@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, Circle, CircleAlert, Copy, ExternalLink, Plus, Smartphone } from 'lucide-react'
 import type { PhoneDevice, PhoneSettingsChange, PhoneState } from '../../shared/phoneTypes'
 import { useDure } from '../state/store'
@@ -334,13 +334,13 @@ export function PhonePane({ onCoveredChange }: { onCoveredChange: (covered: bool
         </p>
       )}
 
-      <div className="phn-panel" aria-live="polite" data-collapsed={collapsed || undefined}>
+      <HeroPanel collapsed={collapsed}>
         {collapsed ? (
           <Ready p={p} enabled={enabled} />
         ) : (
           <Checklist p={p} enabled={enabled} checking={checking} notice={notice} onRecheck={() => void recheck()} />
         )}
-      </div>
+      </HeroPanel>
       {errors.check && (
         <p className="fe phn-err" role="alert">
           {errors.check}
@@ -418,11 +418,44 @@ export function PhonePane({ onCoveredChange }: { onCoveredChange: (covered: bool
 }
 
 /**
+ * 상태 상자 — 접힘(Ready)과 펼침(Checklist)이 서로 바뀌어도, 주소 줄([주소 복사])·[주소 짧게 하기]에 있던 초점이 body 로 떨어지지 않는다
+ * (두 모습이 각자 주소 줄을 그리니 바뀌면 단추가 새로 생긴다 → 새 [주소 복사]로 옮긴다)
+ */
+function HeroPanel({ collapsed, children }: { collapsed: boolean; children: ReactNode }) {
+  const box = useRef<HTMLDivElement>(null)
+  const held = useRef(false)
+  const was = useRef(collapsed)
+  useLayoutEffect(() => {
+    if (was.current === collapsed) return
+    was.current = collapsed
+    const a = document.activeElement
+    if (held.current && (!a || a === document.body)) box.current?.querySelector<HTMLElement>('.phn-copy')?.focus()
+  }, [collapsed])
+  return (
+    <div
+      ref={box}
+      className="phn-panel"
+      aria-live="polite"
+      onFocus={e => {
+        held.current = e.target instanceof Element && e.target.matches('.phn-copy, [data-shorten]')
+      }}
+      onBlur={e => {
+        // 다른 곳으로 옮겨 갔다 — 단추가 없어져서 빠진 것(relatedTarget 없음)과 다르다
+        if (e.relatedTarget instanceof Node && !box.current?.contains(e.relatedTarget)) held.current = false
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
+/**
  * 접힌 상태 상자 — Tailscale 이 다 됐을 때. '휴대폰 주소' + 접속 수 · 주소 줄(꺼져 있으면 '켜면 휴대폰 주소가 열려요') ·
  * '✓ Tailscale 준비됨' + [주소 짧게 하기](누르면 긴 팁이 그 아래 펼쳐진다 — 주소가 보일 때만)
  */
 function Ready({ p, enabled }: { p: PhoneState; enabled: boolean }) {
   const [tip, setTip] = useState(false)
+  const tipId = useId()
   const url = enabled ? p.url : null
   return (
     <>
@@ -442,12 +475,12 @@ function Ready({ p, enabled }: { p: PhoneState; enabled: boolean }) {
           {PHONE.ready}
         </span>
         {url !== null && (
-          <button type="button" className="phn-link" aria-expanded={tip} onClick={() => setTip(t => !t)}>
+          <button type="button" className="phn-link" data-shorten aria-expanded={tip} aria-controls={tipId} onClick={() => setTip(t => !t)}>
             {PHONE.shorten}
           </button>
         )}
       </div>
-      {url !== null && tip && <p className="phn-tip">{PHONE.tip}</p>}
+      {url !== null && tip && <p className="phn-tip" id={tipId}>{PHONE.tip}</p>}
     </>
   )
 }

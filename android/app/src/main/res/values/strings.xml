@@ -6,7 +6,7 @@
     <string name="first_body">이 앱은 PC 의 두레를 휴대폰에서 여는 앱이에요.</string>
     <!-- 처음 쓰기의 번호 줄 — 이 순서대로 1, 2, …(StartActivity 가 first_run_step.xml 로 그린다) -->
     <string-array name="first_steps">
-        <item>PC 두레의 \'휴대폰\' 창에서 QR 로 크롬을 열어요</item>
+        <item>PC 두레 → 설정 → 휴대폰에서 QR 로 크롬을 열어요</item>
         <item>크롬의 두레 화면에서 [두레 앱으로 열기]를 눌러요</item>
     </string-array>
     <!-- 기억한 PC 와 다른 PC 의 주소가 왔을 때 묻는 창(글은 새 PC 의 호스트[:포트]) -->

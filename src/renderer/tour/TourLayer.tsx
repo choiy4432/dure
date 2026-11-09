@@ -158,7 +158,7 @@ export function TourLayer({
   onCloseDialog,
 }: {
   dialog: Dialog
-  /** 그 위에 따로 뜬 창이 있다(휴대폰 창) — 그동안 겹을 숨긴다(단계 판정은 dialog 그대로) */
+  /** 그 위에 따로 겹친 창이 있다(묻지 않고 실행 확인 · 짝 맺기 · 앱 받기 · 끊기 확인) — 그동안 겹을 숨긴다(단계 판정은 dialog 그대로) */
   covered?: boolean
   onCloseDialog: () => void
 }) {
@@ -224,6 +224,14 @@ export function TourLayer({
     let still = 0
     let idle = 0
     let checked = false
+    // beside — 넓어진 설정 창 옆에 카드 자리가 모자라면(작은 두레 창) 설정 창을 왼쪽으로 비켜 준다. 겹치지 않게
+    let shifted = 0
+    let shiftEl: HTMLElement | null = null
+    const setShift = (el: HTMLElement, px: number) => {
+      shiftEl = el
+      shifted = px
+      el.style.translate = px ? `${-px}px 0` : ''
+    }
     const stop = () => {
       cancelAnimationFrame(frame)
       if (nap) clearTimeout(nap)
@@ -261,9 +269,23 @@ export function TourLayer({
       const vh = window.innerHeight
       const w = card.current?.offsetWidth ?? 0
       const h = card.current?.offsetHeight ?? 0
+      let side = target
+      if (mode === 'beside' && target) {
+        const el = els.find(drawn)
+        if (el instanceof HTMLElement) {
+          const home = { ...target, left: target.left + shifted, right: target.right + shifted } // 비키기 전 자리
+          // 왼쪽에 카드가 들어가면 비키지 않는다(placeBeside 가 왼쪽에 둔다)
+          const need = home.left - BESIDE_GAP - w >= EDGE ? 0 : home.right + BESIDE_GAP + w + EDGE - vw
+          const want = Math.round(Math.min(Math.max(need, 0), Math.max(home.left - EDGE, 0)))
+          if (want !== shifted) {
+            setShift(el, want)
+            side = { ...home, left: home.left - want, right: home.right - want }
+          }
+        }
+      }
       const next: Geo =
         mode === 'beside'
-          ? { vw, vh, hole: null, card: placeBeside(target, w, h, vw, vh) }
+          ? { vw, vh, hole: null, card: placeBeside(side, w, h, vw, vh) }
           : (() => {
               const cut = target && {
                 left: Math.max(HOLE_INSET, target.left - PAD),
@@ -289,6 +311,7 @@ export function TourLayer({
     window.addEventListener('scroll', wake, true)
     return () => {
       stop()
+      if (shiftEl) setShift(shiftEl, 0)
       window.removeEventListener('resize', wake)
       window.removeEventListener('scroll', wake, true)
       if (missing) clearTimeout(missing)

@@ -361,7 +361,7 @@ describe('sw.js — PC 에 닿지 않을 때 화면(오프라인)', () => {
   it("오프라인 화면 — 두레 앱 안(html data-app)일 때만 보이는 '주소가 바뀌었으면…' 줄이 'PC 에 닿지 않아요' 안내 바로 아래", () => {
     const pub = path.join(__dirname, '../src/renderer/public')
     const html = fs.readFileSync(path.join(pub, 'offline.html'), 'utf8')
-    const LINE = 'PC 주소가 바뀌었으면 PC 두레의 휴대폰 창 QR 로 크롬에서 열고 [두레 앱으로 열기]를 다시 눌러 주세요.'
+    const LINE = 'PC 주소가 바뀌었으면 PC 두레 → 설정 → 휴대폰의 QR 로 크롬에서 열고 [두레 앱으로 열기]를 다시 눌러 주세요.'
     const text = html.replace(/<[^>]+>/g, '')
     expect(text).toContain(LINE)
     // 안내(Tailscale) 다음, [다시 시도] 앞

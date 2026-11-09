@@ -269,9 +269,10 @@ describe('설정의 휴대폰 탭', () => {
     await act(async () => { await getStore().init() })
     await settle()
     const covered = vi.fn()
+    const closeSettings = vi.fn()
     render(
       <SettingsDialog
-        onClose={() => {}}
+        onClose={closeSettings}
         onReplayTour={() => {}}
         initialTab="phone"
         onCoveredChange={covered}
@@ -285,6 +286,7 @@ describe('설정의 휴대폰 탭', () => {
     /** 아래 설정 창 · 그 휴대폰 판은 그대로 */
     const stays = () => {
       expect(screen.getByRole('dialog', { name: '설정' })).toBeTruthy()
+      expect(closeSettings).not.toHaveBeenCalled() // Esc 가 아래 설정 창까지 닫지 않았다
       expect(phonePanel()).toBe(pane)
       expect(within(pane).getByRole('switch', { name: '휴대폰으로 쓰기 — 켜짐' })).toBeTruthy()
     }
@@ -346,6 +348,39 @@ describe('휴대폰 탭 — 상태 상자', () => {
     expect(dlg.textContent).not.toContain(TIP)
     // 짝 맺기는 열려 있다
     expect((within(dlg).getByRole('button', { name: '휴대폰 짝 맺기' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('urlFocusSurvivesHeroFlip — 접힌 상자에서 주소 복사에 있던 초점은 까닭이 떠 상자가 펼쳐져도 새 주소 복사로 옮겨진다', async () => {
+    phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN }
+    await renderApp()
+    const { dlg } = await openPhone()
+    expect(steps(dlg)).toEqual([])
+    const copy = within(hero(dlg)).getByRole('button', { name: '주소 복사' })
+    act(() => copy.focus())
+    expect(document.activeElement).toBe(copy)
+    emit({ problem: '까닭 한 줄' })
+    expect(steps(dlg)).toHaveLength(3)
+    const now = within(hero(dlg)).getByRole('button', { name: '주소 복사' })
+    expect(document.activeElement).toBe(now)
+    // 다른 곳에 초점이 있었다면 끌어오지 않는다
+    emit({ problem: null })
+    expect(steps(dlg)).toEqual([])
+    const outside = within(dlg).getByRole('switch', { name: /^휴대폰으로 쓰기/ })
+    act(() => outside.focus())
+    emit({ problem: '또 까닭' })
+    expect(document.activeElement).toBe(outside)
+  })
+
+  it('shortenDisclosureControlsTip — 주소 짧게 하기 단추가 펼쳐지는 팁을 가리킨다', async () => {
+    phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN }
+    await renderApp()
+    const { dlg } = await openPhone()
+    const btn = within(hero(dlg)).getByRole('button', { name: '주소 짧게 하기' })
+    fireEvent.click(btn)
+    const id = btn.getAttribute('aria-controls')!
+    expect(id).toBeTruthy()
+    expect(document.getElementById(id)?.className).toBe('phn-tip')
+    expect(hero(dlg).hasAttribute('data-collapsed')).toBe(false)
   })
 
   it('heroExpandsOnProblemOrNotice — ready 여도 까닭(problem)이나 주소 바뀜 알림(notice)이 있으면 단계가 펼쳐진다 · 아직 안 됐으면 단계와 할 일', async () => {

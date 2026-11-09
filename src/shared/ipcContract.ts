@@ -178,7 +178,7 @@ export interface DureApi {
   phonePairCancel(): Promise<void>
   /** 그 기기를 끊는다 — 토큰 무효 + 열린 연결 바로 닫기 */
   phoneUnpair(id: string): Promise<void>
-  /** 휴대폰 창이 '주소가 바뀌었어요' 알림(PhoneState.notice)을 받아 보였다 — main 이 지운다(창은 열린 동안 그대로 보인다) */
+  /** 설정의 휴대폰 탭이 '주소가 바뀌었어요' 알림(PhoneState.notice)을 받아 보였다 — main 이 지운다(창은 열린 동안 그대로 보인다) */
   phoneNoticeSeen(): Promise<void>
 
   /** 해제 함수를 돌려준다 */

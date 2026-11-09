@@ -5,7 +5,7 @@ import { useLeaving } from './presence'
 export const FOCUSABLE =
   'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
 
-/** 지금 열린 대화상자 — 연 차례대로. 겹쳐 열리면(설정 → 휴대폰 → 짝 맺기·확인) 키는 맨 위 것만 받는다 */
+/** 지금 열린 대화상자 — 연 차례대로. 겹쳐 열리면(설정 위에 짝 맺기·앱 받기·확인) 키는 맨 위 것만 받는다 */
 const openDialogs: { box: RefObject<HTMLElement | null>; escape: () => void }[] = []
 /** 열린 대화상자 수가 바뀔 때 — 휴대폰 화면(MobileApp)이 뒤로 가기 자리를 맞춘다. PC 창엔 듣는 쪽이 없다 */
 const watchers = new Set<() => void>()

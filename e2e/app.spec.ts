@@ -520,11 +520,14 @@ test('재우기 — 쉬면 잠들고, 말을 걸면 --resume 으로 깨어난다
       await addAgent(page, WEB, w.webFolder)
     })
 
-    await test.step('설정에서 15분 고르고 저장', async () => {
+    await test.step('설정에서 15분 고르면 바로 반영(저장 단추 없음) → 닫기', async () => {
       await page.getByRole('button', { name: '설정', exact: true }).click()
       const dlg = page.getByRole('dialog', { name: '설정' })
-      await dlg.getByRole('radiogroup', { name: '쉬는 에이전트 재우기' }).getByRole('radio', { name: '15분' }).click()
-      await dlg.getByRole('button', { name: '저장', exact: true }).click()
+      await expect(dlg.getByRole('button', { name: '저장', exact: true })).toHaveCount(0)
+      const sleep15 = dlg.getByRole('radiogroup', { name: '쉬는 에이전트 재우기' }).getByRole('radio', { name: '15분' })
+      await sleep15.click()
+      await expect(sleep15).toBeChecked()
+      await dlg.getByRole('button', { name: '닫기', exact: true }).click()
       await expect(dlg).toBeHidden()
     })
 

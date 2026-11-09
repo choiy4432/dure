@@ -98,7 +98,7 @@ export interface PhoneController {
   /** 새 짝 코드·6자리 숫자 — 앞의 것은 무효. 길이 열려 있어야 한다. 주소가 바뀌었다는 알림(notice)은 지운다 */
   pairStart(): Promise<PhonePairOffer>
   pairCancel(): void
-  /** 휴대폰 창이 주소가 바뀌었다는 알림(notice)을 받아 보였다 — 지운다 */
+  /** 설정의 휴대폰 탭이 주소가 바뀌었다는 알림(notice)을 받아 보였다 — 지운다 */
   noticeSeen(): void
   /** 기기 지우기 + 열린 소켓 닫기 — 같은 틱에 */
   unpair(id: string): void
@@ -144,7 +144,7 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
   /** 길이 열려 있다 — host = 서버가 받는 Host(443 이면 포트 없이), url = 휴대폰 주소, dnsName·httpsPort = 연 짝(이름이 바뀌었나·Funnel 을 볼 때) */
   let open: { host: string; url: string; dnsName: string; httpsPort: number } | null = null
   let problem: string | null = null
-  /** 주소가 바뀌었다는 알림(E.moved) — 휴대폰 창이 보거나·짝을 다시 맺거나·끌 때까지 */
+  /** 주소가 바뀌었다는 알림(E.moved) — 휴대폰 탭이 보거나·짝을 다시 맺거나·끌 때까지 */
   let notice: string | null = null
   /** 이 실행에서 마지막으로 연 주소의 Host — 다시 열 때 주소가 바뀌었나 본다(처음엔 모른다 — 그땐 phone.json 의 httpsPort 와 포트만 견준다) */
   let lastHost: string | null = null

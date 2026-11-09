@@ -6647,25 +6647,25 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
 }
 
 /* 마지막 줄 '＋ 휴대폰 짝 맺기' — 줄 전체가 단추. 주소가 안 열렸으면 잠기고 아래에 까닭 한 줄 */
-.phn-add {
+.sx-r.phn-add {
   width: 100%;
-  gap: 6px;
+  gap: 6px; /* .sx-r 의 12px 보다 앞서야 .phn-wait 의 왼쪽 안쪽 여백(35px)과 글머리가 맞는다 */
   font-size: 13px;
   font-weight: 700;
   color: var(--primary-text);
   text-align: left;
 }
 
-.phn-add:hover:not(:disabled) {
+.sx-r.phn-add:hover:not(:disabled) {
   background: var(--hover);
 }
 
-.phn-add:disabled {
+.sx-r.phn-add:disabled {
   color: var(--muted);
   cursor: default;
 }
 
-.phn-add:focus-visible {
+.sx-r.phn-add:focus-visible {
   outline-offset: -2px;
 }
 

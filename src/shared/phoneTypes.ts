@@ -71,7 +71,7 @@ export type PhoneState = {
   problem: string | null
   /**
    * 다시 연 휴대폰 주소가 앞서 연 주소와 다르다(PC 이름이 바뀜·Funnel 때문에 https 포트를 옮김·공개가 풀려 돌아감) — 짝 맺은 휴대폰이 있을 때만.
-   * 한국어 한 줄, 없으면 null. 휴대폰 창이 보고 phoneNoticeSeen 하거나, 짝을 다시 맺거나(phonePairStart), 끄면 지워진다
+   * 한국어 한 줄, 없으면 null. 설정의 휴대폰 탭이 보고 phoneNoticeSeen 하거나, 짝을 다시 맺거나(phonePairStart), 끄면 지워진다
    */
   notice: string | null
   /** 이 PC 가 휴대폰에 내어 줄 안드로이드 앱의 판 — 앱 파일이 없거나 패키지가 진짜가 아니면(시험 패키지는 시험 빌드에서만) null */
