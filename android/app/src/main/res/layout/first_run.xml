@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  처음 쓰기(시안 app-a) — 기억한 PC 가 없을 때. 크기는 웹 짝 맺기·오프라인 화면과 같은 비율(제목 26sp/34 · 글 15sp/24 · 번호 24dp — 글꼴 크기 설정을 따라 커진다).
+  처음 쓰기(시안 app-a) — 기억한 PC 가 없을 때. 크기는 웹 짝 맺기·오프라인 화면과 같은 비율(제목 26sp/34 · 글 15sp/24 · 번호 24sp — 셋 다 글꼴 크기 설정을 따라 커진다).
   위·아래 여백은 StartActivity 가 상태·탐색 막대만큼 더한다. 바탕은 테마(windowBackground). 글 모양은 values/styles.xml(줄 높이는 values-v28)
 -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"

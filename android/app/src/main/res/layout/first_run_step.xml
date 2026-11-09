@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  처음 쓰기의 번호 줄 하나 — 번호 동그라미(최소 24dp, 글꼴이 커지면 같이 커진다) + 12dp + 글(여러 줄이면 감싼다).
-  번호와 글은 첫 줄의 글자 밑선에 맞춘다(LinearLayout 의 baselineAligned). StartActivity 가 번호·글을 채운다
+  처음 쓰기의 번호 줄 하나 — 번호 동그라미(24sp, 글꼴이 커지면 같이 커진다) + 12dp + 글(여러 줄이면 감싼다).
+  번호는 위에 붙인다 — 동그라미 높이 = 글의 첫 줄 높이(24sp)라 첫 줄 가운데에 선다. 글자 밑선 맞춤(baselineAligned)은 끈다:
+  동그라미가 내려앉아 줄 밖으로 나가 아래가 잘렸다(실측, 글꼴 1.15 배). StartActivity 가 번호·글을 채운다
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
+    android:baselineAligned="false"
     android:orientation="horizontal">
 
     <TextView
@@ -13,6 +15,7 @@
         style="@style/Dure.FirstRun.Badge"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_gravity="top"
         android:importantForAccessibility="no" />
 
     <TextView

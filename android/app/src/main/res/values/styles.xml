@@ -26,10 +26,13 @@
         <item name="android:textColor">@color/text_2</item>
     </style>
 
-    <!-- 번호 동그라미 — 최소 24dp 에 글을 감싼다(글꼴 크기 설정이 커도 잘리지 않게) -->
+    <!--
+      번호 동그라미 — 24sp(글꼴 크기 설정을 따라 커진다 — 번호 줄 글의 첫 줄 높이 24sp 와 늘 같아 첫 줄 가운데에 선다).
+      24dp 로 두고 글자 밑선에 맞췄을 땐 글꼴 1.15 배에서 동그라미가 내려앉아 아래가 잘렸다(실측)
+    -->
     <style name="Dure.FirstRun.Badge" parent="">
-        <item name="android:minWidth">24dp</item>
-        <item name="android:minHeight">24dp</item>
+        <item name="android:minWidth">24sp</item>
+        <item name="android:minHeight">24sp</item>
         <item name="android:paddingStart">6dp</item>
         <item name="android:paddingEnd">6dp</item>
         <item name="android:paddingTop">2dp</item>
