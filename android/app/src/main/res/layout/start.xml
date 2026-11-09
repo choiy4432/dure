@@ -1,42 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 시작 화면(시안 app-a) — 웹의 'PC 에 연결하고 있어요'와 같은 모습: 로고는 화면 한가운데, 회전 + 글은 그 아래. 바탕은 테마(windowBackground) -->
+<!--
+  시작 화면 — 웹의 'PC 에 연결하고 있어요'(offline.html .connecting)와 같은 자리·크기라 TWA 로 넘어갈 때 튀지 않는다.
+  - 로고: 가로 폭의 36%(최대 160dp — StartActivity 가 정한다) · 상태 막대와 탐색 막대 사이(TWA 의 웹 화면 자리)의 한가운데
+    (막대만큼의 바깥 여백도 StartActivity 가 넣는다 — RelativeLayout 의 가운데 맞춤은 안쪽 여백을 보지 않는다)
+  - 줄: 로고 아래 28dp · 높이 24sp(웹 line-height 24px) · 18dp 고리 + 10dp 띄움 + 15sp 글, 가로 가운데(좌우 20dp)
+  바탕은 테마(windowBackground)
+-->
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/start_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
     <ImageView
         android:id="@+id/logo"
-        android:layout_width="76dp"
-        android:layout_height="76dp"
+        android:layout_width="160dp"
+        android:layout_height="160dp"
         android:layout_centerInParent="true"
         android:importantForAccessibility="no"
         android:src="@drawable/dure_logo" />
 
     <!-- 회전하는 건 고리만이라 글의 compound drawable 로 합치지 않는다 -->
     <LinearLayout
-        android:layout_width="wrap_content"
+        android:id="@+id/connecting"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_below="@id/logo"
-        android:layout_centerHorizontal="true"
-        android:layout_marginTop="16dp"
-        android:gravity="center_vertical"
+        android:layout_marginStart="20dp"
+        android:layout_marginTop="28dp"
+        android:layout_marginEnd="20dp"
+        android:gravity="center"
+        android:minHeight="24sp"
         android:orientation="horizontal"
         tools:ignore="UseCompoundDrawables">
 
         <ImageView
             android:id="@+id/spinner"
-            android:layout_width="16dp"
-            android:layout_height="16dp"
+            android:layout_width="18dp"
+            android:layout_height="18dp"
             android:importantForAccessibility="no"
             android:src="@drawable/spinner" />
 
+        <!-- 글 상자 = 글꼴의 위·아래 끝(includeFontPadding 끔)을 24sp 줄 가운데에 — 웹 line-height 의 위아래 반씩 여백과 같다 -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
+            android:layout_marginStart="10dp"
+            android:includeFontPadding="false"
             android:text="@string/connecting"
             android:textColor="@color/text_3"
-            android:textSize="13sp" />
+            android:textSize="15sp" />
     </LinearLayout>
 </RelativeLayout>

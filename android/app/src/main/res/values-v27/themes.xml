@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 안드로이드 8.1 이상 — 탐색 막대 아이콘도 늘 밝게(제조사 테마가 밝은 막대로 돌리지 못하게) -->
+    <style name="Theme.Dure.Base" parent="Theme.Dure.Bars">
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

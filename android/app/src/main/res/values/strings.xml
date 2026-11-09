@@ -8,5 +8,9 @@
     <string name="first_step_1">PC 두레의 \'휴대폰\' 창에서 QR 로 크롬을 열어요</string>
     <string name="first_step_2_no" translatable="false">2</string>
     <string name="first_step_2">크롬의 두레 화면에서 [두레 앱으로 열기]를 눌러요</string>
+    <!-- 기억한 PC 와 다른 PC 의 주소가 왔을 때 묻는 창(글은 새 PC 의 호스트[:포트]) -->
+    <string name="switch_title">다른 PC 로 바꿀까요?</string>
+    <string name="switch_change">바꾸기</string>
+    <string name="switch_keep">그대로</string>
     <string name="notification_channel">두레 알림</string>
 </resources>

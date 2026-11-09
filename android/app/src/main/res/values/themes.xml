@@ -1,11 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 바탕·상태 막대·탐색 막대 모두 두레 바탕색(안드로이드 15 이상은 막대가 투명하고 바탕이 비친다) -->
-    <style name="Theme.Dure.Base" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+    <!--
+      바탕·상태 막대·탐색 막대 모두 두레 바탕색(안드로이드 15 이상은 막대가 투명하고 바탕이 비친다).
+      부모는 어두운 Material — DeviceDefault 는 제조사(삼성 등)가 밝은 판으로 돌려 막대 글자를 어둡게 만들 수 있다.
+      막대 글자·아이콘은 늘 밝게(windowLightStatusBar 끔 · 탐색 막대는 values-v27).
+    -->
+    <style name="Theme.Dure.Bars" parent="@android:style/Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:statusBarColor">@color/bg</item>
         <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 
+    <style name="Theme.Dure.Base" parent="Theme.Dure.Bars" />
+
     <style name="Theme.Dure" parent="Theme.Dure.Base" />
+
+    <!-- '다른 PC 로 바꿀까요?' 창 — 웹 다크의 떠 있는 판(raised)·글·주색 글 -->
+    <style name="Theme.Dure.Dialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorBackground">@color/raised</item>
+        <item name="android:colorBackgroundFloating">@color/raised</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/text_2</item>
+        <item name="android:colorAccent">@color/primary_text</item>
+        <item name="android:backgroundDimAmount">0.6</item>
+    </style>
 </resources>

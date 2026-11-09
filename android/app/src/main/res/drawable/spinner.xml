@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 웹 '연결하고 있어요'의 회전 고리 — 옅은 테두리 + 위쪽 1/4 만 파랑 -->
+<!-- 웹 '연결하고 있어요'의 회전 고리(offline.html .ring) — 18 칸, 굵기 2 의 옅은 테두리(border) + 위쪽 1/4 만 주색(primary) -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="16dp"
-    android:height="16dp"
-    android:viewportWidth="16"
-    android:viewportHeight="16">
+    android:width="18dp"
+    android:height="18dp"
+    android:viewportWidth="18"
+    android:viewportHeight="18">
     <path
-        android:pathData="M8,1 A7,7 0 1 1 8,15 A7,7 0 1 1 8,1"
+        android:pathData="M9,1 A8,8 0 1 1 9,17 A8,8 0 1 1 9,1"
         android:strokeWidth="2"
         android:strokeColor="@color/line" />
     <path
-        android:pathData="M3.05,3.05 A7,7 0 0 1 12.95,3.05"
+        android:pathData="M3.343,3.343 A8,8 0 0 1 14.657,3.343"
         android:strokeWidth="2"
-        android:strokeColor="@color/accent" />
+        android:strokeColor="@color/primary" />
 </vector>
