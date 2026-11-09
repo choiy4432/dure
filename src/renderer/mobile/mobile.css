@@ -385,7 +385,7 @@ button.m-row:active {
   color: var(--danger-text);
 }
 
-/* 두레 앱(안드로이드) 띠 — 시안 phone-a: 방 목록 위, 옅은 파랑 바탕에 한 줄 + 단추 줄(크롬 '두레 앱으로 열기 · 나중에' · 앱 안 '받기') */
+/* 두레 앱(안드로이드) 띠 — 시안 phone-a(AppBand.tsx): 방 목록 위 · 짝 맺기 끝, 옅은 파랑 바탕에 한 줄 + 단추 줄(크롬 '두레 앱으로 열기 · 나중에' · 앱 안 '켜기'(알림) · '받기'(업데이트)) */
 .m-appband {
   display: flex;
   flex-direction: column;

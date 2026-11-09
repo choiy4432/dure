@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import '@testing-library/jest-dom/vitest'
-import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act, within } from '@testing-library/react'
 import { PairScreen, type PairOutcome, type PushOutcome } from '../../src/renderer/mobile/PairScreen'
 import { defaultPhoneName, inAppBrowser, isIOS, isSamsung, type PairEnv } from '../../src/renderer/mobile/pairEnv'
 
@@ -317,5 +317,97 @@ describe('pairEnv — 어떤 브라우저인가', () => {
     expect(isSamsung('', UA.samsungInternet)).toBe(true)
     expect(isSamsung('Pixel 9', UA.chrome)).toBe(false)
     expect(isSamsung('', UA.chrome)).toBe(false)
+  })
+})
+
+describe('PairScreen — 짝을 맺은 화면의 두레 앱 띠(설계 §5.4-3 · 방 목록과 같은 띠)', () => {
+  const ANDROID_CHROME = 'Mozilla/5.0 (Linux; Android 15; SM-S921N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36'
+  const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+  const PC = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36'
+  const STEER = '두레 앱으로 쓰면 알림에 주소가 안 붙어요.'
+  let pcApp: { versionCode: number; packageName: string } | null
+  let me: ReturnType<typeof vi.fn>
+
+  const as = (ua: string, referrer = '') => {
+    Object.defineProperty(navigator, 'userAgent', { value: ua, configurable: true })
+    Object.defineProperty(document, 'referrer', { value: referrer, configurable: true })
+  }
+  /** 띠 모듈이 /api/me 를 한 번 받아 두니 시험마다 새로 읽는다 */
+  async function pairOn(env: PairEnv = android) {
+    vi.resetModules()
+    const { PairScreen: Fresh } = await import('../../src/renderer/mobile/PairScreen')
+    const enablePush = vi.fn(async (): Promise<PushOutcome> => 'on')
+    render(<Fresh code="c0de" env={env} link="https://pc.tail0000.ts.net/mobile.html" pair={async () => ({ ok: true })} enablePush={enablePush} copy={async () => true} onDone={() => {}} />)
+    expect(me).not.toHaveBeenCalled() // 짝을 맺기 전엔 묻지 않는다(401)
+    fireEvent.click(screen.getByRole('button', { name: '짝 맺기' }))
+    await settle()
+    return { enablePush }
+  }
+
+  beforeEach(() => {
+    sessionStorage.clear()
+    pcApp = { versionCode: 3, packageName: 'io.github.choiy4432.dure' }
+    me = vi.fn(async (u: string) =>
+      String(u).endsWith('/api/me')
+        ? new Response(JSON.stringify({ ok: true, device: { id: 'd', name: '내 휴대폰', createdAt: 1, lastSeen: 1, push: false }, androidApp: pcApp }), { status: 200 })
+        : new Response(null, { status: 404 }),
+    )
+    vi.stubGlobal('fetch', me)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    delete (navigator as any).userAgent
+    delete (document as any).referrer
+  })
+
+  it('안드로이드 크롬 + PC 가 앱을 내어 줌 — 짝을 맺었어요 화면에 띠 · [두레 앱으로 열기] = 방 목록과 같은 intent 링크(앱이 없으면 /dure.apk) · 띠의 [나중에]는 없다', async () => {
+    as(ANDROID_CHROME)
+    await pairOn()
+    expect(heading()).toHaveTextContent('짝을 맺었어요')
+    const band = await screen.findByRole('region', { name: '두레 앱으로 쓰기' })
+    expect(band).toHaveTextContent(STEER)
+    expect(band).toHaveClass('m-appband')
+    expect(within(band).getByRole('link', { name: '두레 앱으로 열기' }).getAttribute('href')).toBe(
+      `intent://${location.host}${location.pathname}#Intent;scheme=https;package=io.github.choiy4432.dure;S.browser_fallback_url=${encodeURIComponent(`${location.origin}/dure.apk`)};end`,
+    )
+    expect(within(band).queryByRole('button', { name: '나중에' })).toBeNull()
+    // 알림 단추들은 그대로(맨 아래)
+    expect(screen.getByRole('button', { name: '알림 켜기' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: '나중에' })).toHaveLength(1)
+  })
+
+  it('삼성 — 알림을 켠 뒤의 화면(알림을 켰어요)에도 띠', async () => {
+    as(ANDROID_CHROME)
+    await pairOn(samsung)
+    await screen.findByRole('region', { name: '두레 앱으로 쓰기' })
+    fireEvent.click(screen.getByRole('button', { name: '알림 켜기' }))
+    await settle()
+    expect(heading()).toHaveTextContent('알림을 켰어요')
+    expect(await screen.findByRole('region', { name: '두레 앱으로 쓰기' })).toHaveTextContent(STEER)
+  })
+
+  it('PC 에 앱 파일이 없으면(androidApp null) · 두레 것이 아닌 패키지면 띠 없음', async () => {
+    for (const app of [null, { versionCode: 3, packageName: 'com.evil.app' }]) {
+      pcApp = app
+      as(ANDROID_CHROME)
+      await pairOn()
+      await settle()
+      expect(me).toHaveBeenCalled()
+      expect(screen.queryByText(STEER), String(app?.packageName)).toBeNull()
+      cleanup()
+      me.mockClear()
+    }
+  })
+
+  it('아이폰 · PC 브라우저 · 두레 앱 안 — 띠 없음(/api/me 도 묻지 않는다)', async () => {
+    for (const [ua, referrer] of [[IPHONE, ''], [PC, ''], [ANDROID_CHROME, 'android-app://io.github.choiy4432.dure/']]) {
+      as(ua, referrer)
+      await pairOn(ua === IPHONE ? iphoneHome : android)
+      await settle()
+      expect(heading()).toHaveTextContent('짝을 맺었어요')
+      expect(screen.queryByText(STEER), ua).toBeNull()
+      cleanup()
+    }
+    expect(me).not.toHaveBeenCalled()
   })
 })

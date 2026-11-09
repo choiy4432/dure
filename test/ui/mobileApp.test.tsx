@@ -719,4 +719,125 @@ describe('MobileApp — 두레 앱(안드로이드)으로 쓰기 · 앱 업데�
       vi.resetModules()
     }
   })
+
+  describe("앱 안 — 알림 허락을 아직 안 물었으면 '알림을 켜야 휴대폰으로 알림이 와요' [켜기]", () => {
+    const NOTIFY = '알림을 켜야 휴대폰으로 알림이 와요'
+    let notif: { permission: NotificationPermission; requestPermission: ReturnType<typeof vi.fn> }
+    let answer: NotificationPermission
+    let reg: { pushManager: { getSubscription: ReturnType<typeof vi.fn>; subscribe: ReturnType<typeof vi.fn> } }
+
+    beforeEach(() => {
+      answer = 'granted'
+      notif = {
+        permission: 'default',
+        requestPermission: vi.fn(async () => {
+          notif.permission = answer
+          return answer
+        }),
+      }
+      vi.stubGlobal('Notification', notif)
+      vi.stubGlobal('PushManager', function PushManager() {})
+      reg = {
+        pushManager: {
+          getSubscription: vi.fn(async () => null),
+          subscribe: vi.fn(async () => ({ toJSON: () => ({ endpoint: 'https://push.example/s1', keys: { p256dh: 'p', auth: 'a' } }) })),
+        },
+      }
+      Object.defineProperty(navigator, 'serviceWorker', { value: { register: vi.fn(async () => reg), ready: Promise.resolve(reg) }, configurable: true })
+      // /api/me 는 위 그대로 · 알림 켜기 흐름의 /api/vapid → /api/subscribe
+      const base = me.getMockImplementation() as (u: string) => Promise<Response>
+      me.mockImplementation(async (u: string) =>
+        String(u).endsWith('/api/vapid') ? new Response(JSON.stringify({ ok: true, publicKey: 'AQAB' }), { status: 200 })
+          : String(u).endsWith('/api/subscribe') ? new Response(JSON.stringify({ ok: true }), { status: 200 })
+            : base(u),
+      )
+    })
+    afterEach(() => {
+      delete (navigator as any).serviceWorker
+    })
+    const subscribed = () => me.mock.calls.filter(c => String(c[0]).endsWith('/api/subscribe')).length
+
+    it('앱 안 + 허락 전(default) — 띠가 보이고, [켜기] = 알림 켜기 흐름(앱 안에서 허락을 묻고 구독) → 허락하면 띠가 숨는다', async () => {
+      as(ANDROID_CHROME, 'android-app://io.github.choiy4432.dure/')
+      sessionStorage.setItem('dure:app', '3')
+      await renderPhone()
+      const band = await screen.findByRole('region', { name: '휴대폰 알림' })
+      expect(band).toHaveTextContent(NOTIFY)
+      expect(band).toHaveClass('m-appband') // 시안 phone-a 의 띠 모양 그대로
+      // 띠는 방 목록 위
+      expect(band.compareDocumentPosition(screen.getByRole('region', { name: /^방/ })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(screen.queryByText(STEER)).toBeNull()
+      const on = within(band).getByRole('button', { name: '켜기' })
+      fireEvent.click(on)
+      // 켜는 동안 — 글이 바뀌고(흐려지지 않음) 두 번 눌러도 한 번만
+      expect(on).toHaveTextContent('켜는 중…')
+      expect(on).toHaveAttribute('aria-busy', 'true')
+      expect(on).not.toBeDisabled()
+      fireEvent.click(on)
+      await vi.waitFor(() => expect(screen.queryByText(NOTIFY)).toBeNull())
+      expect(notif.requestPermission).toHaveBeenCalledTimes(1)
+      expect(reg.pushManager.subscribe).toHaveBeenCalledTimes(1)
+      expect(subscribed()).toBe(1)
+      expect(screen.getByText('알림을 켰어요')).toBeInTheDocument()
+    })
+
+    it('[켜기]에서 막으면(denied) 띠가 숨고 막힘 안내', async () => {
+      answer = 'denied'
+      as(ANDROID_CHROME, 'android-app://io.github.choiy4432.dure/')
+      await renderPhone()
+      fireEvent.click(within(await screen.findByRole('region', { name: '휴대폰 알림' })).getByRole('button', { name: '켜기' }))
+      await vi.waitFor(() => expect(screen.queryByText(NOTIFY)).toBeNull())
+      expect(screen.getByRole('alert')).toHaveTextContent('알림이 막혀 있어요')
+      expect(subscribed()).toBe(0)
+    })
+
+    it("⋯ 메뉴의 '휴대폰 알림 켜기'로 켜도 띠가 숨는다(같은 흐름)", async () => {
+      as(ANDROID_CHROME, 'android-app://io.github.choiy4432.dure/')
+      await renderPhone()
+      await screen.findByRole('region', { name: '휴대폰 알림' })
+      fireEvent.click(screen.getByRole('button', { name: '메뉴' }))
+      fireEvent.click(screen.getByRole('menuitem', { name: '휴대폰 알림 켜기' }))
+      await vi.waitFor(() => expect(screen.queryByText(NOTIFY)).toBeNull())
+      expect(notif.requestPermission).toHaveBeenCalledTimes(1)
+    })
+
+    it('앱 안이라도 이미 허락했거나 막았으면 없음', async () => {
+      for (const permission of ['granted', 'denied'] as const) {
+        notif.permission = permission
+        as(ANDROID_CHROME, 'android-app://io.github.choiy4432.dure/')
+        const r = await renderPhone()
+        await settle()
+        expect(screen.queryByText(NOTIFY), permission).toBeNull()
+        r.unmount()
+        vi.resetModules()
+      }
+    })
+
+    it('앱 밖(안드로이드 크롬) · 아이폰 · PC 브라우저 — 허락 전이어도 없음', async () => {
+      for (const ua of [ANDROID_CHROME, IPHONE, PC]) {
+        as(ua)
+        const r = await renderPhone()
+        await settle()
+        expect(screen.queryByText(NOTIFY), ua).toBeNull()
+        expect(screen.queryByRole('region', { name: '휴대폰 알림' }), ua).toBeNull()
+        r.unmount()
+        vi.resetModules()
+      }
+      // 크롬(앱 밖)은 '두레 앱으로 쓰기' 띠 몫이다
+      as(ANDROID_CHROME)
+      await renderPhone()
+      expect(await screen.findByText(STEER)).toBeInTheDocument()
+      expect(screen.queryByText(NOTIFY)).toBeNull()
+      expect(notif.requestPermission).not.toHaveBeenCalled()
+    })
+  })
+
+  it('/api/me 의 패키지가 두레 것이 아니면 띠 없음(남의 앱을 여는 intent 를 만들지 않는다)', async () => {
+    pcApp = { versionCode: 3, packageName: 'com.evil.app' }
+    as(ANDROID_CHROME)
+    await renderPhone()
+    await settle()
+    expect(me).toHaveBeenCalled()
+    expect(screen.queryByText(STEER)).toBeNull()
+  })
 })

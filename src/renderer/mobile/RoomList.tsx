@@ -12,10 +12,10 @@ import { BrandMark } from '../shell/BrandMark'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
 import { FormDialog } from '../shell/FormDialog'
 import { ServerTag } from '../shell/RemoteCheck'
-import type { PhoneAndroidApp } from '../../shared/phoneWire'
 import { useConn } from './connection'
-import { meDevice, meInfo } from './phoneHttp'
-import { appContext, needsUpdate, openInAppHref, setSteerLater, steerLater, subscribePushHere } from './androidApp'
+import { meDevice } from './phoneHttp'
+import { subscribePushHere } from './androidApp'
+import { AppBand } from './AppBand'
 import { PUSH_DENIED, PUSH_FAILED } from './PairScreen'
 import { MobileTop, MoreMenu, OFFLINE_HINT, OfflineBand, Sheet, useOffline } from './parts'
 import { todoCounts } from '../state/attention'
@@ -159,68 +159,6 @@ function NewRoomDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
   )
 }
 
-/** PC 가 내어 줄 앱(/api/me) — 한 번 받으면 이 화면을 다시 그려도 다시 묻지 않는다(방 목록으로 돌아올 때 띠가 깜빡이지 않게). 못 받으면 다음에 다시 */
-let pcAppSeen: { app: PhoneAndroidApp | null } | null = null
-
-/**
- * 두레 앱(안드로이드) 띠 — 시안 phone-a. 방 목록 위에:
- * - 안드로이드 크롬(앱 밖): '두레 앱으로 쓰면 알림에 주소가 안 붙어요.' [두레 앱으로 열기](intent — 앱이 없으면 크롬이 /dure.apk 를 받는다) [나중에](이번 세션만 접기)
- * - 앱 안: PC 의 앱 판이 앱이 알린 판보다 크면 '앱 업데이트가 있어요' [받기](/dure.apk — 같은 열쇠라 덮어 깔린다). 드물어서 [나중에]는 없다
- * PC 가 내어 줄 앱이 없으면(androidApp null) 둘 다 없다. 아이폰·PC 브라우저는 /api/me 도 묻지 않는다
- */
-function AppBand() {
-  const [ctx] = useState(appContext)
-  const [later, setLater] = useState(steerLater)
-  const [pcApp, setPcApp] = useState<PhoneAndroidApp | null>(() => pcAppSeen?.app ?? null)
-  const wanted = ctx.inApp || (ctx.androidChrome && !later)
-  useEffect(() => {
-    if (!wanted || pcAppSeen) return
-    let live = true
-    void meInfo().then(m => {
-      if (!m) return
-      pcAppSeen = { app: m.androidApp }
-      if (live) setPcApp(m.androidApp)
-    })
-    return () => {
-      live = false
-    }
-  }, [wanted])
-  if (!wanted || !pcApp) return null
-  if (ctx.inApp) {
-    if (!needsUpdate(pcApp.versionCode, ctx.appVersion)) return null
-    return (
-      <section className="m-appband" aria-label="앱 업데이트">
-        <p className="m-appband-t">앱 업데이트가 있어요</p>
-        <div className="m-appband-act">
-          <a className="btn pri m-appband-go" href="/dure.apk" download>
-            받기
-          </a>
-        </div>
-      </section>
-    )
-  }
-  return (
-    <section className="m-appband" aria-label="두레 앱으로 쓰기">
-      <p className="m-appband-t">두레 앱으로 쓰면 알림에 주소가 안 붙어요.</p>
-      <div className="m-appband-act">
-        <a className="btn pri m-appband-go" href={openInAppHref(location.origin, location.pathname + location.hash, pcApp.packageName)}>
-          두레 앱으로 열기
-        </a>
-        <button
-          type="button"
-          className="btn m-appband-later"
-          onClick={() => {
-            setSteerLater()
-            setLater(true)
-          }}
-        >
-          나중에
-        </button>
-      </div>
-    </section>
-  )
-}
-
 interface Props {
   onOpenRoom: (id: RoomId) => void
   onOpenAgent: (row: WaitRow) => void
@@ -246,15 +184,19 @@ export function RoomList({ onOpenRoom, onOpenAgent }: Props) {
   const roomsId = useId()
   const room = (id: RoomId | null) => v.rooms.find(r => r.id === id) ?? null
 
-  // 알림 켜기 — 누른 그 자리에서 부른다(아이폰은 사용자 손짓이 있어야 허락을 묻는다)
+  /** 알림 켜기 흐름이 끝날 때마다 하나씩 — 앱 안의 알림 띠가 허락을 다시 본다 */
+  const [pushTick, setPushTick] = useState(0)
+
+  // 알림 켜기 — 누른 그 자리에서 부른다(아이폰은 사용자 손짓이 있어야 허락을 묻는다). ⋯ 메뉴와 앱 안의 알림 띠 [켜기]가 같이 쓴다
   const enablePush = () => {
     setNotice(null)
-    void subscribePushHere().then(r =>
+    return subscribePushHere().then(r => {
       setNotice(
         r === 'on' ? { text: PUSH_ON, tone: 'ok' }
           : { text: r === 'denied' ? PUSH_DENIED : r === 'unsupported' ? PUSH_UNSUPPORTED : PUSH_FAILED, tone: 'bad' },
-      ),
-    )
+      )
+      setPushTick(t => t + 1)
+    })
   }
   // 메뉴를 처음 열 때 이 휴대폰 이름(PC 가 기억하는 것)을 묻는다
   const onMenuOpen = () => {
@@ -280,7 +222,7 @@ export function RoomList({ onOpenRoom, onOpenAgent }: Props) {
                 </span>
               </div>
             }
-            items={[{ label: '휴대폰 알림 켜기', icon: <BellRing className="i" aria-hidden="true" />, onSelect: enablePush }]}
+            items={[{ label: '휴대폰 알림 켜기', icon: <BellRing className="i" aria-hidden="true" />, onSelect: () => void enablePush() }]}
           />
         }
       >
@@ -298,7 +240,7 @@ export function RoomList({ onOpenRoom, onOpenAgent }: Props) {
       <OfflineBand />
       <div className={`m-body${offline ? ' stale' : ''}`}>
         {/* 끊긴 동안은 숨긴다 — 앱으로 열어도·받아도 PC 에 닿지 않는다 */}
-        {!offline && <AppBand />}
+        {!offline && <AppBand onEnablePush={enablePush} pushTick={pushTick} />}
         {notice && (
           <p className={`m-notice ${notice.tone}`} role={notice.tone === 'bad' ? 'alert' : undefined}>
             {notice.text}

@@ -98,6 +98,12 @@ describe('phoneHttp — 짝 맺기·짝 여부·알림 구독(HTTP 길)', () => 
     // 옛 PC 두레(androidApp 칸 없음) · 꼴이 틀린 칸은 앱 없음으로
     expect(await meInfo({ base: BASE, fetch: (async () => json(200, { ok: true, device })) as unknown as typeof fetch })).toEqual({ device, androidApp: null })
     expect(await meInfo({ base: BASE, fetch: (async () => json(200, { ok: true, device, androidApp: { versionCode: '3', packageName: 'x' } })) as unknown as typeof fetch })).toEqual({ device, androidApp: null })
+    // 패키지는 두레 앱(진짜·시험)만 — 남의 패키지면 intent 링크를 만들지 않게 앱 없음으로
+    const test = { versionCode: 3, packageName: 'io.github.choiy4432.dure.test' }
+    expect(await meInfo({ base: BASE, fetch: (async () => json(200, { ok: true, device, androidApp: test })) as unknown as typeof fetch })).toEqual({ device, androidApp: test })
+    for (const packageName of ['com.evil.app', 'io.github.choiy4432.durex', 'io.github.choiy4432.dure;S.x=1', '']) {
+      expect(await meInfo({ base: BASE, fetch: (async () => json(200, { ok: true, device, androidApp: { versionCode: 3, packageName } })) as unknown as typeof fetch }), packageName).toEqual({ device, androidApp: null })
+    }
     expect(await meInfo({ base: BASE, fetch: (async () => json(401, { ok: false, error: 'x' })) as unknown as typeof fetch })).toBeNull()
     expect(await meInfo({ base: BASE, fetch: (async () => { throw new TypeError('x') }) as unknown as typeof fetch })).toBeNull()
   })

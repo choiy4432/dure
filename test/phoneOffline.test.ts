@@ -12,7 +12,7 @@ const never: FetchFn = (_u, init) =>
 const status = (s: number): FetchFn => async () => new Response(null, { status: s })
 const down: FetchFn = async () => { throw new TypeError('Failed to fetch') }
 
-function load(o: { fetch: FetchFn; hidden?: boolean; controller?: boolean; referrer?: string; session?: Record<string, string> }) {
+function load(o: { fetch: FetchFn; hidden?: boolean; controller?: boolean; referrer?: string; session?: Record<string, string>; search?: string }) {
   let answer = o.fetch
   const attrs = new Map<string, string>([['data-state', 'offline']])
   const root = { getAttribute: (k: string) => attrs.get(k) ?? null, setAttribute: (k: string, v: string) => void attrs.set(k, v) }
@@ -42,7 +42,7 @@ function load(o: { fetch: FetchFn; hidden?: boolean; controller?: boolean; refer
   const ctx = {
     document,
     window: { addEventListener: (n: string, f: () => void) => void (winOn[n] ??= []).push(f) },
-    location: { reload },
+    location: { reload, search: o.search ?? '' },
     navigator: { serviceWorker: { controller: o.controller === false ? null : { postMessage } } },
     fetch: fetchFn,
     AbortController,
@@ -97,6 +97,15 @@ describe("offline.js — 두레 앱 안이면 '주소가 바뀌었으면…' 줄
     const a = load({ fetch: never })
     expect(a.attr('data-app')).toBeNull()
     expect(a.state()).toBe('connecting') // 나머지는 그대로 돈다
+  })
+
+  it('referrer·세션이 없어도 주소에 ?app=<판>(앱이 연 첫 주소)이 남아 있으면 앱 안 · 0·빈 값·다른 이름은 아님', () => {
+    for (const search of ['?app=3', '?x=1&app=12']) {
+      expect(load({ fetch: never, search }).attr('data-app'), search).toBe('1')
+    }
+    for (const search of ['', '?app=0', '?app=', '?xapp=3', '?myapp=3']) {
+      expect(load({ fetch: never, search }).attr('data-app'), search).toBeNull()
+    }
   })
 })
 

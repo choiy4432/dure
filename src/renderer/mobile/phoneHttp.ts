@@ -2,6 +2,7 @@
 // 기기 토큰은 HttpOnly 쿠키라 이 코드는 토큰을 보지 못한다(credentials: same-origin 으로 브라우저가 실어 보낸다)
 import { PHONE_PATHS, type PhoneAndroidApp, type PhoneMeResponse, type PhonePairResponse, type PhoneVapidResponse } from '../../shared/phoneWire'
 import type { PhoneDevice } from '../../shared/phoneTypes'
+import { ANDROID_PACKAGE, ANDROID_TEST_PACKAGE } from '../../shared/androidApp'
 
 export const PAIR_OFFLINE = '두레에 닿지 못했어요 — PC 가 켜져 있는지 확인해 주세요'
 export const PAIR_FAILED = '짝을 맺지 못했어요 — 다시 해 주세요'
@@ -41,11 +42,19 @@ export async function checkMe(o: Http = {}): Promise<'paired' | 'unpaired' | 'un
   }
 }
 
-/** androidApp 칸 — 꼴이 틀렸거나 없으면(옛 PC 두레) 앱 없음으로 */
+/** 열기 링크(intent)에 실어도 되는 패키지 — 두레 앱과 그 시험 앱뿐 */
+const APP_PACKAGES: readonly string[] = [ANDROID_PACKAGE, ANDROID_TEST_PACKAGE]
+
+/**
+ * androidApp 칸 — 꼴이 틀렸거나 없으면(옛 PC 두레) 앱 없음으로. 패키지가 두레 것(진짜·시험)이 아니어도 앱 없음
+ * ([두레 앱으로 열기]의 intent 링크가 남의 앱을 열지 않게)
+ */
 const androidAppOf = (v: unknown): PhoneAndroidApp | null => {
   if (!v || typeof v !== 'object') return null
   const { versionCode, packageName } = v as Record<string, unknown>
-  return Number.isInteger(versionCode) && typeof packageName === 'string' && packageName ? { versionCode: versionCode as number, packageName } : null
+  return Number.isInteger(versionCode) && typeof packageName === 'string' && APP_PACKAGES.includes(packageName)
+    ? { versionCode: versionCode as number, packageName }
+    : null
 }
 
 /**

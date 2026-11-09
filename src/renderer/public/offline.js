@@ -19,12 +19,14 @@
 
   /**
    * 두레 안드로이드 앱(TWA) 안인가 — 앱이 연 화면은 referrer 가 android-app://<패키지>(시험 빌드는 .test). 다시 읽은 화면은 referrer 가 빠질 수 있어
-   * 이 세션에 앱이 알린 판(sessionStorage 'dure:app' — mobile.html 이 적는다, src/renderer/mobile/androidApp.ts)도 본다.
+   * 이 세션에 앱이 알린 판(sessionStorage 'dure:app' — mobile.html 이 적는다, src/renderer/mobile/androidApp.ts)과
+   * 주소의 ?app=<판>(앱이 연 첫 주소 — mobile.html 이 읽기 전에 이 화면이 뜨면 아직 주소에 남아 있다)도 본다.
    * 앱 안이면 html 에 data-app — 'PC 주소가 바뀌었으면…' 줄이 보인다(앱은 예전 주소를 열어 이 화면이 된다)
    */
   var APP_REFERRER = /^android-app:\/\/io\.github\.choiy4432\.dure(\.test)?(\/|$)/
   function inApp() {
     if (APP_REFERRER.test(document.referrer || '')) return true
+    if (/[?&]app=[1-9]/.test((typeof location !== 'undefined' && location.search) || '')) return true
     try {
       return sessionStorage.getItem('dure:app') !== null
     } catch (e) {

@@ -2,6 +2,7 @@
  * 휴대폰 짝 맺기 — 시안 B2(.superpowers/brainstorm/103256-1793850157/content/mobile-pair-v2.html): 위에 큰 제목, 할 일 단추는 엄지가 닿는 맨 아래.
  * 길: 앱 안 브라우저 → '크롬(아이폰은 사파리)으로 열어 주세요' · 아이폰 사파리 → '홈 화면에 추가' 안내 · QR 로 열었으면(#pair=) 이름 붙여 짝 맺기 ·
  * 아니면(홈 화면 앱 등) PC 에 뜬 6자리 넣기 → 짝을 맺으면 알림 켜기(삼성이면 팝업 설정 안내를 접어 둠 — 켜고 나면 펼쳐 보인다).
+ * 짝을 맺은 화면엔 안드로이드 크롬에서만 '두레 앱으로 쓰기' 띠(방 목록과 같은 SteerBand — PC 가 앱을 내어 줄 때).
  */
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode, type Ref } from 'react'
 import { Bell, Check, ChevronDown, Copy, Ellipsis, EllipsisVertical, Info, LoaderCircle, Share, type LucideIcon } from 'lucide-react'
@@ -9,6 +10,7 @@ import { BrandMark } from '../shell/BrandMark'
 import { PHONE_NAME_MAX } from '../../shared/phoneTypes'
 import type { PairEnv } from './pairEnv'
 import type { PairOutcome, PushOutcome } from './phoneHttp'
+import { SteerBand } from './AppBand'
 
 export type { PairOutcome, PushOutcome }
 
@@ -151,6 +153,7 @@ export function PairScreen(p: PairScreenProps) {
         </>}
         foot={<button type="button" className="pr-btn pr-pri" onClick={p.onDone}>두레 열기</button>}
       >
+        <SteerBand later={false} />
         <SamsungFold defaultOpen />
       </Screen>
     )
@@ -171,6 +174,8 @@ export function PairScreen(p: PairScreenProps) {
           <button type="button" className="pr-btn pr-link" onClick={p.onDone} disabled={busy}>나중에</button>
         </>}
       >
+        {/* 안드로이드 크롬이고 PC 가 앱을 내어 주면 — 두레 앱으로(설계 §5.4-3). 아래에 알림 [나중에]가 있어 띠의 [나중에]는 뺀다 */}
+        <SteerBand later={false} />
         {p.env.samsung && <SamsungFold />}
         {alert}
       </Screen>
