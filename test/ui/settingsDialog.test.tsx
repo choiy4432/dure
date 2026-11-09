@@ -311,6 +311,11 @@ describe('SettingsDialog — 알림', () => {
     await act(async () => { fireEvent.click(sw(dlg, '일이 끝나면')) })
     await settle()
     expect(setNotify).toHaveBeenCalledTimes(2)
+    // 승인·질문을 다시 켜면 잠김이 풀린다
+    await act(async () => { fireEvent.click(sw(dlg, '승인·질문이 오면')) })
+    await settle()
+    expect(setNotify.mock.calls[2]).toEqual([{ asks: true }])
+    expect(sw(dlg, '일이 끝나면').getAttribute('aria-disabled')).toBeNull()
   })
 
   it('switchSendsOnceAndShowsError — 보내는 중엔 한 번만 · 실패하면 저장된 값 + 그 줄 아래 까닭', async () => {
@@ -359,13 +364,18 @@ describe('SettingsDialog — 두레', () => {
     expect(within(dlg).getByText('최신이에요')).toBeTruthy()
   })
 
-  it('available · downloading · ready 줄과 단추', async () => {
+  it('available — 새 버전 줄 + [업데이트] → downloadUpdate', async () => {
     await renderApp()
     const dlg = open()
     await push(AV)
     expect(within(dlg).getByText('새 버전 0.2.0 이 있어요')).toBeTruthy()
     await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '업데이트' })) })
     expect(downloadUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it('downloading · ready — 받는 중 % · [다시 켜기] → installUpdate', async () => {
+    await renderApp()
+    const dlg = open()
     await push({ kind: 'downloading', version: '0.2.0', percent: 42 })
     expect(within(dlg).getByText('받고 있어요 · 42%')).toBeTruthy()
     await push({ kind: 'ready', version: '0.2.0' })
@@ -374,40 +384,81 @@ describe('SettingsDialog — 두레', () => {
     expect(installUpdate).toHaveBeenCalledTimes(1)
   })
 
-  it('error — 확인 실패는 첫 줄만 · 설치 실패는 [다시 켜기] · 받기 실패는 [다시 시도]', async () => {
+  it('error — 확인 실패(version 없음)는 첫 줄만 · 80자까지 · [다시 시도] 없음', async () => {
     await renderApp()
     const dlg = open()
     await push({ kind: 'error', message: '  net::ERR_FAILED  \nstack line two', version: null })
     expect(within(dlg).getByText('확인하지 못했어요 — net::ERR_FAILED')).toBeTruthy()
     expect(within(dlg).queryByText(/stack line two/)).toBeNull()
-    await push({ kind: 'error', message: '업데이트를 설치하지 못했어요', version: '0.2.0' })
-    expect(within(dlg).getByText('업데이트를 설치하지 못했어요')).toBeTruthy()
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '다시 켜기' })) })
-    expect(installUpdate).toHaveBeenCalledTimes(1)
-    await push({ kind: 'error', message: 'net::ERR_CONNECTION_RESET\n    at X', version: '0.2.0' })
-    expect(within(dlg).getByText('받지 못했어요')).toBeTruthy()
-    expect(dlg.textContent).not.toContain('ERR_CONNECTION_RESET')
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '다시 시도' })) })
-    expect(downloadUpdate).toHaveBeenCalledTimes(1)
+    expect(within(dlg).queryByRole('button', { name: '다시 시도' })).toBeNull()
+    expect(within(dlg).queryByRole('button', { name: '다시 켜기' })).toBeNull()
+    await push({ kind: 'error', message: 'x'.repeat(100), version: null })
+    expect(within(dlg).getByText(`확인하지 못했어요 — ${'x'.repeat(80)}…`)).toBeTruthy()
   })
 
-  it('ready — 일하는 에이전트가 있으면 노란 줄 · [업데이트 확인] 은 꺼진다', async () => {
-    snapshot = { ...snapshot, agents: [agent('a', 'r1', 'working'), agent('b', 'r1', 'awaiting'), agent('c', 'r1', 'idle')] }
+  it('error — 설치 실패 글은 그대로 + [다시 켜기] → installUpdate (downloadUpdate 는 안 부름)', async () => {
+    await renderApp()
+    const dlg = open()
+    await push({ kind: 'error', message: '업데이트를 설치하지 못했어요', version: '0.2.0' })
+    expect(within(dlg).getByText('업데이트를 설치하지 못했어요')).toBeTruthy()
+    expect(dlg.textContent).not.toContain('확인하지 못했어요 —')
+    expect(within(dlg).queryByRole('button', { name: '다시 시도' })).toBeNull()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '다시 켜기' })) })
+    expect(installUpdate).toHaveBeenCalledTimes(1)
+    expect(downloadUpdate).not.toHaveBeenCalled()
+  })
+
+  it('받기 실패(version 있음) — 받지 못했어요 + [다시 시도] → downloadUpdate · 영어 오류 글은 안 보임 · installUpdate 는 안 부름', async () => {
+    await renderApp()
+    const dlg = open()
+    await push({ kind: 'error', message: 'net::ERR_CONNECTION_RESET\n    at SimpleURLLoaderWrapper', version: '0.2.0' })
+    expect(within(dlg).getByText('받지 못했어요')).toBeTruthy()
+    expect(dlg.textContent).not.toContain('확인하지 못했어요')
+    expect(dlg.textContent).not.toContain('ERR_CONNECTION_RESET')
+    expect(within(dlg).queryByRole('button', { name: '다시 켜기' })).toBeNull()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '다시 시도' })) })
+    expect(downloadUpdate).toHaveBeenCalledTimes(1)
+    expect(installUpdate).not.toHaveBeenCalled()
+  })
+
+  it('ready — 일하는 에이전트(모든 방의 작업 중·승인 기다림)가 있으면 노란 줄, 다 쉬면 없음', async () => {
+    snapshot = {
+      ...snapshot,
+      rooms: [...snapshot.rooms, { id: 'r2', name: '서버', createdAt: 2 }],
+      agents: [agent('a', 'r1', 'working'), agent('b', 'r2', 'awaiting'), agent('c', 'r1', 'idle')],
+    }
     ;(window as any).dure.updateAgent = async () => ({})
     await renderApp()
     const dlg = open()
-    const check = within(dlg).getByRole('button', { name: '업데이트 확인' }) as HTMLButtonElement
-    expect(check.disabled).toBe(false)
     await push({ kind: 'ready', version: '0.2.0' })
+    expect(within(dlg).getByText('준비됐어요')).toBeTruthy()
     expect(within(dlg).getByText('일하는 에이전트 2명이 멈춰요 — 다시 켜진 뒤 말을 걸면 이어서 해요')).toBeTruthy()
-    expect(check.disabled).toBe(true)
-    fireEvent.click(check)
-    expect(checkUpdate).not.toHaveBeenCalled()
     await act(async () => {
       handlers['status']?.({ agentId: 'a', status: 'idle', errorText: null })
       handlers['status']?.({ agentId: 'b', status: 'idle', errorText: null })
     })
     expect(within(dlg).queryByText(/명이 멈춰요/)).toBeNull()
+  })
+
+  it('downloading — 일하는 에이전트가 있어도 노란 줄 없음', async () => {
+    snapshot = { ...snapshot, agents: [agent('a', 'r1', 'working'), agent('b', 'r1', 'awaiting')] }
+    ;(window as any).dure.updateAgent = async () => ({})
+    await renderApp()
+    const dlg = open()
+    await push({ kind: 'downloading', version: '0.2.0', percent: 10 })
+    expect(within(dlg).getByText('받고 있어요 · 10%')).toBeTruthy()
+    expect(within(dlg).queryByText(/명이 멈춰요/)).toBeNull()
+  })
+
+  it('ready — [업데이트 확인] 은 꺼진다(다 받아 둔 것을 다시 확인하지 않는다)', async () => {
+    await renderApp()
+    const dlg = open()
+    const check = within(dlg).getByRole('button', { name: '업데이트 확인' }) as HTMLButtonElement
+    expect(check.disabled).toBe(false)
+    await push({ kind: 'ready', version: '0.2.0' })
+    expect(check.disabled).toBe(true)
+    fireEvent.click(check)
+    expect(checkUpdate).not.toHaveBeenCalled()
   })
 
   it('dev — 확인 단추 없이 개발 실행 안내', async () => {

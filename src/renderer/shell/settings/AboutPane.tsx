@@ -40,12 +40,14 @@ export function AboutPane({ onReplayTour }: { onReplayTour: () => void }) {
     <>
       <Section title="업데이트">
         <Row name={info ? W.version(info.version) : '두레'} desc={status}>
+          {({ describedBy }) => (
           <div className="sx-btns">
             {update.kind !== 'dev' && (
               // 다 받아 둔 뒤(ready)엔 확인할 게 없다 — 다시 확인해도 준비 상태를 바꾸지 않는다(updater)
               <button
                 type="button"
                 className="btn sec sm"
+                aria-describedby={describedBy}
                 disabled={update.kind === 'checking' || update.kind === 'downloading' || update.kind === 'ready'}
                 onClick={act(() => window.dure.checkUpdate())}
               >
@@ -53,21 +55,22 @@ export function AboutPane({ onReplayTour }: { onReplayTour: () => void }) {
               </button>
             )}
             {update.kind === 'available' && (
-              <button type="button" className="btn pri sm" onClick={act(() => window.dure.downloadUpdate())}>
+              <button type="button" className="btn pri sm" aria-describedby={describedBy} onClick={act(() => window.dure.downloadUpdate())}>
                 {W.update}
               </button>
             )}
             {downloadFailed && (
-              <button type="button" className="btn pri sm" onClick={act(() => window.dure.downloadUpdate())}>
+              <button type="button" className="btn pri sm" aria-describedby={describedBy} onClick={act(() => window.dure.downloadUpdate())}>
                 {W.retry}
               </button>
             )}
             {(update.kind === 'ready' || installFailed) && (
-              <button type="button" className="btn pri sm" onClick={act(() => window.dure.installUpdate())}>
+              <button type="button" className="btn pri sm" aria-describedby={describedBy} onClick={act(() => window.dure.installUpdate())}>
                 {W.restart}
               </button>
             )}
           </div>
+          )}
         </Row>
       </Section>
       <Section title="두레">

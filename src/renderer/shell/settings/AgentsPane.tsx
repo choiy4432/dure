@@ -52,6 +52,7 @@ export function AgentsPane({ onCoveredChange }: { onCoveredChange: (covered: boo
           labelFor={`${id}-n`}
           error={invalid ? `${LIMIT_MIN}부터 ${LIMIT_MAX}까지 적을 수 있어요` : apply.error('limit')}
         >
+          {({ describedBy }) => (
           <div className="fld-num">
             <input
               id={`${id}-n`}
@@ -70,9 +71,11 @@ export function AgentsPane({ onCoveredChange }: { onCoveredChange: (covered: boo
                 void commit()
               }}
               aria-invalid={invalid ? true : undefined}
+              aria-describedby={describedBy}
             />
             <span className="fld-u">번</span>
           </div>
+          )}
         </Row>
         <SwitchRow
           name="묻지 않고 실행 허용"

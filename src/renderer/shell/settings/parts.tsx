@@ -31,12 +31,17 @@ export function Row({
 }: {
   name: string
   desc?: ReactNode
-  children?: ReactNode
+  /** 함수로 주면 설명·오류 글을 가리키는 id 줄(describedBy)을 받아 조절에 aria-describedby 로 건다 */
+  children?: ReactNode | ((p: { describedBy: string | undefined }) => ReactNode)
   stacked?: boolean
   error?: string | null
   nameId?: string
   labelFor?: string
 }) {
+  const uid = useId()
+  const descId = desc ? `${uid}-d` : undefined
+  const errId = error ? `${uid}-e` : undefined
+  const describedBy = [descId, errId].filter(Boolean).join(' ') || undefined
   const label = labelFor ? (
     <label className="sx-n" id={nameId} htmlFor={labelFor}>
       {name}
@@ -51,11 +56,19 @@ export function Row({
       <div className={stacked ? 'sx-r col' : 'sx-r'}>
         <div className="sx-l">
           {label}
-          {desc && <span className="sx-s">{desc}</span>}
+          {desc && (
+            <span className="sx-s" id={descId}>
+              {desc}
+            </span>
+          )}
         </div>
-        {children && <div className="sx-c">{children}</div>}
+        {children && <div className="sx-c">{typeof children === 'function' ? children({ describedBy }) : children}</div>}
       </div>
-      {error && <p className="fe sx-e">{error}</p>}
+      {error && (
+        <p className="fe sx-e" id={errId} role="alert">
+          {error}
+        </p>
+      )}
     </div>
   )
 }
@@ -82,6 +95,7 @@ export function SwitchRow({
   error?: string | null
 }) {
   const id = useId()
+  const describedBy = [desc ? `${id}-d` : null, error ? `${id}-e` : null].filter(Boolean).join(' ') || undefined
   return (
     <div className="sx-rw" data-row>
       <button
@@ -90,7 +104,7 @@ export function SwitchRow({
         role="switch"
         aria-checked={checked}
         aria-labelledby={`${id}-n`}
-        aria-describedby={desc ? `${id}-d` : undefined}
+        aria-describedby={describedBy}
         aria-busy={busy || undefined}
         aria-disabled={disabled || undefined}
         onClick={() => {
@@ -110,7 +124,11 @@ export function SwitchRow({
         </span>
         <span className="tg" aria-hidden="true" />
       </button>
-      {error && <p className="fe sx-e">{error}</p>}
+      {error && (
+        <p className="fe sx-e" id={`${id}-e`} role="alert">
+          {error}
+        </p>
+      )}
     </div>
   )
 }

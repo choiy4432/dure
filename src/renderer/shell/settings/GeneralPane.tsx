@@ -21,7 +21,8 @@ export function GeneralPane() {
     <>
       <Section title="화면">
         <Row name="테마" stacked nameId={`${id}-t`} error={apply.error('theme')}>
-          <div className="seg" role="radiogroup" aria-labelledby={`${id}-t`} aria-busy={apply.busy('theme') || undefined}>
+          {({ describedBy }) => (
+          <div className="seg" role="radiogroup" aria-labelledby={`${id}-t`} aria-describedby={describedBy} aria-busy={apply.busy('theme') || undefined}>
             {THEMES.map(t => (
               <button
                 key={t.key}
@@ -36,6 +37,7 @@ export function GeneralPane() {
               </button>
             ))}
           </div>
+          )}
         </Row>
       </Section>
       <Section title="쉬는 에이전트">
@@ -46,7 +48,8 @@ export function GeneralPane() {
           nameId={`${id}-s`}
           error={apply.error('sleep')}
         >
-          <div className="seg" role="radiogroup" aria-labelledby={`${id}-s`} aria-busy={apply.busy('sleep') || undefined}>
+          {({ describedBy }) => (
+          <div className="seg" role="radiogroup" aria-labelledby={`${id}-s`} aria-describedby={describedBy} aria-busy={apply.busy('sleep') || undefined}>
             {SLEEP_CHOICES.map(m => (
               <button
                 key={m}
@@ -61,6 +64,7 @@ export function GeneralPane() {
               </button>
             ))}
           </div>
+          )}
         </Row>
       </Section>
     </>
