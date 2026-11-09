@@ -34,6 +34,8 @@
   --border: #E2E8F0;
   --border-strong: #CBD5E1;    /* hover 테두리·경계선 손잡이·꺼진 스위치 */
   --border-soft: #F1F5F9;      /* 카드 안 나눔 줄 */
+  --switch-off: #94A3B8;       /* 꺼진 스위치 — 상자 바탕에 3:1 이상 */
+  --switch-knob-off: var(--bg);
 
   /* 상태 */
   --ok: #10B981;               /* 작업 중 */
@@ -125,6 +127,8 @@
     --border: #243044;
     --border-strong: #334155;
     --border-soft: #1A2436;
+    --switch-off: #475569;
+    --switch-knob-off: #E2E8F0;
 
     --ok: #10B981;
     --ok-bg: rgba(16, 185, 129, 0.14);

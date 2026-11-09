@@ -1,3 +1,4 @@
+import { FOCUSABLE } from '../../src/renderer/lib/dialog'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
@@ -86,7 +87,11 @@ describe('SettingsDialog — 탭 틀', () => {
     expect(tabs.map(t => t.getAttribute('aria-selected'))).toEqual(['true', 'false', 'false', 'false', 'false'])
     expect(tabs.map(t => t.getAttribute('tabindex'))).toEqual(['0', '-1', '-1', '-1', '-1'])
     expect(within(dlg).getByRole('tabpanel', { name: '일반' })).toBeTruthy()
-    expect(document.activeElement).toBe(tabs[0]) // R1 — 처음 초점은 고른 탭
+    expect(document.activeElement).toBe(dlg) // R5 — 처음 초점은 창 자체(고리 없음)
+    expect(dlg.getAttribute('tabindex')).toBe('-1')
+    // Tab 한 번이면 고른 탭 — 브라우저가 갈 첫 초점 대상이 고른 탭이다(다른 탭은 tabindex -1)
+    expect(Array.from(dlg.querySelectorAll<HTMLElement>(FOCUSABLE)).find(el => el.tabIndex >= 0)).toBe(tabs[0])
+    tabs[0].focus()
 
     fireEvent.keyDown(tabs[0], { key: 'ArrowDown' })
     expect(tabs[1].getAttribute('aria-selected')).toBe('true')

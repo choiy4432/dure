@@ -33,7 +33,7 @@ const TAB_ICON: Record<SettingsTab, LucideIcon> = {
 /**
  * 설정(위 띠 톱니) — 넓은 창 하나에 왼쪽 탭 다섯: 일반 · 에이전트 · 알림 · 휴대폰 · 두레.
  * 저장 단추가 없다 — 누르는 즉시 바뀐다(자동 전달 상한만 칸을 벗어나거나 Enter 일 때). 아래 단추는 [닫기] 하나.
- * 고른 판 하나만 그린다(숨긴 판을 DOM 에 두지 않는다). 탭을 바꾸면 판은 맨 위부터. 처음 초점은 고른 탭 — 스위치가 아니라서 Space 한 번에 무엇이 바뀌지 않는다.
+ * 고른 판 하나만 그린다(숨긴 판을 DOM 에 두지 않는다). 탭을 바꾸면 판은 맨 위부터. 처음 초점은 창 자체(R5) — Tab 한 번이면 고른 탭, 스위치가 아니라서 Space 한 번에 무엇이 바뀌지 않는다.
  * phonePane 이 없으면 휴대폰 탭도 없다. 휴대폰으로 쓰기가 켜져 있으면 탭 이름 옆에 상태 점 + 접속 수(그림일 뿐 — 읽는 상태는 탭의 설명).
  * 설정 위에 겹쳐 뜬 창(묻지 않고 실행 확인 · 휴대폰의 짝 맺기·앱 받기·끊기 확인)이 있는 동안은 onCoveredChange(true).
  */
@@ -79,11 +79,11 @@ function Frame({
   const [tab, setTab] = useState<SettingsTab>(tabs.some(t => t.key === initialTab) ? initialTab : 'general')
   useMotion(backdrop, MOTION.backdrop)
   useMotion(ref, MOTION.dialog)
-  // 위 띠 알약에서 열었는데 그사이 휴대폰 연결을 껐으면 알약이 없다 — 닫을 때 초점은 그 옆 설정 톱니로
+  // 처음 초점은 창 자체(R5) — Tab 한 번이면 고른 탭. 위 띠 알약에서 열었는데 그사이 휴대폰 연결을 껐으면 알약이 없다 — 닫을 때 초점은 그 옆 설정 톱니로
   useDialogFocus(
     ref,
     onClose,
-    box => box.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]'),
+    () => null,
     () => document.querySelector<HTMLElement>('[data-tour="settings-gear"]'),
   )
 
@@ -159,7 +159,7 @@ function Frame({
                   {t.key === 'phone' && phone?.settings.enabled && (
                     <span className={`st-badge ${dotOf(phone)}`} aria-hidden="true">
                       <span className={`dot ${dotOf(phone)}`} />
-                      {phone.connected}
+                      {phone.connected > 0 && phone.connected}
                     </span>
                   )}
                 </button>

@@ -207,7 +207,7 @@ code {
   width: 34px;
   height: 20px;
   border-radius: var(--radius-pill);
-  background: var(--border-strong);
+  background: var(--switch-off);
   transition: background-color 0.15s;
 }
 
@@ -219,7 +219,7 @@ code {
   width: 16px;
   height: 16px;
   border-radius: var(--radius-pill);
-  background: var(--bg);
+  background: var(--switch-knob-off);
   box-shadow: var(--shadow-knob);
   transition: left 0.15s;
 }
@@ -6445,6 +6445,10 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
   font-variant-numeric: tabular-nums;
 }
 
+.phn-conn.idle {
+  color: var(--muted);
+}
+
 .phn-hero-off {
   margin: 0;
   font-size: 13px;
@@ -6662,6 +6666,7 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
 
 .sx-r.phn-add:disabled {
   color: var(--muted);
+  opacity: 0.55;
   cursor: default;
 }
 
@@ -6885,10 +6890,13 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
   border: 3px solid var(--raised);
 }
 
+/* [닫기] 줄 — 스크롤 칸 아래에 따로 놓이고 위 구분선으로 잘린 듯 보이지 않게 */
 .st-ab {
   flex: none;
   margin-top: 0;
   padding: 12px 22px 16px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--raised);
 }
 
 .sx {
@@ -6901,15 +6909,16 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
 
 .sx-t {
   margin: 0 2px 6px;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 18px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  color: var(--muted);
+  color: var(--text-3);
 }
 
 .sx-note {
-  font-weight: 500;
+  font-weight: 400;
+  color: var(--muted);
 }
 
 .sx-box {
@@ -6954,8 +6963,8 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
 .sx-s {
   display: block;
   margin-top: 2px;
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 12.5px;
+  line-height: 1.5;
   font-weight: 400;
   color: var(--muted);
 }

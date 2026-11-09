@@ -44,7 +44,7 @@ export const PHONE = {
   rechecking: '확인하는 중…',
   // 상태 상자 — Tailscale 이 다 됐으면 단계를 접은 한 줄
   address: '휴대폰 주소',
-  connectedN: (n: number) => `${n}대 접속 중`,
+  connectedN: (n: number) => (n > 0 ? `${n}대 접속 중` : '접속 중인 휴대폰 없음'),
   ready: 'Tailscale 준비됨',
   shorten: '주소 짧게 하기',
   tip: 'Tailscale 대시보드에서 PC 이름을 dure 처럼 바꾸면 주소가 짧아져요 — 바꾸기 전에 휴대폰 연결을 끄고, 바꾼 뒤 다시 켜 주세요',
@@ -373,6 +373,16 @@ export function PhonePane({ onCoveredChange }: { onCoveredChange: (covered: bool
               )}
             </div>
           </Section>
+          <Section title={PHONE.power}>
+            {sw('keepAwake', PHONE.keepAwake, PHONE.lid)}
+            {sw('openAtLogin', PHONE.openAtLogin, loginOfferedNow && shown('openAtLogin') ? PHONE.openAtLoginOffered : undefined)}
+          </Section>
+        </div>
+        <div className="phn-col">
+          <Section title={PHONE.notify}>
+            {sw('asks', PHONE.asks)}
+            {sw('finished', PHONE.finished)}
+          </Section>
           {p.androidApp !== null && p.url !== null && (
             <Section title={ANDROID.section}>
               <Row name={`${ANDROID.appName} ${ANDROID.version(p.androidApp.versionName)}`} desc={ANDROID.rowDesc}>
@@ -382,16 +392,6 @@ export function PhonePane({ onCoveredChange }: { onCoveredChange: (covered: bool
               </Row>
             </Section>
           )}
-        </div>
-        <div className="phn-col">
-          <Section title={PHONE.notify}>
-            {sw('asks', PHONE.asks)}
-            {sw('finished', PHONE.finished)}
-          </Section>
-          <Section title={PHONE.power}>
-            {sw('keepAwake', PHONE.keepAwake, PHONE.lid)}
-            {sw('openAtLogin', PHONE.openAtLogin, loginOfferedNow && shown('openAtLogin') ? PHONE.openAtLoginOffered : undefined)}
-          </Section>
         </div>
       </div>
 
@@ -462,8 +462,8 @@ function Ready({ p, enabled }: { p: PhoneState; enabled: boolean }) {
       <div className="phn-hero-h">
         <span className="phn-hero-t">{PHONE.address}</span>
         {url !== null && routeOpen(p) && (
-          <span className="phn-conn">
-            <span className="dot g" aria-hidden="true" />
+          <span className={`phn-conn${p.connected > 0 ? '' : ' idle'}`}>
+            <span className={`dot ${p.connected > 0 ? 'g' : 's'}`} aria-hidden="true" />
             {PHONE.connectedN(p.connected)}
           </span>
         )}

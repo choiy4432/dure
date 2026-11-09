@@ -1,4 +1,5 @@
 // PC 설정의 '휴대폰' 탭(휴대폰 창이 설정 안으로 들어왔다) · 짝 맺기 창 · 앱 받기 창 — 가짜 window.dure 로 앱을 띄우고 'phone' 사건을 흉내 낸다
+import { FOCUSABLE } from '../../src/renderer/lib/dialog'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, fireEvent, cleanup, within, waitFor } from '@testing-library/react'
 import type { Snapshot } from '../../src/shared/ipcContract'
@@ -156,7 +157,8 @@ describe('설정의 휴대폰 탭', () => {
     let settings = screen.getByRole('dialog', { name: '설정' })
     expect(phoneTab(settings).getAttribute('aria-selected')).toBe('true')
     expect(within(settings).getByRole('tabpanel', { name: '휴대폰' })).toBeTruthy()
-    expect(document.activeElement).toBe(phoneTab(settings)) // R1 — 처음 초점은 고른 탭(켜기 스위치가 아니다)
+    expect(document.activeElement).toBe(settings) // R5 — 처음 초점은 창 자체(켜기 스위치가 아니다)
+    expect(Array.from(settings.querySelectorAll<HTMLElement>(FOCUSABLE)).find(el => el.tabIndex >= 0)).toBe(phoneTab(settings)) // Tab 한 번이면 고른 탭
     await act(async () => { fireEvent.click(within(settings).getByRole('button', { name: '닫기' })) })
     await settle()
     expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
@@ -197,7 +199,7 @@ describe('설정의 휴대폰 탭', () => {
     let badge = tab.querySelector<HTMLElement>('.st-badge')!
     expect(badge.getAttribute('aria-hidden')).toBe('true')
     expect(badge.querySelector('.dot.a')).not.toBeNull()
-    expect(badge.textContent).toBe('0')
+    expect(badge.textContent).toBe('') // 접속 0 이면 점만(숫자 없음)
     expect(described(tab)).toBe('켜짐 · 아직 안 열렸어요')
 
     emit({ tailscale: READY, url: URL_OPEN, connected: 2, online: ['d1', 'd2'] })
@@ -333,6 +335,12 @@ describe('휴대폰 탭 — 상태 상자', () => {
     expect(box.textContent).toContain('휴대폰 주소')
     expect(box.textContent).toContain('1대 접속 중')
     expect(box.querySelector('.dot.g')).not.toBeNull()
+    emit({ connected: 0, online: [] })
+    expect(box.textContent).toContain('접속 중인 휴대폰 없음')
+    expect(box.textContent).not.toContain('0대 접속 중')
+    expect(box.querySelector('.phn-conn .dot.s')).not.toBeNull()
+    expect(box.querySelector('.phn-conn .dot.g')).toBeNull()
+    emit({ connected: 1, online: ['d1'] })
     expect(within(box).getByText(URL_OPEN).closest('.phn-url')).not.toBeNull()
     expect(box.textContent).toContain('✓ Tailscale 준비됨')
     expect(within(box).queryByRole('button', { name: '다시 확인' })).toBeNull()
@@ -742,7 +750,7 @@ describe('휴대폰 탭', () => {
     await renderApp()
     const { dlg } = await openPhone()
     const heads = Array.from(dlg.querySelectorAll('.sx-t')).map(h => h.textContent)
-    expect(heads).toEqual(['짝 맺은 휴대폰', '휴대폰 알림', 'PC 전원'])
+    expect(heads).toEqual(['짝 맺은 휴대폰', 'PC 전원', '휴대폰 알림'])
     const keepAwake = within(dlg).getByRole('switch', { name: '켜 둔 동안 절전 막기' })
     expect(described(keepAwake)).toBe(LID)
     expect(within(dlg).getByRole('switch', { name: '승인·질문이 오면' }).getAttribute('aria-checked')).toBe('true')
@@ -1078,7 +1086,7 @@ describe('안드로이드 앱 칸', () => {
     expect(row.textContent).toContain('알림에 주소가 안 붙어요')
     expect(within(row).getByRole('button', { name: '앱 받기' })).toBeTruthy()
     const subs = Array.from(dlg.querySelectorAll('.sx-t')).map(h => h.textContent)
-    expect(subs).toEqual(['짝 맺은 휴대폰', '안드로이드 앱', '휴대폰 알림', 'PC 전원'])
+    expect(subs).toEqual(['짝 맺은 휴대폰', 'PC 전원', '휴대폰 알림', '안드로이드 앱'])
   })
 
   it('앱이 없으면(null) 칸이 없다 · 길이 닫혔으면(url null) 칸이 없다', async () => {
