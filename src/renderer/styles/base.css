@@ -6630,6 +6630,42 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
   color: var(--muted);
 }
 
+/* 안드로이드 앱 칸 — 짝 맺은 휴대폰 줄과 같은 카드 */
+.phn-app {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+  background: var(--subtle);
+}
+
+.phn-dev-nm b .phn-app-v {
+  display: inline;
+  margin-left: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* 앱 받기 창 — QR 옆 세 걸음 */
+.phn-apk-steps {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-2);
+}
+
+.phn-apk-steps li + li {
+  margin-top: 8px;
+}
+
 .phn-empty {
   margin: 6px 0 0;
   font-size: 12px;

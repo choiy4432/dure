@@ -10,6 +10,7 @@ import { useNow } from '../lib/useNow'
 import { ago, errorMessage } from '../lib/words'
 import { ConfirmDialog } from './ConfirmDialog'
 import { PhonePairDialog } from './PhonePairDialog'
+import { AndroidAppDialog, ANDROID } from './AndroidAppDialog'
 
 // 휴대폰으로 쓰기 — PC 쪽 화면(시안 C2 + D1, .superpowers/brainstorm/103256-1793850157/content/pc-phone-settings.html).
 // 설정 창엔 '휴대폰' 한 줄(상태 + [열기]), 누르면 이 휴대폰 창이 설정 창 위에 뜬다(설정에서 바꾸던 값은 그대로 남는다).
@@ -193,6 +194,7 @@ function Frame({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
   const [pairOpen, setPairOpen] = useState(false)
+  const [appOpen, setAppOpen] = useState(false)
   const [unpairing, setUnpairing] = useState<PhoneDevice | null>(null)
   /** 처음 켤 때 자동 켜기를 함께 켰다 — 말없이 바뀌지 않게 그 스위치 아래에 한 줄 */
   const [loginOfferedNow, setLoginOfferedNow] = useState(false)
@@ -400,6 +402,23 @@ function Frame({ onClose }: { onClose: () => void }) {
             {p.url === null && <span className="fld-note">{PHONE.pairWait}</span>}
           </div>
 
+          {p.androidApp !== null && p.url !== null && (
+            <>
+              <h3 className="phn-sub">{ANDROID.section}</h3>
+              <div className="phn-app">
+                <div className="phn-dev-nm">
+                  <b>
+                    {ANDROID.appName} <span className="phn-app-v">{ANDROID.version(p.androidApp.versionName)}</span>
+                  </b>
+                  <span>{ANDROID.rowDesc}</span>
+                </div>
+                <button type="button" className="btn pri sm" onClick={() => setAppOpen(true)}>
+                  {ANDROID.get}
+                </button>
+              </div>
+            </>
+          )}
+
           <h3 className="phn-sub">{PHONE.power}</h3>
           <div className="fld phn-sws">
             {sw('asks', PHONE.asks)}
@@ -425,6 +444,7 @@ function Frame({ onClose }: { onClose: () => void }) {
       </div>
       {/* 이 창 위에 겹쳐 뜨는 창 — 키는 맨 위 것만 받는다(useDialogFocus) */}
       <PhonePairDialog open={pairOpen} onClose={() => setPairOpen(false)} />
+      <AndroidAppDialog open={appOpen && p.androidApp !== null && p.url !== null} url={p.url} onClose={() => setAppOpen(false)} />
       <ConfirmDialog
         open={unpairing !== null}
         title={unpairing ? PHONE.unpairTitle(unpairing.name) : ''}

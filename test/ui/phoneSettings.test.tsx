@@ -782,3 +782,78 @@ describe('짝 맺기 창', () => {
     expect(within(pair).getByRole('button', { name: '다시 짝 맺기' })).toBeTruthy()
   })
 })
+
+describe('안드로이드 앱 칸', () => {
+  const APP = { versionCode: 3, versionName: '0.2.0' }
+  const qrText = vi.fn(async (_text: string, _opts?: unknown) => '<svg xmlns="http://www.w3.org/2000/svg"></svg>')
+
+  beforeEach(() => {
+    qrText.mockClear()
+    vi.doMock('qrcode', () => ({ default: { toString: qrText }, toString: qrText }))
+  })
+  afterEach(() => {
+    vi.doUnmock('qrcode')
+  })
+
+  const section = (dlg: HTMLElement) => within(dlg).queryByRole('heading', { name: '안드로이드 앱' })
+  const open = () => ({ settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN, androidApp: APP })
+
+  it('앱이 실려 있고 길이 열렸을 때만 칸이 보인다 — 두레 앱 · 판 · 안내 한 줄 · [앱 받기] · 순서는 짝 맺은 휴대폰 다음, 알림 · 전원 앞', async () => {
+    phone = { ...phone, ...open() }
+    await renderApp()
+    const { dlg } = await openPhone()
+    const head = section(dlg)!
+    expect(head).toBeTruthy()
+    const row = head.nextElementSibling as HTMLElement
+    expect(row.textContent).toContain('두레 앱')
+    expect(row.textContent).toContain('v0.2.0')
+    expect(row.textContent).toContain('알림에 주소가 안 붙어요')
+    expect(within(row).getByRole('button', { name: '앱 받기' })).toBeTruthy()
+    const subs = Array.from(dlg.querySelectorAll('.phn-sub')).map(h => h.textContent)
+    expect(subs).toEqual(['짝 맺은 휴대폰', '안드로이드 앱', '알림 · 전원'])
+  })
+
+  it('앱이 없으면(null) 칸이 없다 · 길이 닫혔으면(url null) 칸이 없다', async () => {
+    phone = { ...phone, ...open(), androidApp: null }
+    await renderApp()
+    const { dlg } = await openPhone()
+    expect(section(dlg)).toBeNull()
+    emit({ androidApp: APP })
+    expect(section(dlg)).toBeTruthy()
+    emit({ url: null })
+    expect(section(dlg)).toBeNull()
+    expect(dlg.textContent).not.toContain('앱 받기')
+  })
+
+  it('[앱 받기] — 작은 창에 <origin>/dure.apk 의 QR 과 세 걸음 · Esc 는 그 창만 닫는다', async () => {
+    phone = { ...phone, ...open(), url: 'https://fake-pc.tail0000.ts.net:8443/mobile.html' }
+    await renderApp()
+    const { dlg } = await openPhone()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '앱 받기' })) })
+    await settle()
+    const get = screen.getByRole('dialog', { name: '안드로이드 앱 받기' })
+    expect(qrText).toHaveBeenCalledTimes(1)
+    expect(qrText.mock.calls[0][0]).toBe('https://fake-pc.tail0000.ts.net:8443/dure.apk')
+    expect(within(get).getByRole('img', { name: '두레 앱 받기 QR' }).getAttribute('src')).toMatch(/^data:image\/svg\+xml/)
+    expect(Array.from(get.querySelectorAll('ol li')).map(li => li.textContent)).toEqual([
+      '휴대폰 카메라로 QR 을 찍어 앱을 받아요',
+      "설치할 때 '출처를 알 수 없는 앱'을 허용해요",
+      '크롬의 두레 화면에서 [두레 앱으로 열기]를 눌러요',
+    ])
+    fireEvent.keyDown(get, { key: 'Escape' })
+    await settle()
+    expect(screen.queryByRole('dialog', { name: '안드로이드 앱 받기' })).toBeNull()
+    expect(screen.getByRole('dialog', { name: '휴대폰' })).toBeTruthy()
+  })
+
+  it('길이 닫히면 열려 있던 작은 창도 닫힌다', async () => {
+    phone = { ...phone, ...open() }
+    await renderApp()
+    const { dlg } = await openPhone()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '앱 받기' })) })
+    await settle()
+    emit({ url: null })
+    await settle()
+    expect(screen.queryByRole('dialog', { name: '안드로이드 앱 받기' })).toBeNull()
+  })
+})
