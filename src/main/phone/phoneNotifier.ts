@@ -15,7 +15,7 @@ export const NOTICE_WORDS: Readonly<Record<NoticeKind, string>> = Object.freeze(
   question: '답을 기다려요',
   handoff: '넘기기 승인을 기다려요',
   remote: '서버에 문제가 있어요',
-  finished: '일을 마쳤어요',
+  finished: '답이 왔어요',
 })
 
 /** 이 판단이 엔진에서 쓰는 것 — 진짜 Engine 이 그대로 맞는다 */

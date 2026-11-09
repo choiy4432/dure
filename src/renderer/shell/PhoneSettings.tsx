@@ -68,7 +68,7 @@ export const PHONE = {
   // 알림 · 전원
   power: '알림 · 전원',
   asks: '승인·질문이 오면 휴대폰 알림',
-  finished: '일을 마치면 휴대폰 알림',
+  finished: '답이 오면 휴대폰 알림',
   keepAwake: '켜 둔 동안 PC 절전 막기',
   lid: "노트북 덮개를 닫으면 PC 가 잠들어요 — Windows 전원 설정에서 '덮개를 닫을 때'를 '아무 것도 안 함'으로 바꿔 주세요",
   openAtLogin: 'Windows 를 켜면 두레도 켜기',

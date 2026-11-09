@@ -178,11 +178,16 @@ test('넘기기 기다림도 asks', async () => {
   expect(off.sent).toHaveLength(0)
 })
 
-test('finished 기본 꺼짐', async () => {
+test('finished 기본 켜짐 — 끄면 안 보낸다', async () => {
   const t = setup()
   t.history('a1', { t: 10, kind: 'result', ok: true, subtype: 'success' })
   await flush()
-  expect(t.sent).toHaveLength(0)
+  expect(t.sent).toHaveLength(1)
+
+  const off = setup({ settings: { notify: { asks: true, finished: false } } })
+  off.history('a1', { t: 10, kind: 'result', ok: true, subtype: 'success' })
+  await flush()
+  expect(off.sent).toHaveLength(0)
 
   const on = setup({ settings: { notify: { asks: false, finished: true } } })
   on.history('a1', { t: 11, kind: 'assistant', blocks: [{ type: 'text', text: '다 했어요 — 비밀 요약' }] })
@@ -194,8 +199,8 @@ test('finished 기본 꺼짐', async () => {
   on.history('a2', { t: 14, kind: 'result', ok: false, subtype: 'error_during_execution' })
   await flush()
   expect(on.sent.map((s) => s.notice)).toEqual([
-    { title: '두레', body: '백엔드 · 일을 마쳤어요', tag: expect.stringMatching(/^dure-a1-finished-\d+$/), url: '/#agent=a1' },
-    { title: '두레', body: '프런트 · 일을 마쳤어요', tag: expect.stringMatching(/^dure-a2-finished-\d+$/), url: '/#agent=a2' },
+    { title: '두레', body: '백엔드 · 답이 왔어요', tag: expect.stringMatching(/^dure-a1-finished-\d+$/), url: '/#agent=a1' },
+    { title: '두레', body: '프런트 · 답이 왔어요', tag: expect.stringMatching(/^dure-a2-finished-\d+$/), url: '/#agent=a2' },
   ])
   expect(on.sent[0].delivery).toEqual({ urgency: 'normal', ttl: 600 })
   expect(JSON.stringify(on.sent)).not.toContain('비밀')
@@ -268,7 +273,7 @@ test('서버 방 문제 — PC 앞이라 미룬 문제가 또 실려 와도 그 
   expect(bodies(late.sent)).toEqual(['백엔드 · 서버에 문제가 있어요'])
 })
 
-test('서버 방 문제가 있는 에이전트의 차례 끝은 일을 마쳤어요 대신 문제만', async () => {
+test('서버 방 문제가 있는 에이전트의 차례 끝은 답이 왔어요 대신 문제만', async () => {
   const t = setup({ settings: { notify: { asks: true, finished: true } } })
   // 서버 claude 로그인이 풀렸다는 답 — 엔진은 그 result 를 기록하기 전에 login 문제를 상태 사건으로 알린다
   t.status('a1', { kind: 'login', detail: null }, 'working')
@@ -277,7 +282,7 @@ test('서버 방 문제가 있는 에이전트의 차례 끝은 일을 마쳤어
   t.status('a1', null, 'working')
   t.history('a1', { t: 21, kind: 'result', ok: true, subtype: 'success' })
   await flush()
-  expect(bodies(t.sent)).toEqual(['백엔드 · 서버에 문제가 있어요', '백엔드 · 일을 마쳤어요'])
+  expect(bodies(t.sent)).toEqual(['백엔드 · 서버에 문제가 있어요', '백엔드 · 답이 왔어요'])
 })
 
 test('화면 보는 기기는 건너뜀', async () => {

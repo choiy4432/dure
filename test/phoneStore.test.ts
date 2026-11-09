@@ -30,7 +30,7 @@ const EMPTY = { settings: DEFAULT_PHONE_SETTINGS, devices: [] };
 test('파일 없음 — 기본값(꺼짐·절전 막기 켬·자동 켜기 끔·승인 알림 켬·끝 알림 끔·포트 47615)', () => {
   expect(PHONE_PORT_DEFAULT).toBe(47615);
   expect(DEFAULT_PHONE_SETTINGS).toEqual({
-    enabled: false, keepAwake: true, openAtLogin: false, notify: { asks: true, finished: false }, port: 47615,
+    enabled: false, keepAwake: true, openAtLogin: false, notify: { asks: true, finished: true }, port: 47615,
   });
   expect(openPhoneStore(dir).read()).toEqual(EMPTY);
   expect(openPhoneStore(path.join(dir, '없는-폴더')).read()).toEqual(EMPTY);
@@ -197,7 +197,7 @@ test('read — 손댄 파일: 틀린 칸은 기본값, 깨진 기기 줄은 버�
     vapid: { publicKey: 'pub' },
   });
   expect(openPhoneStore(dir).read()).toEqual({
-    settings: { ...DEFAULT_PHONE_SETTINGS, enabled: true, notify: { asks: false, finished: false } },
+    settings: { ...DEFAULT_PHONE_SETTINGS, enabled: true, notify: { asks: false, finished: true } },
     devices: [dev({ id: 'ok' }), { id: 'loose', name: '가 나', createdAt: 0, lastSeen: null, push: false, tokenHash: HASH }],
   });
   expect(fs.readdirSync(dir)).toEqual(['phone.json']);

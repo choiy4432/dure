@@ -17,7 +17,7 @@ export type PhoneSettings = {
   keepAwake: boolean
   /** Windows 를 켜면 두레도 켜기 */
   openAtLogin: boolean
-  /** 휴대폰 알림 — 승인·질문 / 일을 마쳤어요(PC 의 Windows 알림과 따로) */
+  /** 휴대폰 알림 — 승인·질문 / 답이 왔어요(PC 의 Windows 알림과 따로) */
   notify: { asks: boolean; finished: boolean }
   /** 휴대폰 서버가 127.0.0.1 에서 듣는 포트 */
   port: number
@@ -28,7 +28,7 @@ export const DEFAULT_PHONE_SETTINGS: Readonly<PhoneSettings> = Object.freeze({
   enabled: false,
   keepAwake: true,
   openAtLogin: false,
-  notify: Object.freeze({ asks: true, finished: false }),
+  notify: Object.freeze({ asks: true, finished: true }),
   port: PHONE_PORT_DEFAULT,
 })
 

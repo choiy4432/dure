@@ -11,7 +11,7 @@ const ENABLE_URL = 'https://login.tailscale.com/f/serve?node=nFAKE'
 const QR = 'data:image/png;base64,iVBORw0KGgo='
 
 const base = (): PhoneState => ({
-  settings: { enabled: false, keepAwake: true, openAtLogin: false, notify: { asks: true, finished: false }, port: 47615 },
+  settings: { enabled: false, keepAwake: true, openAtLogin: false, notify: { asks: true, finished: true }, port: 47615 },
   devices: [],
   online: [],
   connected: 0,
@@ -480,12 +480,12 @@ describe('휴대폰 창', () => {
     await renderApp()
     const { dlg } = await openPhone()
     expect(dlg.textContent).toContain("노트북 덮개를 닫으면 PC 가 잠들어요 — Windows 전원 설정에서 '덮개를 닫을 때'를 '아무 것도 안 함'으로 바꿔 주세요")
-    await act(async () => { fireEvent.click(within(dlg).getByRole('switch', { name: '일을 마치면 휴대폰 알림' })) })
-    expect(api.setPhone).toHaveBeenLastCalledWith({ notify: { finished: true } })
+    await act(async () => { fireEvent.click(within(dlg).getByRole('switch', { name: '답이 오면 휴대폰 알림' })) })
+    expect(api.setPhone).toHaveBeenLastCalledWith({ notify: { finished: false } })
     await act(async () => { fireEvent.click(within(dlg).getByRole('switch', { name: '켜 둔 동안 PC 절전 막기' })) })
     expect(api.setPhone).toHaveBeenLastCalledWith({ keepAwake: false })
     await settle()
-    expect(phone.settings).toMatchObject({ keepAwake: false, notify: { asks: true, finished: true } })
+    expect(phone.settings).toMatchObject({ keepAwake: false, notify: { asks: true, finished: false } })
   })
 
   it('짝 맺은 휴대폰 — 접속 중 · 마지막 접속 · 없음', async () => {
@@ -837,7 +837,7 @@ describe('안드로이드 앱 칸', () => {
     expect(within(get).getByRole('img', { name: '두레 앱 받기 QR' }).getAttribute('src')).toMatch(/^data:image\/svg\+xml/)
     expect(Array.from(get.querySelectorAll('ol li')).map(li => li.textContent)).toEqual([
       '휴대폰 카메라로 QR 을 찍어 앱을 받아요',
-      "설치할 때 '출처를 알 수 없는 앱'을 허용해요",
+      "설치할 때 '출처를 알 수 없는 앱'을 허용하고, Play 프로텍트 경고가 뜨면 [그래도 설치]를 눌러요",
       '크롬의 두레 화면에서 [두레 앱으로 열기]를 눌러요',
     ])
     fireEvent.keyDown(get, { key: 'Escape' })
