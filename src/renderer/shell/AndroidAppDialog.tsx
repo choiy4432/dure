@@ -31,7 +31,7 @@ export function apkUrl(phoneUrl: string): string | null {
   }
 }
 
-/** 앱 받기 창 — 휴대폰 창 위에 뜬다. 열린 동안 휴대폰 주소가 닫히면 부르는 쪽이 open 을 내린다 */
+/** 앱 받기 창 — 설정 창(휴대폰 탭) 위에 뜬다. 열린 동안 휴대폰 주소가 닫히면 부르는 쪽이 open 을 내린다 */
 export function AndroidAppDialog({ open, url, onClose }: { open: boolean; url: string | null; onClose: () => void }) {
   return <Presence show={open}>{createPortal(<Frame url={url} onClose={onClose} />, document.body)}</Presence>
 }

@@ -135,7 +135,7 @@ describe('App 셸', () => {
     expect(document.querySelector('.top .usg-wrap')).toBeNull()
   })
 
-  it('위 띠 휴대폰 알약(켜져 있을 때만)을 누르면 휴대폰 창이 뜬다', async () => {
+  it('위 띠 휴대폰 알약(켜져 있을 때만)을 누르면 설정 창이 휴대폰 탭으로 뜬다', async () => {
     snapshot = { ...snapshot, rooms: [room('r1', '여름 캠페인')] }
     const phone = {
       settings: { enabled: true, keepAwake: true, openAtLogin: false, notify: { asks: true, finished: false }, port: 47615 },
@@ -145,12 +145,14 @@ describe('App 셸', () => {
     Object.assign((window as any).dure, { phoneState: async () => phone, phoneCheck: async () => phone.tailscale })
     await renderApp()
     await act(async () => { await new Promise(r => setTimeout(r, 0)) })
-    expect(screen.queryByRole('dialog', { name: '휴대폰' })).toBeNull()
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '휴대폰 · 1' })) })
-    const dlg = screen.getByRole('dialog', { name: '휴대폰' })
-    expect(within(dlg).getByText('휴대폰 주소가 열렸어요')).toBeTruthy()
-    // 설정 창을 거치지 않는다
     expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '휴대폰 · 1' })) })
+    const dlg = screen.getByRole('dialog', { name: '설정' })
+    expect(within(dlg).getByRole('tab', { name: '휴대폰' }).getAttribute('aria-selected')).toBe('true')
+    const pane = within(dlg).getByRole('tabpanel', { name: '휴대폰' })
+    expect(within(pane).getByText('https://fake-pc.tail0000.ts.net/mobile.html')).toBeTruthy()
+    // 휴대폰 창이 따로 뜨지 않는다
+    expect(screen.queryByRole('dialog', { name: '휴대폰' })).toBeNull()
   })
 
   it('위 띠는 창 제목 표시줄 — 끌어 옮기는 자리라 표시해 둔다', async () => {

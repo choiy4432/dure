@@ -6324,38 +6324,7 @@ code {
   }
 }
 
-/* ── 휴대폰으로 쓰기 — 설정의 휴대폰 칸 · 휴대폰 창 · 짝 맺기 창 · 위 띠 알약(시안 C2 + D1) ── */
-
-/* 설정 칸 — 상태 알약 + [열기] 한 줄. 주소가 열려 있으면 초록, 켜졌지만 아직이거나 꺼짐이면 옅은 회색 */
-.phn-row {
-  justify-content: space-between;
-}
-
-.phn-stat {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  height: 22px;
-  padding: 0 9px;
-  border-radius: var(--radius-pill);
-  background: var(--hover);
-  color: var(--text-3);
-  font-size: 12px;
-  line-height: 18px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.phn-stat.on {
-  background: var(--ok-bg);
-  color: var(--ok-text);
-}
-
-.phn-stat .dot {
-  width: 6px;
-  height: 6px;
-}
+/* ── 휴대폰으로 쓰기 — 설정의 휴대폰 탭 · 짝 맺기 창 · 앱 받기 창 · 위 띠 알약(시안 settings-layout B + D1) ── */
 
 /* 위 띠 알약 — 설정 톱니 왼쪽, 켜져 있을 때만 */
 .phn-top {
@@ -6387,39 +6356,32 @@ code {
   color: var(--text-3);
 }
 
-/* 휴대폰 창 — 설정 창보다 넓게. 낮은 창에선 안이 스크롤되고 [닫기] 줄은 아래에 붙는다(.dlg-form) */
-.dlg-form.phn-dlg {
-  width: 520px;
-}
-
-/* 겹쳐 뜬 대화상자(설정 → 휴대폰 → 짝 맺기·끊기 확인)의 막은 한 겹 — 맨 아래 막만 어둡고 위 막은 투명(바깥 누르기는 그대로 받는다).
+/* 겹쳐 뜬 대화상자(설정 → 짝 맺기·앱 받기·끊기 확인 · 묻지 않고 실행 확인)의 막은 한 겹 — 맨 아래 막만 어둡고 위 막은 투명(바깥 누르기는 그대로 받는다).
    나가는 중(inert)인 아래 막은 세지 않는다 — 설정을 닫고 바로 뜨는 확인 창은 제 막을 그린다 */
 body > .dlg-bd:not([inert]) ~ .dlg-bd {
   background: transparent;
 }
 
-/* 한국어는 낱말 사이에서만 줄을 바꾼다(주소 칸은 .phn-url 이 아무 데서나) */
-.phn-dlg,
+/* 한국어는 낱말 사이에서만 줄을 바꾼다(주소 칸은 .phn-url 이 아무 데서나 · 설정 창은 .st-dlg 가) */
 .phn-pair-dlg {
   word-break: keep-all;
 }
 
+/* 휴대폰 탭 머리 — '휴대폰으로 쓰기' 제목 + 켜기 스위치(켜짐/꺼짐), 아래 한 줄 설명 */
 .phn-head {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.phn-head .dlg-t {
+.phn-title {
   flex: 1;
   min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.phn-head .dlg-t .i {
-  color: var(--text-3);
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 700;
+  color: var(--text);
 }
 
 .phn-master {
@@ -6428,16 +6390,81 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
   color: var(--text);
 }
 
-/* Tailscale 확인 판 — 깔림 → 로그인 → 주소, 막힌 단계엔 할 일 */
+.phn-desc {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.phn-err {
+  margin-top: 8px;
+}
+
+.phn-none {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-3);
+}
+
+/* 상태 상자 — Tailscale 이 다 됐으면 '휴대폰 주소' 한 줄로 접히고, 아니면 깔림 → 로그인 → 주소 단계와 할 일 */
 .phn-panel {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 14px;
-  padding: 12px;
+  margin-top: 12px;
+  padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius-box);
   background: var(--subtle);
+}
+
+.phn-hero-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.phn-hero-t {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.phn-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 12.5px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--ok-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.phn-hero-off {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-3);
+}
+
+.phn-hero-f {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.phn-ready {
+  font-weight: 500;
+  color: var(--ok-text);
 }
 
 .phn-steps {
@@ -6576,78 +6603,77 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
   align-self: flex-start;
 }
 
-/* 묶음 머리(짝 맺은 휴대폰 · 알림 · 전원) */
-.phn-sub {
-  margin: 20px 0 0;
-  font-size: 12px;
-  line-height: 18px;
-  font-weight: 700;
-  color: var(--text-3);
+/* 상태 상자 아래 묶음 넷 — 두 칸(왼쪽: 짝 맺은 휴대폰 · 안드로이드 앱 / 오른쪽: 휴대폰 알림 · PC 전원), 좁으면 한 칸 */
+.phn-cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 14px;
+  align-items: start;
+  margin-top: 18px;
 }
 
-.phn-devs {
-  margin: 8px 0 0;
-  padding: 0 12px;
-  list-style: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-box);
-  background: var(--subtle);
-}
-
-.phn-dev {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 52px;
-  padding: 8px 0;
-  border-top: 1px solid var(--border);
-}
-
-.phn-dev:first-child {
-  border-top: 0;
-}
-
-.phn-dev-nm {
-  flex: 1;
+.phn-col {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
 }
 
-.phn-dev-nm b {
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 600;
-  color: var(--text);
+@media (max-width: 860px) {
+  .phn-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 짝 맺은 휴대폰 — 묶음 상자의 줄(.sx-rw)과 같은 꼴: 점 · 이름 + 접속 상태 · [끊기] */
+.phn-devs {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.phn-devs + .sx-rw {
+  border-top: 1px solid var(--border-soft);
+}
+
+.phn-dev-n {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.phn-dev-nm span {
-  font-size: 12px;
+.phn-empty {
+  margin: 0;
+  font-size: 12.5px;
   line-height: 18px;
   color: var(--muted);
 }
 
-/* 안드로이드 앱 칸 — 짝 맺은 휴대폰 줄과 같은 카드 */
-.phn-app {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 52px;
-  margin: 8px 0 0;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-box);
-  background: var(--subtle);
+/* 마지막 줄 '＋ 휴대폰 짝 맺기' — 줄 전체가 단추. 주소가 안 열렸으면 잠기고 아래에 까닭 한 줄 */
+.phn-add {
+  width: 100%;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--primary-text);
+  text-align: left;
 }
 
-.phn-dev-nm b .phn-app-v {
-  display: inline;
-  margin-left: 4px;
+.phn-add:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.phn-add:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.phn-add:focus-visible {
+  outline-offset: -2px;
+}
+
+.phn-wait {
+  margin: -8px 0 0;
+  padding: 0 14px 11px 35px;
   font-size: 12px;
-  font-weight: 400;
+  line-height: 18px;
   color: var(--muted);
 }
 
@@ -6664,29 +6690,6 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
 
 .phn-apk-steps li + li {
   margin-top: 8px;
-}
-
-.phn-empty {
-  margin: 6px 0 0;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--muted);
-}
-
-.phn-pair {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.fld.phn-sws {
-  gap: 4px;
-  margin-top: 6px;
-}
-
-.phn-sws .fld-d {
-  margin: -2px 0 4px;
 }
 
 /* 짝 맺기 창 — QR(흰 바탕 그림 그대로) + 6자리 + 남은 시간 */
@@ -6834,6 +6837,28 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
   background: var(--primary-soft);
   color: var(--primary-text);
   font-weight: 700;
+}
+
+/* 휴대폰 탭 이름 옆 — 켜져 있을 때만 상태 점 + 접속 수(그림일 뿐 — 읽는 상태는 탭의 설명). 열림이면 초록 글 */
+.st-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  font-size: 11.5px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.st-badge.g {
+  color: var(--ok-text);
+}
+
+.st-badge .dot {
+  width: 6px;
+  height: 6px;
 }
 
 .st-main {

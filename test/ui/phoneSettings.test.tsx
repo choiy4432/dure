@@ -1,4 +1,4 @@
-// PC 설정의 '휴대폰' 칸 · 휴대폰 창 · 짝 맺기 창(시안 C2) — 가짜 window.dure 로 앱을 띄우고 'phone' 사건을 흉내 낸다
+// PC 설정의 '휴대폰' 탭(휴대폰 창이 설정 안으로 들어왔다) · 짝 맺기 창 · 앱 받기 창 — 가짜 window.dure 로 앱을 띄우고 'phone' 사건을 흉내 낸다
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, fireEvent, cleanup, within, waitFor } from '@testing-library/react'
 import type { Snapshot } from '../../src/shared/ipcContract'
@@ -105,24 +105,32 @@ async function renderApp() {
   return getStore()
 }
 
+/** 톱니로 설정 창 — 일반 탭으로 열린다 */
 const openSettings = () => {
   fireEvent.click(screen.getByRole('button', { name: '설정' }))
-  const dlg = screen.getByRole('dialog', { name: '설정' })
-  fireEvent.click(within(dlg).getByRole('tab', { name: '휴대폰' })) // 휴대폰 칸은 휴대폰 탭에(Task 2 가 칸을 갈아 끼운다)
-  return dlg
+  return screen.getByRole('dialog', { name: '설정' })
 }
 
-/** 설정 → 휴대폰 [열기] — 휴대폰 창 */
+const phoneTab = (settings: HTMLElement) => within(settings).getByRole('tab', { name: '휴대폰' })
+const phonePanel = () => within(screen.getByRole('dialog', { name: '설정' })).getByRole('tabpanel', { name: '휴대폰' })
+
+/** 설정 → 휴대폰 탭 — dlg 는 휴대폰 판(tabpanel) */
 async function openPhone() {
   const settings = openSettings()
-  await act(async () => { fireEvent.click(within(settings).getByRole('button', { name: '휴대폰 열기' })) })
+  await act(async () => { fireEvent.click(phoneTab(settings)) })
   await settle()
-  return { settings, dlg: screen.getByRole('dialog', { name: '휴대폰' }) }
+  return { settings, dlg: within(settings).getByRole('tabpanel', { name: '휴대폰' }) }
 }
 
 /** 확인 단계 목록 — [글, 상태] */
 const steps = (dlg: HTMLElement) =>
   Array.from(dlg.querySelectorAll<HTMLElement>('[data-step]')).map(li => [li.querySelector('.phn-step-t')!.textContent, li.dataset.step])
+
+/** 상태 상자 — 다 됐으면 접힌 한 줄, 아니면 단계 */
+const hero = (dlg: HTMLElement) => dlg.querySelector<HTMLElement>('.phn-panel')!
+
+const TIP = 'Tailscale 대시보드에서 PC 이름을 dure 처럼 바꾸면 주소가 짧아져요 — 바꾸기 전에 휴대폰 연결을 끄고, 바꾼 뒤 다시 켜 주세요'
+const PAIR_WAIT = '휴대폰 주소가 열리면 짝을 맺을 수 있어요'
 
 /** 머리의 켜기 스위치 — 이름에 보이는 글(켜짐/꺼짐)을 담는다(WCAG 2.5.3) */
 const master = (dlg: HTMLElement) => within(dlg).getByRole('switch', { name: /^휴대폰으로 쓰기 — (켜짐|꺼짐)$/ })
@@ -137,72 +145,275 @@ const described = (el: Element) =>
 
 const STALE = '두레가 전에 연 길을 정리하지 못했어요 — Tailscale 이 켜져 있는지 확인해 주세요'
 
-describe('설정의 휴대폰 칸', () => {
-  it('꺼짐 · 켜짐 · N대 접속 중 — [열기] 는 설정 창 위에 휴대폰 창을 띄운다 · Esc 는 맨 위 창만 닫는다', async () => {
+describe('설정의 휴대폰 탭', () => {
+  it('pillOpensPhoneTab — 위 띠 알약은 설정 창을 휴대폰 탭으로 · 톱니는 일반 탭 · 닫을 때 초점은 연 자리(알약이 없어졌으면 톱니)', async () => {
+    phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN, connected: 1, online: ['d1'] }
     await renderApp()
-    const settings = openSettings()
-    const field = within(settings).getByText('휴대폰', { selector: '.fld-l' }).closest('.fld') as HTMLElement
-    expect(field.textContent).toContain('꺼짐')
-    expect(field.textContent).toContain('밖에서 휴대폰으로 에이전트 일을 보고 승인해요')
-    // 점 — 꺼짐 회색 · 켰는데 아직(또는 까닭) 앰버 · 열림 초록
-    expect(field.querySelector('.dot.s')).not.toBeNull()
-    emit({ settings: { ...phone.settings, enabled: true } })
-    expect(field.textContent).toContain('켜짐 · 아직 안 열렸어요')
-    expect(field.querySelector('.dot.a')).not.toBeNull()
-
-    emit({ tailscale: READY, url: URL_OPEN, connected: 1, online: ['d1'] })
-    expect(field.textContent).toContain('켜짐 · 1대 접속 중')
-    expect(field.querySelector('.dot.g')).not.toBeNull()
-
-    const opener = within(settings).getByRole('button', { name: '휴대폰 열기' })
-    opener.focus()
-    await act(async () => { fireEvent.click(opener) })
-    const dlg = screen.getByRole('dialog', { name: '휴대폰' })
-    expect(screen.getByRole('dialog', { name: '설정' })).toBeTruthy()
-    // 처음 초점은 창 자체(스위치에 두면 Space 한 번에 꺼진다) · Tab 은 위 창 안에서만 돈다(아래 설정 창으로 새지 않는다)
-    const head = master(dlg)
-    expect(document.activeElement).toBe(dlg)
-    const close = within(dlg).getByRole('button', { name: '닫기' })
-    close.focus()
-    fireEvent.keyDown(close, { key: 'Tab' })
-    expect(document.activeElement).toBe(head)
-    fireEvent.keyDown(head, { key: 'Tab', shiftKey: true })
-    expect(document.activeElement).toBe(close)
-
-    fireEvent.keyDown(dlg, { key: 'Escape' })
-    await settle()
-    expect(screen.queryByRole('dialog', { name: '휴대폰' })).toBeNull()
-    expect(screen.getByRole('dialog', { name: '설정' })).toBeTruthy()
-    expect(document.activeElement).toBe(opener)
-  })
-
-  it('위 띠 알약으로 연 휴대폰 창 — 끄면 알약이 사라지니 닫을 때 초점은 설정 톱니로', async () => {
-    phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN }
-    await renderApp()
-    const pill = document.querySelector<HTMLButtonElement>('.phn-top')!
+    const pill = screen.getByRole('button', { name: '휴대폰 · 1' })
     pill.focus()
     await act(async () => { fireEvent.click(pill) })
     await settle()
-    const dlg = screen.getByRole('dialog', { name: '휴대폰' })
-    await act(async () => { fireEvent.click(master(dlg)) })
+    let settings = screen.getByRole('dialog', { name: '설정' })
+    expect(phoneTab(settings).getAttribute('aria-selected')).toBe('true')
+    expect(within(settings).getByRole('tabpanel', { name: '휴대폰' })).toBeTruthy()
+    expect(document.activeElement).toBe(phoneTab(settings)) // R1 — 처음 초점은 고른 탭(켜기 스위치가 아니다)
+    await act(async () => { fireEvent.click(within(settings).getByRole('button', { name: '닫기' })) })
+    await settle()
+    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
+    expect(document.activeElement).toBe(pill)
+
+    // 톱니로 열면 늘 일반
+    const gear = screen.getByRole('button', { name: '설정' })
+    gear.focus()
+    settings = openSettings()
+    expect(within(settings).getByRole('tab', { name: '일반' }).getAttribute('aria-selected')).toBe('true')
+    expect(phoneTab(settings).getAttribute('aria-selected')).toBe('false')
+    await act(async () => { fireEvent.click(within(settings).getByRole('button', { name: '닫기' })) })
+    await settle()
+    expect(document.activeElement).toBe(gear)
+
+    // 알약으로 열고 끄면 알약이 없어진다 — 닫을 때 초점은 그 옆 톱니로
+    pill.focus()
+    await act(async () => { fireEvent.click(pill) })
+    await settle()
+    await act(async () => { fireEvent.click(master(phonePanel())) })
     await settle()
     expect(api.setPhone).toHaveBeenLastCalledWith({ enabled: false })
     expect(document.querySelector('.phn-top')).toBeNull()
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '닫기' })) })
+    await act(async () => { fireEvent.click(within(screen.getByRole('dialog', { name: '설정' })).getByRole('button', { name: '닫기' })) })
     await settle()
-    expect(screen.queryByRole('dialog', { name: '휴대폰' })).toBeNull()
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: '설정' }))
+    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
+    expect(document.activeElement).toBe(gear)
   })
 
-  it('phoneState 가 없으면(옛 api) 칸을 숨긴다', async () => {
+  it('phoneTabBadge — 꺼짐이면 탭 옆 점 없음 · 켜지면 점(앰버 → 초록) + 접속 수 · 탭 이름은 휴대폰 그대로 · 상태는 설명으로', async () => {
+    await renderApp()
+    const settings = openSettings() // 다른 탭(일반)에 있어도 탭 옆에 보인다
+    const tab = phoneTab(settings)
+    expect(tab.querySelector('.dot')).toBeNull()
+    expect(described(tab)).toBe('꺼짐')
+
+    emit({ settings: { ...phone.settings, enabled: true } })
+    let badge = tab.querySelector<HTMLElement>('.st-badge')!
+    expect(badge.getAttribute('aria-hidden')).toBe('true')
+    expect(badge.querySelector('.dot.a')).not.toBeNull()
+    expect(badge.textContent).toBe('0')
+    expect(described(tab)).toBe('켜짐 · 아직 안 열렸어요')
+
+    emit({ tailscale: READY, url: URL_OPEN, connected: 2, online: ['d1', 'd2'] })
+    badge = tab.querySelector<HTMLElement>('.st-badge')!
+    expect(badge.querySelector('.dot.g')).not.toBeNull()
+    expect(badge.textContent).toBe('2')
+    expect(phoneTab(settings)).toBe(tab) // 이름은 '휴대폰' 그대로(점·숫자는 이름에 안 든다)
+    expect(described(tab)).toBe('켜짐 · 2대 접속 중')
+
+    emit({ problem: STALE })
+    expect(tab.querySelector('.st-badge .dot.a')).not.toBeNull()
+
+    emit({ settings: { ...phone.settings, enabled: false }, url: null, problem: null, connected: 0, online: [] })
+    expect(tab.querySelector('.st-badge')).toBeNull()
+    expect(described(tab)).toBe('꺼짐')
+  })
+
+  it('noPhoneWindow — 알약 · 설정 어디서도 휴대폰 창(dialog)이 따로 뜨지 않는다 · [휴대폰 열기] 없음', async () => {
+    phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN }
+    await renderApp()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '휴대폰 · 0' })) })
+    await settle()
+    expect(screen.getAllByRole('dialog')).toEqual([screen.getByRole('dialog', { name: '설정' })])
+    expect(screen.queryByRole('dialog', { name: '휴대폰' })).toBeNull()
+    const settings = screen.getByRole('dialog', { name: '설정' })
+    for (const t of ['일반', '에이전트', '알림', '휴대폰', '두레']) {
+      await act(async () => { fireEvent.click(within(settings).getByRole('tab', { name: t })) })
+      expect(within(settings).queryByRole('button', { name: '휴대폰 열기' })).toBeNull()
+      expect(screen.queryByRole('dialog', { name: '휴대폰' })).toBeNull()
+    }
+    const mod = await import('../../src/renderer/shell/PhoneSettings')
+    expect('PhoneDialog' in mod).toBe(false)
+    expect('PhoneField' in mod).toBe(false)
+  })
+
+  it('phoneState 가 없으면(옛 api) 휴대폰 탭엔 아직 못 받았다는 한 줄 · 탭 옆 점 없음', async () => {
     delete api.phoneState
     await renderApp()
-    const settings = openSettings()
-    expect(within(settings).queryByRole('button', { name: '휴대폰 열기' })).toBeNull()
+    const { settings, dlg } = await openPhone()
+    expect(dlg.textContent).toBe('휴대폰 연결 상태를 아직 받지 못했어요')
+    expect(phoneTab(settings).querySelector('.st-badge')).toBeNull()
+    expect(phoneTab(settings).getAttribute('aria-describedby')).toBeNull()
+  })
+
+  it('긴 휴대폰 판을 내려 둔 채 다른 탭으로 가면 판은 맨 위부터', async () => {
+    await renderApp()
+    const { settings, dlg } = await openPhone()
+    dlg.scrollTop = 300
+    await act(async () => { fireEvent.click(within(settings).getByRole('tab', { name: '두레' })) })
+    expect(within(settings).getByRole('tabpanel', { name: '두레' }).scrollTop).toBe(0)
+    within(settings).getByRole('tabpanel', { name: '두레' }).scrollTop = 120
+    await act(async () => { fireEvent.click(phoneTab(settings)) })
+    expect(phonePanel().scrollTop).toBe(0)
+  })
+
+  it('subDialogsCoverTour — 짝 맺기 · 앱 받기 · 끊기 확인 창이 떠 있는 동안 onCoveredChange(true) · 닫히면 false · Esc 는 그 창만 닫고 설정 창(휴대폰 탭)은 남는다', async () => {
+    const now = Date.now()
+    phone = {
+      ...phone,
+      settings: { ...phone.settings, enabled: true },
+      tailscale: READY,
+      url: URL_OPEN,
+      androidApp: { versionCode: 3, versionName: '0.2.0' },
+      devices: [{ id: 'd1', name: '갤럭시 S25', createdAt: now, lastSeen: now, push: true }],
+    }
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { SettingsDialog } = await import('../../src/renderer/shell/SettingsDialog')
+    const { PhonePane } = await import('../../src/renderer/shell/PhoneSettings')
+    await act(async () => { await getStore().init() })
+    await settle()
+    const covered = vi.fn()
+    render(
+      <SettingsDialog
+        onClose={() => {}}
+        onReplayTour={() => {}}
+        initialTab="phone"
+        onCoveredChange={covered}
+        phonePane={o => <PhonePane onCoveredChange={o.onCoveredChange} />}
+      />,
+    )
+    await settle()
+    const pane = phonePanel()
+    expect(covered).not.toHaveBeenLastCalledWith(true)
+
+    /** 아래 설정 창 · 그 휴대폰 판은 그대로 */
+    const stays = () => {
+      expect(screen.getByRole('dialog', { name: '설정' })).toBeTruthy()
+      expect(phonePanel()).toBe(pane)
+      expect(within(pane).getByRole('switch', { name: '휴대폰으로 쓰기 — 켜짐' })).toBeTruthy()
+    }
+
+    // 짝 맺기 — Esc 는 짝 맺기 창만
+    await act(async () => { fireEvent.click(within(pane).getByRole('button', { name: '휴대폰 짝 맺기' })) })
+    await settle()
+    expect(covered).toHaveBeenLastCalledWith(true)
+    fireEvent.keyDown(screen.getByRole('dialog', { name: '휴대폰 짝 맺기' }), { key: 'Escape' })
+    await settle()
+    expect(screen.queryByRole('dialog', { name: '휴대폰 짝 맺기' })).toBeNull()
+    expect(covered).toHaveBeenLastCalledWith(false)
+    stays()
+
+    // 앱 받기
+    await act(async () => { fireEvent.click(within(pane).getByRole('button', { name: '앱 받기' })) })
+    await settle()
+    expect(covered).toHaveBeenLastCalledWith(true)
+    fireEvent.keyDown(screen.getByRole('dialog', { name: '안드로이드 앱 받기' }), { key: 'Escape' })
+    await settle()
+    expect(screen.queryByRole('dialog', { name: '안드로이드 앱 받기' })).toBeNull()
+    expect(covered).toHaveBeenLastCalledWith(false)
+    stays()
+
+    // 끊기 확인
+    fireEvent.click(within(pane).getByRole('button', { name: '갤럭시 S25 끊기' }))
+    expect(covered).toHaveBeenLastCalledWith(true)
+    fireEvent.keyDown(screen.getByRole('alertdialog', { name: '‘갤럭시 S25’ 연결을 끊을까요?' }), { key: 'Escape' })
+    await settle()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(covered).toHaveBeenLastCalledWith(false)
+    stays()
+    expect(api.phoneUnpair).not.toHaveBeenCalled()
   })
 })
 
-describe('휴대폰 창', () => {
+describe('휴대폰 탭 — 상태 상자', () => {
+  it('heroCollapsedWhenReady — 켜짐 · ready · 주소 · 까닭/알림 없음 → 단계 없이 한 줄 · 접속 수 · [주소 짧게 하기] 누르면 긴 팁', async () => {
+    phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN, connected: 1, online: ['d1'] }
+    await renderApp()
+    const { dlg } = await openPhone()
+    const box = hero(dlg)
+    expect(steps(dlg)).toEqual([])
+    expect(box.textContent).toContain('휴대폰 주소')
+    expect(box.textContent).toContain('1대 접속 중')
+    expect(box.querySelector('.dot.g')).not.toBeNull()
+    expect(within(box).getByText(URL_OPEN).closest('.phn-url')).not.toBeNull()
+    expect(box.textContent).toContain('✓ Tailscale 준비됨')
+    expect(within(box).queryByRole('button', { name: '다시 확인' })).toBeNull()
+    // 긴 팁은 접혀 있다 — 누르면 그 아래 펼쳐진다
+    expect(dlg.textContent).not.toContain(TIP)
+    const short = within(box).getByRole('button', { name: '주소 짧게 하기' })
+    expect(short.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(short)
+    expect(short.getAttribute('aria-expanded')).toBe('true')
+    expect(box.textContent).toContain(TIP)
+    fireEvent.click(short)
+    expect(short.getAttribute('aria-expanded')).toBe('false')
+    expect(dlg.textContent).not.toContain(TIP)
+    // 짝 맺기는 열려 있다
+    expect((within(dlg).getByRole('button', { name: '휴대폰 짝 맺기' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('heroExpandsOnProblemOrNotice — ready 여도 까닭(problem)이나 주소 바뀜 알림(notice)이 있으면 단계가 펼쳐진다 · 아직 안 됐으면 단계와 할 일', async () => {
+    const MOVED = '주소가 바뀌었어요 — 휴대폰을 다시 짝 맺어 주세요'
+    const PORTS = 'tailnet 의 https 포트 443·47615 가 모두 다른 곳에 쓰이고 있어요 — 하나를 비워 주세요'
+    // ready · 켰는데 주소가 아직 — 접지 않는다(여는 중)
+    phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY }
+    await renderApp()
+    const { dlg } = await openPhone()
+    expect(steps(dlg).at(-1)).toEqual(['휴대폰 주소를 여는 중…', 'todo'])
+
+    // 주소가 열리면 접힌다(열린 주소는 한 번 확인한다 — 그 확인이 끝날 때까지)
+    emit({ url: URL_OPEN })
+    await settle()
+    expect(steps(dlg)).toEqual([])
+
+    // ready + 까닭(주소는 열린 채) — 단계 · 까닭 · [다시 확인]
+    emit({ problem: PORTS })
+    expect(steps(dlg)).toEqual([
+      ['Tailscale 이 깔려 있어요', 'ok'],
+      ['로그인돼 있어요', 'ok'],
+      ['휴대폰 주소가 열렸어요', 'ok'],
+    ])
+    expect(within(hero(dlg)).getByText(PORTS)).toBeTruthy()
+    expect(within(hero(dlg)).getByRole('button', { name: '다시 확인' })).toBeTruthy()
+    expect(hero(dlg).textContent).not.toContain('✓ Tailscale 준비됨')
+    emit({ problem: null })
+    expect(steps(dlg)).toEqual([])
+
+    // ready + 주소 바뀜 알림 — 단계 · 알림(주소와 같은 상자)
+    emit({ url: 'https://fake-pc.tail0000.ts.net:47615/mobile.html', notice: MOVED })
+    await settle()
+    expect(steps(dlg)).toHaveLength(3)
+    expect(within(hero(dlg)).getByText(MOVED)).toBeTruthy()
+    expect(hero(dlg).textContent).not.toContain('✓ Tailscale 준비됨')
+
+    // 아직 안 됐으면(missing · logged-out · no-https) 지금처럼 단계와 할 일
+    emit({ tailscale: { kind: 'missing' } })
+    expect(steps(dlg)[0]).toEqual(['Tailscale 을 깔고 켜 주세요', 'need'])
+    expect(within(dlg).getByRole('button', { name: '내려받기' })).toBeTruthy()
+    emit({ tailscale: { kind: 'logged-out' } })
+    expect(steps(dlg)[1]).toEqual(['Tailscale 에 로그인해 주세요', 'need'])
+    emit({ tailscale: { kind: 'no-https', enableUrl: ENABLE_URL } })
+    expect(steps(dlg)[2]).toEqual(['Tailscale 에서 Serve 를 한 번 켜야 해요', 'need'])
+    expect(within(dlg).getByRole('button', { name: '켜러 가기' })).toBeTruthy()
+    expect(within(dlg).getByRole('button', { name: '다시 확인' })).toBeTruthy()
+  })
+
+  it('offAndReadyCollapsed — 꺼짐 · ready → 접힌 한 줄 + 켜면 휴대폰 주소가 열려요 · [휴대폰 짝 맺기]는 잠기고 까닭 한 줄', async () => {
+    phone = { ...phone, tailscale: READY }
+    await renderApp()
+    const { dlg } = await openPhone()
+    const box = hero(dlg)
+    expect(steps(dlg)).toEqual([])
+    expect(box.textContent).toContain('휴대폰 주소')
+    expect(box.textContent).toContain('켜면 휴대폰 주소가 열려요')
+    expect(box.textContent).toContain('✓ Tailscale 준비됨')
+    expect(box.textContent).not.toContain('대 접속 중')
+    expect(box.querySelector('.phn-url')).toBeNull()
+    expect(within(box).queryByRole('button', { name: '주소 짧게 하기' })).toBeNull() // 주소가 보일 때만
+    const pair = within(dlg).getByRole('button', { name: '휴대폰 짝 맺기' }) as HTMLButtonElement
+    expect(pair.disabled).toBe(true)
+    expect(described(pair)).toBe(PAIR_WAIT)
+    expect(dlg.textContent).toContain(PAIR_WAIT)
+  })
+})
+
+describe('휴대폰 탭', () => {
   it('켜기 — 단계별 안내(missing·logged-out·no-https·ready)', async () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null)
     await renderApp()
@@ -245,26 +456,22 @@ describe('휴대폰 창', () => {
     await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '다시 확인' })) })
     expect(api.phoneCheck).toHaveBeenCalledTimes(2)
 
-    // ready 인데 꺼져 있다 — 짝 맺기는 아직
+    // ready 인데 꺼져 있다 — 단계는 접히고 한 줄(R2) · 짝 맺기는 아직
     emit({ tailscale: READY })
-    expect(steps(dlg)).toEqual([
-      ['Tailscale 이 깔려 있어요', 'ok'],
-      ['로그인돼 있어요', 'ok'],
-      ['켜면 휴대폰 주소가 열려요', 'todo'],
-    ])
+    expect(steps(dlg)).toEqual([])
+    expect(hero(dlg).textContent).toContain('✓ Tailscale 준비됨')
+    expect(hero(dlg).textContent).toContain('켜면 휴대폰 주소가 열려요')
     expect((within(dlg).getByRole('button', { name: '휴대폰 짝 맺기' }) as HTMLButtonElement).disabled).toBe(true)
     expect(dlg.textContent).not.toContain('Tailscale 대시보드에서') // 주소 줄이기 팁은 주소가 보일 때만
 
-    // 켜졌고 길이 열렸다 — 주소와 짝 맺기
+    // 켜졌고 길이 열렸다 — 접힌 한 줄에 주소와 짝 맺기(R2: 세 ✓ 단계 대신)
     emit({ settings: { ...phone.settings, enabled: true }, url: URL_OPEN })
-    expect(steps(dlg)).toEqual([
-      ['Tailscale 이 깔려 있어요', 'ok'],
-      ['로그인돼 있어요', 'ok'],
-      ['휴대폰 주소가 열렸어요', 'ok'],
-    ])
+    expect(steps(dlg)).toEqual([])
+    expect(hero(dlg).textContent).toContain('✓ Tailscale 준비됨')
     expect(within(dlg).getByText(URL_OPEN).closest('.phn-url')).not.toBeNull()
-    // 켠 채 이름을 바꾸면 휴대폰이 아는 주소가 끊긴다 — 끄고 바꾼 뒤 다시 켜라고
-    expect(dlg.textContent).toContain('Tailscale 대시보드에서 PC 이름을 dure 처럼 바꾸면 주소가 짧아져요 — 바꾸기 전에 휴대폰 연결을 끄고, 바꾼 뒤 다시 켜 주세요')
+    // 켠 채 이름을 바꾸면 휴대폰이 아는 주소가 끊긴다 — 끄고 바꾼 뒤 다시 켜라고([주소 짧게 하기] 아래)
+    fireEvent.click(within(dlg).getByRole('button', { name: '주소 짧게 하기' }))
+    expect(dlg.textContent).toContain(TIP)
     expect((within(dlg).getByRole('button', { name: '휴대폰 짝 맺기' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -289,7 +496,7 @@ describe('휴대폰 창', () => {
     expect(api.phoneCheck).toHaveBeenCalledTimes(3)
   })
 
-  it('주소가 열린 채 휴대폰 창을 열면 한 번 확인 — 창이 닫혀 있는 동안 PC 이름을 바꿨을 수 있다', async () => {
+  it('주소가 열린 채 휴대폰 탭을 열면 한 번 확인 — 판이 안 보이는 동안 PC 이름을 바꿨을 수 있다', async () => {
     phone = { ...base(), settings: { ...base().settings, enabled: true }, tailscale: READY, url: URL_OPEN }
     await renderApp()
     await openPhone()
@@ -313,11 +520,15 @@ describe('휴대폰 창', () => {
     expect(steps(dlg).at(-1)?.[1]).toBe('need')
   })
 
-  it('주소가 바뀌었다는 알림(notice) — 창을 열면 보이고 main 엔 봤다고 알린다 · main 이 지워도 창이 열린 동안은 남고, 짝 맺기를 열면 사라진다', async () => {
+  it('주소가 바뀌었다는 알림(notice) — 탭을 열면 보이고 main 엔 봤다고 알린다 · main 이 지워도 판이 보이는 동안은 남고, 짝 맺기를 열면 사라진다', async () => {
     const MOVED = '주소가 바뀌었어요 — 휴대폰을 다시 짝 맺어 주세요'
     phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY, url: 'https://fake-pc.tail0000.ts.net:47615/mobile.html', notice: MOVED }
     await renderApp()
-    expect(api.phoneNoticeSeen).not.toHaveBeenCalled() // 창을 열기 전엔 — 아직 아무도 못 봤다
+    openSettings() // 다른 탭(일반)만 보고 있으면 — 아직 아무도 못 봤다
+    expect(api.phoneNoticeSeen).not.toHaveBeenCalled()
+    await act(async () => { fireEvent.click(within(screen.getByRole('dialog', { name: '설정' })).getByRole('button', { name: '닫기' })) })
+    await settle()
+    expect(api.phoneNoticeSeen).not.toHaveBeenCalled() // 탭을 열기 전엔 — 아직 아무도 못 봤다
     const { dlg } = await openPhone()
     expect(api.phoneNoticeSeen).toHaveBeenCalledTimes(1)
     expect(phone.notice).toBeNull()
@@ -329,24 +540,28 @@ describe('휴대폰 창', () => {
     expect(api.phoneNoticeSeen).toHaveBeenCalledTimes(1)
   })
 
-  it('창이 열린 채 주소가 바뀌면 그 자리에 알림 · 닫았다 다시 열면 없다(이미 봤다)', async () => {
+  it('판이 보이는 채 주소가 바뀌면 그 자리에 알림 · 다른 탭에 갔다 오거나 닫았다 다시 열면 없다(이미 봤다)', async () => {
     const MOVED = '주소가 바뀌었어요 — 휴대폰을 다시 짝 맺어 주세요'
     phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN }
     await renderApp()
-    const { dlg } = await openPhone()
+    const { settings, dlg } = await openPhone()
     expect(within(dlg).queryByText(MOVED)).toBeNull()
     emit({ url: 'https://fake-pc.tail0000.ts.net:47615/mobile.html', notice: MOVED })
     await settle()
     expect(within(dlg).getByText(MOVED)).toBeTruthy()
     expect(api.phoneNoticeSeen).toHaveBeenCalledTimes(1)
     expect(within(dlg).getByText(MOVED)).toBeTruthy() // main 이 지운 뒤에도
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '닫기' })) })
+    // 다른 탭에 갔다 오면 — 이미 봤다
+    await act(async () => { fireEvent.click(within(settings).getByRole('tab', { name: '알림' })) })
+    await act(async () => { fireEvent.click(phoneTab(settings)) })
     await settle()
-    expect(screen.queryByRole('dialog', { name: '휴대폰' })).toBeNull()
-    const settings = screen.getByRole('dialog', { name: '설정' })
-    await act(async () => { fireEvent.click(within(settings).getByRole('button', { name: '휴대폰 열기' })) })
+    expect(within(phonePanel()).queryByText(MOVED)).toBeNull()
+    // 닫았다 다시 열어도
+    await act(async () => { fireEvent.click(within(settings).getByRole('button', { name: '닫기' })) })
     await settle()
-    expect(within(screen.getByRole('dialog', { name: '휴대폰' })).queryByText(MOVED)).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
+    const again = await openPhone()
+    expect(within(again.dlg).queryByText(MOVED)).toBeNull()
     expect(api.phoneNoticeSeen).toHaveBeenCalledTimes(1)
   })
 
@@ -412,12 +627,25 @@ describe('휴대폰 창', () => {
     expect(sw.getAttribute('aria-busy')).toBeNull()
 
     api.setPhone.mockRejectedValueOnce(new Error('휴대폰 연결을 켜지 못했어요'))
-    const asks = within(dlg).getByRole('switch', { name: '승인·질문이 오면 휴대폰 알림' })
+    const asks = within(dlg).getByRole('switch', { name: '승인·질문이 오면' })
     expect(asks.getAttribute('aria-checked')).toBe('true')
     await act(async () => { fireEvent.click(asks) })
     await settle()
     expect(asks.getAttribute('aria-checked')).toBe('true')
-    expect(within(dlg).getByRole('alert').textContent).toBe('휴대폰 연결을 켜지 못했어요')
+    // 까닭은 그 줄 아래(설정의 다른 탭과 같이) — 스위치의 설명으로도 읽힌다
+    const alert = within(dlg).getByRole('alert')
+    expect(alert.textContent).toBe('휴대폰 연결을 켜지 못했어요')
+    expect(alert.closest('[data-row]')).toBe(asks.closest('[data-row]'))
+    expect(described(asks)).toBe('휴대폰 연결을 켜지 못했어요')
+
+    // 켜기 스위치의 까닭은 머리 아래 — 그 스위치의 설명에도 · 실패하면 저장된 값(꺼짐 — 위 가짜 켜기는 상태를 안 바꿨다)으로
+    api.setPhone.mockRejectedValueOnce(new Error('Tailscale 이 답하지 않아요'))
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    await act(async () => { fireEvent.click(sw) })
+    await settle()
+    expect(sw.getAttribute('aria-checked')).toBe('false')
+    expect(described(sw)).toContain('Tailscale 이 답하지 않아요')
+    expect(described(sw)).toContain('밖에서 휴대폰으로 에이전트 일을 보고 승인해요')
   })
 
   it('켜는 중(오래 걸림)에도 끌 수 있다 — {enabled:false} 를 보내고, 먼저 보낸 켜기가 늦게 끝나도 끄는 중 표시는 남고 그 실패도 띄우지 않는다', async () => {
@@ -474,13 +702,18 @@ describe('휴대폰 창', () => {
     expect(say.textContent).toBe('복사하지 못했어요')
   })
 
-  it('알림 · 전원 스위치 — 바꾼 칸만 바로 보낸다 · 덮개 안내', async () => {
+  it('휴대폰 알림 · PC 전원 스위치 — 바꾼 칸만 바로 보낸다 · 덮개 안내는 절전 막기의 설명', async () => {
+    const LID = "노트북은 덮개를 닫으면 잠들어요 — Windows 전원 설정의 '덮개를 닫을 때'를 '아무 것도 안 함'으로"
     await renderApp()
     const { dlg } = await openPhone()
-    expect(dlg.textContent).toContain("노트북 덮개를 닫으면 PC 가 잠들어요 — Windows 전원 설정에서 '덮개를 닫을 때'를 '아무 것도 안 함'으로 바꿔 주세요")
-    await act(async () => { fireEvent.click(within(dlg).getByRole('switch', { name: '답이 오면 휴대폰 알림' })) })
+    const heads = Array.from(dlg.querySelectorAll('.sx-t')).map(h => h.textContent)
+    expect(heads).toEqual(['짝 맺은 휴대폰', '휴대폰 알림', 'PC 전원'])
+    const keepAwake = within(dlg).getByRole('switch', { name: '켜 둔 동안 절전 막기' })
+    expect(described(keepAwake)).toBe(LID)
+    expect(within(dlg).getByRole('switch', { name: '승인·질문이 오면' }).getAttribute('aria-checked')).toBe('true')
+    await act(async () => { fireEvent.click(within(dlg).getByRole('switch', { name: '답이 오면' })) })
     expect(api.setPhone).toHaveBeenLastCalledWith({ notify: { finished: false } })
-    await act(async () => { fireEvent.click(within(dlg).getByRole('switch', { name: '켜 둔 동안 PC 절전 막기' })) })
+    await act(async () => { fireEvent.click(keepAwake) })
     expect(api.setPhone).toHaveBeenLastCalledWith({ keepAwake: false })
     await settle()
     expect(phone.settings).toMatchObject({ keepAwake: false, notify: { asks: true, finished: false } })
@@ -514,14 +747,14 @@ describe('휴대폰 창', () => {
     const now = Date.now()
     phone = { ...phone, devices: [{ id: 'd1', name: '갤럭시 S25', createdAt: now, lastSeen: now, push: true }] }
     await renderApp()
-    const { dlg } = await openPhone()
+    const { settings, dlg } = await openPhone()
     // 확인 창에서 취소하면 안 끊는다
     fireEvent.click(within(dlg).getByRole('button', { name: '갤럭시 S25 끊기' }))
     let confirm = screen.getByRole('alertdialog', { name: '‘갤럭시 S25’ 연결을 끊을까요?' })
     fireEvent.click(within(confirm).getByRole('button', { name: '취소' }))
     await settle()
     expect(api.phoneUnpair).not.toHaveBeenCalled()
-    expect(screen.getByRole('dialog', { name: '휴대폰' })).toBeTruthy()
+    expect(phonePanel()).toBe(dlg)
 
     fireEvent.click(within(dlg).getByRole('button', { name: '갤럭시 S25 끊기' }))
     confirm = screen.getByRole('alertdialog', { name: '‘갤럭시 S25’ 연결을 끊을까요?' })
@@ -529,7 +762,7 @@ describe('휴대폰 창', () => {
     fireEvent.keyDown(confirm, { key: 'Escape' })
     await settle()
     expect(screen.queryByRole('alertdialog')).toBeNull()
-    expect(screen.getByRole('dialog', { name: '휴대폰' })).toBeTruthy()
+    expect(phonePanel()).toBe(dlg)
 
     const row = within(dlg).getByRole('button', { name: '갤럭시 S25 끊기' })
     row.focus() // 누르면 그 단추에 초점이 간다(연 자리)
@@ -540,8 +773,8 @@ describe('휴대폰 창', () => {
     expect(api.phoneUnpair).toHaveBeenCalledWith('d1')
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(dlg.textContent).toContain('아직 짝 맺은 휴대폰이 없어요')
-    // [끊기] 줄이 없어졌고 [휴대폰 짝 맺기]는 막혀 있다 — 초점은 휴대폰 창으로(body 로 떨어지지 않게)
-    expect(document.activeElement).toBe(dlg)
+    // [끊기] 줄이 없어졌고 [휴대폰 짝 맺기]는 막혀 있다 — 초점은 설정 창으로(body 로 떨어지지 않게)
+    expect(document.activeElement).toBe(settings)
   })
 
   it('끊은 뒤 초점 — 연 줄이 없어지면 [휴대폰 짝 맺기]로', async () => {
@@ -571,7 +804,9 @@ describe('짝 맺기 창', () => {
     phone = { ...phone, settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN }
   }
   const startPair = async (dlg: HTMLElement) => {
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '휴대폰 짝 맺기' })) })
+    const open = within(dlg).getByRole('button', { name: '휴대폰 짝 맺기' })
+    open.focus() // 누르면 그 단추에 초점이 간다(연 자리)
+    await act(async () => { fireEvent.click(open) })
     await settle()
     return screen.getByRole('dialog', { name: '휴대폰 짝 맺기' })
   }
@@ -591,15 +826,15 @@ describe('짝 맺기 창', () => {
     await settle()
     expect(api.phonePairCancel).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('dialog', { name: '휴대폰 짝 맺기' })).toBeNull()
-    expect(screen.getByRole('dialog', { name: '휴대폰' })).toBeTruthy()
+    expect(phonePanel()).toBe(dlg)
 
-    // Esc 도 취소 — 휴대폰 창은 남는다
+    // Esc 도 취소 — 설정 창(휴대폰 탭)은 남는다
     const again = await startPair(dlg)
     fireEvent.keyDown(again, { key: 'Escape' })
     await settle()
     expect(api.phonePairCancel).toHaveBeenCalledTimes(2)
     expect(screen.queryByRole('dialog', { name: '휴대폰 짝 맺기' })).toBeNull()
-    expect(screen.getByRole('dialog', { name: '휴대폰' })).toBeTruthy()
+    expect(phonePanel()).toBe(dlg)
   })
 
   it('[취소] 뒤 나가는 동안 — 짝이 닫혔다는 사건이 와도 결과로 바뀌지 않는다', async () => {
@@ -618,7 +853,7 @@ describe('짝 맺기 창', () => {
     expect(pair.textContent).not.toContain('다시 짝 맺기')
     expect(pair.querySelector('.phn-pin')).not.toBeNull()
     await waitFor(() => expect(pair.isConnected).toBe(false))
-    expect(screen.getByRole('dialog', { name: '휴대폰' })).toBeTruthy()
+    expect(phonePanel()).toBe(dlg)
   })
 
   it('닫는 중에 다시 열면(같은 창이 그 자리로 돌아옴) 새 짝 맺기로 — 취소한 숫자를 그대로 두지 않는다', async () => {
@@ -683,10 +918,10 @@ describe('짝 맺기 창', () => {
     expect(within(pair).getAllByText('짝을 맺었어요')).toHaveLength(1)
   })
 
-  it('짝 맺는 중에 휴대폰 연결이 꺼지면(트레이) — 꺼져서 닫았다는 글, 다시 짝 맺기 없음 · 닫으면 초점은 휴대폰 창', async () => {
+  it('짝 맺는 중에 휴대폰 연결이 꺼지면(트레이) — 꺼져서 닫았다는 글, 다시 짝 맺기 없음 · 닫으면 초점은 설정 창', async () => {
     ready()
     await renderApp()
-    const { dlg } = await openPhone()
+    const { settings, dlg } = await openPhone()
     const pair = await startPair(dlg)
     emit({ settings: { ...phone.settings, enabled: false }, url: null, pairing: null })
     expect(pair.textContent).toContain('휴대폰 연결이 꺼져서 짝 맺기를 닫았어요')
@@ -700,9 +935,9 @@ describe('짝 맺기 창', () => {
     await settle()
     expect(api.phonePairCancel).not.toHaveBeenCalled() // main 이 이미 닫았다
     expect(screen.queryByRole('dialog', { name: '휴대폰 짝 맺기' })).toBeNull()
-    // [휴대폰 짝 맺기]는 막혔다 — 초점은 휴대폰 창으로
+    // [휴대폰 짝 맺기]는 막혔다 — 초점은 아래 설정 창으로
     expect((within(dlg).getByRole('button', { name: '휴대폰 짝 맺기' }) as HTMLButtonElement).disabled).toBe(true)
-    expect(document.activeElement).toBe(dlg)
+    expect(document.activeElement).toBe(settings)
   })
 
   it('주소가 닫혀도(켜짐인 채 url null) 같은 글 — 다시 짝 맺기 없음', async () => {
@@ -796,7 +1031,7 @@ describe('안드로이드 앱 칸', () => {
   const section = (dlg: HTMLElement) => within(dlg).queryByRole('heading', { name: '안드로이드 앱' })
   const open = () => ({ settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN, androidApp: APP })
 
-  it('앱이 실려 있고 길이 열렸을 때만 칸이 보인다 — 두레 앱 · 판 · 안내 한 줄 · [앱 받기] · 순서는 짝 맺은 휴대폰 다음, 알림 · 전원 앞', async () => {
+  it('앱이 실려 있고 길이 열렸을 때만 칸이 보인다 — 두레 앱 · 판 · 안내 한 줄 · [앱 받기] · 순서는 짝 맺은 휴대폰 다음, 휴대폰 알림 · PC 전원 앞', async () => {
     phone = { ...phone, ...open() }
     await renderApp()
     const { dlg } = await openPhone()
@@ -807,8 +1042,8 @@ describe('안드로이드 앱 칸', () => {
     expect(row.textContent).toContain('v0.2.0')
     expect(row.textContent).toContain('알림에 주소가 안 붙어요')
     expect(within(row).getByRole('button', { name: '앱 받기' })).toBeTruthy()
-    const subs = Array.from(dlg.querySelectorAll('.phn-sub')).map(h => h.textContent)
-    expect(subs).toEqual(['짝 맺은 휴대폰', '안드로이드 앱', '알림 · 전원'])
+    const subs = Array.from(dlg.querySelectorAll('.sx-t')).map(h => h.textContent)
+    expect(subs).toEqual(['짝 맺은 휴대폰', '안드로이드 앱', '휴대폰 알림', 'PC 전원'])
   })
 
   it('앱이 없으면(null) 칸이 없다 · 길이 닫혔으면(url null) 칸이 없다', async () => {
@@ -841,7 +1076,7 @@ describe('안드로이드 앱 칸', () => {
     fireEvent.keyDown(get, { key: 'Escape' })
     await settle()
     expect(screen.queryByRole('dialog', { name: '안드로이드 앱 받기' })).toBeNull()
-    expect(screen.getByRole('dialog', { name: '휴대폰' })).toBeTruthy()
+    expect(phonePanel()).toBe(dlg)
   })
 
   it('길이 닫히면 열려 있던 작은 창도 닫힌다', async () => {

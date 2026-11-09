@@ -10,7 +10,7 @@ interface Props {
   /** 설정을 막는다(claude 가 없거나 처음 상태를 못 받았을 때) */
   settingsDisabled?: boolean
   onSettings: () => void
-  /** 휴대폰 알약을 누름 — 휴대폰 창. 없으면 알약도 없다 */
+  /** 휴대폰 알약을 누름 — 설정 창을 휴대폰 탭으로. 없으면 알약도 없다 */
   onPhone?: () => void
 }
 

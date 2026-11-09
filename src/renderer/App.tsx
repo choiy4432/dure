@@ -11,7 +11,7 @@ import { SetupScreen } from './shell/SetupScreen'
 import { NewRoomDialog } from './shell/RoomSwitcher'
 import { AddAgentDialog } from './shell/AddAgentDialog'
 import { SettingsDialog, type SettingsTab } from './shell/SettingsDialog'
-import { PhoneDialog, PhoneField } from './shell/PhoneSettings'
+import { PhonePane } from './shell/PhoneSettings'
 import { Presence } from './lib/presence'
 import { RelationMap } from './map/RelationMap'
 import { AgentPanel } from './panel/AgentPanel'
@@ -37,13 +37,15 @@ export function App() {
   const announced = useAttention()
   const fork = useDure(s => s.forkDraft)
   const [dialog, setDialog] = useState<Dialog>(null)
-  /** 설정 창이 열리는 탭 — 톱니는 늘 일반 */
+  /** 설정 창이 열리는 탭 — 톱니는 늘 일반, 위 띠 휴대폰 알약은 휴대폰 */
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
-  /** 설정 위에 겹친 창(묻지 않고 실행 확인)이 떠 있다 — 그동안 투어 카드가 가리지 않게 */
+  /** 설정 위에 겹친 창(묻지 않고 실행 확인 · 휴대폰의 짝 맺기·앱 받기·끊기 확인)이 떠 있다 — 그동안 투어 카드가 가리지 않게 */
   const [settingsCovered, setSettingsCovered] = useState(false)
-  /** 휴대폰 창 — 위 띠 알약이나 설정의 휴대폰 칸에서. 설정 창 위에 겹쳐 뜰 수 있어 dialog 와 따로 둔다 */
-  const [phoneOpen, setPhoneOpen] = useState(false)
   const close = () => setDialog(null)
+  const openSettings = (tab: SettingsTab) => {
+    setSettingsTab(tab)
+    setDialog('settings')
+  }
   const setupPhase = effectiveSetup(v.setup, v.claudeMissing, v.setupLoadFailed).phase
   const preparing = setupPhase === 'needs' || setupPhase === 'relaunching'
   const blocked = v.loadError !== null || preparing || setupPhase === 'checking' || v.claudeMissing
@@ -92,11 +94,8 @@ export function App() {
         <TopBar
           hasRoom={!blocked && v.roomId !== null}
           settingsDisabled={blocked}
-          onSettings={() => {
-            setSettingsTab('general')
-            setDialog('settings')
-          }}
-          onPhone={() => setPhoneOpen(true)}
+          onSettings={() => openSettings('general')}
+          onPhone={() => openSettings('phone')}
         />
         {body}
         <StatusBar />
@@ -116,21 +115,17 @@ export function App() {
             onClose={close}
             initialTab={settingsTab}
             onCoveredChange={setSettingsCovered}
-            phonePane={() => <PhoneField onOpen={() => setPhoneOpen(true)} />}
+            phonePane={o => <PhonePane onCoveredChange={o.onCoveredChange} />}
             onReplayTour={() => {
               close()
               getStore().startTour(getStore().getState().rooms.length > 0)
             }}
           />
         </Presence>
-        {/* 설정 창 다음에 — 겹치면 위에 뜬다 */}
-        <Presence show={phoneOpen}>
-          <PhoneDialog onClose={() => setPhoneOpen(false)} />
-        </Presence>
-        {/* 안내 투어·승인 한 번 — 대화상자 위 겹. 열린 창을 보고 단계를 넘기고, 새 방·에이전트 추가 창이 떠 있는 동안은 숨는다 */}
+        {/* 안내 투어·승인 한 번 — 대화상자 위 겹. 열린 창을 보고 단계를 넘기고, 새 방·에이전트 추가 창 · 설정 위에 겹친 창이 떠 있는 동안은 숨는다 */}
         <TourLayer
           dialog={dialog}
-          covered={phoneOpen || settingsCovered}
+          covered={settingsCovered}
           onCloseDialog={close}
         />
       </div>

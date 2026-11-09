@@ -1,4 +1,5 @@
-// 위 띠의 휴대폰 알약(시안 D1) — 휴대폰 연결이 켜져 있을 때만, 톱니 왼쪽. 'phone' 사건으로 바뀐다(되묻지 않는다)
+// 위 띠의 휴대폰 알약(시안 D1) — 휴대폰 연결이 켜져 있을 때만, 톱니 왼쪽. 'phone' 사건으로 바뀐다(되묻지 않는다).
+// 누르면 onPhone — App 이 설정 창을 휴대폰 탭으로 연다(phoneSettings.test 의 pillOpensPhoneTab)
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, fireEvent, cleanup } from '@testing-library/react'
 import type { Snapshot } from '../../src/shared/ipcContract'
