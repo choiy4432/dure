@@ -40,7 +40,7 @@
         <item name="android:gravity">center</item>
         <item name="android:includeFontPadding">false</item>
         <item name="android:background">@drawable/step_badge</item>
-        <item name="android:textColor">@color/text</item>
+        <item name="android:textColor">@color/primary_text</item>
         <item name="android:textSize">13sp</item>
         <item name="android:textStyle">bold</item>
     </style>

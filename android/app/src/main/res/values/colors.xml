@@ -13,6 +13,8 @@
     <color name="primary">#2563EB</color>
     <!-- primary-text — 어두운 바탕 위 주색 글(묻는 창의 단추) -->
     <color name="primary_text">#93C5FD</color>
+    <!-- primary-soft — 파란 알약 바탕(다크 rgba(59,130,246,.16)) · 처음 쓰기의 번호 동그라미 -->
+    <color name="primary_soft">#293B82F6</color>
     <!-- 런처 아이콘 바탕(maskable 아이콘의 판 색) -->
     <color name="icon_bg">#2563EB</color>
 </resources>

@@ -20,8 +20,8 @@
         android:paddingBottom="20dp">
 
         <ImageView
-            android:layout_width="64dp"
-            android:layout_height="64dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
             android:importantForAccessibility="no"
             android:src="@drawable/dure_logo" />
 
@@ -29,7 +29,7 @@
             style="@style/Dure.FirstRun.Title"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="12dp"
             android:accessibilityHeading="true"
             android:text="@string/first_title"
             tools:targetApi="p" />
