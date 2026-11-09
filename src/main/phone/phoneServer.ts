@@ -483,11 +483,16 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
   function assetLinks(req: IncomingMessage, res: ServerResponse): Promise<void> | void {
     const a = androidNow()
     if (!a) return refuse(req, res, 404, E.notFound)
-    if (req.method === 'HEAD') {
-      res.writeHead(200, { ...BASE_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-      return void res.end()
-    }
-    sendJson(res, 200, a.statements)
+    if (req.method !== 'HEAD') return sendJson(res, 200, a.statements)
+    // HEAD — 몸 없이 GET 과 같은 머리(content-length 도)
+    if (res.headersSent || res.destroyed) return
+    res.writeHead(200, {
+      ...BASE_HEADERS,
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-length': Buffer.byteLength(JSON.stringify(a.statements)),
+    })
+    res.end()
   }
 
   async function serveApk(req: IncomingMessage, res: ServerResponse): Promise<void> {

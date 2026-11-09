@@ -1,6 +1,7 @@
 // 두레 안드로이드 앱(TWA 껍데기) 굽기: node scripts/android/build.mjs [--test]   (npm run android -- --test)
 // DURE_ANDROID_TOOLS 폴더의 JDK·SDK·Gradle 로 android/ 를 굽는다 — Gradle·SDK 캐시도 그 폴더 안(홈 폴더를 건드리지 않는다).
-// JUnit 을 먼저 돌리고(실패하면 멈춤), 서명한 APK 를 resources/android/dure.apk + dure.apk.json({ versionCode, versionName, packageName })으로 둔다.
+// JUnit 을 먼저 돌리고(실패하면 멈춤), 서명한 APK 를 resources/android/dure.apk + dure.apk.json({ versionCode, versionName, packageName, sourceHash })으로 둔다.
+// sourceHash = 구운 android/ 소스의 SHA-256(lib.mjs androidSourceHash) — 릴리스가 지금 소스와 맞춰 본다(껍데기를 바꾸고 다시 안 구우면 멈춤).
 // APK 의 서명 지문이 src/shared/androidApp.ts(휴대폰 서버의 assetlinks.json)와 다르면 멈춘다 — 다르면 크롬이 앱으로 인정하지 않는다.
 //   --test  시험 앱: 패키지 …dure.test · 이름 '두레 시험' · 도구 폴더의 시험 열쇠
 //   (없음)  진짜 앱: 열쇠 DURE_ANDROID_KEYSTORE(기본 %USERPROFILE%\.dure-release\android-release.jks), 비밀번호는 DURE_ANDROID_KEYSTORE_PASS 로만
@@ -9,7 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { androidConsts, parseArgs, readVersion, requireEnv, signerSha256 } from './lib.mjs'
+import { BACKUP_REMINDER, androidConsts, androidSourceHash, parseArgs, readVersion, requireEnv, signerSha256 } from './lib.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const ANDROID = path.join(ROOT, 'android')
@@ -23,12 +24,14 @@ function fail(msg) {
   process.exit(1)
 }
 
-let opts, env, version, consts
+let opts, env, version, consts, sourceHash
 try {
   opts = parseArgs(process.argv.slice(2))
   env = requireEnv(process.env, opts.test)
   version = readVersion(path.join(ANDROID, 'version.json'))
   consts = androidConsts(readFileSync(path.join(ROOT, 'src', 'shared', 'androidApp.ts'), 'utf8'))
+  // 굽기 전에 센다 — 구운 것(build/)·.gradle/·local.properties 는 셈에서 빠진다
+  sourceHash = androidSourceHash(ANDROID)
 } catch (e) {
   fail(e.message)
 }
@@ -98,6 +101,8 @@ if (signer !== sha256) fail(`APK 서명 지문(${signer})이 src/shared/androidA
 
 mkdirSync(OUT, { recursive: true })
 copyFileSync(apk, path.join(OUT, 'dure.apk'))
-const info = { versionCode: version.versionCode, versionName: version.versionName, packageName }
+const info = { versionCode: version.versionCode, versionName: version.versionName, packageName, sourceHash }
 writeFileSync(path.join(OUT, 'dure.apk.json'), `${JSON.stringify(info, null, 2)}\n`)
 console.log(`다 됐어요: resources/android/dure.apk — ${packageName} v${version.versionName}(판 ${version.versionCode}) · 서명 지문 ${signer}`)
+// 진짜 앱만 — 열쇠를 잃으면 앱을 다시는 업데이트할 수 없다(README '릴리스 올리기')
+if (!opts.test) console.log(BACKUP_REMINDER)

@@ -1,3 +1,4 @@
+export const BACKUP_REMINDER: string
 export function parseArgs(argv: string[]): { test: boolean }
 export function requireEnv(
   env: Record<string, string | undefined>,
@@ -6,3 +7,4 @@ export function requireEnv(
 export function readVersion(file: string): { versionCode: number; versionName: string }
 export function androidConsts(ts: string): { packageName: string; testPackageName: string; sha256: string; testSha256: string }
 export function signerSha256(text: string): string | null
+export function androidSourceHash(dir: string): string

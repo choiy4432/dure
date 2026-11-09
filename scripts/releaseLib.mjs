@@ -11,7 +11,9 @@ export function notesProblem(text) {
 // 안드로이드 앱 검사. 문제 없으면 null, 있으면 한국어 사유.
 // 진짜 패키지 이름은 src/shared/androidApp.ts 의 ANDROID_PACKAGE 와 같아야 한다(release.test.ts 가 맞춰 본다)
 export const ANDROID_REAL_PACKAGE = 'io.github.choiy4432.dure'
-export function androidProblem({ apkInfo, version }) {
+export const ANDROID_STALE = '앱 껍데기를 바꾼 뒤 다시 굽지 않았어요 — npm run android'
+// sourceHash = 지금 android/ 소스의 SHA-256(scripts/android/lib.mjs androidSourceHash). 구운 APK 옆 dure.apk.json 의 sourceHash 와 달라야(없어도 — 예전에 구운 것) 멈춘다
+export function androidProblem({ apkInfo, version, sourceHash }) {
   if (!apkInfo) return '안드로이드 앱 파일(resources/android/dure.apk)이 없어요. npm run android 로 먼저 구워 주세요.'
   if (apkInfo.packageName !== ANDROID_REAL_PACKAGE) {
     return '안드로이드 앱의 패키지가 진짜가 아니에요(시험용으로 구운 것일 수 있어요). npm run android 로 다시 구워 주세요.'
@@ -19,6 +21,7 @@ export function androidProblem({ apkInfo, version }) {
   if (apkInfo.versionCode !== version.versionCode || apkInfo.versionName !== version.versionName) {
     return `안드로이드 앱 판(${apkInfo.versionName}, ${apkInfo.versionCode})이 android/version.json(${version.versionName}, ${version.versionCode})과 달라요. npm run android 로 다시 구워 주세요.`
   }
+  if (typeof apkInfo.sourceHash !== 'string' || apkInfo.sourceHash !== sourceHash) return ANDROID_STALE
   return null
 }
 

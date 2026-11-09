@@ -796,6 +796,32 @@ describe('phoneServer', () => {
     expect((await request(none.server.port, { path: '/dure.apk' })).status).toBe(404)
   })
 
+  it('assetlinks.json HEAD — 200 · 몸 없이 GET 과 같은 content-length', async () => {
+    const statements = [{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: 'a.b', sha256_cert_fingerprints: ['AA'] } }]
+    const t = await setup({ android: () => ({ statements, apk: null }) })
+    const get = await request(t.server.port, { path: '/.well-known/assetlinks.json' })
+    const head = await request(t.server.port, { method: 'HEAD', path: '/.well-known/assetlinks.json' })
+    expect(head.status).toBe(200)
+    expect(head.headers['content-type']).toBe(get.headers['content-type'])
+    expect(head.headers['cache-control']).toBe('no-store')
+    expect(head.headers['content-length']).toBe(String(get.body.length))
+    expect(head.body.length).toBe(0)
+  })
+
+  it('android() 가 던지면 두 길 모두 404 · APK 자리가 폴더면 404', async () => {
+    const boom = await setup({ android: () => { throw new Error('x') } })
+    for (const p of ['/.well-known/assetlinks.json', '/dure.apk']) {
+      expect((await request(boom.server.port, { path: p })).status, p).toBe(404)
+      expect((await request(boom.server.port, { method: 'HEAD', path: p })).status, `HEAD ${p}`).toBe(404)
+    }
+    const dir = tempDir()
+    const folder = path.join(dir, 'dure.apk')
+    fs.mkdirSync(folder)
+    const t = await setup({ android: () => ({ statements: [], apk: { path: folder, versionCode: 1, packageName: 'io.github.choiy4432.dure' } }) })
+    expect((await request(t.server.port, { path: '/dure.apk' })).status).toBe(404)
+    expect((await request(t.server.port, { method: 'HEAD', path: '/dure.apk' })).status).toBe(404)
+  })
+
   it('정적 파일 — staticDir 밖 경로 거절', async () => {
     const t = await setup()
     const port = t.server.port

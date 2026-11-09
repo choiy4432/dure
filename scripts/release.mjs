@@ -4,6 +4,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { androidProblem, notesProblem, releaseArgs, releaseFiles, show } from './releaseLib.mjs'
+import { androidSourceHash } from './android/lib.mjs'
 
 const args = process.argv.slice(2)
 const dry = args.includes('--dry-run')
@@ -50,14 +51,15 @@ if (spawnSync('gh', ['auth', 'status'], { stdio: 'ignore' }).status !== 0) {
   fail('gh 를 못 찾았거나 로그인이 안 돼 있어요. `gh auth login` 을 먼저 해 주세요.')
 }
 
-// 안드로이드 앱 — resources/android/dure.apk(.json)이 android/version.json 과 같은 판이고 진짜 패키지여야 한다(설치 파일에 실린다)
+// 안드로이드 앱 — resources/android/dure.apk(.json)이 android/version.json 과 같은 판 · 진짜 패키지 · 지금 android/ 소스로 구운 것이어야 한다
+// (설치 파일에 실린다 — dist·업로드 전에 멈춘다)
 let apkInfo = null
 try {
   apkInfo = JSON.parse(readFileSync('resources/android/dure.apk.json', 'utf8'))
   if (!existsSync('resources/android/dure.apk')) apkInfo = null
 } catch {}
 const androidVersion = JSON.parse(readFileSync('android/version.json', 'utf8'))
-const androidIssue = androidProblem({ apkInfo, version: androidVersion })
+const androidIssue = androidProblem({ apkInfo, version: androidVersion, sourceHash: androidSourceHash('android') })
 if (androidIssue) fail(androidIssue)
 
 const files = releaseFiles(version)

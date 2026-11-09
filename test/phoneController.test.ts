@@ -1290,7 +1290,10 @@ test('안드로이드 앱 — apk 가 없으면 null (상태·서버 모두)', a
   await c.ready
   expect(c.state().androidApp).toBeNull()
   await c.set({ enabled: true })
-  expect(servers.last().opts.android!().apk).toBeNull()
+  const a = servers.last().opts.android!()
+  expect(a.apk).toBeNull()
+  // 앱 파일이 없어도 assetlinks.json 은 낸다(Review Focus 3) — 진짜 앱 하나
+  expect(a.statements).toHaveLength(1)
 })
 
 test('안드로이드 앱 — 시험 패키지 apk 는 진짜 빌드에서 null · 시험 빌드(androidTest)에서만 받는다', async () => {

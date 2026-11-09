@@ -1,7 +1,12 @@
 // scripts/android/build.mjs 의 순수 부분 — 시험할 수 있게 따로 둔다(test/androidBuild.test.ts).
 // 오류 글에는 경로·비밀번호를 넣지 않는다(화면·기록에 남지 않게) — 어느 환경 변수인지만 알린다.
-import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+
+/** 진짜 앱을 다 구운 뒤 한 줄(시험 앱은 안 보인다) — 열쇠를 잃으면 같은 패키지로 덮어 깔 수 없다 */
+export const BACKUP_REMINDER =
+  '잊지 마세요: 서명 열쇠 파일과 그 비밀번호를 따로 백업해 두세요 — 잃으면 안드로이드 앱을 다시는 업데이트할 수 없어요(모두 지우고 다시 깔아야 해요).'
 
 /** 명령줄 → { test }. 모르는 옵션은 멈춘다(잘못 쳐서 진짜 앱을 굽지 않게) */
 export function parseArgs(argv) {
@@ -65,4 +70,37 @@ export function androidConsts(ts) {
 export function signerSha256(text) {
   const m = /Signer #1 certificate SHA-256 digest:\s*([0-9a-fA-F]{64})\b/.exec(text)
   return m ? m[1].toUpperCase().match(/../g).join(':') : null
+}
+
+/** 껍데기 판 셈에서 빼는 것 — 구운 것(build/)·Gradle 캐시(.gradle/)·SDK 자리(local.properties — build.mjs 가 쓴다) */
+const SKIP_DIRS = new Set(['build', '.gradle'])
+const SKIP_FILES = new Set(['local.properties'])
+
+/**
+ * 앱 껍데기 소스(android/)의 SHA-256(16진수) — build.mjs 가 dure.apk.json 의 sourceHash 로 적고, 릴리스(release.mjs)가 지금 것과 맞춰 본다
+ * (껍데기를 바꾸고 다시 굽지 않았으면 멈추게). 파일마다 상대 경로(/ 로 이음, 글자 순) + 길이 + 내용을 넣는다.
+ * 글 파일(NUL 바이트 없음)은 줄 끝 CRLF 를 LF 로 맞춰 센다 — 저장소에서 다시 받으며 줄 끝이 바뀌어도(autocrlf) 같은 값
+ */
+export function androidSourceHash(dir) {
+  const files = []
+  const walk = (rel) => {
+    for (const e of readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) walk(r)
+      } else if (e.isFile() && !SKIP_FILES.has(e.name)) {
+        files.push(r)
+      }
+    }
+  }
+  walk('')
+  files.sort()
+  const h = createHash('sha256')
+  for (const r of files) {
+    let buf = readFileSync(path.join(dir, ...r.split('/')))
+    if (!buf.includes(0)) buf = Buffer.from(buf.toString('latin1').replaceAll('\r\n', '\n'), 'latin1')
+    h.update(`${r}\0${buf.length}\0`)
+    h.update(buf)
+  }
+  return h.digest('hex')
 }
