@@ -725,6 +725,50 @@ describe('phoneServer', () => {
     }
   })
 
+  it('assetlinks.json — 쿠키 없이 허용 Host 에 200 · 틀린 Host 403 · android 옵션 없으면 404', async () => {
+    const statements = [{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: 'a.b', sha256_cert_fingerprints: ['AA'] } }]
+    const t = await setup({ android: () => ({ statements, apk: null }) })
+    const r = await request(t.server.port, { path: '/.well-known/assetlinks.json' })
+    expect(r.status).toBe(200)
+    expect(r.headers['content-type']).toContain('application/json')
+    expect(r.headers['cache-control']).toBe('no-store')
+    expect(json(r)).toEqual(statements)
+    expect((await request(t.server.port, { path: '/.well-known/assetlinks.json', headers: { host: 'evil.example:47615' } })).status).toBe(403)
+    expect((await request(t.server.port, { method: 'POST', path: '/.well-known/assetlinks.json', headers: { origin: ORIGIN } })).status).toBe(405)
+
+    const none = await setup()
+    expect((await request(none.server.port, { path: '/.well-known/assetlinks.json' })).status).toBe(404)
+  })
+
+  it('/dure.apk — 쿠키 없이 바이트 그대로 · 내려받기 이름 · HEAD · apk null 이면 404 · 틀린 Host 403', async () => {
+    const dir = tempDir()
+    const file = path.join(dir, 'dure.apk')
+    const bytes = crypto.randomBytes(100_000)
+    fs.writeFileSync(file, bytes)
+    const t = await setup({ android: () => ({ statements: [], apk: { path: file, versionCode: 2 } }) })
+    const r = await request(t.server.port, { path: '/dure.apk' })
+    expect(r.status).toBe(200)
+    expect(r.headers['content-type']).toBe('application/vnd.android.package-archive')
+    expect(r.headers['content-disposition']).toContain(`filename*=UTF-8''${encodeURIComponent('두레.apk')}`)
+    expect(r.headers['cache-control']).toBe('no-store')
+    expect(r.headers['content-length']).toBe(String(bytes.length))
+    expect(r.body.equals(bytes)).toBe(true)
+
+    const h = await request(t.server.port, { method: 'HEAD', path: '/dure.apk' })
+    expect(h.status).toBe(200)
+    expect(h.headers['content-length']).toBe(String(bytes.length))
+    expect(h.body.length).toBe(0)
+
+    expect((await request(t.server.port, { path: '/dure.apk', headers: { host: 'evil.example:47615' } })).status).toBe(403)
+
+    const nul = await setup({ android: () => ({ statements: [], apk: null }) })
+    expect((await request(nul.server.port, { path: '/dure.apk' })).status).toBe(404)
+    const missing = await setup({ android: () => ({ statements: [], apk: { path: path.join(dir, 'gone.apk'), versionCode: 1 } }) })
+    expect((await request(missing.server.port, { path: '/dure.apk' })).status).toBe(404)
+    const none = await setup()
+    expect((await request(none.server.port, { path: '/dure.apk' })).status).toBe(404)
+  })
+
   it('정적 파일 — staticDir 밖 경로 거절', async () => {
     const t = await setup()
     const port = t.server.port

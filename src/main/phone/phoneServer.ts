@@ -145,6 +145,11 @@ export interface PhoneServerOptions {
   onVisible?: (deviceId: string, visible: boolean) => void
   /** 열린 소켓이 늘거나 줄었다(clients() 가 바뀜) — close() 때는 부르지 않는다 */
   onClients?: () => void
+  /**
+   * 안드로이드 앱 — 요청마다 묻는다. statements 는 /.well-known/assetlinks.json 의 내용, apk 는 /dure.apk 로 내어 줄 파일(없으면 null → 404).
+   * 둘 다 쿠키 없이(공개) · Host 확인만 한다. 옵션이 없으면 두 길 모두 404
+   */
+  android?: () => { statements: object[]; apk: { path: string; versionCode: number } | null }
   /** e2e 만 — Host `127.0.0.1:<포트>` · Origin `http://127.0.0.1:<포트>` 도 받는다 */
   allowLocal?: boolean
   /** 시험만 — 상한을 줄여 본다. 안 준 칸은 기본값 */
@@ -454,7 +459,53 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
     if (p === PHONE_PATHS.ws) return refuse(req, res, 426, E.bad, { upgrade: 'websocket' })
     if (p.startsWith('/api/')) return refuse(req, res, 404, E.notFound)
     if (method !== 'GET' && method !== 'HEAD') return refuse(req, res, 405, E.method, { allow: 'GET, HEAD' })
+    // 정적 규칙은 '.' 으로 시작하는 마디를 막으니 따로 — 쿠키 없이(크롬의 확인·앱 내려받기는 쿠키가 없다)
+    if (p === '/.well-known/assetlinks.json') return assetLinks(req, res)
+    if (p === '/dure.apk') return serveApk(req, res)
     return serveStatic(req, res, gate, p)
+  }
+
+  /** 부를 때마다 묻는다 — 던지면 없는 것으로 */
+  function androidNow(): ReturnType<NonNullable<PhoneServerOptions['android']>> | null {
+    try {
+      return o.android?.() ?? null
+    } catch {
+      return null
+    }
+  }
+
+  function assetLinks(req: IncomingMessage, res: ServerResponse): Promise<void> | void {
+    const a = androidNow()
+    if (!a) return refuse(req, res, 404, E.notFound)
+    if (req.method === 'HEAD') {
+      res.writeHead(200, { ...BASE_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+      return void res.end()
+    }
+    sendJson(res, 200, a.statements)
+  }
+
+  async function serveApk(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const apk = androidNow()?.apk
+    if (!apk) return refuse(req, res, 404, E.notFound)
+    let size: number
+    try {
+      const st = await fs.promises.stat(apk.path)
+      if (!st.isFile()) return refuse(req, res, 404, E.notFound)
+      size = st.size
+    } catch {
+      return refuse(req, res, 404, E.notFound)
+    }
+    if (res.destroyed) return
+    res.writeHead(200, {
+      ...BASE_HEADERS,
+      'content-type': 'application/vnd.android.package-archive',
+      'content-disposition': `attachment; filename="dure.apk"; filename*=UTF-8''${encodeURIComponent('두레.apk')}`,
+      'cache-control': 'no-store',
+      'content-length': size,
+    })
+    if (req.method === 'HEAD') return void res.end()
+    // pipeline — 휴대폰이 받다 끊어도 읽던 파일을 닫는다
+    pipeline(fs.createReadStream(apk.path), res, () => {})
   }
 
   async function pair(req: IncomingMessage, res: ServerResponse, gate: Gate): Promise<void> {
