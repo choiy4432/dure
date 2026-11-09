@@ -6775,3 +6775,217 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
   line-height: 18px;
   color: var(--text-3);
 }
+
+/* ── 설정 창(왼쪽 탭) ──────────────────────────────────
+   넓은 창 하나 — 왼쪽 190px 탭, 오른쪽 판만 스크롤되고 [닫기] 줄은 아래에 붙는다.
+   묶음 = 작은 이름 줄 + 둥근 상자, 상자 안 줄은 이름(+짧은 설명)이 왼쪽 · 조절이 오른쪽. */
+.st-dlg {
+  display: flex;
+  width: min(780px, 100vw - 48px);
+  height: min(560px, 100vh - 48px);
+  max-width: none;
+  padding: 0;
+  overflow: hidden;
+  word-break: keep-all;
+}
+
+.st-nav {
+  flex: none;
+  width: 190px;
+  padding: 14px 10px;
+  border-right: 1px solid var(--border-soft);
+  overflow-y: auto;
+}
+
+.st-title {
+  padding: 4px 10px 12px;
+}
+
+.st-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.st-tab {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-ctl);
+  font-size: 13.5px;
+  line-height: 20px;
+  text-align: left;
+  color: var(--text-3);
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.st-tab .i {
+  flex: none;
+}
+
+.st-tab:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.st-tab[aria-selected="true"] {
+  background: var(--primary-soft);
+  color: var(--primary-text);
+  font-weight: 700;
+}
+
+.st-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.st-pane {
+  flex: 1;
+  min-height: 0;
+  padding: 16px 22px 8px;
+  overflow-y: auto;
+}
+
+.st-pane::-webkit-scrollbar {
+  width: 10px;
+}
+
+.st-pane::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-box);
+  border: 3px solid var(--raised);
+}
+
+.st-ab {
+  flex: none;
+  margin-top: 0;
+  padding: 12px 22px 16px;
+}
+
+.sx {
+  margin-top: 18px;
+}
+
+.sx:first-child {
+  margin-top: 0;
+}
+
+.sx-t {
+  margin: 0 2px 6px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.sx-note {
+  font-weight: 500;
+}
+
+.sx-box {
+  overflow: hidden;
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-box);
+}
+
+.sx-rw + .sx-rw {
+  border-top: 1px solid var(--border-soft);
+}
+
+.sx-r {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 46px;
+  padding: 11px 14px;
+}
+
+.sx-r.col {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.sx-l {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sx-n {
+  font-size: 13.5px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.sx-s {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.sx-c {
+  flex: none;
+}
+
+.sx-r.col .sx-c {
+  width: 100%;
+}
+
+.sx-btns {
+  display: flex;
+  gap: 8px;
+}
+
+.sx-st {
+  display: block;
+}
+
+.sx-st .upd-warn {
+  display: block;
+}
+
+.sx-e {
+  padding: 0 14px 10px;
+}
+
+/* 줄 전체가 스위치 — 이름·설명 왼쪽, 손잡이 오른쪽 */
+.sx-sw {
+  width: 100%;
+  height: auto;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+  text-align: left;
+}
+
+.sx-sw .tg {
+  flex: none;
+}
+
+.sx-sw:hover {
+  background: var(--hover);
+}
+
+.sx-sw[aria-disabled="true"] {
+  opacity: 0.5;
+}
+
+.sx-sw[aria-disabled="true"]:hover {
+  background: transparent;
+}
+
+.sx-sw:focus-visible {
+  outline-offset: -2px;
+}

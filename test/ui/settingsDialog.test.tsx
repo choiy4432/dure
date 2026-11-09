@@ -70,275 +70,285 @@ const openSettings = () => {
   return { dlg: screen.getByRole('dialog', { name: '설정' }), opener }
 }
 
-describe('SettingsDialog', () => {
-  it('재우는 시간 — 다섯 칸에 지금 값이 체크되고, 다른 값을 골라 저장하면 setSleepAfter 한 번 · 그 칸만 바꿔도 저장이 켜진다', async () => {
+const tabOf = (dlg: HTMLElement, name: string) => within(dlg).getByRole('tab', { name })
+const goTab = (dlg: HTMLElement, name: string) => fireEvent.click(tabOf(dlg, name))
+const sw = (dlg: HTMLElement, name: string) => within(dlg).getByRole('switch', { name })
+const limitInput = (dlg: HTMLElement) => within(dlg).getByRole('spinbutton', { name: '자동 전달 상한' }) as HTMLInputElement
+
+describe('SettingsDialog — 탭 틀', () => {
+  it('tabsVertical — 세로 tablist · 탭 다섯 · 화살표/Home/End · 아래 단추는 [닫기] 하나', async () => {
     await renderApp()
     const { dlg } = openSettings()
-    const group = within(dlg).getByRole('radiogroup', { name: '쉬는 에이전트 재우기' })
-    expect(dlg.textContent).toContain('이만큼 쉬면 claude 를 내려 메모리를 비워요. 말을 걸면 몇 초 뒤 그대로 이어서 깨어나요')
-    const radios = within(group).getAllByRole('radio')
-    expect(radios.map(r => r.textContent)).toEqual(['끔', '15분', '30분', '1시간', '3시간'])
-    expect(radios.map(r => r.getAttribute('aria-checked'))).toEqual(['false', 'false', 'true', 'false', 'false'])
-    const save = within(dlg).getByRole('button', { name: '저장' }) as HTMLButtonElement
-    expect(save.disabled).toBe(true)
-    fireEvent.click(within(group).getByRole('radio', { name: '1시간' }))
-    expect(within(group).getByRole('radio', { name: '1시간' }).getAttribute('aria-checked')).toBe('true')
-    expect(save.disabled).toBe(false)
-    await act(async () => { fireEvent.click(save) })
-    await settle()
-    expect(setSleepAfter).toHaveBeenCalledTimes(1)
-    expect(setSleepAfter).toHaveBeenCalledWith(60)
-    expect(setAutoChainLimit).not.toHaveBeenCalled()
+    const list = within(dlg).getByRole('tablist')
+    expect(list.getAttribute('aria-orientation')).toBe('vertical')
+    const tabs = within(list).getAllByRole('tab')
+    expect(tabs.map(t => t.textContent)).toEqual(['일반', '에이전트', '알림', '휴대폰', '두레'])
+    expect(tabs.map(t => t.getAttribute('aria-selected'))).toEqual(['true', 'false', 'false', 'false', 'false'])
+    expect(tabs.map(t => t.getAttribute('tabindex'))).toEqual(['0', '-1', '-1', '-1', '-1'])
+    expect(within(dlg).getByRole('tabpanel', { name: '일반' })).toBeTruthy()
+    expect(document.activeElement).toBe(tabs[0]) // R1 — 처음 초점은 고른 탭
+
+    fireEvent.keyDown(tabs[0], { key: 'ArrowDown' })
+    expect(tabs[1].getAttribute('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(tabs[1])
+    expect(within(dlg).getByRole('tabpanel', { name: '에이전트' })).toBeTruthy()
+    expect(within(dlg).getByRole('spinbutton', { name: '자동 전달 상한' })).toBeTruthy()
+    expect(within(dlg).queryByRole('radiogroup', { name: '테마' })).toBeNull() // 숨긴 판을 DOM 에 두지 않는다
+
+    fireEvent.keyDown(tabs[1], { key: 'End' })
+    expect(tabs[4].getAttribute('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(tabs[4])
+    fireEvent.keyDown(tabs[4], { key: 'ArrowUp' })
+    expect(tabs[3].getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(tabs[3], { key: 'Home' })
+    expect(tabs[0].getAttribute('aria-selected')).toBe('true')
+    expect(document.activeElement).toBe(tabs[0])
+
+    const buttons = within(dlg).getAllByRole('button').map(b => b.textContent)
+    expect(buttons).toContain('닫기')
+    expect(within(dlg).queryByRole('button', { name: '저장' })).toBeNull()
+    expect(within(dlg).queryByRole('button', { name: '취소' })).toBeNull()
   })
 
-  it('재우는 시간을 안 바꾸고 저장하면 setSleepAfter 를 부르지 않는다', async () => {
+  it('[닫기] · Esc 로 닫는다', async () => {
     await renderApp()
-    const { dlg } = openSettings()
-    fireEvent.change(within(dlg).getByRole('spinbutton', { name: '자동 전달 상한' }), { target: { value: '5' } })
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '저장' })) })
-    await settle()
-    expect(setAutoChainLimit).toHaveBeenCalledWith(5)
-    expect(setSleepAfter).not.toHaveBeenCalled()
-  })
-
-  it('지금 상한을 보여 주고 1~20 정수로 바꿨을 때만 저장이 켜진다 — 저장하면 setAutoChainLimit 후 닫힘', async () => {
-    const store = await renderApp()
     const { dlg, opener } = openSettings()
-    const input = within(dlg).getByRole('spinbutton', { name: '자동 전달 상한' }) as HTMLInputElement
-    expect(input.value).toBe('3')
-    expect(document.activeElement).toBe(input)
-    expect(dlg.textContent).toContain('자동 켠 에이전트끼리 사람 확인 없이 이어서 주고받을 수 있는 횟수')
-    const save = within(dlg).getByRole('button', { name: '저장' }) as HTMLButtonElement
-    expect(save.disabled).toBe(true) // 바뀐 게 없다
-
-    for (const bad of ['0', '21', '2.5', '-1', '']) {
-      fireEvent.change(input, { target: { value: bad } })
-      expect(save.disabled).toBe(true)
-      if (bad !== '') expect(input.getAttribute('aria-invalid')).toBe('true')
-    }
-    fireEvent.change(input, { target: { value: '21' } })
-    expect(within(dlg).getByText('1부터 20까지 적을 수 있어요')).toBeTruthy()
-
-    fireEvent.change(input, { target: { value: '20' } })
-    expect(save.disabled).toBe(false)
-    expect(input.getAttribute('aria-invalid')).toBeNull()
-    expect(within(dlg).queryByText('1부터 20까지 적을 수 있어요')).toBeNull()
-
-    fireEvent.change(input, { target: { value: '5' } })
-    await act(async () => { fireEvent.click(save) })
-    await settle()
-    expect(setAutoChainLimit).toHaveBeenCalledTimes(1)
-    expect(setAutoChainLimit).toHaveBeenCalledWith(5)
+    fireEvent.click(within(dlg).getByRole('button', { name: '닫기' }))
     expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
-    expect(store.getState().autoChainLimit).toBe(5)
     expect(document.activeElement).toBe(opener)
-
-    // 다시 열면 저장한 값
     const again = openSettings()
-    expect((within(again.dlg).getByRole('spinbutton') as HTMLInputElement).value).toBe('5')
+    fireEvent.keyDown(again.dlg, { key: 'Escape' })
+    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
   })
 
-  it('엔진 오류는 칸 아래 빨간 글 — 대화상자는 열린 채', async () => {
-    setAutoChainLimit.mockRejectedValueOnce(new Error('상한은 1 이상이어야 해요.'))
-    await renderApp()
-    const { dlg } = openSettings()
-    const input = within(dlg).getByRole('spinbutton', { name: '자동 전달 상한' })
-    fireEvent.change(input, { target: { value: '4' } })
-    await act(async () => { fireEvent.submit(input.closest('form')!) })
-    await settle()
-    const err = within(dlg).getByText('상한은 1 이상이어야 해요.')
-    expect(err.classList.contains('fe')).toBe(true)
-    expect(err.closest('.fld')!.contains(input)).toBe(true)
-    expect(screen.getByRole('dialog', { name: '설정' })).toBeTruthy()
-  })
-
-  it('범위 밖 값은 Enter 로도 저장되지 않는다 · Esc 는 저장하지 않고 닫는다', async () => {
-    await renderApp()
-    const { dlg } = openSettings()
-    const input = within(dlg).getByRole('spinbutton', { name: '자동 전달 상한' })
-    fireEvent.change(input, { target: { value: '99' } })
-    await act(async () => { fireEvent.submit(input.closest('form')!) })
-    expect(setAutoChainLimit).not.toHaveBeenCalled()
-    fireEvent.keyDown(input, { key: 'Escape' })
-    expect(screen.queryByRole('dialog')).toBeNull()
-    expect(setAutoChainLimit).not.toHaveBeenCalled()
+  it('initialTabProp — initialTab="about" 으로 열면 두레 탭이 고른 탭 · phonePane 이 없으면 휴대폰 탭도 없다', async () => {
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { SettingsDialog } = await import('../../src/renderer/shell/SettingsDialog')
+    await act(async () => { await getStore().init() })
+    render(<SettingsDialog onClose={() => {}} onReplayTour={() => {}} initialTab="about" />)
+    const dlg = screen.getByRole('dialog', { name: '설정' })
+    expect(tabOf(dlg, '두레').getAttribute('aria-selected')).toBe('true')
+    expect(within(dlg).getByRole('tabpanel', { name: '두레' })).toBeTruthy()
+    expect(within(dlg).queryByRole('tab', { name: '휴대폰' })).toBeNull()
   })
 })
 
-describe('SettingsDialog — 묻지 않고 실행 허용', () => {
-  const allowSwitch = (dlg: HTMLElement) => within(dlg).getByRole('switch', { name: /묻지 않고 실행 허용/ })
-
-  it('허용이 꺼져 있으면 스위치는 꺼짐 · 켜고 저장하면 설정 창이 닫히고 확인 창이 뜬다 — [허용] 이면 setAllowBypass(true)', async () => {
+describe('SettingsDialog — 일반', () => {
+  it('themeAndSleepApplyNow — 누르는 즉시 setTheme / setSleepAfter 한 번 · 닫아도 되돌리지 않는다', async () => {
     const store = await renderApp()
     const { dlg } = openSettings()
-    const sw = allowSwitch(dlg)
-    expect(sw.getAttribute('aria-checked')).toBe('false')
-    expect(dlg.textContent).toContain('Bypass Permissions')
-    expect(dlg.textContent).toContain('켜면 에이전트마다 승인 없이 실행하게 할 수 있어요')
-    const save = within(dlg).getByRole('button', { name: '저장' }) as HTMLButtonElement
-    expect(save.disabled).toBe(true)
-    fireEvent.click(sw)
-    expect(sw.getAttribute('aria-checked')).toBe('true')
-    expect(save.disabled).toBe(false)
-    expect(setAllowBypass).not.toHaveBeenCalled() // 폼 값일 뿐 — 저장에서 반영
-    await act(async () => { fireEvent.click(save) })
+    const theme = within(dlg).getByRole('radiogroup', { name: '테마' })
+    expect(within(theme).getByRole('radio', { name: 'Windows 따라감' }).getAttribute('aria-checked')).toBe('true')
+    await act(async () => { fireEvent.click(within(theme).getByRole('radio', { name: '다크' })) })
     await settle()
-    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
-    expect(setAllowBypass).not.toHaveBeenCalled()
-    const confirm = screen.getByRole('alertdialog', { name: '묻지 않고 실행을 허용할까요?' })
-    expect(confirm.textContent).toContain("허용하면 에이전트마다 '묻지 않음'을 켤 수 있어요. 켠 에이전트는 파일 수정·명령 실행을 묻지 않고 바로 해요. 믿을 수 있는 폴더에서만 켜 주세요.")
-    await act(async () => { fireEvent.click(within(confirm).getByRole('button', { name: '허용' })) })
-    await settle()
-    expect(setAllowBypass).toHaveBeenCalledWith(true)
-    expect(store.getState().allowBypass).toBe(true)
-    expect(screen.queryByRole('alertdialog')).toBeNull()
-  })
-
-  it('확인 창에서 [취소] 면 setAllowBypass 를 부르지 않고, 같이 바꾼 상한은 저장된다', async () => {
-    const store = await renderApp()
-    const { dlg } = openSettings()
-    fireEvent.change(within(dlg).getByRole('spinbutton', { name: '자동 전달 상한' }), { target: { value: '7' } })
-    fireEvent.click(allowSwitch(dlg))
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '저장' })) })
-    await settle()
-    expect(setAutoChainLimit).toHaveBeenCalledWith(7)
-    const confirm = screen.getByRole('alertdialog')
-    await act(async () => { fireEvent.click(within(confirm).getByRole('button', { name: '취소' })) })
-    await settle()
-    expect(setAllowBypass).not.toHaveBeenCalled()
-    expect(store.getState().allowBypass).toBe(false)
-    expect(store.getState().autoChainLimit).toBe(7)
-    expect(screen.queryByRole('alertdialog')).toBeNull()
-  })
-
-  it('켜져 있을 때 끄고 저장하면 확인 없이 setAllowBypass(false)', async () => {
-    snapshot.allowBypass = true
-    const store = await renderApp()
-    const { dlg } = openSettings()
-    const sw = allowSwitch(dlg)
-    expect(sw.getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(sw)
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '저장' })) })
-    await settle()
-    expect(setAllowBypass).toHaveBeenCalledWith(false)
-    expect(setAutoChainLimit).not.toHaveBeenCalled()
-    expect(screen.queryByRole('alertdialog')).toBeNull()
-    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
-    expect(store.getState().allowBypass).toBe(false)
-  })
-
-  it('알림 두 스위치 — 저장하면 바뀐 칸만 setNotify', async () => {
-    const store = await renderApp()
-    const { dlg } = openSettings()
-    const asks = within(dlg).getByRole('switch', { name: /Windows 알림/ })
-    const fin = within(dlg).getByRole('switch', { name: /일이 끝나도 알림/ })
-    expect(dlg.textContent).toContain('창이 가려져 있을 때 승인·질문을 알려 줘요')
-    expect(dlg.textContent).toContain('창이 가려져 있을 때 일을 끝내면 알려 줘요')
-    expect(asks.getAttribute('aria-checked')).toBe('true')
-    expect(fin.getAttribute('aria-checked')).toBe('false')
-    const save = within(dlg).getByRole('button', { name: '저장' }) as HTMLButtonElement
-    expect(save.disabled).toBe(true)
-    fireEvent.click(fin)
-    expect(save.disabled).toBe(false)
-    fireEvent.click(save)
-    await settle()
-    expect(setNotify).toHaveBeenCalledTimes(1)
-    expect(setNotify).toHaveBeenCalledWith({ finished: true })
-    expect(store.getState().notify).toEqual({ asks: true, finished: true })
-  })
-
-  it('Windows 알림을 끄면 일이 끝나도 알림이 흐려지고 눌리지 않는다', async () => {
-    await renderApp()
-    const { dlg } = openSettings()
-    const asks = within(dlg).getByRole('switch', { name: /Windows 알림/ })
-    const fin = within(dlg).getByRole('switch', { name: /일이 끝나도 알림/ })
-    expect(fin.getAttribute('aria-disabled')).toBeNull()
-    fireEvent.click(asks)
-    expect(fin.getAttribute('aria-disabled')).toBe('true')
-    fireEvent.click(fin)
-    expect(fin.getAttribute('aria-checked')).toBe('false') // 눌림 무시
-    fireEvent.click(asks)
-    expect(fin.getAttribute('aria-disabled')).toBeNull()
-  })
-})
-
-describe('SettingsDialog — 화면 테마', () => {
-  const radios = (dlg: HTMLElement) => {
-    const group = within(dlg).getByRole('radiogroup', { name: '화면 테마' })
-    return {
-      light: within(group).getByRole('radio', { name: '라이트' }),
-      dark: within(group).getByRole('radio', { name: '다크' }),
-      system: within(group).getByRole('radio', { name: 'Windows 따라감' }),
-    }
-  }
-
-  it('기본은 Windows 따라감 — 누르면 저장 전에도 바로 바꾼다(setTheme)', async () => {
-    const store = await renderApp()
-    const { dlg } = openSettings()
-    const r = radios(dlg)
-    expect(r.system.getAttribute('aria-checked')).toBe('true')
-    expect(r.light.getAttribute('aria-checked')).toBe('false')
-    await act(async () => { fireEvent.click(r.dark) })
-    await settle()
-    expect(setTheme).toHaveBeenCalledWith('dark')
-    expect(r.dark.getAttribute('aria-checked')).toBe('true')
+    expect(setTheme.mock.calls).toEqual([['dark']])
     expect(store.getState().theme).toBe('dark')
-    expect((within(dlg).getByRole('button', { name: '저장' }) as HTMLButtonElement).disabled).toBe(false)
-  })
+    expect(within(theme).getByRole('radio', { name: '다크' }).getAttribute('aria-checked')).toBe('true')
 
-  it('저장하면 고른 테마 그대로 닫힌다 — 되돌리지 않는다', async () => {
-    const store = await renderApp()
-    const { dlg } = openSettings()
-    await act(async () => { fireEvent.click(radios(dlg).light) })
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '저장' })) })
+    const sleep = within(dlg).getByRole('radiogroup', { name: '쉬는 에이전트 재우기' })
+    expect(within(sleep).getAllByRole('radio').map(r => r.textContent)).toEqual(['끔', '15분', '30분', '1시간', '3시간'])
+    expect(within(sleep).getByRole('radio', { name: '30분' }).getAttribute('aria-checked')).toBe('true')
+    expect(dlg.textContent).toContain('쉬는 동안 claude 를 내려 메모리를 비워요 · 말을 걸면 다시 깨요')
+    await act(async () => { fireEvent.click(within(sleep).getByRole('radio', { name: '1시간' })) })
     await settle()
-    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
-    expect(setTheme.mock.calls).toEqual([['light']])
-    expect(store.getState().theme).toBe('light')
-  })
+    expect(setSleepAfter.mock.calls).toEqual([[60]])
 
-  it.each([
-    ['취소', (dlg: HTMLElement) => fireEvent.click(within(dlg).getByRole('button', { name: '취소' }))],
-    ['Esc', (dlg: HTMLElement) => fireEvent.keyDown(dlg, { key: 'Escape' })],
-  ])('%s 로 닫으면 열 때의 테마로 되돌린다', async (_name, close) => {
-    snapshot = { ...snapshot, theme: 'light' }
-    const store = await renderApp()
-    const { dlg } = openSettings()
-    await act(async () => { fireEvent.click(radios(dlg).dark) })
-    await act(async () => { close(dlg) })
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '닫기' })) })
     await settle()
-    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
-    expect(setTheme.mock.calls).toEqual([['dark'], ['light']])
-    expect(store.getState().theme).toBe('light')
+    expect(setTheme).toHaveBeenCalledTimes(1)
+    expect(setSleepAfter).toHaveBeenCalledTimes(1)
+    expect(store.getState().theme).toBe('dark')
   })
 
-  it('테마를 안 바꾸고 닫으면 아무것도 부르지 않는다', async () => {
-    await renderApp()
-    const { dlg } = openSettings()
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '취소' })) })
-    expect(setTheme).not.toHaveBeenCalled()
-  })
-
-  it('바꾸지 못하면 오류 글 — 고른 칸은 그대로', async () => {
+  it('테마를 못 바꾸면 그 줄 아래 까닭 · 고른 칸은 저장된 값', async () => {
     setTheme.mockRejectedValueOnce(new Error('설정 파일을 쓰지 못했어요'))
     await renderApp()
     const { dlg } = openSettings()
-    const r = radios(dlg)
-    await act(async () => { fireEvent.click(r.dark) })
+    const theme = within(dlg).getByRole('radiogroup', { name: '테마' })
+    await act(async () => { fireEvent.click(within(theme).getByRole('radio', { name: '다크' })) })
     await settle()
     expect(within(dlg).getByText('설정 파일을 쓰지 못했어요')).toBeTruthy()
-    expect(r.system.getAttribute('aria-checked')).toBe('true')
-    expect(r.dark.getAttribute('aria-checked')).toBe('false')
+    expect(within(theme).getByRole('radio', { name: 'Windows 따라감' }).getAttribute('aria-checked')).toBe('true')
+    expect(within(theme).getByRole('radio', { name: '다크' }).getAttribute('aria-checked')).toBe('false')
   })
 })
 
-describe('SettingsDialog — 업데이트 · 안내 · claude 최신으로', () => {
-  const push = (p: any) => act(async () => { handlers['update']?.(p) })
-  const AV = { kind: 'available', version: '0.2.0', current: '0.1.0', highlights: [], url: 'u' }
+describe('SettingsDialog — 에이전트', () => {
+  it('limitCommitsOnBlurOrEnter — Enter 나 칸을 벗어날 때 보낸다 · 안 바뀐 값은 안 보낸다', async () => {
+    const store = await renderApp()
+    const { dlg } = openSettings()
+    goTab(dlg, '에이전트')
+    const input = limitInput(dlg)
+    expect(input.value).toBe('3')
+    expect(dlg.textContent).toContain('사람 확인 없이 이어서 주고받는 횟수')
+    fireEvent.change(input, { target: { value: '7' } })
+    expect(setAutoChainLimit).not.toHaveBeenCalled() // 적는 동안엔 안 보낸다
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }) })
+    await settle()
+    expect(setAutoChainLimit.mock.calls).toEqual([[7]])
+    expect(store.getState().autoChainLimit).toBe(7)
 
-  it('맨 위에 업데이트 칸 — 두레 0.1.0 · [업데이트 확인] 누르면 checkUpdate · 결과 줄', async () => {
+    fireEvent.change(input, { target: { value: '9' } })
+    await act(async () => { fireEvent.blur(input) })
+    await settle()
+    expect(setAutoChainLimit.mock.calls).toEqual([[7], [9]])
+
+    // 안 바뀐 값
+    await act(async () => { fireEvent.blur(input) })
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }) })
+    await settle()
+    expect(setAutoChainLimit).toHaveBeenCalledTimes(2)
+  })
+
+  it('limitInvalidNeverSent — 21 · 0 · 빈칸 · 3.5 는 까닭만 보이고 안 보낸다 · 탭을 바꿨다 오면 저장된 값', async () => {
     await renderApp()
     const { dlg } = openSettings()
+    goTab(dlg, '에이전트')
+    for (const bad of ['21', '0', '', '3.5']) {
+      const input = limitInput(dlg)
+      fireEvent.change(input, { target: { value: bad } })
+      expect(within(dlg).getByText('1부터 20까지 적을 수 있어요')).toBeTruthy()
+      expect(input.getAttribute('aria-invalid')).toBe('true')
+      await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }) })
+      await act(async () => { fireEvent.blur(input) })
+      await settle()
+    }
+    expect(setAutoChainLimit).not.toHaveBeenCalled()
+    fireEvent.change(limitInput(dlg), { target: { value: '99' } })
+    goTab(dlg, '일반')
+    goTab(dlg, '에이전트')
+    expect(limitInput(dlg).value).toBe('3')
+    expect(within(dlg).queryByText('1부터 20까지 적을 수 있어요')).toBeNull()
+    // 적은 채로 닫았다 다시 열어도
+    fireEvent.change(limitInput(dlg), { target: { value: '0' } })
+    fireEvent.click(within(dlg).getByRole('button', { name: '닫기' }))
+    expect(setAutoChainLimit).not.toHaveBeenCalled()
+    const again = openSettings()
+    goTab(again.dlg, '에이전트')
+    expect(limitInput(again.dlg).value).toBe('3')
+  })
+
+  it('상한을 못 바꾸면 그 줄 아래 까닭 · 칸은 저장된 값', async () => {
+    setAutoChainLimit.mockRejectedValueOnce(new Error('상한은 1 이상이어야 해요.'))
+    await renderApp()
+    const { dlg } = openSettings()
+    goTab(dlg, '에이전트')
+    const input = limitInput(dlg)
+    fireEvent.change(input, { target: { value: '4' } })
+    await act(async () => { fireEvent.keyDown(input, { key: 'Enter' }) })
+    await settle()
+    const err = within(dlg).getByText('상한은 1 이상이어야 해요.')
+    expect(err.classList.contains('fe')).toBe(true)
+    expect(input.value).toBe('3')
+  })
+
+  it('bypassConfirmStacksOverSettings — 켜기는 설정 위에 확인 창 · Esc 는 확인 창만 · [허용] 이면 켜짐 · 끄기는 확인 없이', async () => {
+    const store = await renderApp()
+    const { dlg } = openSettings()
+    goTab(dlg, '에이전트')
+    const bypass = sw(dlg, '묻지 않고 실행 허용')
+    expect(bypass.getAttribute('aria-checked')).toBe('false')
+    expect(dlg.textContent).toContain('켜면 에이전트마다 승인 없이 실행하게 할 수 있어요')
+    expect(dlg.textContent).not.toContain('Bypass Permissions')
+    fireEvent.click(bypass)
+    expect(setAllowBypass).not.toHaveBeenCalled()
+    const confirm = screen.getByRole('alertdialog', { name: '묻지 않고 실행을 허용할까요?' })
+    expect(confirm.textContent).toContain("허용하면 에이전트마다 '묻지 않음'을 켤 수 있어요. 켠 에이전트는 파일 수정·명령 실행을 묻지 않고 바로 해요. 믿을 수 있는 폴더에서만 켜 주세요.")
+    expect(screen.getByRole('dialog', { name: '설정' })).toBeTruthy() // 설정 창은 그대로
+
+    fireEvent.keyDown(confirm, { key: 'Escape' })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(screen.getByRole('dialog', { name: '설정' })).toBeTruthy()
+    expect(setAllowBypass).not.toHaveBeenCalled()
+
+    fireEvent.click(bypass)
+    const confirm2 = screen.getByRole('alertdialog')
+    await act(async () => { fireEvent.click(within(confirm2).getByRole('button', { name: '허용' })) })
+    await settle()
+    expect(setAllowBypass.mock.calls).toEqual([[true]])
+    expect(store.getState().allowBypass).toBe(true)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(sw(dlg, '묻지 않고 실행 허용').getAttribute('aria-checked')).toBe('true')
+
+    await act(async () => { fireEvent.click(sw(dlg, '묻지 않고 실행 허용')) })
+    await settle()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(setAllowBypass.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('확인 창이 떠 있는 동안 onCoveredChange(true) · 닫으면 false', async () => {
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { SettingsDialog } = await import('../../src/renderer/shell/SettingsDialog')
+    await act(async () => { await getStore().init() })
+    const covered = vi.fn()
+    render(<SettingsDialog onClose={() => {}} onReplayTour={() => {}} initialTab="agents" onCoveredChange={covered} />)
+    const dlg = screen.getByRole('dialog', { name: '설정' })
+    fireEvent.click(sw(dlg, '묻지 않고 실행 허용'))
+    expect(covered).toHaveBeenLastCalledWith(true)
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' })
+    expect(covered).toHaveBeenLastCalledWith(false)
+  })
+})
+
+describe('SettingsDialog — 알림', () => {
+  it('notifySwitches — 끄면 setNotify({asks:false}) · 그때 일이 끝나면은 잠기고 안 보낸다 · 켜져 있을 때 켜면 {finished:true}', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    goTab(dlg, '알림')
+    expect(dlg.textContent).toContain('Windows 알림')
+    expect(dlg.textContent).toContain('창이 가려져 있을 때')
+    const fin = sw(dlg, '일이 끝나면')
+    expect(fin.getAttribute('aria-disabled')).toBeNull()
+    await act(async () => { fireEvent.click(fin) })
+    await settle()
+    expect(setNotify.mock.calls).toEqual([[{ finished: true }]])
+    expect(fin.getAttribute('aria-checked')).toBe('true')
+
+    await act(async () => { fireEvent.click(sw(dlg, '승인·질문이 오면')) })
+    await settle()
+    expect(setNotify.mock.calls).toEqual([[{ finished: true }], [{ asks: false }]])
+    expect(sw(dlg, '일이 끝나면').getAttribute('aria-disabled')).toBe('true')
+    await act(async () => { fireEvent.click(sw(dlg, '일이 끝나면')) })
+    await settle()
+    expect(setNotify).toHaveBeenCalledTimes(2)
+  })
+
+  it('switchSendsOnceAndShowsError — 보내는 중엔 한 번만 · 실패하면 저장된 값 + 그 줄 아래 까닭', async () => {
+    let fail!: (e: Error) => void
+    setNotify.mockImplementationOnce(() => new Promise((_res, rej) => { fail = rej }))
+    await renderApp()
+    const { dlg } = openSettings()
+    goTab(dlg, '알림')
+    const fin = sw(dlg, '일이 끝나면')
+    fireEvent.click(fin)
+    fireEvent.click(fin)
+    fireEvent.click(fin)
+    expect(setNotify).toHaveBeenCalledTimes(1)
+    await act(async () => { fail(new Error('저장하지 못했어요')) })
+    await settle()
+    expect(fin.getAttribute('aria-checked')).toBe('false')
+    const err = within(dlg).getByText('저장하지 못했어요')
+    expect(err.closest('[data-row]')!.contains(fin)).toBe(true)
+    // 끝났으니 다시 누르면 다시 보낸다
+    await act(async () => { fireEvent.click(fin) })
+    await settle()
+    expect(setNotify).toHaveBeenCalledTimes(2)
+    expect(within(dlg).queryByText('저장하지 못했어요')).toBeNull()
+  })
+})
+
+describe('SettingsDialog — 두레', () => {
+  const push = (p: any) => act(async () => { handlers['update']?.(p) })
+  const AV = { kind: 'available', version: '0.2.0', current: '0.1.0', highlights: [], url: 'u' }
+  const open = () => {
+    const r = openSettings()
+    goTab(r.dlg, '두레')
+    return r.dlg
+  }
+
+  it('aboutPane — 판 · [업데이트 확인] → checkUpdate · 결과 줄', async () => {
+    await renderApp()
+    const dlg = open()
     expect(within(dlg).getByText('업데이트')).toBeTruthy()
     expect(within(dlg).getByText('두레 0.1.0')).toBeTruthy()
     await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '업데이트 확인' })) })
@@ -349,18 +359,13 @@ describe('SettingsDialog — 업데이트 · 안내 · claude 최신으로', () 
     expect(within(dlg).getByText('최신이에요')).toBeTruthy()
   })
 
-  it('available — 새 버전 줄 + [업데이트] → downloadUpdate', async () => {
+  it('available · downloading · ready 줄과 단추', async () => {
     await renderApp()
-    const { dlg } = openSettings()
+    const dlg = open()
     await push(AV)
     expect(within(dlg).getByText('새 버전 0.2.0 이 있어요')).toBeTruthy()
     await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '업데이트' })) })
     expect(downloadUpdate).toHaveBeenCalledTimes(1)
-  })
-
-  it('downloading · ready — 받는 중 % · [다시 켜기] → installUpdate', async () => {
-    await renderApp()
-    const { dlg } = openSettings()
     await push({ kind: 'downloading', version: '0.2.0', percent: 42 })
     expect(within(dlg).getByText('받고 있어요 · 42%')).toBeTruthy()
     await push({ kind: 'ready', version: '0.2.0' })
@@ -369,147 +374,65 @@ describe('SettingsDialog — 업데이트 · 안내 · claude 최신으로', () 
     expect(installUpdate).toHaveBeenCalledTimes(1)
   })
 
-  it('error — 확인 실패(version 없음)는 첫 줄만 · 80자까지 · 설치 실패 글은 그대로 + [다시 켜기]', async () => {
+  it('error — 확인 실패는 첫 줄만 · 설치 실패는 [다시 켜기] · 받기 실패는 [다시 시도]', async () => {
     await renderApp()
-    const { dlg } = openSettings()
+    const dlg = open()
     await push({ kind: 'error', message: '  net::ERR_FAILED  \nstack line two', version: null })
     expect(within(dlg).getByText('확인하지 못했어요 — net::ERR_FAILED')).toBeTruthy()
     expect(within(dlg).queryByText(/stack line two/)).toBeNull()
-    expect(within(dlg).queryByRole('button', { name: '다시 시도' })).toBeNull()
-    await push({ kind: 'error', message: 'x'.repeat(100), version: null })
-    expect(within(dlg).getByText(`확인하지 못했어요 — ${'x'.repeat(80)}…`)).toBeTruthy()
     await push({ kind: 'error', message: '업데이트를 설치하지 못했어요', version: '0.2.0' })
     expect(within(dlg).getByText('업데이트를 설치하지 못했어요')).toBeTruthy()
-    expect(dlg.textContent).not.toContain('확인하지 못했어요 —')
-    expect(within(dlg).queryByRole('button', { name: '다시 시도' })).toBeNull()
     await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '다시 켜기' })) })
     expect(installUpdate).toHaveBeenCalledTimes(1)
-    expect(downloadUpdate).not.toHaveBeenCalled()
-  })
-
-  it('받기 실패(version 있음) — 토스트와 같은 받지 못했어요 + [다시 시도] → downloadUpdate · 영어 오류 글은 안 보임', async () => {
-    await renderApp()
-    const { dlg } = openSettings()
-    await push({ kind: 'error', message: 'net::ERR_CONNECTION_RESET\n    at SimpleURLLoaderWrapper', version: '0.2.0' })
+    await push({ kind: 'error', message: 'net::ERR_CONNECTION_RESET\n    at X', version: '0.2.0' })
     expect(within(dlg).getByText('받지 못했어요')).toBeTruthy()
-    expect(dlg.textContent).not.toContain('확인하지 못했어요')
     expect(dlg.textContent).not.toContain('ERR_CONNECTION_RESET')
-    expect(within(dlg).queryByRole('button', { name: '다시 켜기' })).toBeNull()
     await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '다시 시도' })) })
     expect(downloadUpdate).toHaveBeenCalledTimes(1)
-    expect(installUpdate).not.toHaveBeenCalled()
   })
 
-  it('ready — 일하는 에이전트(모든 방의 작업 중·승인 기다림)가 있으면 토스트와 같은 노란 줄, 없으면 없음', async () => {
-    snapshot = {
-      ...snapshot,
-      rooms: [...snapshot.rooms, { id: 'r2', name: '서버', createdAt: 2 }],
-      agents: [agent('a', 'r1', 'working'), agent('b', 'r2', 'awaiting'), agent('c', 'r1', 'idle')],
-    }
-    ;(window as any).dure.updateAgent = async () => ({}) // 관계도가 처음 자리를 저장한다
+  it('ready — 일하는 에이전트가 있으면 노란 줄 · [업데이트 확인] 은 꺼진다', async () => {
+    snapshot = { ...snapshot, agents: [agent('a', 'r1', 'working'), agent('b', 'r1', 'awaiting'), agent('c', 'r1', 'idle')] }
+    ;(window as any).dure.updateAgent = async () => ({})
     await renderApp()
-    const { dlg } = openSettings()
+    const dlg = open()
+    const check = within(dlg).getByRole('button', { name: '업데이트 확인' }) as HTMLButtonElement
+    expect(check.disabled).toBe(false)
     await push({ kind: 'ready', version: '0.2.0' })
-    expect(within(dlg).getByText('준비됐어요')).toBeTruthy()
     expect(within(dlg).getByText('일하는 에이전트 2명이 멈춰요 — 다시 켜진 뒤 말을 걸면 이어서 해요')).toBeTruthy()
-    // 다 쉬면 줄이 사라진다
+    expect(check.disabled).toBe(true)
+    fireEvent.click(check)
+    expect(checkUpdate).not.toHaveBeenCalled()
     await act(async () => {
       handlers['status']?.({ agentId: 'a', status: 'idle', errorText: null })
       handlers['status']?.({ agentId: 'b', status: 'idle', errorText: null })
     })
     expect(within(dlg).queryByText(/명이 멈춰요/)).toBeNull()
-    // 준비 상태가 아니면(받는 중) 일하는 에이전트가 있어도 줄이 없다
-    await act(async () => { handlers['status']?.({ agentId: 'a', status: 'working', errorText: null }) })
-    await push({ kind: 'downloading', version: '0.2.0', percent: 10 })
-    expect(within(dlg).queryByText(/명이 멈춰요/)).toBeNull()
   })
 
-  it('ready — [업데이트 확인] 은 꺼진다(다 받아 둔 것을 다시 확인하지 않는다)', async () => {
-    await renderApp()
-    const { dlg } = openSettings()
-    const check = within(dlg).getByRole('button', { name: '업데이트 확인' }) as HTMLButtonElement
-    expect(check.disabled).toBe(false)
-    await push({ kind: 'ready', version: '0.2.0' })
-    expect(check.disabled).toBe(true)
-    fireEvent.click(check)
-    expect(checkUpdate).not.toHaveBeenCalled()
-  })
-
-  it('dev — 단추 없이 개발 실행 안내', async () => {
+  it('dev — 확인 단추 없이 개발 실행 안내', async () => {
     updateNow = { kind: 'dev' }
     await renderApp()
-    const { dlg } = openSettings()
+    const dlg = open()
     expect(within(dlg).getByText('개발 실행이라 확인하지 않아요')).toBeTruthy()
     expect(within(dlg).queryByRole('button', { name: '업데이트 확인' })).toBeNull()
   })
 
-  it('[안내 다시 보기] → onReplayTour (창 닫고 투어)', async () => {
+  it('켤 때 claude 최신으로 — 끄면 setPrefs({claudeAutoUpdate:false}) · [다시 보기] → onReplayTour (창 닫고 투어)', async () => {
     const store = await renderApp()
     const spy = vi.spyOn(store, 'startTour')
-    const { dlg } = openSettings()
-    expect(dlg.textContent).toContain('처음 켰을 때의 둘러보기를 다시 해요')
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '안내 다시 보기' })) })
-    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
-    expect(spy).toHaveBeenCalledWith(true)
-  })
-
-  it('켤 때 claude 최신으로 — 안 바꾸면 저장 꺼짐 · 끄고 저장하면 setPrefs({claudeAutoUpdate:false})', async () => {
-    await renderApp()
-    const { dlg } = openSettings()
-    const sw = within(dlg).getByRole('switch', { name: /켤 때 claude 최신으로/ })
-    expect(dlg.textContent).toContain('두레를 켤 때 이 PC 와 서버의 claude 를 최신 버전으로 바꿔요')
-    expect(sw.getAttribute('aria-checked')).toBe('true')
-    const save = within(dlg).getByRole('button', { name: '저장' }) as HTMLButtonElement
-    expect(save.disabled).toBe(true)
-    fireEvent.click(sw)
-    expect(save.disabled).toBe(false)
-    await act(async () => { fireEvent.click(save) })
+    const dlg = open()
+    const auto = sw(dlg, '켤 때 claude 최신으로')
+    expect(dlg.textContent).toContain('이 PC 와 서버의 claude 를 바꿔요')
+    expect(auto.getAttribute('aria-checked')).toBe('true')
+    await act(async () => { fireEvent.click(auto) })
     await settle()
     expect(setPrefsApi).toHaveBeenCalledWith({ claudeAutoUpdate: false })
-  })
-})
+    expect(sw(dlg, '켤 때 claude 최신으로').getAttribute('aria-checked')).toBe('false')
 
-describe('SettingsDialog — 투어 카드의 닫기 요청(cancelRequest)', () => {
-  async function mountDialog() {
-    const { getStore } = await import('../../src/renderer/state/store')
-    const { SettingsDialog } = await import('../../src/renderer/shell/SettingsDialog')
-    await act(async () => { await getStore().init() })
-    const onClose = vi.fn()
-    const onAskAllow = vi.fn()
-    const ui = (n: number) => <SettingsDialog onClose={onClose} onAskAllow={onAskAllow} onReplayTour={() => {}} cancelRequest={n} />
-    const r = render(ui(0))
-    return { r, ui, onClose, onAskAllow, store: getStore() }
-  }
-
-  it('열릴 때 값으로는 닫지 않고, 요청이 늘면 취소처럼 닫는다 — 바꿔 본 테마는 열 때 값으로 되돌림', async () => {
-    snapshot = { ...snapshot, theme: 'light' }
-    const { r, ui, onClose, store } = await mountDialog()
-    const dlg = screen.getByRole('dialog', { name: '설정' })
-    expect(onClose).not.toHaveBeenCalled()
-    await act(async () => { fireEvent.click(within(within(dlg).getByRole('radiogroup', { name: '화면 테마' })).getByRole('radio', { name: '다크' })) })
-    await settle()
-    await act(async () => { r.rerender(ui(1)) })
-    await settle()
-    expect(setTheme.mock.calls).toEqual([['dark'], ['light']])
-    expect(onClose).toHaveBeenCalledTimes(1)
-    expect(store.getState().theme).toBe('light')
-  })
-
-  it('저장 중(busy)이면 요청을 무시한다 — 저장이 끝나며 한 번만 닫는다', async () => {
-    let release!: () => void
-    setAutoChainLimit.mockImplementationOnce(() => new Promise<void>(res => { release = () => { snapshot = { ...snapshot, autoChainLimit: 5 }; res() } }))
-    const { r, ui, onClose, onAskAllow } = await mountDialog()
-    const dlg = screen.getByRole('dialog', { name: '설정' })
-    fireEvent.change(within(dlg).getByRole('spinbutton', { name: '자동 전달 상한' }), { target: { value: '5' } })
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '저장' })) })
-    expect(setAutoChainLimit).toHaveBeenCalledWith(5)
-    await act(async () => { r.rerender(ui(1)) })
-    await settle()
-    expect(onClose).not.toHaveBeenCalled()
-    expect(setTheme).not.toHaveBeenCalled()
-    await act(async () => { release() })
-    await settle()
-    expect(onClose).toHaveBeenCalledTimes(1)
-    expect(onAskAllow).not.toHaveBeenCalled()
+    expect(within(dlg).getByText('처음 쓰는 안내')).toBeTruthy()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '다시 보기' })) })
+    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
+    expect(spy).toHaveBeenCalledWith(true)
   })
 })

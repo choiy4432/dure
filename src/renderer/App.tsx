@@ -10,9 +10,8 @@ import { Splash } from './shell/Splash'
 import { SetupScreen } from './shell/SetupScreen'
 import { NewRoomDialog } from './shell/RoomSwitcher'
 import { AddAgentDialog } from './shell/AddAgentDialog'
-import { SettingsDialog } from './shell/SettingsDialog'
-import { PhoneDialog } from './shell/PhoneSettings'
-import { ConfirmDialog } from './shell/ConfirmDialog'
+import { SettingsDialog, type SettingsTab } from './shell/SettingsDialog'
+import { PhoneDialog, PhoneField } from './shell/PhoneSettings'
 import { Presence } from './lib/presence'
 import { RelationMap } from './map/RelationMap'
 import { AgentPanel } from './panel/AgentPanel'
@@ -38,12 +37,13 @@ export function App() {
   const announced = useAttention()
   const fork = useDure(s => s.forkDraft)
   const [dialog, setDialog] = useState<Dialog>(null)
-  const [askAllow, setAskAllow] = useState(false)
+  /** 설정 창이 열리는 탭 — 톱니는 늘 일반 */
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
+  /** 설정 위에 겹친 창(묻지 않고 실행 확인)이 떠 있다 — 그동안 투어 카드가 가리지 않게 */
+  const [settingsCovered, setSettingsCovered] = useState(false)
   /** 휴대폰 창 — 위 띠 알약이나 설정의 휴대폰 칸에서. 설정 창 위에 겹쳐 뜰 수 있어 dialog 와 따로 둔다 */
   const [phoneOpen, setPhoneOpen] = useState(false)
   const close = () => setDialog(null)
-  /** 투어 카드가 설정 창을 닫을 때마다 +1 — 창이 스스로 취소한다(바꿔 본 테마 되돌림 · 저장 중엔 기다림) */
-  const [settingsCancel, setSettingsCancel] = useState(0)
   const setupPhase = effectiveSetup(v.setup, v.claudeMissing, v.setupLoadFailed).phase
   const preparing = setupPhase === 'needs' || setupPhase === 'relaunching'
   const blocked = v.loadError !== null || preparing || setupPhase === 'checking' || v.claudeMissing
@@ -92,7 +92,10 @@ export function App() {
         <TopBar
           hasRoom={!blocked && v.roomId !== null}
           settingsDisabled={blocked}
-          onSettings={() => setDialog('settings')}
+          onSettings={() => {
+            setSettingsTab('general')
+            setDialog('settings')
+          }}
           onPhone={() => setPhoneOpen(true)}
         />
         {body}
@@ -111,9 +114,9 @@ export function App() {
         <Presence show={dialog === 'settings'}>
           <SettingsDialog
             onClose={close}
-            cancelRequest={settingsCancel}
-            onAskAllow={() => setAskAllow(true)}
-            onOpenPhone={() => setPhoneOpen(true)}
+            initialTab={settingsTab}
+            onCoveredChange={setSettingsCovered}
+            phonePane={() => <PhoneField onOpen={() => setPhoneOpen(true)} />}
             onReplayTour={() => {
               close()
               getStore().startTour(getStore().getState().rooms.length > 0)
@@ -124,23 +127,11 @@ export function App() {
         <Presence show={phoneOpen}>
           <PhoneDialog onClose={() => setPhoneOpen(false)} />
         </Presence>
-        <ConfirmDialog
-          open={askAllow}
-          title="묻지 않고 실행을 허용할까요?"
-          body="허용하면 에이전트마다 '묻지 않음'을 켤 수 있어요. 켠 에이전트는 파일 수정·명령 실행을 묻지 않고 바로 해요. 믿을 수 있는 폴더에서만 켜 주세요."
-          confirmLabel="허용"
-          onConfirm={async () => {
-            await window.dure.setAllowBypass(true)
-            await getStore().refresh()
-            setAskAllow(false)
-          }}
-          onCancel={() => setAskAllow(false)}
-        />
         {/* 안내 투어·승인 한 번 — 대화상자 위 겹. 열린 창을 보고 단계를 넘기고, 새 방·에이전트 추가 창이 떠 있는 동안은 숨는다 */}
         <TourLayer
           dialog={dialog}
-          covered={phoneOpen}
-          onCloseDialog={() => (dialog === 'settings' ? setSettingsCancel(n => n + 1) : close())}
+          covered={phoneOpen || settingsCovered}
+          onCloseDialog={close}
         />
       </div>
     </LucideProvider>

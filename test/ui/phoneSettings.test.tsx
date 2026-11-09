@@ -107,7 +107,9 @@ async function renderApp() {
 
 const openSettings = () => {
   fireEvent.click(screen.getByRole('button', { name: '설정' }))
-  return screen.getByRole('dialog', { name: '설정' })
+  const dlg = screen.getByRole('dialog', { name: '설정' })
+  fireEvent.click(within(dlg).getByRole('tab', { name: '휴대폰' })) // 휴대폰 칸은 휴대폰 탭에(Task 2 가 칸을 갈아 끼운다)
+  return dlg
 }
 
 /** 설정 → 휴대폰 [열기] — 휴대폰 창 */
@@ -136,7 +138,7 @@ const described = (el: Element) =>
 const STALE = '두레가 전에 연 길을 정리하지 못했어요 — Tailscale 이 켜져 있는지 확인해 주세요'
 
 describe('설정의 휴대폰 칸', () => {
-  it('꺼짐 · 켜짐 · N대 접속 중 — [열기] 는 설정 창 위에 휴대폰 창을 띄우고, 설정에서 바꾸던 값은 그대로 · Esc 는 맨 위 창만 닫는다', async () => {
+  it('꺼짐 · 켜짐 · N대 접속 중 — [열기] 는 설정 창 위에 휴대폰 창을 띄운다 · Esc 는 맨 위 창만 닫는다', async () => {
     await renderApp()
     const settings = openSettings()
     const field = within(settings).getByText('휴대폰', { selector: '.fld-l' }).closest('.fld') as HTMLElement
@@ -152,9 +154,6 @@ describe('설정의 휴대폰 칸', () => {
     expect(field.textContent).toContain('켜짐 · 1대 접속 중')
     expect(field.querySelector('.dot.g')).not.toBeNull()
 
-    // 설정에서 바꾸던 값 — 휴대폰 창을 열고 닫아도 남는다
-    const limit = within(settings).getByRole('spinbutton', { name: '자동 전달 상한' }) as HTMLInputElement
-    fireEvent.change(limit, { target: { value: '9' } })
     const opener = within(settings).getByRole('button', { name: '휴대폰 열기' })
     opener.focus()
     await act(async () => { fireEvent.click(opener) })
@@ -174,7 +173,6 @@ describe('설정의 휴대폰 칸', () => {
     await settle()
     expect(screen.queryByRole('dialog', { name: '휴대폰' })).toBeNull()
     expect(screen.getByRole('dialog', { name: '설정' })).toBeTruthy()
-    expect(limit.value).toBe('9')
     expect(document.activeElement).toBe(opener)
   })
 
