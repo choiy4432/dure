@@ -10,6 +10,13 @@ files:
 # 창은 그대로 app.asar/out/renderer/index.html 로 연다(Electron 이 풀린 파일을 알아서 읽는다)
 asarUnpack:
   - out/renderer/**
+# 안드로이드 앱(npm run android 가 굽는다) — 휴대폰 서버가 /dure.apk 로 내어 준다. asar 밖에 둬서 진짜 파일로 읽는다
+extraResources:
+  - from: resources/android
+    to: android
+    filter:
+      - dure.apk
+      - dure.apk.json
 win:
   target: nsis
   icon: resources/icon.ico

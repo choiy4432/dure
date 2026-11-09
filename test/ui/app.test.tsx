@@ -140,7 +140,7 @@ describe('App 셸', () => {
     const phone = {
       settings: { enabled: true, keepAwake: true, openAtLogin: false, notify: { asks: true, finished: false }, port: 47615 },
       devices: [], online: [], connected: 1, tailscale: { kind: 'ready', dnsName: 'fake-pc.tail0000.ts.net' },
-      url: 'https://fake-pc.tail0000.ts.net/mobile.html', pairing: null, problem: null, notice: null,
+      url: 'https://fake-pc.tail0000.ts.net/mobile.html', pairing: null, problem: null, notice: null, androidApp: null,
     }
     Object.assign((window as any).dure, { phoneState: async () => phone, phoneCheck: async () => phone.tailscale })
     await renderApp()

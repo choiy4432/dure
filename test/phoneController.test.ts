@@ -170,6 +170,7 @@ function make(over: Partial<PhoneControllerOptions> & {
     engine: null,
     dispatch: inner,
     staticDir: path.join(dataDir, 'static'),
+    androidDir: path.join(dataDir, 'android'),
     idle: () => idle.now,
     loginItem,
     emit: (s) => emitted.push(s),
@@ -1261,4 +1262,56 @@ test('진짜 서버 — 끄면 serve 를 끄기 전에(Tailscale 이 늦어도) 
   await vi.waitFor(() => expect(ts.serveOff).toHaveBeenCalledTimes(1)) // 길 끄기는 아직 기다리는 중
   release(true)
   await off
+})
+
+// ── 안드로이드 앱 ──────────────────────────────────────────────────────────
+const putApk = (info: Record<string, unknown>, d = dir) => {
+  const a = path.join(d, 'android')
+  fs.mkdirSync(a, { recursive: true })
+  fs.writeFileSync(path.join(a, 'dure.apk'), 'APK')
+  fs.writeFileSync(path.join(a, 'dure.apk.json'), JSON.stringify(info))
+}
+const REAL = { versionCode: 3, versionName: '1.2.0', packageName: 'io.github.choiy4432.dure' }
+const TEST = { ...REAL, packageName: 'io.github.choiy4432.dure.test' }
+
+test('안드로이드 앱 — 진짜 apk 가 있으면 상태에 그 판, 서버에 apk 경로와 판 번호', async () => {
+  putApk(REAL)
+  const { c, servers } = make()
+  await c.ready
+  expect(c.state().androidApp).toEqual({ versionCode: 3, versionName: '1.2.0' })
+  await c.set({ enabled: true })
+  const a = servers.last().opts.android!()
+  expect(a.apk).toEqual({ path: path.join(dir, 'android', 'dure.apk'), versionCode: 3 })
+  expect(a.statements).toHaveLength(1) // 진짜 앱만
+})
+
+test('안드로이드 앱 — apk 가 없으면 null (상태·서버 모두)', async () => {
+  const { c, servers } = make()
+  await c.ready
+  expect(c.state().androidApp).toBeNull()
+  await c.set({ enabled: true })
+  expect(servers.last().opts.android!().apk).toBeNull()
+})
+
+test('안드로이드 앱 — 시험 패키지 apk 는 진짜 빌드에서 null · 시험 빌드(androidTest)에서만 받는다', async () => {
+  putApk(TEST)
+  const real = make()
+  await real.c.ready
+  expect(real.c.state().androidApp).toBeNull()
+  await real.c.set({ enabled: true })
+  expect(real.servers.last().opts.android!().apk).toBeNull()
+
+  const t = make({ androidTest: true })
+  await t.c.ready
+  expect(t.c.state().androidApp).toEqual({ versionCode: 3, versionName: '1.2.0' })
+  await t.c.set({ enabled: true })
+  expect(t.servers.last().opts.android!().apk?.versionCode).toBe(3)
+  expect(t.servers.last().opts.android!().statements).toHaveLength(2)
+})
+
+test('안드로이드 앱 — 모르는 패키지는 시험 빌드에서도 null', async () => {
+  putApk({ ...REAL, packageName: 'com.example.other' })
+  const { c } = make({ androidTest: true })
+  await c.ready
+  expect(c.state().androidApp).toBeNull()
 })

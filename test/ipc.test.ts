@@ -115,6 +115,7 @@ const PHONE_STATE: PhoneState = {
   pairing: null,
   problem: null,
   notice: null,
+  androidApp: null,
 }
 const PAIR_OFFER = { qr: 'data:image/png;base64,AA', pin: '123456', url: 'https://pc.tail0000.ts.net/mobile.html#pair=x', expiresAt: 9 }
 

@@ -552,6 +552,9 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
         engine,
         dispatch: createDispatcher(engine, ipcDeps),
         staticDir: phoneStaticDir(__dirname, app.isPackaged),
+        androidDir: app.isPackaged ? join(process.resourcesPath, 'android') : join(app.getAppPath(), 'resources', 'android'),
+        // 개발 실행·시험 빌드(dure-…)만 시험 패키지 앱도 — 진짜 빌드는 진짜 패키지만. 빌드 이름을 못 읽으면 진짜로 본다
+        androidTest: !app.isPackaged || (loginName() !== null && loginName() !== 'dure'),
         tailscale: createTailscale(resolveTailscaleCommand(env)),
         power: {
           start: () => powerSaveBlocker.start('prevent-app-suspension'),

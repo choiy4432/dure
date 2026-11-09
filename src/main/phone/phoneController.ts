@@ -1,12 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import QRCode from 'qrcode'
+import { ANDROID_PACKAGE, ANDROID_TEST_PACKAGE } from '../../shared/androidApp'
 import { EVENT_NAMES } from '../../shared/ipcContract'
 import {
   PAIR_TTL_MS, PHONE_PORT_DEFAULT, pickPhoneChange,
   type PhonePairOffer, type PhoneSettingsChange, type PhoneState, type TailscaleState,
 } from '../../shared/phoneTypes'
 import { phoneDispatcher, type Dispatch } from '../dispatch'
+import { assetStatements, readApk } from './androidApp'
 import { createPairing, type Pairing } from './pairing'
 import { createPhoneNotifier, type NotifierEngine } from './phoneNotifier'
 import { startPhoneServer, type PhoneServer, type PhoneServerOptions } from './phoneServer'
@@ -51,6 +53,10 @@ export interface PhoneControllerOptions {
   dispatch: Dispatch
   /** 휴대폰 묶음 폴더(phoneStaticDir) */
   staticDir: string
+  /** 안드로이드 앱 폴더(dure.apk · dure.apk.json) — 설치본은 resources/android, 개발은 resources/android(굽기 결과) */
+  androidDir: string
+  /** 시험 빌드(dure-…)·개발 실행 — 시험 패키지 앱과 그 확인 항목도 받는다. 진짜 빌드는 진짜 패키지만 */
+  androidTest?: boolean
   tailscale: Pick<Tailscale, 'status' | 'serveOn' | 'serveOff' | 'httpsPortFree' | 'funnelOn'>
   /** 절전 막기 — 진짜는 powerSaveBlocker('prevent-app-suspension') */
   power: { start(): number; stop(id: number): void }
@@ -125,6 +131,14 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
   const retryMs = o.retryMs ?? PHONE_RETRY_MS
   const phoneDispatch = phoneDispatcher(o.dispatch, { inboxDir })
 
+  /** 내어 줄 안드로이드 앱 — 진짜 패키지만(시험 빌드면 시험 패키지도). 파일이 없거나 꼴·패키지가 틀리면 null */
+  const androidApk = () => {
+    const a = readApk(o.androidDir)
+    if (!a) return null
+    const ok = a.info.packageName === ANDROID_PACKAGE || (o.androidTest === true && a.info.packageName === ANDROID_TEST_PACKAGE)
+    return ok ? a : null
+  }
+
   let tailscale: TailscaleState | null = null
   let server: PhoneServer | null = null
   /** 길이 열려 있다 — host = 서버가 받는 Host(443 이면 포트 없이), url = 휴대폰 주소, dnsName·httpsPort = 연 짝(이름이 바뀌었나·Funnel 을 볼 때) */
@@ -163,6 +177,7 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
 
   const state = (): PhoneState => {
     const f = store.read()
+    const apkNow = androidApk()
     const online = server ? [...new Set(server.clients().map((c) => c.deviceId))].sort() : []
     return {
       settings: f.settings,
@@ -174,6 +189,7 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
       pairing: pair ? { ...pair } : null,
       problem,
       notice,
+      androidApp: apkNow ? { versionCode: apkNow.info.versionCode, versionName: apkNow.info.versionName } : null,
     }
   }
   /** 바뀌었으면 'phone' 사건 — 같은 상태는 다시 보내지 않는다 */
@@ -258,6 +274,13 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
       dispatch: phoneDispatch,
       subscribe: engineEvents,
       staticDir: o.staticDir,
+      android: () => {
+        const a = androidApk()
+        return {
+          statements: assetStatements({ includeTest: o.androidTest === true }),
+          apk: a ? { path: a.path, versionCode: a.info.versionCode } : null,
+        }
+      },
       inboxDir,
       vapidKey: () => push.publicKey(),
       onSubscribe: (id, sub) => {

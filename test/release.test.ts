@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { notesProblem, releaseArgs, show } from '../scripts/releaseLib.mjs'
+import { ANDROID_PACKAGE } from '../src/shared/androidApp'
+import { ANDROID_REAL_PACKAGE, androidProblem, notesProblem, releaseArgs, show } from '../scripts/releaseLib.mjs'
 
 describe('releaseArgs', () => {
   it('제목은 한 칸, 파일 셋, 노트 경로는 공백이 있어도 한 칸', () => {
@@ -24,3 +25,20 @@ describe('notesProblem', () => {
     expect(notesProblem('- C:\\Users\\x')).toMatch(/경로/)
   })
 })
+
+describe('androidProblem', () => {
+  const version = { versionCode: 2, versionName: '1.1.0' }
+  const apk = { ...version, packageName: 'io.github.choiy4432.dure' }
+  it('맞으면 null', () => expect(androidProblem({ apkInfo: apk, version })).toBeNull())
+  it('앱 파일이 없으면', () => expect(androidProblem({ apkInfo: null, version })).toMatch(/앱 파일/))
+  it('판이 android/version.json 과 다르면', () => {
+    expect(androidProblem({ apkInfo: { ...apk, versionCode: 1 }, version })).toMatch(/version\.json/)
+    expect(androidProblem({ apkInfo: { ...apk, versionName: '1.0.0' }, version })).toMatch(/version\.json/)
+  })
+  it('시험 패키지·모르는 패키지면', () => {
+    expect(androidProblem({ apkInfo: { ...apk, packageName: 'io.github.choiy4432.dure.test' }, version })).toMatch(/패키지/)
+    expect(androidProblem({ apkInfo: { ...apk, packageName: 'x.y' }, version })).toMatch(/패키지/)
+  })
+})
+
+it('릴리스 가드의 진짜 패키지 이름은 앱의 ANDROID_PACKAGE 와 같다', () => expect(ANDROID_REAL_PACKAGE).toBe(ANDROID_PACKAGE))

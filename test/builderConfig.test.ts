@@ -11,6 +11,7 @@ type BuilderConfig = {
   nsis?: { oneClick?: unknown; perMachine?: unknown; deleteAppDataOnUninstall?: unknown; include?: unknown }
   asarUnpack?: unknown
   files?: unknown
+  extraResources?: unknown
 }
 const config = load(readFileSync(join(__dirname, '..', 'electron-builder.yml'), 'utf8')) as BuilderConfig
 
@@ -81,5 +82,12 @@ describe('electron-builder.yml — 휴대폰 묶음', () => {
   it('렌더러 출력(out/renderer)은 app.asar 밖으로 푼다 — 휴대폰 서버가 진짜 파일로 읽는다(phoneStaticDir 가 app.asar.unpacked 를 가리킴)', () => {
     expect(config.asarUnpack).toEqual(['out/renderer/**'])
     expect(config.files).toContain('out/**')
+  })
+
+  it('안드로이드 앱(dure.apk · dure.apk.json)을 resources/android 로 싣는다 — asar 밖(extraResources)', () => {
+    expect(config.extraResources).toEqual([
+      { from: 'resources/android', to: 'android', filter: ['dure.apk', 'dure.apk.json'] },
+    ])
+    expect(config.files).not.toContain('resources/android/**')
   })
 })

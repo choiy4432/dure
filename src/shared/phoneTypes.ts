@@ -74,6 +74,8 @@ export type PhoneState = {
    * 한국어 한 줄, 없으면 null. 휴대폰 창이 보고 phoneNoticeSeen 하거나, 짝을 다시 맺거나(phonePairStart), 끄면 지워진다
    */
   notice: string | null
+  /** 이 PC 가 휴대폰에 내어 줄 안드로이드 앱의 판 — 앱 파일이 없거나 패키지가 진짜가 아니면(시험 패키지는 시험 빌드에서만) null */
+  androidApp: { versionCode: number; versionName: string } | null
 }
 
 /** setPhone 이 받는 것 — 화면이 바꾸는 칸만(포트는 main 이 정한다). 꼴이 틀린 칸은 pickPhoneChange 가 버린다 */

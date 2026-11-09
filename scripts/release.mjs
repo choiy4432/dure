@@ -3,7 +3,7 @@
 // gh 는 셸 없이 부른다 — 제목의 공백, 노트 경로의 공백·&·% 가 쪼개지거나 해석되지 않게.
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { notesProblem, releaseArgs, releaseFiles, show } from './releaseLib.mjs'
+import { androidProblem, notesProblem, releaseArgs, releaseFiles, show } from './releaseLib.mjs'
 
 const args = process.argv.slice(2)
 const dry = args.includes('--dry-run')
@@ -49,6 +49,16 @@ if (run('git', ['ls-remote', '--tags', 'origin', `refs/tags/${tag}`])) fail(`태
 if (spawnSync('gh', ['auth', 'status'], { stdio: 'ignore' }).status !== 0) {
   fail('gh 를 못 찾았거나 로그인이 안 돼 있어요. `gh auth login` 을 먼저 해 주세요.')
 }
+
+// 안드로이드 앱 — resources/android/dure.apk(.json)이 android/version.json 과 같은 판이고 진짜 패키지여야 한다(설치 파일에 실린다)
+let apkInfo = null
+try {
+  apkInfo = JSON.parse(readFileSync('resources/android/dure.apk.json', 'utf8'))
+  if (!existsSync('resources/android/dure.apk')) apkInfo = null
+} catch {}
+const androidVersion = JSON.parse(readFileSync('android/version.json', 'utf8'))
+const androidIssue = androidProblem({ apkInfo, version: androidVersion })
+if (androidIssue) fail(androidIssue)
 
 const files = releaseFiles(version)
 const ghArgs = releaseArgs(version, notes)

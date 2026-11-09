@@ -14,6 +14,7 @@ const base = (): PhoneState => ({
   pairing: null,
   problem: null,
   notice: null,
+  androidApp: null,
 })
 
 let phone: PhoneState
