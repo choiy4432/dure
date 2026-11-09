@@ -740,12 +740,39 @@ describe('phoneServer', () => {
     expect((await request(none.server.port, { path: '/.well-known/assetlinks.json' })).status).toBe(404)
   })
 
+  it('/api/me — PC 가 내어 줄 안드로이드 앱의 판·패키지(androidApp) · 앱이 없거나 android 옵션이 없으면 null · 파일 경로는 내보내지 않는다', async () => {
+    const dir = tempDir()
+    const file = path.join(dir, 'dure.apk')
+    fs.writeFileSync(file, 'APK')
+    let apk: { path: string; versionCode: number; packageName: string } | null = { path: file, versionCode: 3, packageName: 'io.github.choiy4432.dure.test' }
+    const t = await setup({ android: () => ({ statements: [], apk }) })
+    const token = t.pairing.add()
+    const me = await request(t.server.port, { path: '/api/me', headers: { cookie: cookie(token) } })
+    expect(me.status).toBe(200)
+    expect(json(me)).toEqual({ ok: true, device: expect.objectContaining({ id: 'dev-a' }), androidApp: { versionCode: 3, packageName: 'io.github.choiy4432.dure.test' } })
+    expect(me.text).not.toContain(dir.replace(/\\/g, '\\\\'))
+    // 요청마다 묻는다 — 앱 파일이 빠지면 null
+    apk = null
+    expect(json(await request(t.server.port, { path: '/api/me', headers: { cookie: cookie(token) } })).androidApp).toBeNull()
+    // 짝을 안 맺었으면 그대로 401(앱 판도 알리지 않는다)
+    expect((await request(t.server.port, { path: '/api/me' })).status).toBe(401)
+
+    const none = await setup()
+    const tk = none.pairing.add()
+    expect(json(await request(none.server.port, { path: '/api/me', headers: { cookie: cookie(tk) } })).androidApp).toBeNull()
+    const boom = await setup({ android: () => { throw new Error('x') } })
+    const tb = boom.pairing.add()
+    const r = await request(boom.server.port, { path: '/api/me', headers: { cookie: cookie(tb) } })
+    expect(r.status).toBe(200)
+    expect(json(r).androidApp).toBeNull()
+  })
+
   it('/dure.apk — 쿠키 없이 바이트 그대로 · 내려받기 이름 · HEAD · apk null 이면 404 · 틀린 Host 403', async () => {
     const dir = tempDir()
     const file = path.join(dir, 'dure.apk')
     const bytes = crypto.randomBytes(100_000)
     fs.writeFileSync(file, bytes)
-    const t = await setup({ android: () => ({ statements: [], apk: { path: file, versionCode: 2 } }) })
+    const t = await setup({ android: () => ({ statements: [], apk: { path: file, versionCode: 2, packageName: 'io.github.choiy4432.dure' } }) })
     const r = await request(t.server.port, { path: '/dure.apk' })
     expect(r.status).toBe(200)
     expect(r.headers['content-type']).toBe('application/vnd.android.package-archive')
@@ -763,7 +790,7 @@ describe('phoneServer', () => {
 
     const nul = await setup({ android: () => ({ statements: [], apk: null }) })
     expect((await request(nul.server.port, { path: '/dure.apk' })).status).toBe(404)
-    const missing = await setup({ android: () => ({ statements: [], apk: { path: path.join(dir, 'gone.apk'), versionCode: 1 } }) })
+    const missing = await setup({ android: () => ({ statements: [], apk: { path: path.join(dir, 'gone.apk'), versionCode: 1, packageName: 'io.github.choiy4432.dure' } }) })
     expect((await request(missing.server.port, { path: '/dure.apk' })).status).toBe(404)
     const none = await setup()
     expect((await request(none.server.port, { path: '/dure.apk' })).status).toBe(404)

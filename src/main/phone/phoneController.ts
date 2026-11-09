@@ -278,7 +278,7 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
         const a = androidApk()
         return {
           statements: assetStatements({ includeTest: o.androidTest === true }),
-          apk: a ? { path: a.path, versionCode: a.info.versionCode } : null,
+          apk: a ? { path: a.path, versionCode: a.info.versionCode, packageName: a.info.packageName } : null,
         }
       },
       inboxDir,

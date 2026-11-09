@@ -19,8 +19,9 @@ import { onPhoneConn } from './connection'
 import { PairScreen } from './PairScreen'
 import { MobileApp } from './MobileApp'
 import { detectPairEnv } from './pairEnv'
-import { checkMe, copyText, pairWith, subscribePush } from './phoneHttp'
+import { checkMe, copyText, pairWith } from './phoneHttp'
 import { openFromWorker, resubscribeIfGranted, takePairCode } from './entry'
+import { blockInstallPrompt, subscribePushHere, takeAppParam } from './androidApp'
 
 /** 알림 서비스 워커 — 짝 맺기 전에도 등록해 둔다(알림 켜기가 바로 구독하게). 알림을 누르면 열린 창이 그 대화로(#agent=) */
 function registerServiceWorker(): void {
@@ -41,7 +42,11 @@ const show = (node: ReactNode) =>
     </StrictMode>,
   )
 
+// 두레 앱(안드로이드)이 붙인 ?app=<판> — 세션에 두고 주소창에서 지운다(다시 읽지 않음). 그다음 짝 코드(둘 다 서로의 칸은 그대로 둔다)
+takeAppParam()
 const pairCode = takePairCode()
+// 안드로이드 크롬(앱 밖)의 웹앱 설치 권유 — 일찍 오니 맨 먼저 막아 둔다(takeAppParam 뒤: 앱 안인지가 방금 받은 ?app= 에도 달려 있다)
+blockInstallPrompt()
 registerServiceWorker()
 void boot()
 
@@ -50,7 +55,8 @@ async function boot(): Promise<void> {
   // 끊겼거나 PC 가 꺼져 있으면(모름) 일단 잇는다 — 못 열 때마다 다시 짝 여부를 본다(wsApi)
   if ((await checkMe()) === 'unpaired') return showPair()
   startApp()
-  // 이미 알림을 허락했으면 조용히 다시 구독 — 짝 맺기 화면에서 막 정한 때는 하지 않는다(그 자리에서 켰거나 '나중에' 를 골랐다)
+  // 이미 알림을 허락했으면 조용히 다시 구독 — 짝 맺기 화면에서 막 정한 때는 하지 않는다(그 자리에서 켰거나 '나중에' 를 골랐다).
+  // 두레 앱 안에서 처음이면 옛 구독을 지우고 새로(한 번만 — androidApp.subscribePushHere)
   void resubscribeIfGranted()
 }
 
@@ -63,7 +69,7 @@ async function showPair(): Promise<void> {
       env={env}
       link={link}
       pair={(secret, name) => pairWith(secret, name)}
-      enablePush={() => subscribePush()}
+      enablePush={() => subscribePushHere()}
       copy={copyText}
       onDone={startApp}
     />,

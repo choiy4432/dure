@@ -4,7 +4,7 @@
   두 모습(html 의 data-state):
   - connecting 'PC 에 연결하고 있어요' (시안 A) — 시작 화면의 로고를 가운데 그대로 두고 아래에 회전 + 글. offline.js 가 그리기 전에 이 모습으로 바꾸고 뒤에서 PC 에 닿는지 본다
   - offline 'PC 에 닿지 않아요' — 짝 맺기 화면(PairScreen · 시안 B2)과 같은 틀: 위에 큰 제목, 할 일 단추는 엄지가 닿는 맨 아래.
-    기본값이라 스크립트를 못 읽으면 이 모습이 보인다
+    기본값이라 스크립트를 못 읽으면 이 모습이 보인다. 두레 안드로이드 앱 안이면(offline.js 가 data-app) '주소가 바뀌었으면…' 줄이 더 보인다
   색은 tokens.css 값을 옮겨 적었다(라이트·다크는 휴대폰 설정 따라감).
   CSP 는 script-src 'self' — 스크립트는 offline.js 로만(같이 받아 둔다). 글꼴은 받지 않는다(시스템 글꼴)
 -->
@@ -30,12 +30,14 @@
         --on-primary: #FFFFFF;
         --warn-bg: #FFFBEB;
         --warn-text: #B45309;
+        --muted: #64748B;
       }
       @media (prefers-color-scheme: dark) {
         :root {
           --bg: #111827;
           --text: #E5E9F0;
           --text-3: #A3B1C6;
+          --muted: #8392A8;
           --border: #243044;
           --primary-hover: #3B82F6;
           --warn-bg: rgba(245, 158, 11, 0.12);
@@ -78,6 +80,10 @@
       h1 { margin: 0; font-size: 26px; line-height: 34px; font-weight: 700; letter-spacing: -0.02em; }
       h1:focus { outline: none; }
       p { margin: 0; font-size: 15px; line-height: 24px; color: var(--text-3); }
+      /* 두레 앱 안에서만(offline.js 가 html 에 data-app) — 안내 아래 옅은 한 줄 */
+      .note { font-size: 14px; line-height: 22px; color: var(--muted); }
+      .app-only { display: none; }
+      html[data-app] .app-only { display: block; }
       .foot {
         flex: none;
         padding: 12px 16px calc(env(safe-area-inset-bottom) + 16px);
@@ -169,6 +175,7 @@
         </span>
         <h1 tabindex="-1">PC 에 닿지 않아요</h1>
         <p>PC 가 켜져 있고 두레가 떠 있는지, 휴대폰의 <span class="nb">Tailscale 이</span> 켜져 있는지 봐 주세요.</p>
+        <p class="app-only note">PC 주소가 바뀌었으면 PC 두레의 휴대폰 창 QR 로 크롬에서 열고 [두레 앱으로 열기]를 다시 눌러 주세요.</p>
       </div>
       <div class="foot">
         <button type="button" id="retry" aria-busy="false">

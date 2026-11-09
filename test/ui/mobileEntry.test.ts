@@ -1,6 +1,10 @@
 // 휴대폰 진입점의 주소·서비스 워커 일(src/renderer/mobile/entry.ts) — jsdom 주소 위에서
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { openFromWorker, resubscribeIfGranted, takePairCode } from '../../src/renderer/mobile/entry'
+import { subscribePush } from '../../src/renderer/mobile/phoneHttp'
+
+// 진짜 구독(서비스 워커·VAPID)은 phoneHttp 시험이 본다 — 여기선 몇 번·어떻게 불렀는지만
+vi.mock('../../src/renderer/mobile/phoneHttp', async orig => ({ ...(await orig<typeof import('../../src/renderer/mobile/phoneHttp')>()), subscribePush: vi.fn(async () => 'on') }))
 
 afterEach(() => {
   history.replaceState(null, '', '/')
@@ -89,6 +93,36 @@ describe('resubscribeIfGranted — 이미 허락한 알림은 켤 때마다 조�
     expect(await resubscribeIfGranted({ notification: null, subscribe })).toBeNull()
     expect(subscribe).toHaveBeenCalledTimes(1)
     expect(requestPermission).not.toHaveBeenCalled()
+  })
+
+  it('앱 안 첫 실행 — 옛 구독(크롬 탭·웹앱이 만든 것)을 지우고 새로: subscribePush 를 fresh 로 한 번만 · 다음 실행은 보통', async () => {
+    localStorage.clear()
+    sessionStorage.clear()
+    Object.defineProperty(document, 'referrer', { value: 'android-app://io.github.choiy4432.dure/', configurable: true })
+    try {
+      const sub = vi.mocked(subscribePush)
+      sub.mockClear()
+      const granted = { permission: 'granted' as NotificationPermission, requestPermission: vi.fn() }
+      expect(await resubscribeIfGranted({ notification: granted })).toBe('on')
+      expect(sub).toHaveBeenCalledTimes(1)
+      expect(sub).toHaveBeenCalledWith({ fresh: true })
+      expect(await resubscribeIfGranted({ notification: granted })).toBe('on')
+      expect(sub).toHaveBeenCalledTimes(2)
+      expect(sub).toHaveBeenLastCalledWith({ fresh: false })
+      expect(granted.requestPermission).not.toHaveBeenCalled()
+    } finally {
+      delete (document as unknown as Record<string, unknown>).referrer
+    }
+  })
+
+  it('앱 밖은 보통 구독(옛 구독을 지우지 않음)', async () => {
+    localStorage.clear()
+    sessionStorage.clear()
+    const sub = vi.mocked(subscribePush)
+    sub.mockClear()
+    await resubscribeIfGranted({ notification: { permission: 'granted', requestPermission: vi.fn() } })
+    expect(sub).toHaveBeenCalledTimes(1)
+    expect(sub).toHaveBeenCalledWith({ fresh: false })
   })
 
   it('구독이 던져도 조용히 failed', async () => {

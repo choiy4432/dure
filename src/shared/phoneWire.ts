@@ -57,7 +57,12 @@ export type PhoneServerMessage =
 /** HTTP 길의 실패 답 — error 는 화면에 그대로 보일 한국어 */
 export type PhoneApiError = { ok: false; error: string }
 export type PhonePairResponse = { ok: true; device: PhoneDevice } | PhoneApiError
-export type PhoneMeResponse = { ok: true; device: PhoneDevice } | PhoneApiError
+/**
+ * PC 가 /dure.apk 로 내어 줄 안드로이드 앱 — 판(versionCode)은 앱 업데이트 띠, 패키지는 [두레 앱으로 열기] 링크가 쓴다
+ * (시험 빌드는 시험 패키지). 내어 줄 앱이 없으면 null
+ */
+export type PhoneAndroidApp = { versionCode: number; packageName: string }
+export type PhoneMeResponse = { ok: true; device: PhoneDevice; androidApp: PhoneAndroidApp | null } | PhoneApiError
 /** path = PC 의 받은 파일(그대로 sendUser 의 file part path 로) · name = 다듬은 이름 · bytes = 받은 바이트 수 */
 export type PhoneUploadResponse = { ok: true; path: string; name: string; bytes: number } | PhoneApiError
 export type PhoneVapidResponse = { ok: true; publicKey: string } | PhoneApiError

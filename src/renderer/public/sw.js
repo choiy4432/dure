@@ -3,7 +3,7 @@
 // 알림 글은 PC(main 의 phoneNotifier)가 정한 네 칸 { title, body, tag, url } 뿐 — 명령·대화 글은 오지 않는다.
 
 /** 오프라인 화면 캐시 — 판이 바뀌면 이름을 바꾼다(activate 가 옛 'dure-offline-*' 를 지운다) */
-const OFFLINE_CACHE = 'dure-offline-2'
+const OFFLINE_CACHE = 'dure-offline-3'
 const OFFLINE_PAGE = '/offline.html'
 /** 오프라인 화면과 그 화면이 쓰는 것(스크립트 · '연결하고 있어요'의 로고) — 이 셋은 캐시가 먼저(PC 에 닿지 않을 때 또 기다리지 않게) */
 const OFFLINE_FILES = [OFFLINE_PAGE, '/offline.js', '/icons/dure-512.png']

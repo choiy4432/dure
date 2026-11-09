@@ -1,6 +1,6 @@
 // 휴대폰 → PC 휴대폰 서버의 HTTP 길 — 짝 여부(/api/me) · 짝 맺기(/api/pair) · 알림 구독(/api/vapid → /api/subscribe).
 // 기기 토큰은 HttpOnly 쿠키라 이 코드는 토큰을 보지 못한다(credentials: same-origin 으로 브라우저가 실어 보낸다)
-import { PHONE_PATHS, type PhoneMeResponse, type PhonePairResponse, type PhoneVapidResponse } from '../../shared/phoneWire'
+import { PHONE_PATHS, type PhoneAndroidApp, type PhoneMeResponse, type PhonePairResponse, type PhoneVapidResponse } from '../../shared/phoneWire'
 import type { PhoneDevice } from '../../shared/phoneTypes'
 
 export const PAIR_OFFLINE = '두레에 닿지 못했어요 — PC 가 켜져 있는지 확인해 주세요'
@@ -41,16 +41,32 @@ export async function checkMe(o: Http = {}): Promise<'paired' | 'unpaired' | 'un
   }
 }
 
-/** 이 휴대폰(PC 가 기억하는 이름 등) — 짝을 안 맺었거나 끊겼거나 서버 오류면 null */
-export async function meDevice(o: Http = {}): Promise<PhoneDevice | null> {
+/** androidApp 칸 — 꼴이 틀렸거나 없으면(옛 PC 두레) 앱 없음으로 */
+const androidAppOf = (v: unknown): PhoneAndroidApp | null => {
+  if (!v || typeof v !== 'object') return null
+  const { versionCode, packageName } = v as Record<string, unknown>
+  return Number.isInteger(versionCode) && typeof packageName === 'string' && packageName ? { versionCode: versionCode as number, packageName } : null
+}
+
+/**
+ * 이 휴대폰(PC 가 기억하는 이름 등)과 PC 가 내어 줄 안드로이드 앱(판·패키지 — 없으면 null).
+ * 짝을 안 맺었거나 끊겼거나 서버 오류면 null
+ */
+export async function meInfo(o: Http = {}): Promise<{ device: PhoneDevice; androidApp: PhoneAndroidApp | null } | null> {
   try {
     const r = await fetchWithin(o, `${baseOf(o)}${PHONE_PATHS.me}`, { credentials: 'same-origin', cache: 'no-store' })
     if (!r.ok) return null
     const body = (await r.json()) as PhoneMeResponse
-    return body && body.ok && body.device && typeof body.device.name === 'string' ? body.device : null
+    if (!body || !body.ok || !body.device || typeof body.device.name !== 'string') return null
+    return { device: body.device, androidApp: androidAppOf(body.androidApp) }
   } catch {
     return null
   }
+}
+
+/** 이 휴대폰(PC 가 기억하는 이름 등) — 짝을 안 맺었거나 끊겼거나 서버 오류면 null */
+export async function meDevice(o: Http = {}): Promise<PhoneDevice | null> {
+  return (await meInfo(o))?.device ?? null
 }
 
 /** 짝 맺기 결과 — kind 로 화면 글을 고른다(틀림·지남은 화면의 말로, 막힘·그 밖은 서버 글 그대로) */
@@ -90,6 +106,8 @@ type PushDeps = Http & {
   notification?: NotificationLike | null
   /** 서비스 워커 등록 — 활성 워커가 있어야 구독할 수 있다 */
   registration?: () => Promise<ServiceWorkerRegistration>
+  /** 열쇠가 같아도 옛 구독을 지우고 새로 — 두레 앱 안에서 처음(크롬 탭·웹앱이 만든 구독 대신 앱이 받게, 설계 §5.6) */
+  fresh?: boolean
 }
 
 /** VAPID 공개 열쇠(base64url) → 바이트 */
@@ -123,7 +141,7 @@ const defaultNotification = (): NotificationLike | null =>
 
 /**
  * 알림 켜기 — 허락을 묻고(누른 그 자리에서 불러야 한다: 아이폰은 사용자 손짓이 있어야 묻는다) → 공개 열쇠 → 구독 → PC 에 올림.
- * 이미 구독이 있는데 열쇠가 다르면(PC 가 열쇠를 새로 만듦) 지우고 다시 — 안 지우면 subscribe 가 InvalidStateError(실측)
+ * 이미 구독이 있는데 열쇠가 다르면(PC 가 열쇠를 새로 만듦) 지우고 다시 — 안 지우면 subscribe 가 InvalidStateError(실측). fresh 면 열쇠가 같아도 지우고 다시
  */
 export async function subscribePush(o: PushDeps = {}): Promise<PushOutcome> {
   const n = o.notification === undefined ? defaultNotification() : o.notification
@@ -146,7 +164,7 @@ export async function subscribePush(o: PushDeps = {}): Promise<PushOutcome> {
     if (!vr.ok || !v.ok) return 'failed'
     const key = base64UrlBytes(v.publicKey)
     let sub = await reg.pushManager.getSubscription()
-    if (sub && !sameBytes(sub.options?.applicationServerKey, key)) {
+    if (sub && (o.fresh || !sameBytes(sub.options?.applicationServerKey, key))) {
       await sub.unsubscribe()
       sub = null
     }

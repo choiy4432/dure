@@ -594,3 +594,129 @@ describe('AgentMenu — 휴대폰', () => {
     expect(screen.getByRole('menuitem', { name: '대화 내보내기' })).toBeInTheDocument()
   })
 })
+
+describe('MobileApp — 두레 앱(안드로이드)으로 쓰기 · 앱 업데이트 띠', () => {
+  const ANDROID_CHROME = 'Mozilla/5.0 (Linux; Android 15; SM-S921N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Mobile Safari/537.36'
+  const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+  const PC = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36'
+  const STEER = '두레 앱으로 쓰면 알림에 주소가 안 붙어요.'
+  const UPDATE = '앱 업데이트가 있어요'
+  let pcApp: { versionCode: number; packageName: string } | null
+  let me: ReturnType<typeof vi.fn>
+
+  const as = (ua: string, referrer = '') => {
+    Object.defineProperty(navigator, 'userAgent', { value: ua, configurable: true })
+    Object.defineProperty(document, 'referrer', { value: referrer, configurable: true })
+  }
+  /** 웹앱 설치 권유 — 진입점처럼 막기를 걸고 크롬이 권유를 보낸 것처럼 */
+  const installPrompt = async () => {
+    const { blockInstallPrompt } = await import('../../src/renderer/mobile/androidApp')
+    const t = new EventTarget()
+    blockInstallPrompt(t)
+    const e = new Event('beforeinstallprompt', { cancelable: true })
+    t.dispatchEvent(e)
+    return e
+  }
+
+  beforeEach(() => {
+    sessionStorage.clear()
+    pcApp = { versionCode: 3, packageName: 'io.github.choiy4432.dure' }
+    me = vi.fn(async (u: string) =>
+      String(u).endsWith('/api/me')
+        ? new Response(JSON.stringify({ ok: true, device: { id: 'd', name: '내 휴대폰', createdAt: 1, lastSeen: 1, push: false }, androidApp: pcApp }), { status: 200 })
+        : new Response(null, { status: 404 }),
+    )
+    vi.stubGlobal('fetch', me)
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    delete (navigator as any).userAgent
+    delete (document as any).referrer
+  })
+
+  it('안드로이드 크롬(앱 밖) — 웹앱 설치 권유를 막고, 방 목록 위 띠: [두레 앱으로 열기] = intent 링크(앱이 없으면 /dure.apk)', async () => {
+    as(ANDROID_CHROME)
+    expect((await installPrompt()).defaultPrevented).toBe(true)
+    await renderPhone()
+    const band = await screen.findByRole('region', { name: '두레 앱으로 쓰기' })
+    expect(band).toHaveTextContent(STEER)
+    const open = within(band).getByRole('link', { name: '두레 앱으로 열기' })
+    expect(open.getAttribute('href')).toBe(
+      `intent://${location.host}/mobile.html#Intent;scheme=https;package=io.github.choiy4432.dure;S.browser_fallback_url=${encodeURIComponent(`${location.origin}/dure.apk`)};end`,
+    )
+    // 띠는 방 목록 위
+    const rooms = screen.getByRole('region', { name: /^방/ })
+    expect(band.compareDocumentPosition(rooms) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.queryByText(UPDATE)).toBeNull()
+  })
+
+  it('시험 빌드의 앱(패키지 .test)이면 그 패키지로 연다 — /api/me 가 알려 준 대로', async () => {
+    pcApp = { versionCode: 3, packageName: 'io.github.choiy4432.dure.test' }
+    as(ANDROID_CHROME)
+    await renderPhone()
+    const open = await screen.findByRole('link', { name: '두레 앱으로 열기' })
+    expect(open.getAttribute('href')).toContain(';package=io.github.choiy4432.dure.test;')
+  })
+
+  it('[나중에] — 이번 세션 동안 접는다(다시 그려도 안 보임)', async () => {
+    as(ANDROID_CHROME)
+    const first = await renderPhone()
+    fireEvent.click(await screen.findByRole('button', { name: '나중에' }))
+    expect(screen.queryByText(STEER)).toBeNull()
+    first.unmount()
+    vi.resetModules()
+    await renderPhone()
+    await settle()
+    expect(screen.queryByText(STEER)).toBeNull()
+  })
+
+  it('PC 에 앱 파일이 없으면(androidApp null) 띠 없음', async () => {
+    pcApp = null
+    as(ANDROID_CHROME)
+    await renderPhone()
+    await settle()
+    expect(me).toHaveBeenCalled()
+    expect(screen.queryByText(STEER)).toBeNull()
+    expect(screen.queryByRole('region', { name: '두레 앱으로 쓰기' })).toBeNull()
+  })
+
+  it('아이폰 · PC 브라우저 — 설치 권유 그대로 · 띠 없음(/api/me 도 묻지 않는다)', async () => {
+    for (const ua of [IPHONE, PC]) {
+      as(ua)
+      expect((await installPrompt()).defaultPrevented, ua).toBe(false)
+      const r = await renderPhone()
+      await settle()
+      expect(screen.queryByText(STEER)).toBeNull()
+      expect(screen.queryByText(UPDATE)).toBeNull()
+      r.unmount()
+      vi.resetModules()
+    }
+    expect(me).not.toHaveBeenCalled()
+  })
+
+  it('앱 안 — 설치 권유·크롬 띠 없음 · PC 판이 앱 판보다 크면 앱 업데이트 띠 [받기] = /dure.apk', async () => {
+    as(ANDROID_CHROME, 'android-app://io.github.choiy4432.dure/')
+    sessionStorage.setItem('dure:app', '2')
+    expect((await installPrompt()).defaultPrevented).toBe(false)
+    await renderPhone()
+    const band = await screen.findByRole('region', { name: '앱 업데이트' })
+    expect(band).toHaveTextContent(UPDATE)
+    expect(within(band).getByRole('link', { name: '받기' }).getAttribute('href')).toBe('/dure.apk')
+    expect(within(band).queryByRole('button', { name: '나중에' })).toBeNull()
+    expect(screen.queryByText(STEER)).toBeNull()
+  })
+
+  it('앱 안 — 판이 같거나 앱이 판을 안 알렸으면 업데이트 띠 없음', async () => {
+    for (const stored of ['3', null]) {
+      sessionStorage.clear()
+      if (stored) sessionStorage.setItem('dure:app', stored)
+      as(ANDROID_CHROME, 'android-app://io.github.choiy4432.dure/')
+      const r = await renderPhone()
+      await settle()
+      expect(screen.queryByText(UPDATE), String(stored)).toBeNull()
+      expect(screen.queryByText(STEER)).toBeNull()
+      r.unmount()
+      vi.resetModules()
+    }
+  })
+})

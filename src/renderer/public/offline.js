@@ -16,6 +16,22 @@
 
   var root = document.documentElement
   var WORDS = { connecting: 'PC 에 연결하고 있어요', offline: 'PC 에 닿지 않아요' }
+
+  /**
+   * 두레 안드로이드 앱(TWA) 안인가 — 앱이 연 화면은 referrer 가 android-app://<패키지>(시험 빌드는 .test). 다시 읽은 화면은 referrer 가 빠질 수 있어
+   * 이 세션에 앱이 알린 판(sessionStorage 'dure:app' — mobile.html 이 적는다, src/renderer/mobile/androidApp.ts)도 본다.
+   * 앱 안이면 html 에 data-app — 'PC 주소가 바뀌었으면…' 줄이 보인다(앱은 예전 주소를 열어 이 화면이 된다)
+   */
+  var APP_REFERRER = /^android-app:\/\/io\.github\.choiy4432\.dure(\.test)?(\/|$)/
+  function inApp() {
+    if (APP_REFERRER.test(document.referrer || '')) return true
+    try {
+      return sessionStorage.getItem('dure:app') !== null
+    } catch (e) {
+      return false // 저장소를 못 쓰는 브라우저 — referrer 만으로
+    }
+  }
+  if (inApp()) root.setAttribute('data-app', '1')
   var timer = null
   var inflight = null
   var leaving = false

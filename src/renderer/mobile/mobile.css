@@ -385,6 +385,57 @@ button.m-row:active {
   color: var(--danger-text);
 }
 
+/* 두레 앱(안드로이드) 띠 — 시안 phone-a: 방 목록 위, 옅은 파랑 바탕에 한 줄 + 단추 줄(크롬 '두레 앱으로 열기 · 나중에' · 앱 안 '받기') */
+.m-appband {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 12px 10px 14px;
+  border-radius: var(--radius-box);
+  background: var(--primary-soft);
+  color: var(--primary-text);
+}
+
+.m-appband-t {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+}
+
+.m-appband-act {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.m-appband-go,
+.m-appband-later {
+  height: 44px;
+  border-radius: var(--radius-ctl);
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.m-appband-go {
+  padding: 0 16px;
+}
+
+.m-appband-go:active {
+  background: var(--primary-hover);
+}
+
+.m-appband-later {
+  padding: 0 12px;
+  color: var(--text-3);
+}
+
+.m-appband-later:active {
+  background: var(--hover);
+}
+
 /* 빈 화면 — 방 없음 · 에이전트 없음 */
 .m-empty {
   flex: 1;

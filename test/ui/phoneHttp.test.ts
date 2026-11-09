@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { checkMe, pairWith, subscribePush, PAIR_OFFLINE } from '../../src/renderer/mobile/phoneHttp'
+import { checkMe, meInfo, pairWith, subscribePush, PAIR_OFFLINE } from '../../src/renderer/mobile/phoneHttp'
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const BASE = 'https://pc.tail.ts.net'
@@ -70,5 +70,35 @@ describe('phoneHttp — 짝 맺기·짝 여부·알림 구독(HTTP 길)', () => 
     const badPost = vi.fn(async (u: unknown) => (String(u).endsWith('/api/vapid') ? json(200, { ok: true, publicKey: 'BAEC' }) : json(400, { ok: false, error: 'x' })))
     expect(await subscribePush({ base: BASE, fetch: badPost as unknown as typeof fetch, notification: granted, registration: async () => reg as unknown as ServiceWorkerRegistration })).toBe('failed')
     expect(await subscribePush({ base: BASE, fetch: f as unknown as typeof fetch, notification: granted, registration: async () => { throw new Error('no sw') } })).toBe('failed')
+  })
+
+  it('subscribePush fresh — 열쇠가 같아도 옛 구독(크롬 탭·웹앱이 만든 것)을 지우고 새로 구독해 올림', async () => {
+    const same = { options: { applicationServerKey: new Uint8Array([4, 1, 2]).buffer }, unsubscribe: vi.fn(async () => true), toJSON: () => ({ endpoint: 'old' }) }
+    const made = { options: { applicationServerKey: new Uint8Array([4, 1, 2]).buffer }, unsubscribe: vi.fn(), toJSON: () => ({ endpoint: 'new' }) }
+    const subscribe = vi.fn(async () => made)
+    const reg = { pushManager: { getSubscription: async () => same, subscribe } }
+    const f = vi.fn(async (u: unknown, _o?: RequestInit) => (String(u).endsWith('/api/vapid') ? json(200, { ok: true, publicKey: 'BAEC' }) : json(200, { ok: true })))
+    const granted = { permission: 'granted' as NotificationPermission, requestPermission: vi.fn() }
+    expect(await subscribePush({ base: BASE, fetch: f as unknown as typeof fetch, notification: granted, registration: async () => reg as unknown as ServiceWorkerRegistration, fresh: true })).toBe('on')
+    expect(same.unsubscribe).toHaveBeenCalledTimes(1)
+    expect(subscribe).toHaveBeenCalledTimes(1)
+    const post = f.mock.calls.find(c => String(c[0]).endsWith('/api/subscribe'))!
+    expect(JSON.parse(String(post[1]!.body))).toEqual({ subscription: { endpoint: 'new' } })
+    // 구독이 없으면 그냥 새로
+    const none = { pushManager: { getSubscription: async () => null, subscribe: vi.fn(async () => made) } }
+    expect(await subscribePush({ base: BASE, fetch: f as unknown as typeof fetch, notification: granted, registration: async () => none as unknown as ServiceWorkerRegistration, fresh: true })).toBe('on')
+    expect(none.pushManager.subscribe).toHaveBeenCalledTimes(1)
+  })
+
+  it('meInfo — 이 휴대폰과 PC 가 내어 줄 안드로이드 앱(판·패키지) · 없으면 null · 짝 안 맺음·끊김은 null', async () => {
+    const device = { id: 'd', name: '내 휴대폰', createdAt: 1, lastSeen: 1, push: false }
+    const androidApp = { versionCode: 3, packageName: 'io.github.choiy4432.dure' }
+    expect(await meInfo({ base: BASE, fetch: (async () => json(200, { ok: true, device, androidApp })) as unknown as typeof fetch })).toEqual({ device, androidApp })
+    expect(await meInfo({ base: BASE, fetch: (async () => json(200, { ok: true, device, androidApp: null })) as unknown as typeof fetch })).toEqual({ device, androidApp: null })
+    // 옛 PC 두레(androidApp 칸 없음) · 꼴이 틀린 칸은 앱 없음으로
+    expect(await meInfo({ base: BASE, fetch: (async () => json(200, { ok: true, device })) as unknown as typeof fetch })).toEqual({ device, androidApp: null })
+    expect(await meInfo({ base: BASE, fetch: (async () => json(200, { ok: true, device, androidApp: { versionCode: '3', packageName: 'x' } })) as unknown as typeof fetch })).toEqual({ device, androidApp: null })
+    expect(await meInfo({ base: BASE, fetch: (async () => json(401, { ok: false, error: 'x' })) as unknown as typeof fetch })).toBeNull()
+    expect(await meInfo({ base: BASE, fetch: (async () => { throw new TypeError('x') }) as unknown as typeof fetch })).toBeNull()
   })
 })

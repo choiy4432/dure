@@ -1281,7 +1281,7 @@ test('안드로이드 앱 — 진짜 apk 가 있으면 상태에 그 판, 서버
   expect(c.state().androidApp).toEqual({ versionCode: 3, versionName: '1.2.0' })
   await c.set({ enabled: true })
   const a = servers.last().opts.android!()
-  expect(a.apk).toEqual({ path: path.join(dir, 'android', 'dure.apk'), versionCode: 3 })
+  expect(a.apk).toEqual({ path: path.join(dir, 'android', 'dure.apk'), versionCode: 3, packageName: 'io.github.choiy4432.dure' })
   expect(a.statements).toHaveLength(1) // 진짜 앱만
 })
 
@@ -1305,7 +1305,7 @@ test('안드로이드 앱 — 시험 패키지 apk 는 진짜 빌드에서 null 
   await t.c.ready
   expect(t.c.state().androidApp).toEqual({ versionCode: 3, versionName: '1.2.0' })
   await t.c.set({ enabled: true })
-  expect(t.servers.last().opts.android!().apk?.versionCode).toBe(3)
+  expect(t.servers.last().opts.android!().apk).toMatchObject({ versionCode: 3, packageName: 'io.github.choiy4432.dure.test' })
   expect(t.servers.last().opts.android!().statements).toHaveLength(2)
 })
 

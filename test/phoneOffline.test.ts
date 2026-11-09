@@ -12,7 +12,7 @@ const never: FetchFn = (_u, init) =>
 const status = (s: number): FetchFn => async () => new Response(null, { status: s })
 const down: FetchFn = async () => { throw new TypeError('Failed to fetch') }
 
-function load(o: { fetch: FetchFn; hidden?: boolean; controller?: boolean }) {
+function load(o: { fetch: FetchFn; hidden?: boolean; controller?: boolean; referrer?: string; session?: Record<string, string> }) {
   let answer = o.fetch
   const attrs = new Map<string, string>([['data-state', 'offline']])
   const root = { getAttribute: (k: string) => attrs.get(k) ?? null, setAttribute: (k: string, v: string) => void attrs.set(k, v) }
@@ -31,6 +31,7 @@ function load(o: { fetch: FetchFn; hidden?: boolean; controller?: boolean }) {
     documentElement: root,
     title: '두레 — PC 에 닿지 않아요',
     visibilityState: o.hidden ? 'hidden' : 'visible',
+    referrer: o.referrer ?? '',
     // head 에서 돌 때는 아직 body 가 없다
     getElementById: (id: string) => (!domReady ? null : id === 'status' ? live : id === 'retry' ? btn : null),
     addEventListener: (n: string, f: () => void) => void (docOn[n] ??= []).push(f),
@@ -49,10 +50,13 @@ function load(o: { fetch: FetchFn; hidden?: boolean; controller?: boolean }) {
     Date,
     setTimeout: (f: () => void, ms: number) => setTimeout(f, ms),
     clearTimeout: (t: ReturnType<typeof setTimeout>) => clearTimeout(t),
+    // 없으면(옛 브라우저·막힘) 이름 자체가 없다 — 스크립트가 던지지 않아야 한다
+    ...(o.session ? { sessionStorage: { getItem: (k: string) => o.session![k] ?? null } } : {}),
   }
   vm.runInNewContext(CODE, ctx)
   return {
     state: () => attrs.get('data-state'),
+    attr: (k: string) => attrs.get(k) ?? null,
     document,
     live,
     busy: () => btnAttrs.get('aria-busy'),
@@ -72,6 +76,28 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.useRealTimers()
+})
+
+describe("offline.js — 두레 앱 안이면 '주소가 바뀌었으면…' 줄(html 의 data-app)", () => {
+  it('referrer 가 android-app://<두레 패키지>(시험 패키지도) 면 그리기 전에 data-app', () => {
+    for (const referrer of ['android-app://io.github.choiy4432.dure/', 'android-app://io.github.choiy4432.dure', 'android-app://io.github.choiy4432.dure.test/']) {
+      expect(load({ fetch: never, referrer }).attr('data-app'), referrer).toBe('1')
+    }
+  })
+
+  it('크롬 탭 · 웹앱 · 다른 앱 · 이름만 비슷한 패키지 → 없음', () => {
+    for (const referrer of ['', 'https://pc.tail0000.ts.net/', 'android-app://com.android.chrome/', 'android-app://io.github.choiy4432.durex/']) {
+      expect(load({ fetch: never, referrer }).attr('data-app'), referrer).toBeNull()
+    }
+  })
+
+  it('referrer 가 없어도 이 세션에 앱이 판을 알렸으면(dure:app) 앱 안 · sessionStorage 가 없어도 던지지 않는다', () => {
+    expect(load({ fetch: never, session: { 'dure:app': '3' } }).attr('data-app')).toBe('1')
+    expect(load({ fetch: never, session: {} }).attr('data-app')).toBeNull()
+    const a = load({ fetch: never })
+    expect(a.attr('data-app')).toBeNull()
+    expect(a.state()).toBe('connecting') // 나머지는 그대로 돈다
+  })
 })
 
 describe('offline.js — PC 에 연결하는 동안·닿지 않을 때', () => {

@@ -1,6 +1,8 @@
-// 휴대폰 진입점(main.tsx)이 처음에 하는 일 — 주소의 짝 코드 · 알림을 누름(서비스 워커 글) · 이미 허락한 알림 다시 구독.
+// 휴대폰 진입점(main.tsx)이 처음에 하는 일 — 주소의 짝 코드 · 알림을 누름(서비스 워커 글) · 이미 허락한 알림 다시 구독
+// (앱 판 ?app= 와 웹앱 설치 권유 막기는 androidApp.ts).
 // main.tsx 는 맨 위에서 바로 돌아 시험하기 어려워 여기로 뗐다
-import { subscribePush, type NotificationLike, type PushOutcome } from './phoneHttp'
+import type { NotificationLike, PushOutcome } from './phoneHttp'
+import { subscribePushHere } from './androidApp'
 
 /** 주소 조각 하나(`a=b`)의 이름 — URLSearchParams 와 같게 읽는다 */
 const keyOf = (part: string) => [...new URLSearchParams(part).keys()][0] ?? ''
@@ -41,13 +43,14 @@ export function openFromWorker(data: unknown): boolean {
 
 /**
  * 이미 알림을 허락했다 — 켤 때마다 조용히 다시 구독한다(묻지 않는다). PC 가 열쇠를 새로 만들었거나, 구독이 지나 PC 가 지웠거나(410),
- * 브라우저가 구독을 바꿨어도 알림이 이어진다. 허락 전·막힘·못 쓰는 브라우저면 아무것도 안 함(null)
+ * 브라우저가 구독을 바꿨어도 알림이 이어진다. 허락 전·막힘·못 쓰는 브라우저면 아무것도 안 함(null).
+ * 두레 앱 안에서 처음이면 옛 구독을 지우고 새로(subscribePushHere — 한 번만)
  */
 export async function resubscribeIfGranted(o: { notification?: NotificationLike | null; subscribe?: () => Promise<PushOutcome> } = {}): Promise<PushOutcome | null> {
   const n = o.notification === undefined ? (typeof Notification === 'undefined' ? null : Notification) : o.notification
   if (!n || n.permission !== 'granted') return null
   try {
-    return await (o.subscribe ?? (() => subscribePush()))()
+    return await (o.subscribe ?? (() => subscribePushHere()))()
   } catch {
     return 'failed'
   }

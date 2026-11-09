@@ -358,6 +358,28 @@ describe('sw.js — PC 에 닿지 않을 때 화면(오프라인)', () => {
     expect(js).toContain('location.reload()')
   })
 
+  it("오프라인 화면 — 두레 앱 안(html data-app)일 때만 보이는 '주소가 바뀌었으면…' 줄이 'PC 에 닿지 않아요' 안내 바로 아래", () => {
+    const pub = path.join(__dirname, '../src/renderer/public')
+    const html = fs.readFileSync(path.join(pub, 'offline.html'), 'utf8')
+    const LINE = 'PC 주소가 바뀌었으면 PC 두레의 휴대폰 창 QR 로 크롬에서 열고 [두레 앱으로 열기]를 다시 눌러 주세요.'
+    const text = html.replace(/<[^>]+>/g, '')
+    expect(text).toContain(LINE)
+    // 안내(Tailscale) 다음, [다시 시도] 앞
+    expect(text.indexOf('Tailscale 이 켜져 있는지 봐 주세요.')).toBeLessThan(text.indexOf(LINE))
+    expect(text.indexOf(LINE)).toBeLessThan(text.indexOf('다시 시도'))
+    // 그 줄은 class="app-only" — 기본은 숨고 html[data-app] 일 때만
+    const line = html.match(/<p class="([^"]*)"[^>]*>[^<]*PC 주소가 바뀌었으면/)
+    expect(line?.[1].split(' ')).toContain('app-only')
+    expect(html).toMatch(/\.app-only\s*\{\s*display:\s*none;?\s*\}/)
+    expect(html).toMatch(/html\[data-app\]\s+\.app-only\s*\{\s*display:\s*block;?\s*\}/)
+  })
+
+  it('오프라인 화면이 바뀌면 캐시 이름도 바뀐다 — 받아 둔 옛 화면에 머물지 않게(dure-offline-3)', async () => {
+    const a = load({ fetch: serve() })
+    await a.fire('install')
+    expect([...a.caches.store.keys()]).toContain('dure-offline-3')
+  })
+
   it('미리 받아 둔 것이 없고 망도 안 되면 — 브라우저 오류 화면(Response.error)', async () => {
     const a = load({ fetch: async () => { throw new TypeError('Failed to fetch') } })
     await a.fire('install')

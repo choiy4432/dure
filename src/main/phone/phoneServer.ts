@@ -11,7 +11,7 @@ import { ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../../shared/attachments'
 import type { InvokeResult } from '../../shared/ipcContract'
 import type { PhoneDevice } from '../../shared/phoneTypes'
 import {
-  PHONE_CLOSE_UNPAIRED, PHONE_PATHS, PHONE_WS_MESSAGE_MAX, phoneCookieName, type PhoneServerMessage,
+  PHONE_CLOSE_UNPAIRED, PHONE_PATHS, PHONE_WS_MESSAGE_MAX, phoneCookieName, type PhoneAndroidApp, type PhoneMeResponse, type PhoneServerMessage,
 } from '../../shared/phoneWire'
 import type { Dispatch } from '../dispatch'
 import type { Pairing } from './pairing'
@@ -147,9 +147,9 @@ export interface PhoneServerOptions {
   onClients?: () => void
   /**
    * 안드로이드 앱 — 요청마다 묻는다. statements 는 /.well-known/assetlinks.json 의 내용, apk 는 /dure.apk 로 내어 줄 파일(없으면 null → 404).
-   * 둘 다 쿠키 없이(공개) · Host 확인만 한다. 옵션이 없으면 두 길 모두 404
+   * 둘 다 쿠키 없이(공개) · Host 확인만 한다. 옵션이 없으면 두 길 모두 404. apk 의 판·패키지는 /api/me 의 androidApp 으로도 알린다(경로는 빼고)
    */
-  android?: () => { statements: object[]; apk: { path: string; versionCode: number } | null }
+  android?: () => { statements: object[]; apk: { path: string; versionCode: number; packageName: string } | null }
   /** e2e 만 — Host `127.0.0.1:<포트>` · Origin `http://127.0.0.1:<포트>` 도 받는다 */
   allowLocal?: boolean
   /** 시험만 — 상한을 줄여 본다. 안 준 칸은 기본값 */
@@ -447,7 +447,7 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
       const a = authOf(req, gate)
       if (a === 'error') return refuse(req, res, 503, E.busy)
       if (a === 'none') return refuse(req, res, 401, E.unpaired)
-      if (p === PHONE_PATHS.me) return sendJson(res, 200, { ok: true, device: deviceView(a.device) })
+      if (p === PHONE_PATHS.me) return sendJson(res, 200, { ok: true, device: deviceView(a.device), androidApp: androidAppView() } satisfies PhoneMeResponse)
       let publicKey: string
       try {
         publicKey = o.vapidKey()
@@ -472,6 +472,12 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
     } catch {
       return null
     }
+  }
+
+  /** /api/me 의 androidApp — 판과 패키지만(파일 경로는 휴대폰에 알리지 않는다) */
+  function androidAppView(): PhoneAndroidApp | null {
+    const apk = androidNow()?.apk
+    return apk ? { versionCode: apk.versionCode, packageName: apk.packageName } : null
   }
 
   function assetLinks(req: IncomingMessage, res: ServerResponse): Promise<void> | void {
