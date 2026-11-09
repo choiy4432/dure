@@ -487,3 +487,45 @@ describe('SettingsDialog — 두레', () => {
     expect(spy).toHaveBeenCalledWith(true)
   })
 })
+
+const described = (el: HTMLElement) =>
+  (el.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
+    .map(id => document.getElementById(id)?.textContent ?? '').join(' ')
+
+describe('SettingsDialog — 설명·오류 글 잇기', () => {
+  it('숫자 칸 — describedby 가 설명을 담고 · 잘못 적으면 오류 글(role=alert)도 담고 · 고치면 빠진다', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    goTab(dlg, '에이전트')
+    const input = limitInput(dlg)
+    expect(described(input)).toContain('사람 확인 없이 이어서 주고받는 횟수')
+    expect(described(input)).not.toContain('1부터 20까지 적을 수 있어요')
+    fireEvent.change(input, { target: { value: '21' } })
+    expect(described(input)).toContain('사람 확인 없이 이어서 주고받는 횟수')
+    expect(described(input)).toContain('1부터 20까지 적을 수 있어요')
+    expect(within(dlg).getByText('1부터 20까지 적을 수 있어요').getAttribute('role')).toBe('alert')
+    fireEvent.change(input, { target: { value: '7' } })
+    expect(described(input)).not.toContain('1부터 20까지 적을 수 있어요')
+    expect(described(input)).toContain('사람 확인 없이 이어서 주고받는 횟수')
+  })
+
+  it('스위치 실패 — 오류 글이 그 스위치의 describedby 에 들어가고 role=alert', async () => {
+    setNotify.mockRejectedValueOnce(new Error('저장하지 못했어요'))
+    await renderApp()
+    const { dlg } = openSettings()
+    goTab(dlg, '알림')
+    const asks = sw(dlg, '승인·질문이 오면')
+    expect(described(asks)).not.toContain('저장하지 못했어요')
+    await act(async () => { fireEvent.click(asks) })
+    await settle()
+    expect(described(sw(dlg, '승인·질문이 오면'))).toContain('저장하지 못했어요')
+    expect(within(dlg).getByText('저장하지 못했어요').getAttribute('role')).toBe('alert')
+  })
+
+  it('재우기 radiogroup — describedby 가 설명을 가리킨다', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    const sleep = within(dlg).getByRole('radiogroup', { name: '쉬는 에이전트 재우기' })
+    expect(described(sleep)).toContain('쉬는 동안 claude 를 내려 메모리를 비워요 · 말을 걸면 다시 깨요')
+  })
+})
