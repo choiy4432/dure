@@ -4,10 +4,11 @@
     <string name="connecting">PC 에 연결하고 있어요</string>
     <string name="first_title">PC 두레와 이어 주세요</string>
     <string name="first_body">이 앱은 PC 의 두레를 휴대폰에서 여는 앱이에요.</string>
-    <string name="first_step_1_no" translatable="false">1</string>
-    <string name="first_step_1">PC 두레의 \'휴대폰\' 창에서 QR 로 크롬을 열어요</string>
-    <string name="first_step_2_no" translatable="false">2</string>
-    <string name="first_step_2">크롬의 두레 화면에서 [두레 앱으로 열기]를 눌러요</string>
+    <!-- 처음 쓰기의 번호 줄 — 이 순서대로 1, 2, …(StartActivity 가 first_run_step.xml 로 그린다) -->
+    <string-array name="first_steps">
+        <item>PC 두레의 \'휴대폰\' 창에서 QR 로 크롬을 열어요</item>
+        <item>크롬의 두레 화면에서 [두레 앱으로 열기]를 눌러요</item>
+    </string-array>
     <!-- 기억한 PC 와 다른 PC 의 주소가 왔을 때 묻는 창(글은 새 PC 의 호스트[:포트]) -->
     <string name="switch_title">다른 PC 로 바꿀까요?</string>
     <string name="switch_change">바꾸기</string>

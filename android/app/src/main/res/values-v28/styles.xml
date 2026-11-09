@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 안드로이드 9 이상 — 처음 쓰기의 줄 높이를 웹과 같게(제목 34 · 글 24). 번호 줄의 글(Dure.FirstRun.Step)은 Body 를 물려받는다 -->
+<resources>
+    <style name="Dure.FirstRun.Title" parent="Base.Dure.FirstRun.Title">
+        <item name="android:lineHeight">34sp</item>
+    </style>
+
+    <style name="Dure.FirstRun.Body" parent="Base.Dure.FirstRun.Body">
+        <item name="android:lineHeight">24sp</item>
+    </style>
+</resources>

@@ -6,22 +6,31 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.animation.LinearInterpolator;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import androidx.browser.customtabs.CustomTabColorSchemeParams;
+import androidx.browser.customtabs.CustomTabsService;
 import androidx.browser.trusted.TrustedWebActivityIntentBuilder;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import com.google.androidbrowserhelper.trusted.ChromeLegacyUtils;
 import com.google.androidbrowserhelper.trusted.SessionStore;
 import com.google.androidbrowserhelper.trusted.SharedPreferencesTokenStore;
 import com.google.androidbrowserhelper.trusted.TwaLauncher;
+
+import java.util.List;
 
 /**
  * 두레 앱의 시작 화면 — 보이는 화면에서 TWA 를 연다(androidbrowserhelper 의 투명한 LauncherActivity 는 안드로이드 17 에서 아무것도 안 했다, 실측).
@@ -30,6 +39,7 @@ import com.google.androidbrowserhelper.trusted.TwaLauncher;
  *   기억한 PC 와 같으면 그냥 그 주소로, 다른 PC 면 '다른 PC 로 바꿀까요?' 를 묻는다.
  * - 아니면 기억한 PC 의 origin + /mobile.html 로. 기억한 게 없으면 '처음 쓰기' 안내.
  * - 여는 주소에는 앱 판(?app=)을 싣는다 — 웹이 앱 안인 것과 앱 판을 안다.
+ * - TWA 는 크롬으로 연다(TwaProvider — 짝 쿠키가 크롬 프로필에 있다. 기본 브라우저가 삼성 인터넷·엣지여도). 크롬이 TWA 를 못 열 때만 androidbrowserhelper 가 고른다.
  * PC 가 꺼져 있어도 곧바로 연다 — 크롬이 앱 인정을 기억해 주소창 없이 웹의 'PC 에 연결하고 있어요'가 뜬다(실측).
  * 수명은 LauncherActivity 와 같은 꼴: TWA 를 띄운 뒤 사용자가 돌아오면(onRestart) 끝낸다. 살아 있는 동안 온 새 주소는 onNewIntent 가 같은 길로 다룬다.
  */
@@ -173,10 +183,27 @@ public class StartActivity extends Activity {
                         .build());
         // LauncherActivity 와 같게 — 작업(task)마다 세션, 크롬 토큰은 앱 저장소에(DelegationService 가 크롬인지 이것으로 본다).
         // 다시 열 때(onNewIntent)는 같은 것을 쓴다 — 세션이 있으면 곧바로, 아직 잇는 중이면 기다리던 것을 새 주소로 바꾼다
+        // 브라우저는 크롬으로 못 박는다(짝 쿠키가 크롬 프로필에 있다 — TwaProvider). 크롬이 TWA 를 못 열면 null(androidbrowserhelper 가 고른다)
         if (launcher == null) {
-            launcher = new TwaLauncher(this, null, SessionStore.makeSessionId(getTaskId()), new SharedPreferencesTokenStore(this));
+            launcher = new TwaLauncher(this, provider(), SessionStore.makeSessionId(getTaskId()), new SharedPreferencesTokenStore(this));
         }
         launcher.launch(builder, null, null, () -> browserWasLaunched = true, TwaLauncher.CCT_FALLBACK_STRATEGY);
+    }
+
+    /**
+     * TWA 를 띄울 브라우저 — 크롬의 CustomTabsService 를 찾아(매니페스트 queries 가 보이게 한다) TWA 갈래가 있거나 TWA 를 아는 옛 크롬(72~74)이면 크롬.
+     * 아니면 null(androidbrowserhelper 의 TwaProviderPicker 가 고른다 — 같은 규칙으로 기본 브라우저부터)
+     */
+    private String provider() {
+        PackageManager pm = getPackageManager();
+        Intent query = new Intent(CustomTabsService.ACTION_CUSTOM_TABS_CONNECTION).setPackage(TwaProvider.CHROME);
+        List<ResolveInfo> services = pm.queryIntentServices(query, PackageManager.GET_RESOLVED_FILTER);
+        boolean twa = false;
+        for (ResolveInfo s : services) {
+            if (s.filter != null && TwaProvider.hasTwaCategory(s.filter.categoriesIterator())) twa = true;
+        }
+        if (!twa && !services.isEmpty()) twa = ChromeLegacyUtils.supportsTrustedWebActivities(pm, TwaProvider.CHROME);
+        return TwaProvider.choose(!services.isEmpty(), twa);
     }
 
     /**
@@ -219,6 +246,7 @@ public class StartActivity extends Activity {
         screen = R.layout.first_run;
         stopSpin();
         setContentView(R.layout.first_run);
+        addSteps();
         View body = findViewById(R.id.first_run_body);
         int left = body.getPaddingLeft();
         int top = body.getPaddingTop();
@@ -230,6 +258,23 @@ public class StartActivity extends Activity {
             return insets;
         });
         ViewCompat.requestApplyInsets(body);
+    }
+
+    /** 처음 쓰기의 번호 줄 — first_steps 의 순서대로 한 줄 꼴(first_run_step.xml)을 채운다. 읽어 주는 프로그램은 번호와 함께 읽는다(번호 동그라미는 건너뛴다) */
+    private void addSteps() {
+        LinearLayout steps = findViewById(R.id.first_run_steps);
+        LayoutInflater inflater = LayoutInflater.from(this);
+        String[] texts = getResources().getStringArray(R.array.first_steps);
+        for (int i = 0; i < texts.length; i++) {
+            View row = inflater.inflate(R.layout.first_run_step, steps, false);
+            String no = Integer.toString(i + 1);
+            TextView badge = row.findViewById(R.id.step_no);
+            badge.setText(no);
+            TextView text = row.findViewById(R.id.step_text);
+            text.setText(texts[i]);
+            text.setContentDescription(no + ". " + texts[i]);
+            steps.addView(row);
+        }
     }
 
     /** 고리는 보이는 동안만 돈다 — TWA 가 위에 있거나 앱이 뒤로 가면(onStop) 멈춘다(애니메이션을 끈 기기에서는 Animator 가 따라 돌지 않는다) */

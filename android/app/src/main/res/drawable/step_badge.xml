@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+<!-- 처음 쓰기의 번호 동그라미 — 모서리를 끝까지 둥글게(정사각이면 원, 글꼴이 커져 길어지면 알약 꼴 — 타원으로 찌그러지지 않는다) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <corners android:radius="999dp" />
     <solid android:color="@color/line" />
 </shape>

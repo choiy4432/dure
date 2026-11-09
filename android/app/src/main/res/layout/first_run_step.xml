@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  처음 쓰기의 번호 줄 하나 — 번호 동그라미(최소 24dp, 글꼴이 커지면 같이 커진다) + 12dp + 글(여러 줄이면 감싼다).
+  번호와 글은 첫 줄의 글자 밑선에 맞춘다(LinearLayout 의 baselineAligned). StartActivity 가 번호·글을 채운다
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal">
+
+    <TextView
+        android:id="@+id/step_no"
+        style="@style/Dure.FirstRun.Badge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:importantForAccessibility="no" />
+
+    <TextView
+        android:id="@+id/step_text"
+        style="@style/Dure.FirstRun.Step"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_weight="1" />
+</LinearLayout>

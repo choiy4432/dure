@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 빈 16dp — 처음 쓰기의 번호 줄 사이(LinearLayout divider) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <size android:height="16dp" />
+    <solid android:color="@android:color/transparent" />
+</shape>

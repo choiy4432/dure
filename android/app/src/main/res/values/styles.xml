@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  처음 쓰기(first_run.xml · first_run_step.xml)의 글 모양 — 웹 짝 맺기·오프라인 화면과 같은 크기(제목 26px/34 · 글 15px/24 · 번호 24px 13px 굵게).
+  줄 높이(android:lineHeight)는 안드로이드 9(API 28)부터라 values-v28 에서 더한다 — 그 아래 판은 글꼴의 기본 줄 높이.
+  색은 colors.xml(웹 다크 토큰) 그대로
+-->
+<resources>
+    <style name="Base.Dure.FirstRun.Title" parent="">
+        <item name="android:textSize">26sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">-0.02</item>
+        <item name="android:textColor">@color/text</item>
+    </style>
+
+    <style name="Dure.FirstRun.Title" parent="Base.Dure.FirstRun.Title" />
+
+    <style name="Base.Dure.FirstRun.Body" parent="">
+        <item name="android:textSize">15sp</item>
+        <item name="android:textColor">@color/text_3</item>
+    </style>
+
+    <style name="Dure.FirstRun.Body" parent="Base.Dure.FirstRun.Body" />
+
+    <!-- 번호 줄의 글 — 글 모양은 Body, 색만 한 단 밝게(시안 그대로) -->
+    <style name="Dure.FirstRun.Step" parent="Dure.FirstRun.Body">
+        <item name="android:textColor">@color/text_2</item>
+    </style>
+
+    <!-- 번호 동그라미 — 최소 24dp 에 글을 감싼다(글꼴 크기 설정이 커도 잘리지 않게) -->
+    <style name="Dure.FirstRun.Badge" parent="">
+        <item name="android:minWidth">24dp</item>
+        <item name="android:minHeight">24dp</item>
+        <item name="android:paddingStart">6dp</item>
+        <item name="android:paddingEnd">6dp</item>
+        <item name="android:paddingTop">2dp</item>
+        <item name="android:paddingBottom">2dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:includeFontPadding">false</item>
+        <item name="android:background">@drawable/step_badge</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+</resources>
