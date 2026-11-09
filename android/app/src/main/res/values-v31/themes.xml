@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 안드로이드 12 이상의 시스템 시작 화면은 바탕만 — 큰 앱 아이콘이 떴다가 시작 화면의 작은 로고로 바뀌며 튀지 않게 -->
+    <style name="Theme.Dure" parent="Theme.Dure.Base">
+        <item name="android:windowSplashScreenBackground">@color/bg</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+    </style>
+</resources>

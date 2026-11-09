@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 앱 이름(app_name)은 app/build.gradle 이 정한다(시험 앱은 '두레 시험') -->
+<resources>
+    <string name="connecting">PC 에 연결하고 있어요</string>
+    <string name="first_title">PC 두레와 이어 주세요</string>
+    <string name="first_body">이 앱은 PC 의 두레를 휴대폰에서 여는 앱이에요.</string>
+    <string name="first_step_1_no" translatable="false">1</string>
+    <string name="first_step_1">PC 두레의 \'휴대폰\' 창에서 QR 로 크롬을 열어요</string>
+    <string name="first_step_2_no" translatable="false">2</string>
+    <string name="first_step_2">크롬의 두레 화면에서 [두레 앱으로 열기]를 눌러요</string>
+    <string name="notification_channel">두레 알림</string>
+</resources>

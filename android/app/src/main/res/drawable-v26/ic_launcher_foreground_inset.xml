@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- maskable 아이콘(판 전체가 보여도 되는 그림)을 adaptive 아이콘의 보이는 칸(108dp 중 가운데 72dp)에 맞춘다 -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_launcher_foreground"
+    android:inset="16.667%" />

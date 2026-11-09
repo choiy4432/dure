@@ -14,6 +14,7 @@
     "e2e": "playwright test",
     "smoke": "tsx scripts/smoke-real.ts",
     "release": "node scripts/release.mjs",
+    "android": "node scripts/android/build.mjs",
     "dist": "npm run build && electron-builder --win --publish never"
   },
   "devDependencies": {

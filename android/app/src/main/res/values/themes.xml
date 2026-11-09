@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 바탕·상태 막대·탐색 막대 모두 두레 바탕색(안드로이드 15 이상은 막대가 투명하고 바탕이 비친다) -->
+    <style name="Theme.Dure.Base" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+    </style>
+
+    <style name="Theme.Dure" parent="Theme.Dure.Base" />
+</resources>

@@ -1,0 +1,106 @@
+// 두레 안드로이드 앱 — PC 두레의 휴대폰 화면(mobile.html)을 TWA 로 여는 껍데기. 굽기는 scripts/android/build.mjs 가 한다
+// (도구·서명 열쇠를 환경 변수로 넘긴다 — 비밀번호는 명령줄·파일에 적지 않는다).
+plugins {
+    id 'com.android.application'
+}
+
+// 앱 판은 android/version.json 하나에서 — 껍데기(android/)가 바뀔 때만 올린다(두레 판과 따로)
+def appVersion = new groovy.json.JsonSlurper().parse(rootProject.file('version.json'))
+// 시험 앱(-PdureTest=true): 패키지 …dure.test · 이름 '두레 시험' — 진짜 앱과 같이 깔려도 겹치지 않게
+def testApp = findProperty('dureTest')?.toString() == 'true'
+// 서명: 굽는 스크립트가 넘긴다. 없으면(Gradle 을 따로 돌림) 서명하지 않는다
+def signStore = System.getenv('DURE_SIGN_STORE')
+
+android {
+    namespace = 'io.github.choiy4432.dure'
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = testApp ? 'io.github.choiy4432.dure.test' : 'io.github.choiy4432.dure'
+        minSdk = 24
+        targetSdk = 36
+        versionCode = appVersion.versionCode as int
+        versionName = appVersion.versionName as String
+        resValue 'string', 'app_name', testApp ? '두레 시험' : '두레'
+    }
+
+    signingConfigs {
+        dure {
+            if (signStore) {
+                storeFile = file(signStore)
+                storePassword = System.getenv('DURE_SIGN_PASS')
+                keyAlias = System.getenv('DURE_SIGN_ALIAS')
+                keyPassword = System.getenv('DURE_SIGN_PASS')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            signingConfig = signStore ? signingConfigs.dure : null
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+        resValues = true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests.all {
+            testLogging {
+                events 'passed', 'skipped', 'failed'
+                exceptionFormat = 'full'
+            }
+        }
+    }
+}
+
+// 아이콘은 한 벌(resources/icon/mobile — scripts/icon/build.mjs 가 굽는다)만 둔다. 구울 때 res 이름으로 옮겨 싣는다
+abstract class DureIcons extends DefaultTask {
+    @InputDirectory
+    @PathSensitive(PathSensitivity.RELATIVE)
+    abstract DirectoryProperty getIconDir()
+
+    @OutputDirectory
+    abstract DirectoryProperty getOutputDir()
+
+    @TaskAction
+    void copy() {
+        def files = [
+            'mipmap-xxxhdpi/ic_launcher.png'           : 'dure-192.png',          // 런처(안드로이드 7 — 둥근 모서리 그대로)
+            'drawable-nodpi/ic_launcher_foreground.png': 'dure-maskable-512.png', // 런처(8 이상 — adaptive 앞면)
+            'drawable-nodpi/dure_logo.png'             : 'dure-512.png',          // 시작·처음 쓰기 화면의 로고
+            'drawable-xxxhdpi/ic_notification_icon.png': 'dure-badge-96.png',     // 알림 작은 아이콘(흰 단색)
+        ]
+        def out = outputDir.get().asFile
+        out.deleteDir()
+        files.each { target, source ->
+            def to = new File(out, target)
+            to.parentFile.mkdirs()
+            java.nio.file.Files.copy(iconDir.file(source).get().asFile.toPath(), to.toPath())
+        }
+    }
+}
+
+def dureIcons = tasks.register('dureIcons', DureIcons) {
+    iconDir.set(rootProject.file('../resources/icon/mobile'))
+    outputDir.set(layout.buildDirectory.dir('generated/dure-icons/res'))
+}
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        variant.sources.res.addGeneratedSourceDirectory(dureIcons, { it.outputDir })
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.7.4'
+    testImplementation 'junit:junit:4.13.2'
+}

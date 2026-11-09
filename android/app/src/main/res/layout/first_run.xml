@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 처음 쓰기(시안 app-a) — 기억한 PC 가 없을 때. 위·아래 여백은 StartActivity 가 상태·탐색 막대만큼 더한다. 바탕은 테마(windowBackground) -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:id="@+id/first_run_body"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="20dp"
+        android:paddingTop="40dp"
+        android:paddingEnd="20dp"
+        android:paddingBottom="20dp">
+
+        <ImageView
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:importantForAccessibility="no"
+            android:src="@drawable/dure_logo" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:accessibilityHeading="true"
+            android:text="@string/first_title"
+            android:textColor="@color/text"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            tools:targetApi="p" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:lineSpacingMultiplier="1.3"
+            android:text="@string/first_body"
+            android:textColor="@color/text_3"
+            android:textSize="12.5sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:background="@drawable/step_badge"
+                android:gravity="center"
+                android:importantForAccessibility="no"
+                android:text="@string/first_step_1_no"
+                android:textColor="@color/text"
+                android:textSize="11sp" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:layout_weight="1"
+                android:lineSpacingMultiplier="1.25"
+                android:text="@string/first_step_1"
+                android:textColor="@color/text_2"
+                android:textSize="12.5sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:background="@drawable/step_badge"
+                android:gravity="center"
+                android:importantForAccessibility="no"
+                android:text="@string/first_step_2_no"
+                android:textColor="@color/text"
+                android:textSize="11sp" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:layout_weight="1"
+                android:lineSpacingMultiplier="1.25"
+                android:text="@string/first_step_2"
+                android:textColor="@color/text_2"
+                android:textSize="12.5sp" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

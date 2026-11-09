@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 웹 휴대폰 화면(tokens.css 다크)과 같은 색 -->
+<resources>
+    <color name="bg">#111827</color>
+    <color name="text">#E5E9F0</color>
+    <color name="text_2">#CBD5E1</color>
+    <color name="text_3">#A3B1C6</color>
+    <color name="line">#243044</color>
+    <color name="accent">#3B82F6</color>
+    <!-- 런처 아이콘 바탕(maskable 아이콘의 판 색) -->
+    <color name="icon_bg">#2563EB</color>
+</resources>

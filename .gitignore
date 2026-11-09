@@ -14,3 +14,8 @@ DESIGN.md
 PRODUCT.md
 .impeccable/
 .gstack/
+# 안드로이드 앱 — 구운 APK·Gradle 산출물·SDK 자리(scripts/android/build.mjs 가 만든다)
+resources/android/
+android/**/build/
+android/.gradle/
+android/local.properties

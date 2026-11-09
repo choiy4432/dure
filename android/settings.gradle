@@ -1,0 +1,10 @@
+// 두레 안드로이드 앱(TWA 껍데기) — 굽기는 scripts/android/build.mjs(npm run android)가 한다
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+dependencyResolutionManagement {
+    repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
+    repositories { google(); mavenCentral() }
+}
+rootProject.name = 'dure-android'
+include ':app'
