@@ -130,7 +130,7 @@ function Frame({
         aria-labelledby={titleId}
         tabIndex={-1}
       >
-        <nav className="st-nav">
+        <div className="st-nav">
           <h2 id={titleId} className="dlg-t st-title">
             설정
           </h2>
@@ -149,7 +149,7 @@ function Frame({
                   role="tab"
                   className="st-tab"
                   aria-selected={on}
-                  aria-controls={`${id}-pane`}
+                  aria-controls={on ? `${id}-pane` : undefined}
                   aria-describedby={t.key === 'phone' && phoneStatus ? phoneStatusId : undefined}
                   tabIndex={on ? 0 : -1}
                   onClick={() => setTab(t.key)}
@@ -171,7 +171,7 @@ function Frame({
               {PHONE.status(phone)}
             </span>
           )}
-        </nav>
+        </div>
         <div className="st-main">
           <div ref={pane} id={`${id}-pane`} className="st-pane" role="tabpanel" aria-labelledby={`${id}-tab-${tab}`}>
             {tab === 'general' && <GeneralPane />}

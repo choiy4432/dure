@@ -58,7 +58,6 @@ export const SLEEP_BLOCK_WORD: Record<SleepBlock, string> = {
 /** 설정의 재우는 시간 칸 — 문구와 고르는 값의 이름 */
 export const SLEEP_SETTING = {
   label: '쉬는 에이전트 재우기',
-  desc: '이만큼 쉬면 claude 를 내려 메모리를 비워요. 말을 걸면 몇 초 뒤 그대로 이어서 깨어나요',
 }
 export const SLEEP_CHOICE_WORD: Record<number, string> = { 0: '끔', 15: '15분', 30: '30분', 60: '1시간', 180: '3시간' }
 
@@ -494,7 +493,6 @@ export const UPDATE_TOAST = {
 
 /** 설정 — 업데이트 · 안내 · 켤 때 claude 최신으로 */
 export const SETTINGS_UPDATE = {
-  label: '업데이트',
   version: (v: string) => `두레 ${v}`,
   check: '업데이트 확인',
   checking: '확인하는 중…',
@@ -513,11 +511,8 @@ export const SETTINGS_UPDATE = {
   retry: UPDATE_TOAST.retry,
   installFailed: UPDATE_TOAST.installFailed,
   dev: '개발 실행이라 확인하지 않아요',
-  tourLabel: '안내',
   tour: '안내 다시 보기',
-  tourDesc: '처음 켰을 때의 둘러보기를 다시 해요',
   claudeAuto: '켤 때 claude 최신으로',
-  claudeAutoDesc: '두레를 켤 때 이 PC 와 서버의 claude 를 최신 버전으로 바꿔요',
 } as const
 
 /** 업데이트 오류 글의 첫 줄만, 앞뒤 공백 없이 80자까지(넘으면 …) */

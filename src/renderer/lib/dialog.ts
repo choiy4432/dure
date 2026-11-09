@@ -112,7 +112,7 @@ export function useDialogFocus(
         return
       }
       if (e.key !== 'Tab') return
-      const items = Array.from(dlg.querySelectorAll<HTMLElement>(FOCUSABLE))
+      const items = Array.from(dlg.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(el => el.tabIndex >= 0)
       const at = document.activeElement
       const inside = dlg.contains(at)
       if (items.length === 0) {

@@ -14,6 +14,8 @@ import { Row, Section, SwitchRow } from './settings/parts'
 // 위 띠 알약은 설정 창을 이 탭으로 연다. 스위치는 저장 단추 없이 바로 setPhone — 상태는 main 의 'phone' 사건으로만 바뀐다(되묻지 않는다).
 
 /** 화면 글 — 해요체 */
+const connectedN = (n: number) => (n > 0 ? `${n}대 접속 중` : '접속 중인 휴대폰 없음')
+
 export const PHONE = {
   switchName: '휴대폰으로 쓰기',
   on: '켜짐',
@@ -44,7 +46,7 @@ export const PHONE = {
   rechecking: '확인하는 중…',
   // 상태 상자 — Tailscale 이 다 됐으면 단계를 접은 한 줄
   address: '휴대폰 주소',
-  connectedN: (n: number) => (n > 0 ? `${n}대 접속 중` : '접속 중인 휴대폰 없음'),
+  connectedN,
   ready: 'Tailscale 준비됨',
   shorten: '주소 짧게 하기',
   tip: 'Tailscale 대시보드에서 PC 이름을 dure 처럼 바꾸면 주소가 짧아져요 — 바꾸기 전에 휴대폰 연결을 끄고, 바꾼 뒤 다시 켜 주세요',
@@ -74,11 +76,11 @@ export const PHONE = {
   openAtLoginOffered: 'PC 를 다시 켜도 휴대폰 연결이 이어지게 함께 켰어요',
   noState: '휴대폰 연결 상태를 아직 받지 못했어요',
   // 상태 한 줄(설정의 휴대폰 탭 설명 · 위 띠 알약)
-  status: (p: PhoneState) => (!p.settings.enabled ? '꺼짐' : routeOpen(p) ? `켜짐 · ${p.connected}대 접속 중` : '켜짐 · 아직 안 열렸어요'),
+  status: (p: PhoneState) => (!p.settings.enabled ? '꺼짐' : routeOpen(p) ? `켜짐 · ${connectedN(p.connected)}` : '켜짐 · 아직 안 열렸어요'),
   /** 위 띠 알약의 보이는 글 = 이름 */
   pill: (n: number) => `휴대폰 · ${n}`,
   /** 위 띠 알약의 긴 말 — 설명(aria-describedby)·툴팁 */
-  pillDesc: (p: PhoneState) => (routeOpen(p) ? `휴대폰 연결 켜짐 · ${p.connected}대 접속 중` : '휴대폰 연결 켜짐 · 아직 안 열렸어요'),
+  pillDesc: (p: PhoneState) => (routeOpen(p) ? `휴대폰 연결 켜짐 · ${connectedN(p.connected)}` : '휴대폰 연결 켜짐 · 아직 안 열렸어요'),
 } as const
 
 /** Tailscale 내려받기 — 기본 브라우저로 */
@@ -475,7 +477,7 @@ function Ready({ p, enabled }: { p: PhoneState; enabled: boolean }) {
           {PHONE.ready}
         </span>
         {url !== null && (
-          <button type="button" className="phn-link" data-shorten aria-expanded={tip} aria-controls={tipId} onClick={() => setTip(t => !t)}>
+          <button type="button" className="phn-link" data-shorten aria-expanded={tip} aria-controls={tip ? tipId : undefined} onClick={() => setTip(t => !t)}>
             {PHONE.shorten}
           </button>
         )}

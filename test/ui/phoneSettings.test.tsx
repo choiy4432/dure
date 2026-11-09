@@ -336,6 +336,7 @@ describe('휴대폰 탭 — 상태 상자', () => {
     expect(box.textContent).toContain('1대 접속 중')
     expect(box.querySelector('.dot.g')).not.toBeNull()
     emit({ connected: 0, online: [] })
+    expect(described(phoneTab(screen.getByRole('dialog', { name: '설정' })))).toBe('켜짐 · 접속 중인 휴대폰 없음')
     expect(box.textContent).toContain('접속 중인 휴대폰 없음')
     expect(box.textContent).not.toContain('0대 접속 중')
     expect(box.querySelector('.phn-conn .dot.s')).not.toBeNull()
@@ -1074,7 +1075,7 @@ describe('안드로이드 앱 칸', () => {
   const section = (dlg: HTMLElement) => within(dlg).queryByRole('heading', { name: '안드로이드 앱' })
   const open = () => ({ settings: { ...phone.settings, enabled: true }, tailscale: READY, url: URL_OPEN, androidApp: APP })
 
-  it('앱이 실려 있고 길이 열렸을 때만 칸이 보인다 — 두레 앱 · 판 · 안내 한 줄 · [앱 받기] · 순서는 짝 맺은 휴대폰 다음, 휴대폰 알림 · PC 전원 앞', async () => {
+  it('앱이 실려 있고 길이 열렸을 때만 칸이 보인다 — 두레 앱 · 판 · 안내 한 줄 · [앱 받기] · 순서는 오른쪽 칸 — 휴대폰 알림 다음', async () => {
     phone = { ...phone, ...open() }
     await renderApp()
     const { dlg } = await openPhone()

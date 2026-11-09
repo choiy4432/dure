@@ -374,10 +374,10 @@ describe('sw.js — PC 에 닿지 않을 때 화면(오프라인)', () => {
     expect(html).toMatch(/html\[data-app\]\s+\.app-only\s*\{\s*display:\s*block;?\s*\}/)
   })
 
-  it('오프라인 화면이 바뀌면 캐시 이름도 바뀐다 — 받아 둔 옛 화면에 머물지 않게(dure-offline-3)', async () => {
+  it('오프라인 화면이 바뀌면 캐시 이름도 바뀐다 — 받아 둔 옛 화면에 머물지 않게(dure-offline-4)', async () => {
     const a = load({ fetch: serve() })
     await a.fire('install')
-    expect([...a.caches.store.keys()]).toContain('dure-offline-3')
+    expect([...a.caches.store.keys()]).toContain('dure-offline-4')
   })
 
   it('미리 받아 둔 것이 없고 망도 안 되면 — 브라우저 오류 화면(Response.error)', async () => {

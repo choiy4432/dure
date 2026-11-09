@@ -5338,21 +5338,7 @@ code {
 }
 
 /* 설정의 업데이트 칸 — 버전 + 확인 단추 한 줄, 아래에 결과 줄(+ 바로 할 일 단추) */
-.upd-v {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  line-height: 20px;
-  color: var(--text);
-}
 
-.upd-line {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 28px;
-}
 
 .upd-t {
   min-width: 0;
@@ -5372,11 +5358,6 @@ code {
   color: var(--text);
 }
 
-.sw-en {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--muted);
-}
 
 /* 응답 기다리는 스위치는 흐리게, 잠긴 스위치는 누를 수 없는 손 모양 */
 .sw[aria-busy="true"] {
@@ -6607,7 +6588,7 @@ body > .dlg-bd:not([inert]) ~ .dlg-bd {
   align-self: flex-start;
 }
 
-/* 상태 상자 아래 묶음 넷 — 두 칸(왼쪽: 짝 맺은 휴대폰 · 안드로이드 앱 / 오른쪽: 휴대폰 알림 · PC 전원), 좁으면 한 칸 */
+/* 상태 상자 아래 묶음 넷 — 두 칸(왼쪽: 짝 맺은 휴대폰 · PC 전원 / 오른쪽: 휴대폰 알림 · 안드로이드 앱), 좁으면 한 칸 */
 .phn-cols {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -218,7 +218,7 @@ export function RoomList({ onOpenRoom, onOpenAgent }: Props) {
                 <Smartphone className="i" aria-hidden="true" />
                 <span className="m-pop-hd-tx">
                   <b>{device ?? '이 휴대폰'}</b>
-                  <span>이름 바꾸기와 짝 끊기는 PC 설정의 휴대폰 칸에서 해요</span>
+                  <span>이름 바꾸기와 짝 끊기는 PC 두레 → 설정 → 휴대폰에서 해요</span>
                 </span>
               </div>
             }

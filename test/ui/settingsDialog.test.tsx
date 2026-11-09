@@ -115,6 +115,23 @@ describe('SettingsDialog — 탭 틀', () => {
     expect(within(dlg).queryByRole('button', { name: '취소' })).toBeNull()
   })
 
+  it('focusTrap — 고르지 않은 탭(tabindex -1)은 가두기에서 빠진다: 고른 탭 ⇄ [닫기] 로 돈다', async () => {
+    await renderApp()
+    const { dlg } = openSettings()
+    goTab(dlg, '두레')
+    const sel = tabOf(dlg, '두레')
+    const close = within(dlg).getByRole('button', { name: '닫기' })
+    expect(sel.getAttribute('tabindex')).toBe('0')
+    sel.focus()
+    fireEvent.keyDown(sel, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(close)
+    fireEvent.keyDown(close, { key: 'Tab' })
+    expect(document.activeElement).toBe(sel)
+    // 고른 탭만 aria-controls 를 가진다
+    const tabs = within(dlg).getAllByRole('tab')
+    expect(tabs.filter(t => t.hasAttribute('aria-controls'))).toEqual([sel])
+  })
+
   it('[닫기] · Esc 로 닫는다', async () => {
     await renderApp()
     const { dlg, opener } = openSettings()
@@ -487,7 +504,7 @@ describe('SettingsDialog — 두레', () => {
     expect(sw(dlg, '켤 때 claude 최신으로').getAttribute('aria-checked')).toBe('false')
 
     expect(within(dlg).getByText('처음 쓰는 안내')).toBeTruthy()
-    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '다시 보기' })) })
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '안내 다시 보기' })) })
     expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
     expect(spy).toHaveBeenCalledWith(true)
   })

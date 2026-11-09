@@ -83,7 +83,7 @@ export function AboutPane({ onReplayTour }: { onReplayTour: () => void }) {
           onToggle={() => void apply.run('auto', () => getStore().setPrefs({ claudeAutoUpdate: !auto }))}
         />
         <Row name="처음 쓰는 안내">
-          <button type="button" className="btn sec sm" onClick={onReplayTour}>
+          <button type="button" className="btn sec sm" aria-label={W.tour} onClick={onReplayTour}>
             다시 보기
           </button>
         </Row>
