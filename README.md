@@ -104,11 +104,12 @@ npm start
 
 1. 안드로이드 앱을 굽는다: `npm run android`. 환경 변수 두 개가 필요해요 — `DURE_ANDROID_TOOLS`(JDK·Android SDK·Gradle 이 든 폴더)와 `DURE_ANDROID_KEYSTORE_PASS`(서명 열쇠 비밀번호). 진짜 서명 열쇠는 `%USERPROFILE%\.dure-release\android-release.jks` 에 둬요(다른 곳이면 `DURE_ANDROID_KEYSTORE`).
    - 앱 껍데기(`android/`)를 그대로 두었고 전에 진짜로 구운 앱이 있으면 다시 안 구워도 돼요. 릴리스가 앱 파일·판·패키지·껍데기 소스를 맞춰 보고, 안 맞으면(시험용 `--test` 로 구운 것 포함) 올리기 전에 멈춰요.
-2. `npm run release -- --notes <노트 파일>` (먼저 `--dry-run` 으로 할 일만 확인). 노트는 맨 앞이 `- ` 목록이에요.
+2. `npm run release -- --notes <노트 파일>` (먼저 `--dry-run` 으로 할 일만 확인). 노트는 맨 앞이 `- ` 목록이에요. 올리기 전에 typecheck 와 시험을 먼저 돌리고, 하나라도 실패하면 멈춰요.
+3. 릴리스는 **초안(draft)** 으로 올라가요. GitHub 에서 초안을 확인하고 [Publish release] 를 누르면 그때 자동 업데이트가 나가요.
 
 > ⚠️ **서명 열쇠 파일(`android-release.jks`)과 그 비밀번호를 꼭 따로 백업해 두세요**(USB · 비밀번호 관리자 등).
 > 잃으면 안드로이드 앱을 **다시는 업데이트할 수 없어요** — 같은 앱을 다른 열쇠로는 덮어 깔 수 없어서, 쓰는 사람 모두 앱을 지우고 다시 깔아야 해요.
 
 ## 라이선스
 
-없어요 — 팀 내부용으로 공개해 둔 레포예요.
+MIT 라이선스예요 — [LICENSE](LICENSE) 를 봐 주세요. 설치 파일에 든 글꼴(Noto Sans KR · JetBrains Mono)은 SIL OFL 1.1 이고, 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 에 있어요.

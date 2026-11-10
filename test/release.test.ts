@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ANDROID_PACKAGE } from '../src/shared/androidApp'
-import { ANDROID_REAL_PACKAGE, ANDROID_STALE, androidProblem, notesProblem, releaseArgs, show } from '../scripts/releaseLib.mjs'
+import { ANDROID_REAL_PACKAGE, ANDROID_STALE, DRAFT_HINT, androidProblem, notesProblem, releasePlan, releaseArgs, runPlan, show } from '../scripts/releaseLib.mjs'
 
 describe('releaseArgs', () => {
   it('제목은 한 칸, 파일 셋, 노트 경로는 공백이 있어도 한 칸', () => {
@@ -12,7 +12,7 @@ describe('releaseArgs', () => {
     expect(a.slice(3, 6)).toEqual(['dist/Dure-Setup-0.1.0.exe', 'dist/Dure-Setup-0.1.0.exe.blockmap', 'dist/latest.yml'])
     expect(a[a.indexOf('--title') + 1]).toBe('두레 0.1.0')
     expect(a[a.indexOf('--notes-file') + 1]).toBe(notes)
-    expect(a).toHaveLength(10)
+    expect(a).toHaveLength(11)
   })
   it('show 는 공백·특수문자 인자를 따옴표로 감싼다', () => {
     expect(show('gh', ['--title', '두레 0.1.0', 'a&b', 'plain'])).toBe('gh --title "두레 0.1.0" "a&b" plain')
@@ -56,8 +56,32 @@ it('release.mjs — 지금 android/ 의 sourceHash 로 가드를 부르고, 가�
   expect(src).toMatch(/import \{ androidSourceHash \} from '\.\/android\/lib\.mjs'/)
   const guard = src.indexOf("androidProblem({ apkInfo, version: androidVersion, sourceHash: androidSourceHash('android') })")
   expect(guard).toBeGreaterThan(0)
-  expect(guard).toBeLessThan(src.indexOf("spawnSync('npm run dist'"))
-  expect(guard).toBeLessThan(src.indexOf('spawnSync(\'gh\', ghArgs'))
+  expect(guard).toBeLessThan(src.indexOf('runPlan('))
 })
 
 it('릴리스 가드의 진짜 패키지 이름은 앱의 ANDROID_PACKAGE 와 같다', () => expect(ANDROID_REAL_PACKAGE).toBe(ANDROID_PACKAGE))
+
+describe('릴리스 순서', () => {
+  it('releaseRunsChecksFirst — typecheck → 시험 → 빌드 → 올리기, 앞이 실패하면 뒤는 돌리지 않는다', () => {
+    const plan = releasePlan('0.1.0', 'notes.md')
+    expect(plan.map((s) => s.name)).toEqual(['typecheck', 'test', 'dist', 'upload'])
+    expect(plan.map((s) => s.cmd)).toEqual(['npm run typecheck', 'npm test', 'npm run dist', 'gh'])
+    const ran: string[] = []
+    expect(runPlan(plan, (s) => (ran.push(s.name), 0))).toBeNull()
+    expect(ran).toEqual(['typecheck', 'test', 'dist', 'upload'])
+    for (const failing of ['typecheck', 'test', 'dist']) {
+      const seen: string[] = []
+      const bad = runPlan(plan, (s) => (seen.push(s.name), s.name === failing ? 1 : 0))
+      expect(bad).toMatch(failing)
+      expect(seen[seen.length - 1]).toBe(failing)
+      expect(seen).not.toContain('upload')
+    }
+  })
+  it('releaseIsDraft — gh release create 는 --draft 로 올리고, 끝에 Publish 안내를 찍는다', () => {
+    expect(releaseArgs('0.1.0', 'n.md')).toContain('--draft')
+    expect(DRAFT_HINT).toBe('GitHub 에서 초안을 확인하고 [Publish release] 를 누르면 자동 업데이트가 나가요')
+    const src = fs.readFileSync(path.join(__dirname, '../scripts/release.mjs'), 'utf8')
+    expect(src).toContain('DRAFT_HINT')
+    expect(src.lastIndexOf('console.log(DRAFT_HINT)')).toBeGreaterThan(src.indexOf('runPlan('))
+  })
+})

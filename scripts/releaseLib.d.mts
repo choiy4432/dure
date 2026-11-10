@@ -11,3 +11,7 @@ export function androidProblem(o: {
   /** 지금 android/ 소스의 SHA-256(androidSourceHash) */
   sourceHash: string
 }): string | null
+export const DRAFT_HINT: string
+export type ReleaseStep = { name: 'typecheck' | 'test' | 'dist' | 'upload'; cmd: string; args: string[]; shell: boolean }
+export function releasePlan(version: string, notesFile: string): ReleaseStep[]
+export function runPlan(plan: ReleaseStep[], exec: (step: ReleaseStep) => number | null): string | null
