@@ -293,7 +293,7 @@ export function serverLine(host: string, hosts: readonly SshHostEntry[] | null):
   return addr ? `${host} · ${addr}` : host
 }
 
-/** 지난 대화 탭 — 탭 이름 · 지금 배지 · 날짜 줄 꼬리 · 읽기 띠 · 아래 줄 안내·단추 · 긴 대화의 앞 줄 */
+/** 지난 대화 탭 — 탭 이름 · 지금 배지 · 날짜 줄 꼬리 · 읽기 띠 · 아래 줄 안내·단추 · 긴 대화의 앞 줄 · 찾기로 연 읽기의 앞뒤 줄 */
 export const PAST = {
   tab: '지난 대화',
   current: '지금',
@@ -306,6 +306,9 @@ export const PAST = {
   fork: '새 에이전트로 이어 가기',
   resume: '이 대화로 돌아가기',
   more: '앞 줄 모두 보기',
+  /** 찾기로 연 읽기는 찾은 줄 둘레만 그린다 — 가장자리에서 조금씩 더 */
+  earlier: '앞 줄 더 보기',
+  later: '뒤 줄 더 보기',
 } as const
 
 /**

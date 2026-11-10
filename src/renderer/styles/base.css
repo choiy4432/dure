@@ -2993,7 +2993,7 @@ code {
   color: var(--muted);
 }
 
-/* 이전 대화 N개 더 보기 */
+/* 이전 대화 N개 더 보기 · 지난 대화 읽기의 앞 줄 모두 보기 · 찾기로 연 읽기의 앞 줄 더 보기(위) · 뒤 줄 더 보기(아래) */
 .conv-more {
   align-self: center;
   flex: none;

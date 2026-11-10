@@ -7,6 +7,12 @@ import type { ChatLine } from '../state/transcript'
 /** 고른 줄을 두르는 시간(ms) — 지나면 표시를 걷는다 */
 export const HIT_MS = 2000
 
+/**
+ * 찾기로 연 지난 대화 읽기가 그리는 줄 — 찾은 줄 앞 lead 줄부터 그 줄을 포함해 after 줄까지. 가장자리 단추가 more 줄씩 더 보인다.
+ * 긴 대화(수천 줄)를 통째로 그리면 줄마다 마크다운을 읽느라 앱이 멈춘다 — 받는 것과 줄로 바꾸는 것은 싸다(수만 항목에 수십 ms)
+ */
+export const HIT_WIN = { lead: 40, after: 300, more: 200 } as const
+
 const KIND: Record<SearchWho, ChatLine['kind']> = { me: 'me', claude: 'claude', message: 'relay' }
 
 /**

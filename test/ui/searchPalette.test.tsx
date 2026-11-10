@@ -632,6 +632,101 @@ describe('고른 대화 줄로 가기', () => {
       // 탭을 열며 부른 목록 하나로 — 같은 목록을 두 번 부르지 않는다
       expect(conversations).toHaveBeenCalledTimes(2)
     })
+
+    describe('긴 대화 — 찾기로 열면 그 줄 둘레만 그린다', () => {
+      // 합성 긴 지난 대화 — 5000 차례 = 1만 항목 = 1만 줄(질문 · 답이 한 줄씩이라 항목 자리 = 줄 자리)
+      const LONG: HistoryItem[] = Array.from({ length: 5000 }, (_, i) => turn(100_000 + i * 10, i)).flat()
+      const pastHit = (t: number) => hit({ agentId: 'd', roomId: 'r2', t, who: 'me', conversation: { key: 'S1', startedAt: LONG[0].t } })
+      const reader = () => screen.getByRole('region', { name: '버튼 크기 정하기' })
+      const rows = () => Array.from(reader().querySelectorAll<HTMLElement>(':scope > [data-t]'))
+      const tOf = (i: number) => String(LONG[i].t)
+
+      it('farPastWindow — 1만 항목 대화의 한참 앞 줄: 모두 받는 동안 줄을 그리지 않고, 받으면 그 줄 둘레(앞 40 · 그 줄부터 300)만 · 그 줄을 두르고 초점 · 가장자리 단추로 조금씩 더(같은 줄은 그대로)', async () => {
+        const { HIT_WIN } = await import('../../src/renderer/panel/hitJump')
+        let release!: () => void
+        conversation.mockImplementation((_id, _key, o) =>
+          o?.limit === Infinity ? new Promise(r => { release = () => r(LONG) }) : Promise.resolve(LONG.slice(-500)))
+        const at = 4000 // 질문 2000 — 끝 500 항목보다 한참 앞
+        const store = await renderApp()
+        await act(async () => { await store.openHit(pastHit(LONG[at].t)) })
+        await wait()
+        await wait()
+        await wait()
+        // 모두 받는 중 — 끝 500 항목을 잠깐 그렸다 버리지 않는다
+        expect(conversation.mock.calls.filter(([, , o]) => o?.limit === Infinity)).toEqual([['d', 'S1', { limit: Infinity }]])
+        expect(reader()).toHaveTextContent('대화를 불러오는 중…')
+        expect(reader()).toHaveAttribute('aria-busy', 'true')
+        expect(rows()).toHaveLength(0)
+        await act(async () => { release() })
+        await wait()
+
+        // 그 줄 둘레만 — 1만 줄 가운데 340 줄
+        expect(rows()).toHaveLength(HIT_WIN.lead + HIT_WIN.after)
+        expect(rows()[0].dataset.t).toBe(tOf(at - HIT_WIN.lead))
+        expect(rows().at(-1)!.dataset.t).toBe(tOf(at + HIT_WIN.after - 1))
+        const row = reader().querySelector<HTMLElement>(`:scope > [data-t="${LONG[at].t}"]`)!
+        expect(row).toHaveClass('me')
+        expect(row).toHaveTextContent('질문 2000')
+        expect(row).toHaveClass('hit')
+        expect(document.activeElement).toBe(row)
+        expect(reader().querySelectorAll('.hit')).toHaveLength(1)
+        expect(store.getState().hitFocus).toBeNull()
+        // 둘레에 갇힌 것은 '앞 줄 모두 보기'가 아니라 조금씩 더
+        expect(within(reader()).queryByRole('button', { name: '앞 줄 모두 보기' })).toBeNull()
+
+        // 앞 줄 더 보기 — 200 줄 더, 이미 받은 줄이라 더 부르지 않는다 · 그린 줄은 그대로(key 가 같다)
+        fireEvent.click(within(reader()).getByRole('button', { name: '앞 줄 더 보기' }))
+        expect(rows()).toHaveLength(HIT_WIN.lead + HIT_WIN.after + HIT_WIN.more)
+        expect(rows()[0].dataset.t).toBe(tOf(at - HIT_WIN.lead - HIT_WIN.more))
+        expect(reader().querySelector(`:scope > [data-t="${LONG[at].t}"]`)).toBe(row)
+        // 뒤 줄 더 보기 — 아래로 200 줄 더
+        fireEvent.click(within(reader()).getByRole('button', { name: '뒤 줄 더 보기' }))
+        expect(rows()).toHaveLength(HIT_WIN.lead + HIT_WIN.after + 2 * HIT_WIN.more)
+        expect(rows().at(-1)!.dataset.t).toBe(tOf(at + HIT_WIN.after + HIT_WIN.more - 1))
+        expect(reader().querySelector(`:scope > [data-t="${LONG[at].t}"]`)).toBe(row)
+        expect(conversation).toHaveBeenCalledTimes(2)
+      })
+
+      it('끝 500 항목 안의 줄도 그 둘레만 · 끝까지 보이면 단추가 사라지고 초점은 읽기 칸(Esc 가 든다) · 맨 위의 앞 줄 더 보기 = 모두 받아 그만큼 더 · 목록에서 다시 열면 보통 읽기(끝 500 항목 모두 · 앞 줄 모두 보기)', async () => {
+        const { HIT_WIN } = await import('../../src/renderer/panel/hitJump')
+        conversation.mockImplementation(async (_id, _key, o) => (o?.limit === Infinity ? LONG : LONG.slice(-500)))
+        const at = LONG.length - 480 // 받은 끝 500 항목의 스물한째 — 앞 40 줄 가운데 20 줄만 받아 있다
+        const store = await renderApp()
+        await act(async () => { await store.openHit(pastHit(LONG[at].t)) })
+        await wait()
+        await wait()
+        expect(conversation.mock.calls.some(([, , o]) => o?.limit === Infinity)).toBe(false)
+        expect(rows()).toHaveLength(20 + HIT_WIN.after)
+        expect(rows()[0].dataset.t).toBe(tOf(LONG.length - 500))
+        const row = reader().querySelector<HTMLElement>(`:scope > [data-t="${LONG[at].t}"]`)!
+        expect(row).toHaveClass('hit')
+
+        // 뒤 줄 더 보기 — 남은 180 줄이 다 보이면 단추가 사라진다. 초점은 몸통이 아니라 읽기 칸
+        const later = within(reader()).getByRole('button', { name: '뒤 줄 더 보기' })
+        later.focus()
+        fireEvent.click(later)
+        expect(rows()).toHaveLength(500)
+        expect(within(reader()).queryByRole('button', { name: '뒤 줄 더 보기' })).toBeNull()
+        expect(document.activeElement).toHaveClass('pc-view')
+
+        // 맨 위 — 앞 줄을 아직 안 받았으니 모두 받고 200 줄 더(한 번만 부른다)
+        fireEvent.click(within(reader()).getByRole('button', { name: '앞 줄 더 보기' }))
+        await wait()
+        expect(conversation.mock.calls.filter(([, , o]) => o?.limit === Infinity)).toEqual([['d', 'S1', { limit: Infinity }]])
+        expect(rows()).toHaveLength(500 + HIT_WIN.more)
+        expect(rows()[0].dataset.t).toBe(tOf(LONG.length - 500 - HIT_WIN.more))
+        expect(reader().querySelector(`:scope > [data-t="${LONG[at].t}"]`)).toBe(row)
+
+        // Esc = 목록 · 다시 열면 보통 읽기 — 끝 500 항목을 모두 그리고 맨 위엔 '앞 줄 모두 보기'
+        fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+        fireEvent.click(screen.getByRole('button', { name: /버튼 크기 정하기/ }))
+        await wait()
+        expect(rows()).toHaveLength(500)
+        expect(within(reader()).getByRole('button', { name: '앞 줄 모두 보기' })).toBeInTheDocument()
+        expect(within(reader()).queryByRole('button', { name: /더 보기/ })).toBeNull()
+        expect(reader().querySelector('.hit')).toBeNull()
+      })
+    })
   })
 })
 

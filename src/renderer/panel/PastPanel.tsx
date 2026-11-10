@@ -10,7 +10,7 @@ import { errorMessage, PAST, pastWhyText, RESUME_BLOCK_WORD, SEARCH } from '../l
 import { ChatItem } from './ChatItem'
 import { ViewShown } from './PanelTabs'
 import { nextAgentName, pastDateLine, resumeBlockOf } from './pastView'
-import { hitLineIndex, revealHit } from './hitJump'
+import { HIT_WIN, hitLineIndex, revealHit } from './hitJump'
 
 /** 엔진 conversation() 의 기본 줄 수 — 이만큼 왔으면 앞 줄이 더 있을 수 있다 */
 const LAST = 500
@@ -214,7 +214,8 @@ function PastRow({ conv: c, now, onChoose, rowRef }: {
  * '이 대화로 돌아가기'는 일하는 중·카드 기다림·붙잡은 입력이면 꺼지고 그 까닭이 안내 자리에 — 본문은 그대로.
  * '새 에이전트로 이어 가기'는 일하는 중에도 된다(돌아가기가 막힐 때의 다른 길). 이어 갈 수 없는 대화면 둘 다 꺼짐 + 이유.
  * 엔진이 거절하면 그 글을 안내 자리에(다음 동작까지).
- * jump 면 그 줄로 가서 잠깐 두르고 초점을 옮긴다 — 끝 500줄보다 앞이면 앞 줄을 모두 받은 뒤(한 번에).
+ * jump 면 그 줄로 가서 잠깐 두르고 초점을 옮긴다 — 끝 500줄보다 앞이면 앞 줄을 모두 받은 뒤(한 번에, 받는 동안 줄은 그리지 않는다).
+ * 그때부터는 그 줄 둘레(HIT_WIN)만 그리고, 위·아래 끝의 '앞 줄 더 보기' · '뒤 줄 더 보기'로 조금씩 더 — 긴 대화를 통째로 그리지 않는다.
  * 지금 대화(찾은 줄이 대화 탭으로는 너무 앞)면 두 단추 없이 안내 자리에 그렇게 연 까닭.
  */
 function PastRead({ agentId, conv, now, jump, onJumped, onBack, onResumed }: {
@@ -236,6 +237,7 @@ function PastRead({ agentId, conv, now, jump, onJumped, onBack, onResumed }: {
     return a ? resumeBlockOf(a) : null
   })
   const backBtn = useRef<HTMLButtonElement>(null)
+  const root = useRef<HTMLDivElement>(null)
   const view = useRef<HTMLElement>(null)
   const noteId = useId()
   const ask = useRef(0)
@@ -263,22 +265,69 @@ function PastRead({ agentId, conv, now, jump, onJumped, onBack, onResumed }: {
     backBtn.current?.focus()
   }, [])
 
+  // 줄로 바꾸기는 통째로 해도 싸다(1만 항목 약 7 ms) — 비싼 것은 줄마다 그리는 것(마크다운)이라 그리는 범위만 줄인다(win)
   const lines = useMemo(() => (items ? buildTranscript(items, undefined, Infinity).lines : []), [items])
+  const more = items !== null && !full && items.length >= LAST
+  // 찾은 줄이 받은 끝 500줄보다 앞 — 모두 받을 때까지 줄을 그리지 않는다(끝 쪽을 잠깐 그렸다 버리지 않게)
+  const waiting = jump !== null && items !== null && more && jump.t < items[0].t
+  const k = useMemo(() => (jump && items !== null && !waiting ? hitLineIndex(lines, jump.t, jump.who) : null), [jump, items, waiting, lines])
+
+  // 그리는 범위 — 찾기로 열었으면 그 줄 둘레만, 아니면(보통 읽기 · null) 모두. 끝에서 센 자리(줄 key 와 같다)로 들고 있어
+  // 앞 줄을 모두 받아 위에 붙어도 같은 줄들이다: top = 그리는 맨 위 줄의 끝에서 센 자리 · bottom = 그리지 않는 아래 줄 수
+  const [win, setWin] = useState<{ n: number; top: number; bottom: number } | null>(null)
+  if (jump && k !== null && win?.n !== jump.n) {
+    // 새로 고른 줄 — 이 그리기에서 바로 그 둘레로(통째로 한 번 그리지 않게). 모든 줄보다 앞(-1)이면 맨 앞 둘레
+    const at = Math.max(0, k)
+    setWin({ n: jump.n, top: lines.length - Math.max(0, at - HIT_WIN.lead), bottom: Math.max(0, lines.length - at - HIT_WIN.after) })
+  }
+  const total = lines.length
+  const from = win ? Math.max(0, total - win.top) : 0
+  const to = win ? Math.max(from, total - win.bottom) : total
 
   // 찾기에서 고른 줄로 — 받은 끝 500줄보다 앞이면 앞 줄까지 모두 받고 다시 본다(못 받으면 다시 시도로 받을 때까지 기다린다).
-  // 줄(data-t 를 가진 자식)은 lines 와 같은 차례다
+  // 줄(data-t 를 가진 자식)은 그린 줄(lines 의 from 부터)과 같은 차례다
   useLayoutEffect(() => {
     if (!jump || items === null) return
-    if (!full && items.length >= LAST && (items.length === 0 || jump.t < items[0].t)) {
+    if (waiting) {
       load(true)
       return
     }
     const el = view.current
-    const k = hitLineIndex(lines, jump.t, jump.who)
-    const node = el && k >= 0 ? el.querySelectorAll<HTMLElement>(':scope > [data-t]')[k] : undefined
+    const node = el && k !== null && k >= from ? el.querySelectorAll<HTMLElement>(':scope > [data-t]')[k - from] : undefined
     if (el && node) revealHit(el, node)
     onJumped(jump.n)
-  }, [jump, items, full, lines, load, onJumped])
+  }, [jump, items, waiting, k, from, load, onJumped])
+
+  // 가장자리 단추 — 앞 줄은 보던 자리 그대로(바닥까지 거리를 지킨다). 앞에 받지 않은 줄이 남았으면 모두 받고 그 끝에서 센 자리로 더 보인다.
+  // 누른 단추가 사라지면(끝까지 보임) 초점은 읽기 칸으로 — 몸통으로 떨어지면 Esc 가 안 든다
+  const keep = useRef<{ gap: number; untilFull: boolean } | null>(null)
+  const held = useRef<'top' | 'bottom' | null>(null)
+  const topBtn = useRef<HTMLButtonElement>(null)
+  const bottomBtn = useRef<HTMLButtonElement>(null)
+  const earlier = () => {
+    const el = view.current
+    const all = from < HIT_WIN.more && more
+    if (el) keep.current = { gap: el.scrollHeight - el.scrollTop, untilFull: all }
+    held.current = 'top'
+    if (all) load(true)
+    setWin(w => w && { ...w, top: w.top + HIT_WIN.more })
+  }
+  const later = () => {
+    held.current = 'bottom'
+    setWin(w => w && { ...w, bottom: Math.max(0, w.bottom - HIT_WIN.more) })
+  }
+  // 모두 받는 중이면 받아서 위에 붙을 때까지 지킨다
+  useLayoutEffect(() => {
+    const el = view.current
+    if (!el || keep.current === null) return
+    el.scrollTop = el.scrollHeight - keep.current.gap
+    if (!keep.current.untilFull || full) keep.current = null
+  }, [from, total, full])
+  useLayoutEffect(() => {
+    if (held.current === null || (held.current === 'top' ? topBtn : bottomBtn).current) return
+    held.current = null
+    if (document.activeElement === null || document.activeElement === document.body) root.current?.focus({ preventScroll: true })
+  })
 
   const resume = async () => {
     setFailed(null)
@@ -320,7 +369,7 @@ function PastRead({ agentId, conv, now, jump, onJumped, onBack, onResumed }: {
 
   return (
     // 칸 어디를 눌러도 초점이 이 안에 남게(tabIndex -1) — 그래야 Esc 가 여기로 온다
-    <div className="pc-view" tabIndex={-1} onKeyDown={onKeyDown}>
+    <div ref={root} className="pc-view" tabIndex={-1} onKeyDown={onKeyDown}>
       <div className="pc-band">
         <button ref={backBtn} type="button" className="ib" aria-label={PAST.back} onClick={onBack}>
           <ChevronLeft className="i" aria-hidden="true" />
@@ -330,8 +379,8 @@ function PastRead({ agentId, conv, now, jump, onJumped, onBack, onResumed }: {
         </b>
         <span className="pc-band-d">· {pastDateLine(conv.at, now)}</span>
       </div>
-      <section ref={view} className="conv" aria-label={title} aria-busy={items === null}>
-        {items === null && !loadError && <p className="conv-st">대화를 불러오는 중…</p>}
+      <section ref={view} className="conv" aria-label={title} aria-busy={items === null || waiting}>
+        {(items === null || waiting) && !loadError && <p className="conv-st">대화를 불러오는 중…</p>}
         {loadError && (
           <p className="conv-st">
             대화를 불러오지 못했어요
@@ -340,16 +389,23 @@ function PastRead({ agentId, conv, now, jump, onJumped, onBack, onResumed }: {
             </button>
           </p>
         )}
-        {items && !full && !loadError && items.length >= LAST && (
-          <button type="button" className="conv-more" onClick={() => load(true)}>
-            {PAST.more}
+        {!waiting && !loadError && (win ? from > 0 || more : more) && (
+          // 보통 읽기 = 앞 줄 모두 받기 · 찾기로 연 읽기 = 앞 줄 조금 더(남은 앞 줄을 아직 안 받았으면 받으며)
+          <button ref={topBtn} type="button" className="conv-more" onClick={win ? earlier : () => load(true)}>
+            {win ? PAST.earlier : PAST.more}
           </button>
         )}
-        {lines.map((line, i) => (
-          // 끝에서 센 자리 — 앞 줄을 모두 받아 위에 붙어도 같은 줄은 같은 key(펼친 하는 일이 다른 줄로 옮겨 가지 않게).
-          // agentId 는 그림 보기용 — 서브에이전트 요약 줄은 누를 수 없게(서브에이전트 탭은 지금 대화 것)
-          <ChatItem key={lines.length - i} line={line} agentId={agentId} navigable={false} />
-        ))}
+        {!waiting &&
+          lines.slice(from, to).map((line, i) => (
+            // 끝에서 센 자리 — 앞 줄을 모두 받아 위에 붙어도 · 그리는 범위가 늘어도 같은 줄은 같은 key(펼친 하는 일이 다른 줄로 옮겨 가지 않게).
+            // agentId 는 그림 보기용 — 서브에이전트 요약 줄은 누를 수 없게(서브에이전트 탭은 지금 대화 것)
+            <ChatItem key={total - from - i} line={line} agentId={agentId} navigable={false} />
+          ))}
+        {!waiting && to < total && (
+          <button ref={bottomBtn} type="button" className="conv-more" onClick={later}>
+            {PAST.later}
+          </button>
+        )}
       </section>
       <div className="pc-back">
         {alert ? (
