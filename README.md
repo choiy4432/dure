@@ -2,7 +2,7 @@
 
 **Agents in concert. Human in control.**
 
-> 비공식 · 팀 내부용 · 본인 Claude 구독 필요
+> 비공식 · 본인 Claude 구독 필요
 
 여러 Claude 에이전트를 한 창에 띄워 두고, 에이전트끼리 일을 넘기게 하는 Windows 데스크톱 앱이에요. 사람은 관계도로 흐름을 보면서 승인만 하면 돼요.
 

@@ -51,7 +51,7 @@
   },
   "main": "out/main/index.js",
   "productName": "Dure",
-  "description": "두레 — 여러 Claude 에이전트가 한 방에서 일을 주고받는 데스크톱 앱 (비공식 · 팀 내부용)",
+  "description": "두레 — 여러 Claude 에이전트가 한 방에서 일을 주고받는 데스크톱 앱 (비공식)",
   "author": "choiy4432",
   "dependencies": {
     "animejs": "4.5.0",
