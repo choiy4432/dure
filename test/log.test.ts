@@ -1,8 +1,30 @@
-import { afterEach, beforeEach, expect, test } from 'vitest'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { openLog } from '../src/main/log'
+import { makeFatalReporter, openLog } from '../src/main/log'
+
+test('makeFatalReporter: 로그는 늘 쓰고, 같은 글은 상자 한 번만', () => {
+  const log = vi.fn()
+  const showBox = vi.fn()
+  const r = makeFatalReporter({ log, showBox, noDialog: false })
+  r(new Error('boom'))
+  r(new Error('boom'))
+  r(new Error('other'))
+  expect(log).toHaveBeenCalledTimes(3)
+  expect(showBox).toHaveBeenCalledTimes(2)
+  expect(showBox.mock.calls[0][0]).toBe('두레에 문제가 생겼어요')
+  expect(showBox.mock.calls[0][1]).toContain('boom')
+  expect(showBox.mock.calls[0][1]).toContain('dure.log')
+})
+
+test('makeFatalReporter: noDialog 면 상자 없음', () => {
+  const log = vi.fn()
+  const showBox = vi.fn()
+  makeFatalReporter({ log, showBox, noDialog: true })('x')
+  expect(log).toHaveBeenCalledTimes(1)
+  expect(showBox).not.toHaveBeenCalled()
+})
 
 let dir: string
 beforeEach(() => {

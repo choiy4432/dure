@@ -45,3 +45,27 @@ export function openLog(dir: string, o: { maxBytes?: number; keep?: number } = {
     },
   }
 }
+
+/**
+ * 메인 프로세스의 잡히지 않은 오류 — 로그에 쓰고, 알림 상자도 띄운다(같은 글은 한 번만 · noDialog 면 안 띄움).
+ * uncaughtException 핸들러가 Electron 기본 오류 창을 대신하므로 사용자가 알 수 있게 한다.
+ */
+export function makeFatalReporter(o: {
+  log: (...args: unknown[]) => void
+  showBox: (title: string, body: string) => void
+  noDialog: boolean
+}): (err: unknown) => void {
+  const shown = new Set<string>()
+  return (err) => {
+    o.log('[두레] uncaughtException:', err)
+    if (o.noDialog) return
+    const msg = err instanceof Error ? err.message : String(err)
+    if (shown.has(msg)) return
+    shown.add(msg)
+    try {
+      o.showBox('두레에 문제가 생겼어요', `${msg}\n\n자세한 내용은 logs/dure.log 에 남겼어요.`)
+    } catch {
+      // 상자를 못 띄워도 앱을 더 망가뜨리지 않는다
+    }
+  }
+}

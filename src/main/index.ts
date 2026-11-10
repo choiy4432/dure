@@ -6,7 +6,7 @@ import { writeFile } from 'node:fs/promises'
 import electronUpdater from 'electron-updater'
 import { killTree } from '../engine/killTree'
 import { authStatus, claudeEnv, claudeVersion, createEngine, locateClaude } from '../engine'
-import { openLog } from './log'
+import { makeFatalReporter, openLog } from './log'
 import type { Engine } from '../engine'
 import type { AppEventMap, ClaudeUpdateState } from '../shared/appTypes'
 import { appEnv, appIconFor, appUserModelId, loginItemNamer, loginItemSettings } from './appEnv'
@@ -160,7 +160,8 @@ function logError(...args: unknown[]): void {
   console.error(...args)
   fileLog.write(args.map((a) => (a instanceof Error ? (a.stack ?? a.message) : String(a))).join(' '))
 }
-process.on('uncaughtException', (err) => logError('[두레] uncaughtException:', err))
+const reportFatal = makeFatalReporter({ log: logError, showBox: (t, b) => dialog.showErrorBox(t, b), noDialog: process.env.DURE_NO_DIALOG === '1' })
+process.on('uncaughtException', reportFatal)
 process.on('unhandledRejection', (reason) => logError('[두레] unhandledRejection:', reason))
 
 /** Test-only hook: DURE_E2E_FOLDERS (JSON array) — pickFolder hands these out in order instead of opening the dialog, then null. */
