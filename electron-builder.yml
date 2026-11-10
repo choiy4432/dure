@@ -17,6 +17,11 @@ extraResources:
     filter:
       - dure.apk
       - dure.apk.json
+# 라이선스·글꼴 고지(SIL OFL 1.1 — 글꼴을 싣는 모든 사본에 저작권·라이선스를 함께) — 설치 폴더의 resources/ 에 놓인다
+  - from: LICENSE
+    to: LICENSE
+  - from: THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
 win:
   target: nsis
   icon: resources/icon.ico

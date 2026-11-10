@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { UNINSTALL_CLEANUP_ARG } from '../src/main/uninstallCleanup'
@@ -85,9 +85,13 @@ describe('electron-builder.yml — 휴대폰 묶음', () => {
   })
 
   it('안드로이드 앱(dure.apk · dure.apk.json)을 resources/android 로 싣는다 — asar 밖(extraResources)', () => {
-    expect(config.extraResources).toEqual([
-      { from: 'resources/android', to: 'android', filter: ['dure.apk', 'dure.apk.json'] },
-    ])
+    expect(config.extraResources).toContainEqual({ from: 'resources/android', to: 'android', filter: ['dure.apk', 'dure.apk.json'] })
     expect(config.files).not.toContain('resources/android/**')
+  })
+
+  it('LICENSE · THIRD_PARTY_NOTICES.md(글꼴 OFL 고지)를 설치 파일에 함께 싣는다 — extraResources, 두 파일이 실제로 있다', () => {
+    expect(config.extraResources).toContainEqual({ from: 'LICENSE', to: 'LICENSE' })
+    expect(config.extraResources).toContainEqual({ from: 'THIRD_PARTY_NOTICES.md', to: 'THIRD_PARTY_NOTICES.md' })
+    for (const f of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) expect(existsSync(join(__dirname, '..', f))).toBe(true)
   })
 })

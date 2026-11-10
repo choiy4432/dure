@@ -112,4 +112,4 @@ npm start
 
 ## 라이선스
 
-MIT 라이선스예요 — [LICENSE](LICENSE) 를 봐 주세요. 설치 파일에 든 글꼴(Noto Sans KR · JetBrains Mono)은 SIL OFL 1.1 이고, 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 에 있어요.
+MIT 라이선스예요 — [LICENSE](LICENSE) 를 봐 주세요. 설치 파일에 든 글꼴(Noto Sans KR · JetBrains Mono)은 SIL OFL 1.1 이고, 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 에 있어요. 설치 파일에도 `LICENSE` 와 `THIRD_PARTY_NOTICES.md` 가 함께 들어 있어요(설치 폴더의 `resources`).
