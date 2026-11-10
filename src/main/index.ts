@@ -8,6 +8,7 @@ import { killTree } from '../engine/killTree'
 import { authStatus, claudeEnv, claudeVersion, createEngine, locateClaude } from '../engine'
 import { homedir } from 'node:os'
 import { formatLogArgs, makeFatalReporter, openLog } from './log'
+import { startFailureMessage } from './startFailure'
 import type { Engine } from '../engine'
 import type { AppEventMap, ClaudeUpdateState } from '../shared/appTypes'
 import { appEnv, appIconFor, appUserModelId, loginItemNamer, loginItemSettings } from './appEnv'
@@ -155,13 +156,15 @@ function emitApp<K extends keyof AppEventMap>(name: K, payload: AppEventMap[K]):
 const env = appEnv(process.env, app.isPackaged)
 if (env.DURE_USER_DATA) app.setPath('userData', env.DURE_USER_DATA)
 
+const home = homedir()
+
 /** 설치본엔 콘솔이 없다 — 오류는 <userData>/logs/dure.log 에도 남긴다. 오류 글만(대화 글·토큰·쿠키는 쓰지 않는다) */
-const fileLog = openLog(join(app.getPath('userData'), 'logs'), { home: homedir() })
+const fileLog = openLog(join(app.getPath('userData'), 'logs'), { home })
 function logError(...args: unknown[]): void {
   console.error(...args)
   fileLog.write(formatLogArgs(args)) // 홈 경로는 openLog 가 ~ 로 가린다
 }
-const reportFatal = makeFatalReporter({ log: logError, showBox: (t, b) => dialog.showErrorBox(t, b), noDialog: process.env.DURE_NO_DIALOG === '1', home: homedir() })
+const reportFatal = makeFatalReporter({ log: logError, showBox: (t, b) => dialog.showErrorBox(t, b), noDialog: process.env.DURE_NO_DIALOG === '1', home })
 process.on('uncaughtException', reportFatal)
 process.on('unhandledRejection', (reason) => logError('[두레] unhandledRejection:', reason))
 
@@ -633,7 +636,7 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
       })
     })
     .catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = startFailureMessage(err, home)
       logError('[두레] 시작 실패:', message)
       if (env.DURE_NO_DIALOG !== '1') dialog.showErrorBox('두레를 시작하지 못했어요', message)
       // Go through the normal quit path (before-quit -> shutdown -> exit) so Chromium's helper processes are torn down.

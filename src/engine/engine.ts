@@ -2986,13 +2986,14 @@ class EngineImpl extends EventEmitter implements Engine {
    */
   private saveHeld(): void {
     if (this.finished) return;
-    // 몰아 쓰기 — 마지막 바뀜 뒤 HELD_SAVE_DEBOUNCE_MS 에 한 번. 끄는 중(shutdown)엔 바로 쓴다
+    // 몰아 쓰기 — 마지막 바뀜 뒤 HELD_SAVE_DEBOUNCE_MS 에 한 번. 끄는 중(shutdown)엔 바로 쓴다.
+    // 알려진 타협: 입력을 보내거나 버린 뒤 500ms 안에 두레가 갑자기 죽으면 옛 파일이 남아, 보낸 입력이 다시 켠 뒤 붙잡기에 되살아날 수 있다
     if (this.closed) {
       this.flushHeld();
       return;
     }
     if (this.heldSaveTimer) clearTimeout(this.heldSaveTimer);
-    this.heldSaveTimer = setTimeout(() => this.flushHeld(), HELD_SAVE_DEBOUNCE_MS);
+    this.heldSaveTimer = setTimeout(() => this.guard(null, () => this.flushHeld()), HELD_SAVE_DEBOUNCE_MS);
     this.heldSaveTimer.unref?.();
   }
 

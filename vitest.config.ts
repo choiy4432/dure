@@ -1,3 +1,4 @@
+import { availableParallelism } from 'node:os'
 import { defineConfig } from 'vitest/config'
 
 // 전체 시험을 한꺼번에 돌리면 CPU 가 모자라 시간 초과로 흔들린다 — 시험·훅 상한을 넉넉히(안전망).
@@ -7,7 +8,7 @@ const TIMEOUTS = { testTimeout: 30_000, hookTimeout: 30_000 }
 export default defineConfig({
   test: {
     // 가짜 claude·ssh 를 띄우는 시험이 많아 파일을 너무 많이 한꺼번에 돌리면 CPU 를 다투다 시간 초과로 흔들린다 — 동시에 도는 파일 수를 줄인다
-    maxWorkers: 6,
+    maxWorkers: Math.max(1, Math.min(6, availableParallelism() - 1)),
     projects: [
       {
         extends: false,
