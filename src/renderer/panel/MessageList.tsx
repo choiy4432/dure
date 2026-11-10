@@ -1,21 +1,22 @@
 import { useState } from 'react'
-import { ArrowDownLeft, ArrowRight, ArrowUpRight, Check, Clock } from 'lucide-react'
+import { ArrowDownLeft, ArrowRight, ArrowUpRight, Check, Clock, TriangleAlert } from 'lucide-react'
 import type { AgentId, RelayMessage } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
-import { messagesOf } from '../state/selectors'
+import { isDelivered, messagesOf } from '../state/selectors'
 import { Markdown } from '../lib/Markdown'
 import { Clamp } from '../lib/Clamp'
 import { ExpandBox } from '../lib/ExpandBox'
 import { Presence } from '../lib/presence'
 import { useNow } from '../lib/useNow'
-import { ago, firstLine, josa, MESSAGE_WORD } from '../lib/words'
+import { ago, deliveryFailedLine, firstLine, josa, MESSAGE_WORD } from '../lib/words'
 import { useCall } from './cards/useCall'
 
 /**
  * 메시지 탭(시안 A · 한 줄 목록) — 이 에이전트가 받은 메시지와 보낸 메시지를 새것부터 한 줄씩.
  * 줄 = 방향 아이콘 · '기획 → 웹'(상대 이름만 굵게) · 접혀 있으면 첫 줄 · 상태 꼬리표 · 시각. 줄을 누르면 그 자리에서 펼쳐 전문(마크다운).
  * 내 확인이 필요한 것은 처음부터 펼친 채 주황 테두리 + [일 시키기] [나중에](나중에 = 접기 — 할 일 목록의 카드와 같다, 보낸 메시지도 여기서 시작시킬 수 있다).
- * 전달된 것은 '대화에서 보기' — 받은 것은 이 대화의 그 줄로, 보낸 것은 받은 에이전트의 대화로 간다. 버린 것은 흐리게.
+ * 전달된 것(읽음 포함)은 '대화에서 보기' — 받은 것은 이 대화의 그 줄로, 보낸 것은 받은 에이전트의 대화로 간다. 버린 것은 흐리게.
+ * 전달하지 못한 것(받는 쪽을 못 띄움)도 처음부터 펼친 채 — 오류 줄에 까닭 + [다시 시도].
  * 자동 멈춤은 꼬리표만 — 계속은 방에 한 장인 자동 상한 카드가 맡는다.
  */
 export function MessageList({ agentId }: { agentId: AgentId }) {
@@ -34,7 +35,7 @@ export function MessageList({ agentId }: { agentId: AgentId }) {
             me={agentId}
             nameOf={nameOf}
             now={now}
-            open={open[m.id] ?? m.state === 'pending'}
+            open={open[m.id] ?? (m.state === 'pending' || m.state === 'failed')}
             onOpenChange={o => setOpen(prev => ({ ...prev, [m.id]: o }))}
           />
         ))}
@@ -57,8 +58,10 @@ function MessageRow({ message: m, me, nameOf, now, open, onOpenChange }: {
   const to = nameOf(m.to) ?? '지워진 에이전트'
   const other = out ? to : from
   const pending = m.state === 'pending'
-  // 전달된 것은 전달된 때, 기다리는 것은 보낸 때
-  const time = ago(m.state === 'delivered' ? m.updatedAt : m.createdAt, now)
+  const failed = m.state === 'failed'
+  const delivered = isDelivered(m.state)
+  // 전달된 것은 전달된 때(읽음이면 읽은 때), 전달하지 못한 것은 마지막으로 해 본 때(다시 시도가 또 실패해도 바뀐 게 보인다), 기다리는 것은 보낸 때
+  const time = ago(delivered || failed ? m.updatedAt : m.createdAt, now)
   const label = `${from}${josa(from, '이/가')} ${to}에게 보낸 메시지${open ? '' : ` — ${firstLine(m.text)}`}`
   // 보낸 메시지는 받은 에이전트의 대화로 — 받은 에이전트가 지워졌으면 갈 곳이 없다
   const seeIn = out ? (nameOf(m.to) ? m.to : null) : me
@@ -77,9 +80,11 @@ function MessageRow({ message: m, me, nameOf, now, open, onOpenChange }: {
           </span>
           {!open && <span className="mrow-tx">{firstLine(m.text)}</span>}
         </button>
-        <span className={`tag${m.state === 'delivered' ? ' ok' : ''}`}>
-          {m.state === 'delivered' ? (
+        <span className={`tag${delivered ? ' ok' : ''}`}>
+          {delivered ? (
             <Check className="i" size={14} strokeWidth={2} aria-hidden="true" />
+          ) : failed ? (
+            <TriangleAlert className="i" size={14} strokeWidth={2} aria-hidden="true" />
           ) : m.state !== 'dismissed' ? (
             <Clock className="i" size={14} strokeWidth={2} aria-hidden="true" />
           ) : null}
@@ -103,8 +108,17 @@ function MessageRow({ message: m, me, nameOf, now, open, onOpenChange }: {
                 나중에
               </button>
             </div>
+          ) : failed ? (
+            <>
+              <p className="pin-err">{deliveryFailedLine(m.failReason)}</p>
+              <div className="ab mrow-ab">
+                <button type="button" className="btn sec sm" disabled={busy} onClick={() => call(() => window.dure.retryMessage(m.id))}>
+                  다시 시도
+                </button>
+              </div>
+            </>
           ) : (
-            m.state === 'delivered' &&
+            delivered &&
             seeIn && (
               <div className="mrow-ab">
                 <button type="button" className="lk" onClick={() => getStore().showMessage(seeIn, m.id)}>

@@ -346,6 +346,7 @@ const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
   },
   approveMessage: (e, _d, id) => e.approveMessage(id),
   dismissMessage: (e, _d, id) => e.dismissMessage(id),
+  retryMessage: (e, _d, id) => e.retryMessage(id),
   continueHeld: (e, _d, roomId) => e.continueHeld(roomId),
   answerRequest: (e, _d, id, d) => {
     if (typeof id !== 'string') throw new Error(DECISION_BAD)

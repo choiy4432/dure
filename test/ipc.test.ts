@@ -79,6 +79,7 @@ function fakeEngine() {
     attachmentPath: (_id: string, _file: string) => null, // 기록 안 함 — 시험이 진짜 첨부 가게로 갈아 낀다
     approveMessage: rec('approveMessage'),
     dismissMessage: rec('dismissMessage'),
+    retryMessage: rec('retryMessage'),
     continueHeld: rec('continueHeld'),
     answerRequest: rec('answerRequest'),
     setAutoChainLimit: rec('setAutoChainLimit'),
@@ -254,7 +255,7 @@ describe('registerIpc', () => {
       newConversation: ['a1'], setModel: ['a1', null], describe: ['a1'], history: ['a1', { all: true }], image: ['a1', 'f.png'],
       conversations: ['a1'], conversation: ['a1', 'k1', { limit: 5 }], resumeConversation: ['a1', 'k1'],
       forkAgent: [{ from: 'a1', key: 'k1', name: 'n', role: 'r' }],
-      approveMessage: ['m1'], dismissMessage: ['m1'], continueHeld: ['r1'],
+      approveMessage: ['m1'], dismissMessage: ['m1'], retryMessage: ['m1'], continueHeld: ['r1'],
       answerRequest: ['q1', { type: 'allow' }], setAutoChainLimit: [5],
       setEffort: ['a1', 'high'], refreshUsage: [], setAllowBypass: [true], setNotify: [{ finished: true }], setTheme: ['dark'], setBypass: ['a1', false],
       setPlanMode: ['a1', true], resumeHold: ['a1'], dropHoldItem: ['a1', 'i1'], dropHold: ['a1'], revokeAlwaysAllow: ['a1', 'Bash'],

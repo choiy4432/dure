@@ -29,11 +29,17 @@ export const STATUS_LINE: Record<DisplayStatus, string> = {
 /** 메시지 상태 — 관계도 엣지 알약·패널 메시지 꼬리표·엣지 목록이 같은 말을 쓴다. 내가 할 일이면 '내 …', 기계가 쥐고 있으면 그 사정 */
 export const MESSAGE_WORD: Record<MessageState, string> = {
   delivered: '전달됨',
+  // 받는 쪽이 실제로 읽음 — 화면은 전달됨과 같게(읽기 전·뒤를 가르지 않는다)
+  read: '전달됨',
   pending: '내 확인 필요',
   held: '자동 멈춤',
   queued: '끝나면 전달',
+  failed: '전달 못 함',
   dismissed: '버림',
 }
+
+/** 메시지 줄의 오류 줄 — 받는 쪽을 못 띄워 전달하지 못했다(까닭은 엔진이 준 글 그대로) */
+export const deliveryFailedLine = (why: string | undefined) => (why ? `전달하지 못했어요 — ${why}` : '전달하지 못했어요')
 
 /** 잠든 에이전트(프로세스를 꺼 둔 것) — 바닥 줄·패널 알약 낱말과 달 위에 올렸을 때 설명 */
 export const SLEEP_WORD = { asleep: '잠듦', waking: '깨우는 중' } as const

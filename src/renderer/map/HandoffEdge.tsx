@@ -5,7 +5,7 @@ import {
 } from '@xyflow/react'
 import type { AgentId, MessageState } from '../../engine/types'
 import { useDure } from '../state/store'
-import { label, type EdgeAge } from '../state/selectors'
+import { isDelivered, label, type EdgeAge } from '../state/selectors'
 import { useNow } from '../lib/useNow'
 import { PACKET_MS, useShot } from '../lib/motion'
 import { LABEL_SIZE, NODE_SIZE, curvePoint, edgeEnds, edgePath, pairBow, type Rect, type Size } from './layout'
@@ -31,14 +31,15 @@ const RING_MS = 450
 /** 처음 그릴 때 이보다 오래된 전달은 움직이지 않는다 */
 const REPLAY_WINDOW_MS = 2_000
 
-/** 선 모양 — on 갓 전달 · old 전달된 지 오래 · wait 내 확인 필요 · held 자동 멈춤 · queue 끝나면 전달 */
+/** 선 모양 — on 갓 전달 · old 전달된 지 오래(읽음도 전달) · wait 내 확인 필요·전달 못 함 · held 자동 멈춤 · queue 끝나면 전달 */
 type Tone = 'on' | 'old' | 'wait' | 'held' | 'queue'
 export const MARKER_TONES = ['on', 'old', 'wait', 'held'] as const
 export const markerId = (tone: (typeof MARKER_TONES)[number]) => `dure-mk-${tone}`
 
 function toneOf(state: MessageState, fresh: boolean): Tone {
   switch (state) {
-    case 'delivered': return fresh ? 'on' : 'old'
+    case 'delivered':
+    case 'read': return fresh ? 'on' : 'old'
     case 'held': return 'held'
     case 'queued': return 'queue'
     default: return 'wait'
@@ -130,7 +131,7 @@ export const HandoffEdge = memo(function HandoffEdge({ id, source, target, data 
   const d = edgePath(ends, bow)
   const at = curvePoint(ends, 0.5, bow)
   const view = { state: data.state, at: data.at }
-  const fresh = data.state === 'delivered' && now - data.at < FRESH_MS
+  const fresh = isDelivered(data.state) && now - data.at < FRESH_MS
   const tone = toneOf(data.state, fresh)
   const marker = tone === 'queue' ? 'wait' : tone
   const faint = data.age === 'old'

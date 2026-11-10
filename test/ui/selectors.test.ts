@@ -142,6 +142,21 @@ describe('edges', () => {
     const ms = [msg('a', 'gone', 'pending'), msg('gone', 'b', 'pending'), msg('a', 'b', 'pending', { roomId: 'r2' })]
     expect(edges('r1', agents, ms, recent)).toEqual([])
   })
+
+  it('읽음(read)은 전달됨과 같다 — 나이를 재고 24시간 넘으면 안 그림', () => {
+    const at = (ago: number) => msg('a', 'b', 'read', { createdAt: NOW - ago, updatedAt: NOW - ago })
+    expect(edges('r1', agents, [at(29 * MIN)], recent)[0]).toMatchObject({ state: 'read', age: 'recent' })
+    expect(edges('r1', agents, [at(31 * MIN)], recent)[0].age).toBe('old')
+    expect(edges('r1', agents, [at(25 * 60 * MIN)], recent)).toEqual([])
+  })
+
+  it('전달 못 함(failed)은 할 일 — 늘 진하게, 전달된 것보다 앞선다', () => {
+    const ms = [
+      msg('a', 'b', 'read', { createdAt: NOW - MIN, updatedAt: NOW - MIN }),
+      msg('a', 'b', 'failed', { createdAt: NOW - 25 * 60 * MIN, updatedAt: NOW - 25 * 60 * MIN }),
+    ]
+    expect(edges('r1', agents, ms, recent)[0]).toMatchObject({ state: 'failed', age: 'live', count: 2 })
+  })
 })
 
 describe('label', () => {
@@ -157,6 +172,12 @@ describe('label', () => {
     expect(label(e('pending'), 0)).toBe('내 확인 필요')
     expect(label(e('held'), 0)).toBe('자동 멈춤')
     expect(label(e('queued'), 0)).toBe('끝나면 전달')
+    expect(label(e('failed'), 0)).toBe('전달 못 함')
+  })
+
+  it('읽음은 전달됨과 같은 말', () => {
+    expect(label(e('read', 0), 59_000)).toBe('전달됨 · 방금')
+    expect(label(e('read', 0), 5 * 60_000 + 30_000)).toBe('전달됨 · 5분 전')
   })
 })
 

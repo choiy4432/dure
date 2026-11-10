@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ago, attachCount, FRESH_WORD, formatBytes, splitName, MESSAGE_WORD, PHASE_WORD, QUESTION_LINK, STATUS_LINE, STATUS_WORD, TOUR, elapsed, fieldError, josa, lasting, localSummary, modelText, modelVersionName, nodeModelLabel, resetText, tokensText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
+import { ago, attachCount, deliveryFailedLine, FRESH_WORD, formatBytes, splitName, MESSAGE_WORD, PHASE_WORD, QUESTION_LINK, STATUS_LINE, STATUS_WORD, TOUR, elapsed, fieldError, josa, lasting, localSummary, modelText, modelVersionName, nodeModelLabel, resetText, tokensText, usageBarLabel, usageRowLabel } from '../../src/renderer/lib/words'
 
 describe('fieldError — 엔진 오류를 칸 아래 안내로', () => {
   it('이름 겹침은 해요체로, 다음 할 일까지 — 받침 따라 이라는/라는, 모르면 (이)라는', () => {
@@ -219,7 +219,9 @@ describe('modelVersionName · modelText — 모델 이름에 버전', () => {
 it('B1 상태·메시지·단계 말', () => {
   expect(STATUS_WORD).toEqual({ working: '작업 중', awaiting: '내 승인 필요', idle: '쉬는 중', stopped: '쉬는 중', error: '멈춤' })
   expect(STATUS_LINE).toEqual({ working: '작업 중…', awaiting: '내 승인 필요', idle: '쉬는 중', stopped: '쉬는 중', error: '오류로 멈췄어요' })
-  expect(MESSAGE_WORD).toEqual({ delivered: '전달됨', pending: '내 확인 필요', held: '자동 멈춤', queued: '끝나면 전달', dismissed: '버림' })
+  expect(MESSAGE_WORD).toEqual({ delivered: '전달됨', read: '전달됨', pending: '내 확인 필요', held: '자동 멈춤', queued: '끝나면 전달', failed: '전달 못 함', dismissed: '버림' })
+  expect(deliveryFailedLine('폴더를 찾을 수 없어요')).toBe('전달하지 못했어요 — 폴더를 찾을 수 없어요')
+  expect(deliveryFailedLine(undefined)).toBe('전달하지 못했어요')
   expect(PHASE_WORD.requesting).toBe('Claude 답 받는 중…')
   expect(FRESH_WORD).toBe('끝남 · 새 결과')
   expect(QUESTION_LINK).toBe('내 답 필요 · 패널에서 답하기')

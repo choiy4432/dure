@@ -40,6 +40,9 @@ interface SummaryInput {
 
 const isUnread = (m: RelayMessage) => m.state === 'pending' || m.state === 'held'
 
+/** 받는 쪽에 넘겨진 메시지 — 넘김(delivered)과 읽음(read)은 화면에서 같게 보인다 */
+export const isDelivered = (state: MessageState) => state === 'delivered' || state === 'read'
+
 export function displayStatus(agent: AgentView, requests: PendingRequest[]): DisplayStatus {
   if (agent.status === 'awaiting' || requests.some(r => r.agentId === agent.id)) return 'awaiting'
   return agent.status
@@ -131,11 +134,11 @@ export function nextAgent(kind: ChipKind, s: FreshInput, roomId: RoomId, after: 
 }
 
 /** 할 일 있는 상태의 급한 차례 — 낮을수록 먼저 알약에 */
-const ACTION_RANK: Partial<Record<MessageState, number>> = { pending: 0, held: 1, queued: 2 }
+const ACTION_RANK: Partial<Record<MessageState, number>> = { pending: 0, failed: 0, held: 1, queued: 2 }
 
 /**
  * 방의 관계도 선 — 방향마다 하나. 버린 메시지와 지워진 에이전트가 낀 메시지는 빼고, '최근' 보기에선 24시간이 지난 전달도 뺀다(수에도 안 센다).
- * 대표 = 할 일(내 확인 필요 → 자동 멈춤 → 끝나면 전달, 같으면 나중에 보낸 것), 없으면 가장 최근 전달.
+ * 대표 = 할 일(내 확인 필요·전달 못 함 → 자동 멈춤 → 끝나면 전달, 같으면 나중에 보낸 것), 없으면 가장 최근 전달(읽음 포함).
  */
 export function edges(roomId: RoomId, agents: AgentView[], messages: RelayMessage[], o: { now: number; mode: EdgeMode }): EdgeView[] {
   if (o.mode === 'off') return []
@@ -150,7 +153,7 @@ export function edges(roomId: RoomId, agents: AgentView[], messages: RelayMessag
   for (const m of messages) {
     if (m.roomId !== roomId || m.state === 'dismissed') continue
     if (!alive.has(m.from) || !alive.has(m.to)) continue
-    if (o.mode === 'recent' && m.state === 'delivered' && o.now - m.updatedAt >= EDGE_KEEP_MS) continue
+    if (o.mode === 'recent' && isDelivered(m.state) && o.now - m.updatedAt >= EDGE_KEEP_MS) continue
     const id = `${m.from}>${m.to}`
     const cur = byPair.get(id)
     if (!cur) byPair.set(id, { rep: m, count: 1 })
@@ -161,7 +164,7 @@ export function edges(roomId: RoomId, agents: AgentView[], messages: RelayMessag
   }
   return [...byPair].map(([id, { rep, count }]) => ({
     id, from: rep.from, to: rep.to, state: rep.state, at: rep.updatedAt, count,
-    age: rep.state !== 'delivered' ? 'live' : o.now - rep.updatedAt < EDGE_RECENT_MS ? 'recent' : 'old',
+    age: !isDelivered(rep.state) ? 'live' : o.now - rep.updatedAt < EDGE_RECENT_MS ? 'recent' : 'old',
   }))
 }
 
@@ -174,13 +177,15 @@ export function pairMessages(a: AgentId, b: AgentId, messages: RelayMessage[]): 
 
 export function label(edge: Pick<EdgeView, 'state' | 'at'>, now: number): string {
   switch (edge.state) {
-    case 'delivered': {
+    case 'delivered':
+    case 'read': {
       const sec = (now - edge.at) / 1000
       return sec < 60 ? '전달됨 · 방금' : `전달됨 · ${Math.floor(sec / 60)}분 전`
     }
     case 'pending':
     case 'held':
-    case 'queued': return MESSAGE_WORD[edge.state]
+    case 'queued':
+    case 'failed': return MESSAGE_WORD[edge.state]
     default: return ''
   }
 }

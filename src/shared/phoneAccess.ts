@@ -48,6 +48,7 @@ export const PHONE_ACCESS: Readonly<Record<ApiMethod, PhoneAccess>> = Object.fre
   // 승인 · 넘기기
   approveMessage: 'phone',
   dismissMessage: 'phone',
+  retryMessage: 'phone',
   continueHeld: 'phone',
   answerRequest: 'phone',
   setBypass: 'phone',

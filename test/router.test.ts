@@ -10,7 +10,7 @@ import type { Agent } from '../src/engine/types';
 let dir: string;
 let store: Store;
 let log: MessageLog;
-let deliver: Mock<(agentId: string, batch: Delivery[], mid: boolean) => void>;
+let deliver: Mock<(agentId: string, batch: Delivery[], mid: boolean) => void | 'later'>;
 let busy: Set<string>;
 let interject: Set<string>;
 let now: number;
@@ -23,7 +23,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dure-'));
   store = openStore(dir);
   log = openMessageLog(dir);
-  deliver = vi.fn<(agentId: string, batch: Delivery[], mid: boolean) => void>();
+  deliver = vi.fn<(agentId: string, batch: Delivery[], mid: boolean) => void | 'later'>();
   busy = new Set();
   interject = new Set();
   now = Date.now();
@@ -247,15 +247,148 @@ test('dismiss → dismissed, 이후 approve 하면 throw', () => {
   expect(() => router.dismiss(m.id)).toThrow('이미 처리된 메시지입니다.');
 });
 
-test('deliver 가 던지면 queued 로 남고 결과는 대기 글', () => {
+test("deliver 가 'later' 를 돌려주면(받는 쪽이 곧 꺼낸다) queued 로 남고 결과는 대기 글", () => {
   auto(b.id);
-  deliver.mockImplementationOnce(() => {
-    throw new Error('boom');
-  });
+  deliver.mockImplementationOnce(() => 'later');
   expect(router.send(a.id, 'Backend', 'x')).toBe('Backend 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
   expect(log.list()[0].state).toBe('queued');
   router.onIdle(b.id);
   expect(log.list()[0].state).toBe('delivered');
+});
+
+test('deliveryFailureShown: deliver 가 던지면 failed + 까닭 — 보낸 쪽 결과 글은 그대로, 다시 시도(retry)하면 전달', () => {
+  auto(b.id);
+  const seen: string[] = [];
+  router.on('message', (m) => seen.push(m.state));
+  deliver.mockImplementationOnce(() => {
+    throw new Error('폴더를 찾을 수 없습니다: C:\\없는 폴더');
+  });
+
+  expect(router.send(a.id, 'Backend', 'x')).toBe('Backend 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+
+  const m = log.list()[0];
+  expect(m).toMatchObject({ state: 'failed', failReason: '폴더를 찾을 수 없습니다: C:\\없는 폴더' });
+  expect(seen).toEqual(['queued', 'failed']);
+  router.onIdle(b.id); // 쉬어도 다시 가지 않는다 — 사람이 [다시 시도] 를 고를 때까지
+  router.flushAll();
+  expect(deliver).toHaveBeenCalledTimes(1);
+
+  router.retry(m.id); // 고쳐졌다 — 이번엔 던지지 않는다
+  expect(deliver).toHaveBeenCalledTimes(2);
+  expect(deliver.mock.calls[1]).toEqual([b.id, one(formatDelivery(a, 'x'), m.id), false]);
+  expect(log.get(m.id)!.state).toBe('delivered');
+  expect(log.get(m.id)!.failReason).toBeUndefined();
+  expect(seen).toEqual(['queued', 'failed', 'queued', 'delivered']);
+});
+
+test('deliveryFailureShown: 한 번에 넘기던 묶음이 모두 failed — 다시 시도는 고른 메시지 하나만', () => {
+  auto(b.id);
+  busy.add(b.id);
+  router.send(a.id, 'Backend', '하나');
+  router.send(a.id, 'Backend', '둘');
+  busy.delete(b.id);
+  deliver.mockImplementationOnce(() => {
+    throw new Error('윈도우 OpenSSH 를 찾지 못했어요');
+  });
+  router.onIdle(b.id);
+  const [m1, m2] = log.list();
+  expect([m1.state, m2.state]).toEqual(['failed', 'failed']);
+  expect(m2.failReason).toBe('윈도우 OpenSSH 를 찾지 못했어요');
+
+  router.retry(m2.id);
+  expect(ids(1)).toEqual([m2.id]);
+  expect(log.get(m1.id)!.state).toBe('failed');
+});
+
+test('retry: 다시 해도 못 띄우면 새 까닭으로 failed · 받는 쪽이 바쁘면 queued 로 기다린다', () => {
+  auto(b.id);
+  deliver.mockImplementationOnce(() => {
+    throw new Error('첫 까닭');
+  });
+  router.send(a.id, 'Backend', 'x');
+  const m = log.list()[0];
+  deliver.mockImplementationOnce(() => {
+    throw new Error('둘째 까닭');
+  });
+  router.retry(m.id);
+  expect(log.get(m.id)).toMatchObject({ state: 'failed', failReason: '둘째 까닭' });
+
+  busy.add(b.id);
+  router.retry(m.id);
+  expect(log.get(m.id)!.state).toBe('queued');
+  expect(log.get(m.id)!.failReason).toBeUndefined();
+  busy.delete(b.id);
+  router.onIdle(b.id);
+  expect(log.get(m.id)!.state).toBe('delivered');
+});
+
+test('retry: failed 가 아니면 던진다 · 없는 메시지도', () => {
+  router.send(a.id, 'Backend', 'x'); // pending
+  const m = log.list()[0];
+  expect(() => router.retry(m.id)).toThrow('이미 처리된 메시지입니다.');
+  expect(() => router.retry('없는-id')).toThrow('메시지를 찾을 수 없습니다');
+});
+
+test('dismiss: failed 도 버릴 수 있다', () => {
+  auto(b.id);
+  deliver.mockImplementationOnce(() => {
+    throw new Error('x');
+  });
+  router.send(a.id, 'Backend', 'x');
+  const m = log.list()[0];
+  router.dismiss(m.id);
+  expect(log.get(m.id)!.state).toBe('dismissed');
+});
+
+test('markRead: delivered 만 read 로 — message 이벤트, 그 밖은 그대로', () => {
+  auto(b.id);
+  router.send(a.id, 'Backend', '읽어');
+  const m = log.list()[0];
+  const seen: string[] = [];
+  router.on('message', (x) => seen.push(x.state));
+  router.markRead(m.id);
+  expect(log.get(m.id)!.state).toBe('read');
+  router.markRead(m.id); // 이미 read
+  router.markRead('없는-id');
+  router.requeue(m.id); // 읽은 메시지는 되돌리지 않는다
+  expect(seen).toEqual(['read']);
+  expect(log.get(m.id)!.state).toBe('read');
+});
+
+test('requeueUnread: 전달하고 읽음을 못 받은 메시지만 queued 로 — 읽은 것·옛 기록의 delivered 는 그대로', () => {
+  auto(b.id);
+  router.send(a.id, 'Backend', '읽음');
+  router.send(a.id, 'Backend', '안 읽음');
+  const [read, unread] = log.list();
+  router.markRead(read.id);
+  // 읽음을 남기지 않던 옛 판의 delivered — 기록 파일에 그대로 쓴다
+  const old = log.create({ roomId, from: a.id, to: b.id, text: '옛것', state: 'queued' });
+  fs.appendFileSync(path.join(dir, 'messages.jsonl'), `${JSON.stringify({ op: 'state', id: old.id, state: 'delivered', at: Date.now() })}\n`);
+  log = openMessageLog(dir);
+  router = new Router({ store, log, deliver, isBusy: (id) => busy.has(id), now: () => now });
+  const seen: string[] = [];
+  router.on('message', (x) => seen.push(`${x.text}:${x.state}`));
+
+  router.requeueUnread();
+
+  expect(seen).toEqual(['안 읽음:queued']);
+  expect(log.get(read.id)!.state).toBe('read');
+  expect(log.get(unread.id)!.state).toBe('queued');
+  expect(log.get(old.id)!.state).toBe('delivered');
+});
+
+test('flush: 받는 쪽이 지워졌으면 그 메시지는 dismissed — failed 로 남기지 않는다', () => {
+  auto(b.id);
+  busy.add(b.id);
+  router.send(a.id, 'Backend', 'x');
+  busy.delete(b.id);
+  store.removeAgent(b.id);
+  deliver.mockImplementation(() => {
+    throw new Error('에이전트를 찾을 수 없습니다');
+  });
+  router.flushAll();
+  expect(log.list()[0].state).toBe('dismissed');
+  expect(deliver).not.toHaveBeenCalled();
 });
 
 test('message 이벤트는 만들 때와 상태 바뀔 때마다', () => {

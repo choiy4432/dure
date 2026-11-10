@@ -117,6 +117,49 @@ describe('메시지 탭', () => {
     expect(store.getState().messageFocus).toBeNull()
   })
 
+  it('deliveryFailureShown: 전달하지 못한 메시지는 펼친 채 오류 줄에 까닭 + [다시 시도] — 누르면 retryMessage', async () => {
+    const retryMessage = vi.fn(async (_id: string) => {})
+    ;(window as any).dure.retryMessage = retryMessage
+    snapshot.messages = [
+      { ...msg('m5', 'w', 's', 'failed', 2_000, '쿠폰 API 고쳐 주세요.'), failReason: '폴더를 찾을 수 없어요' },
+      msg('m3', 'w', 's', 'read', 720_000, '쿠폰 확인 API 가 필요해요.'),
+    ]
+    await renderPanel()
+    fireEvent.click(msgTab())
+    const [failed] = rows()
+    expect(failed.querySelector('.mrow-tg')).toHaveAttribute('aria-expanded', 'true')
+    expect(within(failed).getByText('전달 못 함')).toBeInTheDocument()
+    const line = within(failed).getByText('전달하지 못했어요 — 폴더를 찾을 수 없어요')
+    expect(line).toHaveClass('pin-err') // 메시지 카드의 오류 줄 꼴 그대로
+    expect(within(failed).queryByRole('button', { name: /대화에서 보기/ })).toBeNull()
+    fireEvent.click(within(failed).getByRole('button', { name: '다시 시도' }))
+    await settle()
+    expect(retryMessage).toHaveBeenCalledWith('m5')
+  })
+
+  it('다시 시도가 거절되면(이미 처리됨) 그 까닭을 같은 줄 꼴로', async () => {
+    ;(window as any).dure.retryMessage = vi.fn(async () => {
+      throw new Error('이미 처리된 메시지입니다.')
+    })
+    snapshot.messages = [{ ...msg('m5', 'w', 's', 'failed', 2_000, '쿠폰 API'), failReason: '윈도우 OpenSSH 를 찾지 못했어요' }]
+    await renderPanel()
+    fireEvent.click(msgTab())
+    const [failed] = rows()
+    fireEvent.click(within(failed).getByRole('button', { name: '다시 시도' }))
+    await settle()
+    expect(within(failed).getByRole('alert')).toHaveTextContent('이미 처리된 메시지입니다.')
+  })
+
+  it('읽음(read)은 전달됨과 같은 꼴 — 파란 꼬리표 · 대화에서 보기', async () => {
+    snapshot.messages = [msg('m2', 's', 'w', 'read', 480_000, '## 쿠폰 API\n만들었어요.')]
+    await renderPanel()
+    fireEvent.click(msgTab())
+    const [read] = rows()
+    expect(within(read).getByText('전달됨')).toHaveClass('tag', 'ok')
+    fireEvent.click(read.querySelector('.mrow-tg')!)
+    expect(within(read).getByRole('button', { name: '대화에서 보기' })).toBeInTheDocument()
+  })
+
   it("보낸 메시지의 '서버 대화에서 보기' — 받은 에이전트를 고른다", async () => {
     const { store } = await renderPanel()
     fireEvent.click(msgTab())

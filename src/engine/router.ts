@@ -38,8 +38,11 @@ export interface Delivery {
 export interface RouterDeps {
   store: Store;
   log: MessageLog;
-  /** 받는 쪽에 넘긴다 — 여럿이면 한 줄로 묶어서(joinDeliveries). mid = 받는 쪽 차례 도중에 끼워 넣기(다음 걸음에서 읽는다) */
-  deliver(agentId: AgentId, batch: Delivery[], mid: boolean): void;
+  /**
+   * 받는 쪽에 넘긴다 — 여럿이면 한 줄로 묶어서(joinDeliveries). mid = 받는 쪽 차례 도중에 끼워 넣기(다음 걸음에서 읽는다).
+   * 'later' = 지금은 못 넘기지만 받는 쪽이 곧 꺼낸다(queued 그대로). 던지면 전달을 시작하지 못한 것(받는 쪽을 못 띄움) — failed + 그 까닭
+   */
+  deliver(agentId: AgentId, batch: Delivery[], mid: boolean): void | 'later';
   isBusy(agentId: AgentId): boolean;
   /** 바쁜 받는 쪽의 지금 차례에 끼워 넣을 수 있나 — 없으면 쉴 때까지 기다린다 */
   canInterject?(agentId: AgentId): boolean;
@@ -49,6 +52,8 @@ export interface RouterDeps {
 
 const norm = (s: string) => s.trim().toLocaleLowerCase('ko');
 const DONE = '이미 처리된 메시지입니다.';
+/** deliver 가 까닭 없이 던졌을 때 */
+const DELIVER_FAILED = '받는 쪽을 띄우지 못했어요';
 
 export class Router extends EventEmitter {
   private chains = new Map<RoomId, number>();
@@ -133,8 +138,16 @@ export class Router extends EventEmitter {
   dismiss(messageId: string): void {
     const m = this.d.log.get(messageId);
     if (!m) throw new Error(`메시지를 찾을 수 없습니다: ${messageId}`);
-    if (m.state !== 'pending' && m.state !== 'held' && m.state !== 'queued') throw new Error(DONE);
+    if (m.state !== 'pending' && m.state !== 'held' && m.state !== 'queued' && m.state !== 'failed') throw new Error(DONE);
     this.record(this.d.log.setState(messageId, 'dismissed'));
+  }
+
+  /** 다시 시도 — 전달을 시작하지 못한 메시지(failed)를 queued 로 되돌리고 바로 전달해 본다(또 못 띄우면 새 까닭으로 failed, 바쁘면 쉴 때) */
+  retry(messageId: string): void {
+    const m = this.d.log.get(messageId);
+    if (!m) throw new Error(`메시지를 찾을 수 없습니다: ${messageId}`);
+    if (m.state !== 'failed') throw new Error(DONE);
+    this.release(m);
   }
 
   /** 전달했는데 받는 쪽이 읽기 전에 죽은 메시지 — delivered 만 queued 로 되돌린다(다음 실행·flushAll 때 다시 전달) */
@@ -142,6 +155,21 @@ export class Router extends EventEmitter {
     const m = this.d.log.get(messageId);
     if (!m || m.state !== 'delivered') return;
     this.record(this.d.log.setState(messageId, 'queued'));
+  }
+
+  /** 받는 쪽 차례가 그 메시지를 실제로 읽었다 — delivered 만 read 로(다시 켜도 다시 전달하지 않는다) */
+  markRead(messageId: string): void {
+    const m = this.d.log.get(messageId);
+    if (!m || m.state !== 'delivered') return;
+    this.record(this.d.log.setState(messageId, 'read'));
+  }
+
+  /**
+   * 켤 때 — 지난번에 전달하고 읽음을 못 받은 메시지(그새 두레가 죽었다)를 queued 로 되돌린다. 곧 flushAll·onIdle 이 한 번 다시 넘긴다.
+   * 읽음을 남기지 않던 옛 판의 delivered 는 건드리지 않는다(awaitingRead 에 없다)
+   */
+  requeueUnread(): void {
+    for (const m of this.d.log.awaitingRead()) this.requeue(m.id);
   }
 
   onIdle(agentId: AgentId): void {
@@ -163,7 +191,7 @@ export class Router extends EventEmitter {
     return `${target.name} 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.`;
   }
 
-  /** 사람이 풀어 준 메시지: queued 로 바꾸고 전달을 시도한다(한가하면 새 차례로, 일하는 중이면 끼워 넣기) */
+  /** 사람이 풀어 준(또는 다시 시도하는) 메시지: queued 로 바꾸고 전달을 시도한다(한가하면 새 차례로, 일하는 중이면 끼워 넣기) */
   private release(m: RelayMessage): void {
     this.record(this.d.log.setState(m.id, 'queued'));
     this.flush(m.to);
@@ -171,10 +199,15 @@ export class Router extends EventEmitter {
 
   /**
    * 받는 쪽의 queued 를 다 넘긴다 — 보낸 차례대로 한 번에(쌓였다 하나씩 차례를 열면 앞 메시지에 답하고서야 뒤의 정정·취소를 읽는다).
-   * 한가하면(idle: 호출한 쪽이 한가하다고 알려 준 경우 포함) 새 차례로, 바쁘면 지금 차례에 끼워 넣을 수 있을 때만. 보낸 쪽이 지워진 메시지는 취소.
-   * 못 넘기면(끼워 넣을 수 없거나 deliver 가 던지면) queued 그대로
+   * 한가하면(idle: 호출한 쪽이 한가하다고 알려 준 경우 포함) 새 차례로, 바쁘면 지금 차례에 끼워 넣을 수 있을 때만. 보낸 쪽·받는 쪽이 지워진 메시지는 취소.
+   * 못 넘기면(끼워 넣을 수 없거나 deliver 가 'later') queued 그대로. deliver 가 던지면(받는 쪽을 못 띄움) 그 묶음은 failed + 까닭 —
+   * 사람이 [다시 시도] 할 때까지 다시 가지 않는다. 보낸 쪽에 돌려주는 결과 글은 기다림(wait)과 같다
    */
   private flush(to: AgentId, idle = false): 'delivered' | 'mid' | 'wait' {
+    if (!this.d.store.agent(to)) {
+      for (const m of this.d.log.list({ to, states: ['queued'] })) this.record(this.d.log.setState(m.id, 'dismissed'));
+      return 'wait';
+    }
     let mid = false;
     if (!idle && this.d.isBusy(to)) {
       if (!this.d.canInterject?.(to)) return 'wait';
@@ -191,11 +224,15 @@ export class Router extends EventEmitter {
       batch.push({ m, text: formatDelivery(from, m.text, now - m.createdAt) });
     }
     if (!batch.length) return 'wait';
+    let r: void | 'later';
     try {
-      this.d.deliver(to, batch.map(({ m, text }) => ({ messageId: m.id, text })), mid);
-    } catch {
+      r = this.d.deliver(to, batch.map(({ m, text }) => ({ messageId: m.id, text })), mid);
+    } catch (e) {
+      const failReason = (e instanceof Error ? e.message : String(e ?? '')).trim() || DELIVER_FAILED;
+      for (const { m } of batch) this.record(this.d.log.setState(m.id, 'failed', { failReason }));
       return 'wait';
     }
+    if (r === 'later') return 'wait';
     for (const { m } of batch) this.record(this.d.log.setState(m.id, 'delivered'));
     return mid ? 'mid' : 'delivered';
   }

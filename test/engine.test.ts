@@ -176,7 +176,7 @@ test('A 가 SEND 로 자동 켜진 B 에게 → B 가 [두레 메시지 — 보�
   expect(await resultText(bDone)).toBe(`받음: ${expected}`);
   expect(userTexts()).toContain(expected); // B 의 stdin 에 그대로
   expect(e.status(b.id)).toBe('idle');
-  expect(e.messages()).toMatchObject([{ from: a.id, to: b.id, text: '화면 만들어 줘', state: 'delivered' }]);
+  expect(e.messages()).toMatchObject([{ from: a.id, to: b.id, text: '화면 만들어 줘', state: 'read' }]); // B 차례가 읽었다
   expect(flags).toContainEqual({ agentId: a.id, bypass: false, bySettings: false, pending: false });
   expect(agentOf(e, a.id).started).toBe(true);
 });
@@ -339,7 +339,7 @@ test('일하는 중엔 사람 말도 받은 메시지도 바로 지금 차례에
   e.resumeHold(a.id);
   await own;
   await relayed;
-  expect(e.messages({ to: a.id }).map((m) => m.state)).toEqual(['delivered']);
+  expect(e.messages({ to: a.id }).map((m) => m.state)).toEqual(['read']);
   expect(aTexts()).toEqual(['SLOW', 'echo 둘째', delivery, 'echo 둘째', delivery]);
 });
 
@@ -387,7 +387,7 @@ test('받는 쪽이 끼워 넣을 수 없는 동안(먼저 기다리는 입력) 
   const relays = e.history(a.id).filter((x) => x.kind === 'user' && x.source === 'relay');
   expect(relays.map((x) => (x.kind === 'user' ? x.messageId : null))).toEqual(e.messages({ to: a.id }).map((m) => m.id));
   expect(relays.map((x) => (x.kind === 'user' ? x.parts : null))).toEqual([[{ type: 'text', text: first }], [{ type: 'text', text: second }]]);
-  expect(e.messages({ to: a.id }).map((m) => m.state)).toEqual(['delivered', 'delivered']);
+  expect(e.messages({ to: a.id }).map((m) => m.state)).toEqual(['read', 'read']); // 한 줄로 묶어 넘겨 둘 다 읽었다
 });
 
 test('끼어든 말의 되돌림이 안 오면(맞추지 못함) 차례가 끝난 뒤 midGraceMs 기다렸다가 다시 쉰다', async () => {
@@ -511,6 +511,178 @@ test('shutdown 으로 끝낸 세션이 못 읽은 메시지는 queued 로 남고
   expect(await resultText(resultOf(e2, b.id))).toBe('받음: [두레 메시지 — 보낸 쪽: A(기획)]\n끝나기 전에');
 });
 
+/** 두레가 여기서 죽었다 — 끄기 정리 없이 디스크에 남은 그대로를 다른 자리에 옮겨 둔다(그 자리로 다시 켠다) */
+function crashCopy(): string {
+  const to = path.join(dir, `crashed-${fs.readdirSync(dir).length}`);
+  fs.cpSync(dataDir, to, { recursive: true });
+  return to;
+}
+
+test('readNotRedelivered: 받는 쪽이 읽으면 메시지는 read — 다시 켜도, 죽었다 켜도 다시 전달하지 않는다', async () => {
+  const e1 = await start();
+  const { a, b } = setup(e1);
+  e1.updateAgent(b.id, { auto: true });
+  const states: string[] = [];
+  e1.on('message', (m: RelayMessage) => m.to === b.id && states.push(m.state));
+  const bDone = resultOf(e1, b.id);
+  await e1.sendUser(a.id, text('SEND B: 한 번만'));
+  expect(await resultText(bDone)).toBe('받음: [두레 메시지 — 보낸 쪽: A(기획)]\n한 번만');
+  expect(states).toEqual(['queued', 'delivered', 'read']);
+  const crashed = crashCopy();
+  await e1.shutdown();
+
+  for (const d of [dataDir, crashed]) {
+    const e = await start({}, false, { dataDir: d });
+    expect(e.messages({ to: b.id }).map((m) => m.state)).toEqual(['read']);
+    await e.shutdown();
+  }
+  await sleep(300);
+  expect(spawnsOf('B')).toHaveLength(1);
+  expect(userTexts().filter((t) => t.endsWith('한 번만') && t.startsWith('[두레 메시지'))).toHaveLength(1);
+});
+
+test('requeueUnreadOnStart: 전달(delivered) 뒤 읽기 전에 두레가 죽으면 다시 켤 때 queued — 받는 쪽이 한가하면 한 번만 다시 전달', async () => {
+  const dieFlag = path.join(dir, 'die');
+  fs.writeFileSync(dieFlag, 'B:hang'); // 받기만 하고 읽지 않는다
+  const e1 = await start({ FAKE_DIE_FLAG_FILE: dieFlag });
+  const { a, b } = setup(e1);
+  e1.updateAgent(b.id, { auto: true });
+  const delivered = waitFor<RelayMessage>(e1, 'message', (m) => m.to === b.id && m.state === 'delivered');
+  const aDone = resultOf(e1, a.id);
+  await e1.sendUser(a.id, text('SEND B: 죽기 전에'));
+  await delivered;
+  await aDone;
+  const crashed = crashCopy();
+  expect(openMessageLog(crashed).list({ to: b.id }).map((m) => m.state)).toEqual(['delivered']);
+  // 다시 켠 판의 B 는 정상 — 고장 표시 파일은 지우지 않고(죽은 판의 B 가 뜨며 아직 읽는 중일 수 있다) 없는 파일을 준다
+  const healthy = { FAKE_DIE_FLAG_FILE: path.join(dir, 'no-die') };
+
+  const e2 = await start(healthy, false, { dataDir: crashed });
+  const delivery = '[두레 메시지 — 보낸 쪽: A(기획)]\n죽기 전에';
+  expect(await resultText(resultOf(e2, b.id))).toBe(`받음: ${delivery}`);
+  expect(e2.messages({ to: b.id }).map((m) => m.state)).toEqual(['read']);
+  await e2.shutdown();
+  const e3 = await start(healthy, false, { dataDir: crashed });
+  expect(e3.messages({ to: b.id }).map((m) => m.state)).toEqual(['read']);
+  await sleep(300);
+  expect(userTexts().filter((t) => t === delivery)).toHaveLength(1); // 죽은 판의 B 는 읽지 않았다 — 다시 켠 판에서 한 번
+  expect(spawnsOf('B')).toHaveLength(2);
+});
+
+test('옛 데이터: 읽음을 남기지 않던 판의 delivered 메시지는 켤 때 그대로 — 다시 전달하지 않는다', async () => {
+  const e1 = await start();
+  const { a, b } = setup(e1);
+  e1.updateAgent(b.id, { auto: true });
+  await e1.shutdown();
+  const at = Date.now() - 60_000;
+  const lines = [
+    { op: 'create', msg: { id: 'old-1', roomId: a.roomId, from: a.id, to: b.id, text: '옛 메시지', createdAt: at, state: 'queued', updatedAt: at } },
+    { op: 'state', id: 'old-1', state: 'delivered', at: at + 1 },
+  ];
+  fs.appendFileSync(path.join(dataDir, 'messages.jsonl'), lines.map((x) => `${JSON.stringify(x)}\n`).join(''));
+
+  const e2 = await start();
+  expect(e2.messages()).toEqual([{ id: 'old-1', roomId: a.roomId, from: a.id, to: b.id, text: '옛 메시지', createdAt: at, state: 'delivered', updatedAt: at + 1 }]);
+  await sleep(300);
+  expect(spawnsOf('B')).toHaveLength(0);
+});
+
+test('heldInputSurvivesRestart: 일하는 중 쳐서 기다리던 내 입력은 다시 켜도(죽었다 켜도) 붙잡기에 남는다 — 빼기·이어서 보내기', async () => {
+  const e1 = await start();
+  const { b } = setup(e1);
+  await e1.sendUser(b.id, text('SLOW'));
+  await waitFor<AgentEvent>(e1, 'agent-event', (x) => x.agentId === b.id && x.event.kind === 'init');
+  await e1.sendUser(b.id, text('/compact')); // 슬래시 명령은 끼어들지 않고 줄에 선다
+  await e1.sendUser(b.id, text('echo 붙잡힌 말')); // 먼저 기다리는 입력이 있으면 앞지르지 않는다
+  expect(e1.heldInput(b.id)).toBe(2);
+  const crashed = crashCopy();
+  await e1.shutdown();
+  const items = (e: Engine) => e.hold(b.id)?.items.map((x) => [x.source, x.text]);
+
+  // 끄고 켜도 — 저절로 보내지 않고 붙잡기에서 사람이 고른다
+  const again = await start();
+  expect(again.heldInput(b.id)).toBe(0);
+  expect(items(again)).toEqual([['human', '/compact'], ['human', 'echo 붙잡힌 말']]);
+  await again.shutdown();
+
+  const e2 = await start({}, false, { dataDir: crashed });
+  expect(items(e2)).toEqual([['human', '/compact'], ['human', 'echo 붙잡힌 말']]);
+  e2.dropHoldItem(b.id, e2.hold(b.id)!.items[0].id);
+  const sent = resultTextIs(e2, b.id, '받음: echo 붙잡힌 말');
+  e2.resumeHold(b.id);
+  await sent;
+  expect(e2.hold(b.id)).toBeNull();
+  await e2.shutdown();
+
+  const e3 = await start({}, false, { dataDir: crashed });
+  expect(e3.hold(b.id)).toBeNull(); // 보낸 것·뺀 것은 다시 붙잡히지 않는다
+  expect(e3.heldInput(b.id)).toBe(0);
+  expect(userTexts().filter((t) => t === '/compact')).toEqual([]);
+  expect(userTexts().filter((t) => t === 'echo 붙잡힌 말')).toHaveLength(1);
+});
+
+test('붙잡은 내 입력이 있던 에이전트에게 쌓인 메시지는 다시 켜면 그 붙잡기 목록 끝에 — 이어서 보내면 내 입력 먼저', async () => {
+  const e1 = await start();
+  const { a, b } = setup(e1);
+  e1.updateAgent(b.id, { auto: true });
+  await e1.sendUser(b.id, text('SLOW'));
+  await waitFor<AgentEvent>(e1, 'agent-event', (x) => x.agentId === b.id && x.event.kind === 'init');
+  await e1.sendUser(b.id, text('/compact'));
+  await e1.sendUser(b.id, text('echo 내 말')); // 기다리는 입력이 있어 아래 메시지도 끼어들지 못하고 queued
+  const aDone = resultOf(e1, a.id);
+  await e1.sendUser(a.id, text('SEND B: 쌓인 일'));
+  expect(await resultText(aDone)).toBe('B 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+  const crashed = crashCopy();
+
+  const e2 = await start({}, false, { dataDir: crashed });
+  expect(e2.hold(b.id)?.items.map((x) => [x.source, x.text])).toEqual([['human', '/compact'], ['human', 'echo 내 말'], ['relay', '쌓인 일']]);
+  expect(e2.messages({ to: b.id }).map((m) => m.state)).toEqual(['queued']); // 붙잡힌 동안은 켤 때 전달(flushAll)하지 않는다
+  e2.dropHoldItem(b.id, e2.hold(b.id)!.items[0].id);
+  const own = resultTextIs(e2, b.id, '받음: echo 내 말');
+  const relayed = resultTextIs(e2, b.id, '받음: [두레 메시지 — 보낸 쪽: A(기획)]\n쌓인 일');
+  e2.resumeHold(b.id);
+  await own;
+  await relayed;
+  expect(e2.messages({ to: b.id }).map((m) => m.state)).toEqual(['read']);
+});
+
+test('deliveryFailureShown: 받는 쪽 폴더가 없으면 메시지는 failed + 까닭 — 보낸 쪽 결과 글은 그대로, 폴더를 되살려 다시 시도하면 전달', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  e.updateAgent(b.id, { auto: true });
+  fs.rmSync(b.folder, { recursive: true });
+  const failed = waitFor<RelayMessage>(e, 'message', (m) => m.to === b.id && m.state === 'failed');
+  const aDone = resultOf(e, a.id);
+  await e.sendUser(a.id, text('SEND B: 폴더 없음'));
+  expect(await resultText(aDone)).toBe('B 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+  const m = await failed;
+  expect(m.failReason).toContain('폴더를 찾을 수 없습니다');
+  expect(e.messages({ to: b.id })).toMatchObject([{ state: 'failed', failReason: m.failReason }]);
+  expect(e.status(b.id)).toBe('error');
+  expect(() => e.approveMessage(m.id)).toThrow('이미 처리된 메시지입니다.');
+
+  fs.mkdirSync(b.folder, { recursive: true });
+  const read = waitFor<RelayMessage>(e, 'message', (x) => x.id === m.id && x.state === 'read');
+  const bDone = resultOf(e, b.id);
+  e.retryMessage(m.id);
+  await read;
+  expect(await resultText(bDone)).toBe('받음: [두레 메시지 — 보낸 쪽: A(기획)]\n폴더 없음');
+  expect(e.messages({ to: b.id })[0]).not.toHaveProperty('failReason');
+  expect(() => e.retryMessage(m.id)).toThrow('이미 처리된 메시지입니다.');
+});
+
+test('지운 에이전트에게 가다 실패한 메시지는 지울 때 버린다 — 다시 켜도 failed 로 남지 않는다', async () => {
+  const e = await start();
+  const { a, b } = setup(e);
+  e.updateAgent(b.id, { auto: true });
+  fs.rmSync(b.folder, { recursive: true });
+  const failed = waitFor<RelayMessage>(e, 'message', (m) => m.to === b.id && m.state === 'failed');
+  await e.sendUser(a.id, text('SEND B: 갈 곳 없음'));
+  const m = await failed;
+  await e.removeAgent(b.id);
+  expect(e.messages().find((x) => x.id === m.id)?.state).toBe('dismissed');
+});
+
 test('newConversation 으로 끝낸 세션이 못 읽은 사람 입력은 새 대화의 맨 앞으로', async () => {
   const dieFlag = path.join(dir, 'die');
   fs.writeFileSync(dieFlag, 'B:mute'); // 제어 요청에만 답하고 사용자 줄은 읽지 않는다(받은 줄을 기록만 한다)
@@ -566,7 +738,7 @@ test('newConversation 때 남은 사람 입력은 새 대화로 보내고 idle �
   expect(userTexts().filter((t) => t !== 'SEND B: 이어서')).toEqual(['echo 못 읽음', 'SLOW', 'echo 못 읽음', 'SLOW', delivery, delivery]);
   expect(flagValue(spawnsOf('B')[1].argv, '--session-id')).toBe(agentOf(e, b.id).sessionId);
   expect(flagValue(lastSpawnOf('B').argv, '--resume')).toBe(agentOf(e, b.id).sessionId);
-  expect(e.messages({ to: b.id }).map((m) => m.state)).toEqual(['delivered']);
+  expect(e.messages({ to: b.id }).map((m) => m.state)).toEqual(['read']);
 });
 
 test('newConversation 때 남은 입력이 있는데 폴더가 없으면 status error 로 남고 던지지 않는다', async () => {
@@ -705,12 +877,12 @@ test('폴더 지운 뒤 sendUser → status error, errorText 폴더를 찾을 �
   expect(e.errorText(a.id)).toBe(`폴더를 찾을 수 없습니다: ${a.folder}`);
   expect(spawnsOf('A')).toHaveLength(0);
 
-  // 엔진은 살아 있다 — B 는 일하고, A 에게 보낸 메시지는 사라지지 않는다
+  // 엔진은 살아 있다 — B 는 일하고, A 에게 보낸 메시지는 사라지지도 조용히 갇히지도 않는다(전달 못 함 + 까닭 — 사람이 [다시 시도])
   e.updateAgent(a.id, { auto: true });
   const bDone = resultOf(e, b.id);
   await e.sendUser(b.id, text('SEND A: 받아 줘'));
   expect(await resultText(bDone)).toBe('A 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
-  expect(e.messages({ to: a.id })[0].state).toBe('queued');
+  expect(e.messages({ to: a.id })[0]).toMatchObject({ state: 'failed', failReason: `폴더를 찾을 수 없습니다: ${a.folder}` });
   expect(e.status(b.id)).toBe('idle');
 });
 
@@ -1093,7 +1265,7 @@ test('engine: 전달 메시지는 source relay + messageId', async () => {
   await e.sendUser(a.id, text('SEND B: 하이'));
   await aDone;
   await bDone;
-  const delivered = e.messages({ to: b.id }).find((m) => m.state === 'delivered')!;
+  const delivered = e.messages({ to: b.id }).find((m) => m.state === 'read')!;
   const user = e.history(b.id)[0];
   expect(user).toMatchObject({
     kind: 'user',
@@ -1435,7 +1607,7 @@ test('autoStart false → createEngine 직후엔 queued 가 안 가고 start() �
   e2.start();
   e2.start(); // 두 번째는 아무 일도 안 한다
   await done;
-  expect(e2.messages()[0].state).toBe('delivered');
+  expect(e2.messages()[0].state).toBe('read');
 });
 
 test('heldInput: 작업 중 sendUser 두 번 → 2, 차례가 끝나며 1 → 0, 이벤트도 바뀔 때마다', async () => {
@@ -1846,7 +2018,7 @@ test('effort: 막 띄운 세션이 /effort 차례 중이면 넘김 메시지는 
   expect(await resultText(bDone)).toBe(`받음: ${RELAY_HI}`);
   expect(linesByProcess('B')).toEqual([['/effort max', RELAY_HI]]);
   expect(e.history(b.id).filter((h) => h.kind === 'user')).toHaveLength(1);
-  expect(e.messages()[0].state).toBe('delivered');
+  expect(e.messages()[0].state).toBe('read');
   expect(e.effortNow(b.id)).toBe('max');
 });
 
@@ -1925,7 +2097,7 @@ test('effort: 막힌 /effort 를 다시 띄우면 줄에 선 넘김 메시지도
   await e.sendUser(a.id, text('SEND B: 안녕'));
   expect(await resultText(bDone)).toBe(`받음: ${RELAY_HI}`);
   expect(linesByProcess('B')).toEqual([['/effort max'], [RELAY_HI]]);
-  expect(e.messages()[0].state).toBe('delivered');
+  expect(e.messages()[0].state).toBe('read');
   await e.setModel(b.id, 'sonnet'); // 모델을 바꾸면 다시 /effort 를 해 본다
   await until('/effort max 를 다시 씀', () => linesByProcess('B')[1]?.includes('/effort max') ?? false);
 }, 20_000);
@@ -3488,7 +3660,7 @@ test('hold: 이어서 보내기 = 내 입력 먼저 그다음 메시지, 붙잡�
   expect(got).toEqual([null]);
   await third;
   expect(textsToA()).toEqual(['SLOW', '/echo 둘째', delivery]);
-  expect(e.messages({ to: a.id }).map((x) => x.state)).toEqual(['delivered']);
+  expect(e.messages({ to: a.id }).map((x) => x.state)).toEqual(['read']);
   expect(e.status(a.id)).toBe('idle');
 });
 
@@ -4272,7 +4444,7 @@ test('subagent: 서브에이전트의 승인이 떠 있어도 사람 입력·받
   const got = resultTextIs(e, a.id, '받음: [두레 메시지 — 보낸 쪽: B(웹 화면)]\n확인해 줘');
   e.approveMessage(m.id); // 서브에이전트 카드가 떠 있어도 바쁘지 않다 — 바로 전달
   await got;
-  expect(e.messages().find((x) => x.id === m.id)?.state).toBe('delivered');
+  expect(e.messages().find((x) => x.id === m.id)?.state).toBe('read');
   expect(e.pendingRequests(a.id)).toEqual([r]);
 
   const relayed = resultTextIs(e, a.id, '전달: 보고: Write');
@@ -4467,9 +4639,9 @@ test('create_agent: 첫 할 일 — 새 에이전트 자동이 꺼져 있어도 
   const theirs = resultOf(e, made.id);
   expect(await resultText(done)).toBe("에이전트 '테스트'를 만들었어요. 첫 메시지를 보냈어요.");
   expect(await resultText(theirs)).toBe('받음: [두레 메시지 — 보낸 쪽: A(기획)]\nREADME 정리해 줘');
-  expect(states).toEqual(['queued', 'delivered']); // pending(확인 대기)을 거치지 않는다
+  expect(states).toEqual(['queued', 'delivered', 'read']); // pending(확인 대기)을 거치지 않는다
   const [m] = e.messages();
-  expect(m).toMatchObject({ from: a.id, to: made.id, text: 'README 정리해 줘', state: 'delivered' });
+  expect(m).toMatchObject({ from: a.id, to: made.id, text: 'README 정리해 줘', state: 'read' });
   expect(e.history(made.id).find((h) => h.kind === 'user')).toMatchObject({ source: 'relay', messageId: m.id });
 });
 
@@ -5099,7 +5271,7 @@ test('깨우기: effort 를 고른 에이전트를 전달 메시지가 깨우면
     { agentId: a.id, asleep: false, waking: true },
     { agentId: a.id, asleep: false, waking: false },
   ]);
-  expect(e.messages({ to: a.id })).toMatchObject([{ text: '일해', state: 'delivered' }]);
+  expect(e.messages({ to: a.id })).toMatchObject([{ text: '일해', state: 'read' }]);
 });
 
 test('깨우기: 고르기로만 깨우면(줄 없음) 깨우는 중이 아니다 — 쉬는 중', async () => {
@@ -5134,7 +5306,7 @@ test('재우기: 재우는 중에 온 입력도 깨워서 한 번만 나간다',
   expect(e.sleepState(a.id)).toEqual({ asleep: false, waking: false }); // 새 세션이 받았다
 });
 
-test('깨우기: 전달 메시지가 잠든 에이전트를 깨운다 — --resume 으로 띄워 받고 delivered', async () => {
+test('깨우기: 전달 메시지가 잠든 에이전트를 깨운다 — --resume 으로 띄워 받고 읽음(read)', async () => {
   const e = await start({}, false, SLEEPY);
   e.setSleepAfter(0);
   const { a, b } = setup(e);
@@ -5148,7 +5320,7 @@ test('깨우기: 전달 메시지가 잠든 에이전트를 깨운다 — --resu
   expect(await resultText(aDone)).toBe('받음: [두레 메시지 — 보낸 쪽: B(웹 화면)]\n일해');
   expect(spawnsOf('A')).toHaveLength(2);
   expect(flagValue(lastSpawnOf('A').argv, '--resume')).toBe(a.sessionId);
-  expect(e.messages({ to: a.id })).toMatchObject([{ text: '일해', state: 'delivered' }]);
+  expect(e.messages({ to: a.id })).toMatchObject([{ text: '일해', state: 'read' }]);
 });
 
 test('재우기: 뒤에서 명령이 돌면 재우지 않는다 — 끝나 그 차례가 끝난 뒤부터 다시 잰다', async () => {
@@ -6202,7 +6374,7 @@ describe('서버 방 띄우기', () => {
     await e.sendUser(web.id, text('SEND api: 화면 만들어 줘'));
     expect(await resultText(aDone)).toBe('api 에게 전달했습니다.');
     expect(await resultText(bDone)).toBe('받음: [두레 메시지 — 보낸 쪽: web(화면)]\n화면 만들어 줘');
-    expect(e.messages()).toMatchObject([{ from: web.id, to: api.id, state: 'delivered' }]);
+    expect(e.messages()).toMatchObject([{ from: web.id, to: api.id, state: 'read' }]);
   }, 30_000);
 
   test('멈추기(claude 를 내릴 때)·재우기·지우기 — ssh 를 끈 뒤 서버 정리 · 서버 claude 없음 · 저장된 pid 비움', async () => {

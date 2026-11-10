@@ -94,8 +94,11 @@ export type AgentPatch = Partial<
   Pick<Agent, 'name' | 'role' | 'auto' | 'model' | 'alwaysAllow' | 'pos' | 'color' | 'started' | 'sessionId' | 'effort' | 'lastContext' | 'bypassOn' | 'bypassNoticeClosed' | 'forkOf' | 'remoteLaunch'>
 >;
 
-export type MessageState = 'pending' | 'held' | 'queued' | 'delivered' | 'dismissed';
-// pending=사람 확인 대기(자동 꺼짐) · held=자동 상한에 걸려 대기 · queued=전달 허락됨, 받는 쪽 작업 끝 대기
+export type MessageState = 'pending' | 'held' | 'queued' | 'delivered' | 'read' | 'failed' | 'dismissed';
+// pending=사람 확인 대기(자동 꺼짐) · held=자동 상한에 걸려 대기 · queued=전달 허락됨, 받는 쪽 작업 끝 대기 ·
+// delivered=받는 쪽에 넘김(읽기 전 — 그새 두레가 죽으면 다시 켤 때 queued 로) · read=받는 쪽 차례가 실제로 읽음 ·
+// failed=전달을 시작하지 못함(받는 쪽을 못 띄움 — failReason, 사람이 [다시 시도] 하면 queued) ·
+// 읽음을 남기지 않던 옛 판의 delivered 는 그대로 delivered(다시 전달하지 않는다)
 export interface RelayMessage {
   id: string;
   roomId: RoomId;
@@ -105,6 +108,8 @@ export interface RelayMessage {
   createdAt: number;
   state: MessageState;
   updatedAt: number;
+  /** failed 일 때만 — 받는 쪽을 못 띄운 까닭(폴더 없음·ssh 없음 …). 다른 상태가 되면 없다 */
+  failReason?: string;
 }
 
 /**
@@ -117,7 +122,8 @@ export type FileInput = { type: 'file'; path: string; name: string; bytes: numbe
  * file: 첨부 폴더 안 사본 이름 · bytes: 사본의 크기 · sendPath: Claude 에게 줄 절대 경로(이 PC 방은 사본, 서버 방은 remotePath) ·
  * remotePath: 서버 방이면 서버에 올린 경로 ·
  * inline: PDF 면 문서 블록으로도 넘길 사본의 내용(base64 — PDF_INLINE_MAX_BYTES·MEDIA_INLINE_MAX_B64·PDF_INLINE_MAX_PAGES 안일 때만). 메모리에만 —
- * 기록·로그·붙잡기 목록(HoldItem)·화면엔 싣지 않는다(줄 선·붙잡힌 입력엔 실려 있다가 보낼 때 쓴다. 앱을 끄면 함께 사라진다)
+ * 기록·로그·붙잡기 목록(HoldItem)·화면엔 싣지 않는다(줄 선·붙잡힌 입력엔 실려 있다가 보낼 때 쓴다. 앱을 끄면 함께 사라진다 —
+ * 붙잡은 내 입력 저장(held-input.json)에도 빼고 둔다: 다시 켠 뒤 보내면 그 PDF 는 경로로만 간다)
  */
 export type FileReady = {
   type: 'file';

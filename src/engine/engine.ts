@@ -295,6 +295,8 @@ export interface Engine extends EventEmitter {
   messages(f?: Parameters<MessageLog['list']>[0]): RelayMessage[];
   approveMessage(id: string): void;
   dismissMessage(id: string): void;
+  /** 다시 시도 — 전달하지 못한(failed) 메시지를 다시 전달해 본다. failed 가 아니면 던진다('이미 처리된 메시지입니다.') */
+  retryMessage(id: string): void;
   continueHeld(roomId: RoomId): void;
   pendingRequests(agentId?: AgentId): PendingRequest[];
   answerRequest(id: string, d: Decision): void;
@@ -455,7 +457,6 @@ interface RemoteRun {
 }
 /** /effort 의 답(로컬 명령 — 모델을 부르지 않는다): "Set effort level to max (this session only): …" (probe9) */
 const EFFORT_SET = /Set effort level to (low|medium|high|xhigh|max)\b/;
-const EFFORT_BUSY = '/effort 차례가 끝나면 보낸다';
 /** /effort 답을 기다리는 한도 — 띄운 직후엔 CLI 시작·--resume 대화 읽기까지 기다리므로 넉넉히 */
 const EFFORT_TIMEOUT_MS = 30_000;
 const EFFORT_STUCK = 'effort 를 정하는 동안 Claude 가 답하지 않아 다시 띄웠어요 — 이번 실행엔 고른 effort 를 적용하지 못했어요.';
@@ -512,6 +513,17 @@ const ATTACH_CREDENTIALS = '자격 증명 파일은 보낼 수 없어요';
 const CREDENTIALS_FILE = '.credentials.json';
 /** 에이전트를 지웠는데 첨부 폴더가 잠겨 남았다(다른 프로그램이 연 파일 등) — 켤 때 주인 없는 첨부 폴더를 다시 지운다(prune) */
 const ATTACH_LEFT = '첨부 폴더를 다 지우지 못했어요 — 두레를 다시 켜면 다시 지워요';
+/** 아직 보내지 않은 내 입력(기다리는 줄 · 붙잡기)을 남기는 파일 — 데이터 폴더(user-data) 안. 바뀔 때마다 통째로 쓴다 */
+const HELD_FILE = 'held-input.json';
+const HELD_SAVE_FAILED = '아직 보내지 않은 내 입력을 저장하지 못했어요 — 두레가 꺼지면 사라질 수 있어요';
+
+/** held-input.json 의 내 입력 하나 — written: Claude 에게 한 번 썼다 돌려받은 것(기록에 있다 — 버려도 첨부 사본은 둔다) */
+interface SavedHeldInput {
+  id: string;
+  parts: ReadyPart[];
+  plan?: true;
+  written?: true;
+}
 
 /** 엔진이 써 넣은 /effort 한 줄 — 그 result 까지 */
 interface EffortTurn {
@@ -607,8 +619,9 @@ class SeenToolUses {
 
 class EngineImpl extends EventEmitter implements Engine {
   private sessions = new Map<AgentId, ClaudeSession>();
-  private held = new Map<AgentId, HeldInput[]>(); // 일하는 중에 사람이 넣은 입력 — 끝나면 순서대로(붙잡힌 것은 holds 에)
-  private holds = new Map<AgentId, HoldState>(); // 멈춰서 붙잡은 대기열 — 사람이 고를 때까지. 메모리만(다시 켜면 풀린다), 비면 지운다
+  private held = new Map<AgentId, HeldInput[]>(); // 일하는 중에 사람이 넣은 입력 — 끝나면 순서대로(붙잡힌 것은 holds 에). 내 입력은 held-input.json 에도(saveHeld)
+  // 멈춰서 붙잡은 대기열 — 사람이 고를 때까지, 비면 지운다. 내 입력은 held-input.json 에도 — 다시 켜면 held 의 것과 함께 붙잡기로 되살린다(restoreHeld)
+  private holds = new Map<AgentId, HoldState>();
   private errors = new Map<AgentId, string>(); // 세션 없이 남은 오류(비정상 종료·폴더 없음) — 다음 실행까지
   private shown = new Map<AgentId, { status: AgentStatus; errorText: string | null; issue: RemoteIssue | null }>();
   private described = new WeakMap<ClaudeSession, Promise<AgentDescription>>();
@@ -747,10 +760,12 @@ class EngineImpl extends EventEmitter implements Engine {
       store,
       log,
       limit: this.limit,
+      // 띄우지 못하면(폴더 없음·ssh 없음 …) ensure 가 던진다 — 그 메시지는 failed + 까닭(사람이 [다시 시도])
       deliver: (id, batch, mid) => {
+        if (this.closed) return 'later'; // 끄는 중 — queued 그대로(다음에 켤 때 flushAll)
         const s = this.ensure(id);
-        // 막 띄운 세션이 /effort 차례 중 — 던지면 queued 로 남고, 그 차례가 끝나면 pump → onIdle 이 꺼낸다(두 줄을 동시에 쓰지 않는다)
-        if (this.effortTurn.has(s)) throw new Error(EFFORT_BUSY);
+        // 막 띄운 세션이 /effort 차례 중 — queued 로 남고, 그 차례가 끝나면 pump → onIdle 이 꺼낸다(두 줄을 동시에 쓰지 않는다)
+        if (this.effortTurn.has(s)) return 'later';
         this.sendRelay(id, s, batch, mid);
       },
       // 붙잡힌 에이전트도 바쁨 — 전달 대기 메시지는 queued 로 남아 붙잡기 목록에 붙는다
@@ -780,6 +795,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.guard(m.to, () => this.emitSleep(m.to)); // 깨운 세션의 /effort 차례 중에 queued 로 남은 메시지도 깨우는 중
     });
     this.router.on('held', (h: { roomId: RoomId }) => this.guard(null, () => this.emit('held', h)));
+    this.restoreHeld();
   }
 
   async init(): Promise<void> {
@@ -824,6 +840,8 @@ class EngineImpl extends EventEmitter implements Engine {
     // state.json 이 깨져 빈 상태로 시작한 판엔 하지 않는다 — 가게가 비었을 뿐이다(지우면 .broken 을 되살려도 첨부가 모두 없다).
     // 옮겨 둔 .broken-* 가 남아 있는 동안도 — 그 판에 새로 만든 에이전트로 state.json 이 다시 생겨도 옛 에이전트들은 그 파일에 있다
     if (!this.store.recovered && !brokenStateLeft(this.o.dataDir)) this.pruning = this.attachments.prune((id) => !!this.store.agent(id));
+    // 지난번에 넘겼지만 받는 쪽이 읽기 전에 두레가 죽은 메시지 — queued 로 되돌려 아래에서(바쁘면 쉴 때) 한 번 다시 넘긴다
+    this.guard(null, () => this.router.requeueUnread());
     this.router.flushAll();
     this.watcher?.start();
     this.sweepTimer = setInterval(() => this.guard(null, () => this.sweep()), this.o.sleepSweepMs ?? this.minuteMs());
@@ -1342,7 +1360,7 @@ class EngineImpl extends EventEmitter implements Engine {
       const gone = this.store.agent(id);
       const remote = gone && this.remoteOf(gone);
       if (remote && gone.remoteLaunch) void this.queueClean(id, remote.host, gone.remoteLaunch);
-      for (const m of this.log.list({ states: ['pending', 'held', 'queued'] })) {
+      for (const m of this.log.list({ states: ['pending', 'held', 'queued', 'failed'] })) {
         if (m.to === id || m.from === id) this.router.dismiss(m.id);
       }
       // store 가 지우며 서버 첨부 폴더를 기다리는 첨부 정리 목록에 넣는다 — 지금 한 번 해 보고, 되면 목록에서 뺀다(안 되면 다음에 켤 때 다시)
@@ -1379,6 +1397,7 @@ class EngineImpl extends EventEmitter implements Engine {
       this.remoteIssues.delete(id);
       this.portTries.delete(id);
       this.stops.delete(id);
+      this.saveHeld(); // 그 에이전트의 내 입력은 저장에서도 뺀다
       if (had > 0) this.guard(id, () => this.emit('held-input', { agentId: id, count: 0 }));
       if (hadHold) this.guard(id, () => this.emit('hold', { agentId: id, hold: null }));
     }
@@ -2536,6 +2555,7 @@ class EngineImpl extends EventEmitter implements Engine {
   messages(f?: Parameters<MessageLog['list']>[0]) { return this.log.list(f); }
   approveMessage(id: string) { this.router.approve(id); }
   dismissMessage(id: string) { this.router.dismiss(id); }
+  retryMessage(id: string) { this.router.retry(id); }
   continueHeld(roomId: RoomId) { this.router.continueHeld(roomId); }
   pendingRequests(agentId?: AgentId) { return this.perms.pending(agentId); }
   answerRequest(id: string, d: Decision) { this.perms.answer(id, d); }
@@ -2736,7 +2756,8 @@ class EngineImpl extends EventEmitter implements Engine {
   /**
    * 보낸 줄을 읽었나 — 차례 도중에 보낸 말은 그 되돌림(replay — 너그럽게 맞춘다, replayMatches)으로만, 쉴 때 보낸 줄은 Claude 의 첫 줄로
    * (그 줄의 init 이 되돌림보다 먼저 온다). 읽은 줄을 목록에서 뺀다. 쉴 때 보낸 줄의 되돌림은 그 몫(echoOwed)이 먼저 가져간다 —
-   * 되돌림은 Claude 가 읽은 차례대로 오고, 쉴 때 쓴 줄은 그 뒤에 끼운 말보다 먼저 쓰였다
+   * 되돌림은 Claude 가 읽은 차례대로 오고, 쉴 때 쓴 줄은 그 뒤에 끼운 말보다 먼저 쓰였다. 읽은 줄의 전달 메시지는 read 로(기록에 남는다 —
+   * 다시 켜도 다시 전달하지 않는다)
    */
   private noteRead(s: ClaudeSession, ev: StreamEvent): boolean {
     if (ev.kind === 'replay' && this.payEcho(s, ev.text)) return false;
@@ -2746,13 +2767,20 @@ class EngineImpl extends EventEmitter implements Engine {
     if (ev.kind === 'replay') {
       const i = list.findIndex((x) => x.mid && replayMatches(x.kind === 'human' ? x.input.parts : x.text, ev.text));
       if (i < 0) return false;
-      list.splice(i, 1);
+      this.readRelays(list.splice(i, 1));
       if (!this.midUnread(s)) this.clearMidGrace(s);
       return true;
     }
     if (!readsInput(ev) || list[0].mid) return false;
-    list.shift();
+    this.readRelays([list.shift()!]);
     return true;
+  }
+
+  /** 읽은 줄 — 전달 메시지면 read 로. 기록을 못 남겨도(디스크) 읽음 처리는 이어 간다 */
+  private readRelays(lines: InFlight[]): void {
+    for (const x of lines) {
+      if (x.kind === 'relay') for (const m of x.messageIds) this.guard(null, () => this.router.markRead(m));
+    }
   }
 
   /** 쉴 때 쓴 줄의 되돌림인가 — 맞는 몫을 가져간다(그 앞의 몫은 되돌림이 안 온 것 — 함께 버린다). 맞으면 true */
@@ -2779,7 +2807,9 @@ class EngineImpl extends EventEmitter implements Engine {
     const timer = setTimeout(() => {
       this.midGrace.delete(s);
       if (this.sessions.get(id) !== s || s.status !== 'idle' || !this.midUnread(s)) return;
-      this.inFlight.set(s, (this.inFlight.get(s) ?? []).filter((x) => !x.mid));
+      const list = this.inFlight.get(s) ?? [];
+      this.inFlight.set(s, list.filter((x) => !x.mid));
+      this.readRelays(list.filter((x) => x.mid)); // 읽은 것으로 본다 — 다시 켜도 다시 보내지 않는다(세션이 끝나도 되살리지 않는 것과 같다)
       this.guard(id, () => this.pump(id));
       this.emitStatus(id);
     }, this.o.midGraceMs ?? MID_GRACE_MS);
@@ -2830,6 +2860,7 @@ class EngineImpl extends EventEmitter implements Engine {
       // 묻지 않고 실행하는 세션이면 계획 모드 답을 기다렸다 쓴다 — 차례가 먼저 시작되면 계획 없이 묻지 않고 돈다(답이 오면 planSettled 가)
       if (this.planBlocked(id, s)) {
         this.planGates.set(s, next);
+        this.saveHeld(); // 쥔 동안도 아직 안 보낸 내 입력이다
         this.emitStatus(id);
         return;
       }
@@ -2857,8 +2888,10 @@ class EngineImpl extends EventEmitter implements Engine {
     const input = this.planGates.get(s);
     if (input) {
       this.planGates.delete(s);
-      if (this.modes.get(s) === PLAN_MODE) this.sendTo(id, s, input.parts, { kind: 'human', input });
-      else {
+      if (this.modes.get(s) === PLAN_MODE) {
+        this.sendTo(id, s, input.parts, { kind: 'human', input });
+        this.saveHeld();
+      } else {
         this.heldOf(id).unshift(input);
         this.holdQueue(id);
       }
@@ -2935,7 +2968,71 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   private emitHeld(id: AgentId): void {
+    this.saveHeld();
     this.guard(id, () => this.emit('held-input', { agentId: id, count: this.held.get(id)?.length ?? 0 }));
+  }
+
+  /**
+   * 아직 보내지 않은 내 입력을 데이터 폴더에 통째로 쓴다(held-input.json) — 두레가 죽어도 다음에 켤 때 붙잡기로 되살린다(restoreHeld).
+   * 에이전트마다 보낼 차례대로: 계획 모드 답을 기다리며 쥔 것 → 기다리는 줄 → 붙잡기의 내 입력(이어서 보내기와 같은 차례).
+   * 메시지는 기록(messages.jsonl)에 queued 로 남아 있어 따로 쓰지 않는다. PDF 의 문서 블록(inline)은 메모리에만 — 빼고 쓴다.
+   * 기다리는 줄·붙잡기가 바뀌는 자리(emitHeld·emitHold)와 계획 모드 답을 기다리며 쥐거나 놓을 때 부른다. 끝난(shutdown) 뒤엔 쓰지 않는다
+   */
+  private saveHeld(): void {
+    if (this.finished) return;
+    const agents: Record<AgentId, { since: number; inputs: SavedHeldInput[] }> = {};
+    for (const id of new Set<AgentId>([...this.held.keys(), ...this.holds.keys(), ...this.sessions.keys()])) {
+      if (!this.store.agent(id)) continue;
+      const s = this.sessions.get(id);
+      const gate = s && this.planGates.get(s);
+      const hold = this.holds.get(id);
+      const inputs = [...(gate ? [gate] : []), ...(this.held.get(id) ?? []), ...(hold?.entries.flatMap((e) => (e.input ? [e.input] : [])) ?? [])];
+      if (inputs.length === 0) continue;
+      agents[id] = { since: hold?.since ?? Date.now(), inputs: inputs.map((x) => savedInput(x, this.written.has(x))) };
+    }
+    const file = path.join(this.o.dataDir, HELD_FILE);
+    try {
+      if (Object.keys(agents).length === 0) {
+        if (fs.existsSync(file)) fs.rmSync(file, { force: true });
+        return;
+      }
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify({ v: 1, agents }));
+      renameRetrying(`${file}.tmp`, file);
+    } catch {
+      // 디스크가 막혔다 — 보내기는 그대로 되고, 꺼지면 잃을 수 있다는 것만 알린다(오류 원문엔 내 PC 경로가 실린다)
+      this.guard(null, () => this.emit('engine-error', { agentId: null, message: HELD_SAVE_FAILED }));
+    }
+  }
+
+  /**
+   * 켤 때 — 지난번에 보내지 못한 내 입력(saveHeld)을 그 에이전트의 붙잡기로 되살린다. 저절로 보내지 않는다: 사람이 이어서 보내기·빼기를
+   * 고른다(붙잡은 동안 그 에이전트에게 온 queued 메시지도 지금처럼 목록 끝에 — 이어서 보내면 내 입력 먼저). 없는 에이전트의 것·모르는 꼴은 버린다.
+   * 첨부의 보낼 경로는 파일을 믿지 않고 다시 만든다(이 PC 방은 첨부 폴더 안 사본 — 없으면 그 입력을 버린다, 서버 방은 올린 경로)
+   */
+  private restoreHeld(): void {
+    let saved: unknown;
+    try {
+      saved = JSON.parse(fs.readFileSync(path.join(this.o.dataDir, HELD_FILE), 'utf8'));
+    } catch {
+      return; // 없거나 깨졌다 — 붙잡을 것이 없다
+    }
+    const agents = (saved as { agents?: unknown } | null)?.agents;
+    if (!agents || typeof agents !== 'object') return;
+    for (const [id, v] of Object.entries(agents as Record<string, { since?: unknown; inputs?: unknown }>)) {
+      const agent = this.store.agent(id);
+      if (!agent || !Array.isArray(v?.inputs)) continue;
+      const remote = !!this.remoteOf(agent);
+      const entries: HoldEntry[] = [];
+      for (const x of v.inputs) {
+        const input = heldFromSaved(x, (file, remotePath) => (remote ? remotePath : this.attachments.resolve(id, file)));
+        if (!input) continue;
+        if ((x as SavedHeldInput).written === true) this.written.add(input);
+        entries.push({ item: humanItem(input), input });
+      }
+      if (entries.length === 0) continue;
+      for (const m of this.log.list({ to: id, states: ['queued'] })) entries.push({ item: relayItem(m) });
+      this.holds.set(id, { since: typeof v.since === 'number' ? v.since : Date.now(), entries });
+    }
   }
 
   private heldOf(id: AgentId): HeldInput[] {
@@ -3005,6 +3102,7 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   private emitHold(id: AgentId): void {
+    this.saveHeld();
     this.guard(id, () => this.emit('hold', { agentId: id, hold: this.holdView(id) }));
   }
 
@@ -4226,6 +4324,39 @@ function humanItem(input: HeldInput): HoldItem {
 /** 붙잡은 전달 대기 메시지 — id 는 메시지 id, 보낸 쪽은 보낸 에이전트 */
 function relayItem(m: RelayMessage): HoldItem {
   return { id: m.id, source: 'relay', from: m.from, text: firstLine(m.text), images: 0 };
+}
+
+/** 저장할 꼴 — PDF 의 문서 블록(inline)은 메모리에만(빼고 쓴다) */
+function savedInput(input: HeldInput, written: boolean): SavedHeldInput {
+  const parts = input.parts.map((p): ReadyPart => {
+    if (p.type !== 'file' || !p.inline) return p;
+    const { inline: _inline, ...rest } = p;
+    return rest;
+  });
+  return { id: input.id, parts, ...(input.plan ? { plan: true as const } : {}), ...(written ? { written: true as const } : {}) };
+}
+
+/**
+ * 저장한 내 입력을 되살린다 — 모르는 칸이 하나라도 있으면 그 입력은 버린다(반쪽만 보내지 않는다). 첨부의 보낼 경로는 sendPath(file, remotePath)
+ * 가 다시 만든다(null = 사본이 없다 — 그 입력을 버린다)
+ */
+function heldFromSaved(x: unknown, sendPath: (file: string, remotePath: string | null) => string | null): HeldInput | null {
+  const v = x as { id?: unknown; parts?: unknown; plan?: unknown } | null;
+  if (!v || typeof v.id !== 'string' || !Array.isArray(v.parts) || v.parts.length === 0) return null;
+  const parts: ReadyPart[] = [];
+  for (const raw of v.parts) {
+    const p = raw as Record<string, unknown> | null;
+    if (p?.type === 'text' && typeof p.text === 'string') parts.push({ type: 'text', text: p.text });
+    else if (p?.type === 'image' && typeof p.mediaType === 'string' && typeof p.base64 === 'string') {
+      parts.push({ type: 'image', mediaType: p.mediaType, base64: p.base64 });
+    } else if (p?.type === 'file' && typeof p.name === 'string' && typeof p.file === 'string' && typeof p.bytes === 'number') {
+      const remotePath = typeof p.remotePath === 'string' ? p.remotePath : null;
+      const to = sendPath(p.file, remotePath);
+      if (!to) return null;
+      parts.push({ type: 'file', name: p.name, bytes: p.bytes, file: p.file, sendPath: to, ...(remotePath ? { remotePath } : {}) });
+    } else return null;
+  }
+  return { id: v.id, parts, ...(v.plan === true ? { plan: true as const } : {}) };
 }
 
 /** /effort 답에서 정해진 단계 — 모르는 말이면 null */

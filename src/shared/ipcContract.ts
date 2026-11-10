@@ -113,6 +113,8 @@ export interface DureApi {
   openAttachment(agentId: AgentId, file: string): Promise<void>
   approveMessage(id: string): Promise<void>
   dismissMessage(id: string): Promise<void>
+  /** 전달하지 못한(failed) 메시지를 다시 전달해 본다 — failed 가 아니면 '이미 처리된 메시지입니다.' */
+  retryMessage(id: string): Promise<void>
   continueHeld(roomId: RoomId): Promise<void>
   answerRequest(id: string, d: Decision): Promise<void>
   setAutoChainLimit(n: number): Promise<void>
@@ -208,7 +210,7 @@ export const APP_METHODS = [
 export const METHODS = [
   'snapshot', 'addRoom', 'sshAvailable', 'sshHosts', 'checkRemote', 'checkRemoteFolder', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
   'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'conversations', 'conversation', 'resumeConversation', 'forkAgent', 'image', 'openAttachment',
-  'approveMessage', 'dismissMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
+  'approveMessage', 'dismissMessage', 'retryMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
   'setAllowBypass', 'setNotify', 'setTheme', 'setBypass',
   'sleep', 'sleepRoom', 'sleepBlock', 'sleepableIn', 'setSleepAfter',
   'setPlanMode', 'resumeHold', 'dropHoldItem', 'dropHold', 'revokeAlwaysAllow',
