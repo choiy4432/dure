@@ -51,7 +51,8 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
   // 생각 전 기다림 — 준비하는 중·Claude 답 받는 중·대화를 정리하는 중
   const phase = useDure(s => s.phase[agentId])
   const focus = useDure(s => (s.messageFocus?.agentId === agentId ? s.messageFocus : null))
-  const hit = useDure(s => (s.hitFocus?.hit.agentId === agentId && s.hitFocus.hit.conversation.key === null ? s.hitFocus : null))
+  // 너무 앞(far)인 줄은 지난 대화 탭의 읽기 몫
+  const hit = useDure(s => (s.hitFocus?.hit.agentId === agentId && s.hitFocus.hit.conversation.key === null && !s.hitFocus.far ? s.hitFocus : null))
   const runningSet = useMemo(() => new Set(running), [running])
   const [limit, setLimit] = useState(PAGE)
 
@@ -165,7 +166,8 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
   }, [focus, lines, v.status, shown, measure])
 
   // 찾기에서 고른 줄 — 그 기록이 든 줄(hitLineIndex)로 가서 잠깐 두르고 초점도 그 줄로. 기록을 다 받은 뒤에(앞쪽은 openHit 이 불러 두었다).
-  // 앞에 숨긴 줄이면 그 줄까지 더 그리고 다시 본다. 받은 기록보다 앞이거나 못 받았으면 요청만 지운다. 따라 내려가기 효과들 뒤 — 같은 그리기에서 이것이 이긴다
+  // 앞에 숨긴 줄이면 그 줄까지 더 그리고 다시 본다 — openHit 이 그 줄부터 끝까지 HIT_MAX 항목 안일 때만 여기로 보내니 더 그리는 줄도 그 안이다.
+  // 받은 기록보다 앞이거나 못 받았으면 요청만 지운다. 따라 내려가기 효과들 뒤 — 같은 그리기에서 이것이 이긴다
   useLayoutEffect(() => {
     const el = box.current
     if (!hit || !el || !visible.current) return

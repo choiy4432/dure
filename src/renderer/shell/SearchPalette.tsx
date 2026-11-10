@@ -118,23 +118,21 @@ export function SearchPalette({ onClose }: { onClose: () => void }) {
   const [recent] = useState(() => getStore().recentAgents())
   const names = useMemo(() => nameRows(v.agents, v.rooms, v.roomId, q, recent), [v.agents, v.rooms, v.roomId, q, recent])
 
-  // 대화 찾기 — 마지막으로 부른 것(ask)의 답만 받는다. 끊긴 답(cancelled)은 더 새 찾기가 돌고 있다는 뜻이라 그대로 기다린다
+  // 대화 찾기 — 마지막으로 부른 것(ask)의 답만 받는다. 끊긴 답(cancelled)은 더 새 찾기가 돌고 있다는 뜻이라 그대로 기다린다.
+  // 찾을 말(또는 지금 방)이 바뀌면 곧바로 ask 를 올린다 — 앞 찾기의 답이 150 ms 기다리는 사이에 와도 버리고, 새 답이 올 때까지 찾는 중.
+  // 같은 말로 돌아와도(결제 → 결제 버 → 결제) 다시 찾는다 — 찾는 중 표시가 남지 않게
   const [convs, setConvs] = useState<Convs>(NO_CONVS)
   const ask = useRef(0)
-  const asked = useRef<string | null>(null)
   const roomId = v.roomId
   useEffect(() => {
+    ask.current++
     if (!long) {
-      ask.current++
-      asked.current = null
       setConvs(c => (c.hits.length > 0 || c.busy || c.failed ? { ...NO_CONVS, ver: c.ver + 1 } : c))
       return
     }
-    if (asked.current === q) return
     setConvs(c => (c.busy && !c.failed ? c : { ...c, busy: true, failed: false }))
     const timer = setTimeout(() => {
       const n = ++ask.current
-      asked.current = q
       Promise.resolve()
         .then(() => window.dure.search(q, roomId !== null ? { roomId } : undefined))
         .then(

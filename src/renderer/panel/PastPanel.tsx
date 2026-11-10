@@ -6,7 +6,7 @@ import { buildTranscript } from '../state/transcript'
 import { MOTION } from '../lib/motion'
 import { PresenceList, useMotion } from '../lib/presence'
 import { useNow } from '../lib/useNow'
-import { errorMessage, PAST, pastWhyText, RESUME_BLOCK_WORD } from '../lib/words'
+import { errorMessage, PAST, pastWhyText, RESUME_BLOCK_WORD, SEARCH } from '../lib/words'
 import { ChatItem } from './ChatItem'
 import { ViewShown } from './PanelTabs'
 import { nextAgentName, pastDateLine, resumeBlockOf } from './pastView'
@@ -30,50 +30,70 @@ interface Jump {
  * 목록 = 새것부터 한 줄씩(제목 · 날짜 줄 · 마지막 답 또는 이어 갈 수 없는 이유), 지금 대화는 '지금' 배지와 함께 — 누르면 대화 탭으로.
  * 목록은 탭을 열 때마다 · 지난 대화 수가 바뀔 때(경계) 다시 받는다 — 숨은 동안엔 받지 않는다(ViewShown).
  * 읽기를 닫으면(‹ · Esc) 연 줄로 초점이 돌아온다.
- * 찾기(Ctrl+K)에서 이 에이전트의 지난 대화 줄을 골랐으면(hitFocus) 목록을 받은 뒤 그 대화의 읽기를 열어 그 줄로 간다 — 목록에 없는 대화
+ * 찾기(Ctrl+K)에서 이 에이전트의 지난 대화 줄을 골랐으면(hitFocus) 그 뒤에 받은 목록으로 그 대화의 읽기를 열어 그 줄로 간다 — 목록에 없는 대화
  * (사람 말이 없는 대화)도 그 열쇠로 연다. 그새 그 대화로 돌아가 지금 대화가 됐으면 대화 탭의 그 줄로.
+ * 지금 대화 줄인데 대화 탭으로는 너무 앞이면(hitFocus.far) 지금 대화를 읽기로 연다 — 단추 없이 그렇게 연 까닭만.
  */
 export function PastPanel({ agentId }: { agentId: AgentId }) {
   const shown = useContext(ViewShown)
   const pastCount = useDure(s => s.agents.find(a => a.id === agentId)?.pastCount ?? 0)
   const now = useNow()
-  const [list, setList] = useState<ConversationSummary[] | null>(null)
+  // 받은 목록과 그 부르기 번호(n) — 찾은 줄은 그 줄이 온 뒤에 부른 목록으로만 고른다
+  const [got, setGot] = useState<{ list: ConversationSummary[]; n: number } | null>(null)
+  const list = got?.list ?? null
   const [failed, setFailed] = useState<string | null>(null)
   const [open, setOpen] = useState<ConversationSummary | null>(null)
   const [jump, setJump] = useState<Jump | null>(null)
-  const hit = useDure(s => (s.hitFocus?.hit.agentId === agentId && s.hitFocus.hit.conversation.key !== null ? s.hitFocus : null))
+  const hit = useDure(s => (s.hitFocus?.hit.agentId === agentId && (s.hitFocus.hit.conversation.key !== null || s.hitFocus.far) ? s.hitFocus : null))
   const ask = useRef(0)
 
-  // 늦게 온 옛 답이 새 목록을 덮지 않게 — 마지막으로 부른 것만 받는다
-  const load = useCallback(() => {
+  // 늦게 온 옛 답이 새 목록을 덮지 않게 — 마지막으로 부른 것만 받는다. 부르기 번호를 돌려준다
+  const load = useCallback((): number => {
     const n = ++ask.current
     setFailed(null)
     Promise.resolve()
       .then(() => window.dure.conversations(agentId))
       .then(
-        l => { if (n === ask.current) setList(l) },
+        l => { if (n === ask.current) setGot({ list: l, n }) },
         e => { if (n === ask.current) setFailed(errorMessage(e)) },
       )
+    return n
   }, [agentId])
 
   useEffect(() => {
     if (shown) load()
   }, [shown, pastCount, load])
 
-  // 찾기에서 고른 줄 — 보이고 목록을 받은 뒤에. 요청(hitFocus)은 여기서 지우고, 그 줄로 가는 일은 읽기가 맡는다(jump)
+  // 찾기에서 고른 줄 — 보이고, 그 줄이 온 뒤의 목록을 받은 뒤에: 그때 부르는 중이던 목록(탭을 열며 부른 것)이 있으면 그것, 없으면 새로 부른다.
+  // 숨은 동안 바뀐 옛 목록(/clear 로 지금 대화가 지난 대화가 됨 등)으로 고르지 않게. 요청(hitFocus)은 여기서 지우고, 그 줄로 가는 일은 읽기가 맡는다(jump)
+  const hitAsk = useRef<{ n: number; ask: number } | null>(null)
   useEffect(() => {
-    if (!hit || !shown || list === null) return
+    if (!hit || !shown) return
+    if (hitAsk.current?.n !== hit.n) hitAsk.current = { n: hit.n, ask: got?.n === ask.current ? load() : ask.current }
+    if (got === null || got.n < hitAsk.current.ask) return
     const h = hit.hit
-    const key = h.conversation.key!
-    const c = list.find(x => x.key === key)
-    if (c?.current) {
-      void getStore().openHit({ ...h, conversation: { ...h.conversation, key: null } })
-      return
+    const store = getStore()
+    let c: ConversationSummary | undefined
+    if (hit.far) {
+      // 지금 대화를 읽기로 — 목록에 없으면(사람 말이 없는 대화) 지금 세션의 열쇠로
+      c = got.list.find(x => x.current)
+      const a = c ? null : store.getState().agents.find(x => x.id === agentId)
+      if (a) c = { key: a.sessionId, current: true, title: '', at: h.conversation.startedAt ?? h.t, turns: 0, lastReply: '', resumable: false, why: null }
+    } else {
+      const key = h.conversation.key!
+      c = got.list.find(x => x.key === key)
+      if (c?.current) {
+        void store.openHit({ ...h, conversation: { ...h.conversation, key: null } })
+        return
+      }
+      c ??= { key, current: false, title: '', at: h.conversation.startedAt ?? h.t, turns: 0, lastReply: '', resumable: false, why: null }
     }
-    setOpen(c ?? { key, current: false, title: '', at: h.conversation.startedAt ?? h.t, turns: 0, lastReply: '', resumable: false, why: null })
-    setJump({ key, t: h.t, who: h.who, n: hit.n })
-    getStore().doneHitFocus(hit.n)
-  }, [hit, shown, list])
+    if (c) {
+      setOpen(c)
+      setJump({ key: c.key, t: h.t, who: h.who, n: hit.n })
+    }
+    store.doneHitFocus(hit.n)
+  }, [hit, shown, got, load])
   const jumped = useCallback((n: number) => setJump(j => (j?.n === n ? null : j)), [])
 
   // 초점 — 읽기를 ‹·Esc 로 닫으면 연 줄로, 대화 탭으로 가면(지금 대화를 고름 · 돌아감) 입력창으로(숨은 칸에 있던 초점이 몸통으로 떨어지지 않게).
@@ -195,6 +215,7 @@ function PastRow({ conv: c, now, onChoose, rowRef }: {
  * '새 에이전트로 이어 가기'는 일하는 중에도 된다(돌아가기가 막힐 때의 다른 길). 이어 갈 수 없는 대화면 둘 다 꺼짐 + 이유.
  * 엔진이 거절하면 그 글을 안내 자리에(다음 동작까지).
  * jump 면 그 줄로 가서 잠깐 두르고 초점을 옮긴다 — 끝 500줄보다 앞이면 앞 줄을 모두 받은 뒤(한 번에).
+ * 지금 대화(찾은 줄이 대화 탭으로는 너무 앞)면 두 단추 없이 안내 자리에 그렇게 연 까닭.
  */
 function PastRead({ agentId, conv, now, jump, onJumped, onBack, onResumed }: {
   agentId: AgentId
@@ -292,8 +313,8 @@ function PastRead({ agentId, conv, now, jump, onJumped, onBack, onResumed }: {
 
   const why = conv.why ? pastWhyText(conv.why, conv.at, now) : null
   const blocked = block ? RESUME_BLOCK_WORD[block] : null
-  // 안내 자리 — 이어 갈 수 없는 이유 > 지금 막는 까닭 > 거절당한 글 > 평소 안내
-  const reason = why ?? blocked
+  // 안내 자리 — (지금 대화면 그렇게 연 까닭) 이어 갈 수 없는 이유 > 지금 막는 까닭 > 거절당한 글 > 평소 안내
+  const reason = conv.current ? SEARCH.far : (why ?? blocked)
   const alert = reason === null && failed !== null
   const title = titleOf(conv)
 
@@ -340,26 +361,29 @@ function PastRead({ agentId, conv, now, jump, onJumped, onBack, onResumed }: {
             {reason ?? PAST.note}
           </p>
         )}
-        <div className="pc-acts">
-          <button
-            type="button"
-            className="btn sec"
-            disabled={busy || !conv.resumable}
-            aria-describedby={why ? noteId : undefined}
-            onClick={fork}
-          >
-            {PAST.fork}
-          </button>
-          <button
-            type="button"
-            className="btn pri"
-            disabled={busy || !conv.resumable || block !== null}
-            aria-describedby={reason ? noteId : undefined}
-            onClick={() => void resume()}
-          >
-            {PAST.resume}
-          </button>
-        </div>
+        {/* 지금 대화(찾은 줄이 너무 앞이라 연 것)엔 돌아가기 · 이어 가기가 없다 — 이미 그 대화다 */}
+        {!conv.current && (
+          <div className="pc-acts">
+            <button
+              type="button"
+              className="btn sec"
+              disabled={busy || !conv.resumable}
+              aria-describedby={why ? noteId : undefined}
+              onClick={fork}
+            >
+              {PAST.fork}
+            </button>
+            <button
+              type="button"
+              className="btn pri"
+              disabled={busy || !conv.resumable || block !== null}
+              aria-describedby={reason ? noteId : undefined}
+              onClick={() => void resume()}
+            >
+              {PAST.resume}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -100,6 +100,11 @@ const type = (text: string) => act(() => { fireEvent.change(input(), { target: {
 const key = (k: string) => act(() => { fireEvent.keyDown(input(), { key: k }) })
 const options = () => screen.queryAllByRole('option')
 const optionNames = () => options().map(o => o.querySelector('.pal-l1')?.textContent)
+/** 대화 묶음의 줄(첫 줄 글) — 묶음이 없으면 [] */
+const hitRows = () => {
+  const g = screen.queryByRole('group', { name: /대화에서/ })
+  return g ? within(g).getAllByRole('option').map(o => o.querySelector('.pal-l1')?.textContent) : []
+}
 const group = (name: string | RegExp) => screen.getByRole('group', { name })
 const status = () => within(palette()!).getByRole('status')
 const conv = () => screen.getByRole('region', { name: '대화' })
@@ -259,7 +264,7 @@ describe('검색창 — 대화 묶음', () => {
     expect(search).toHaveBeenCalledWith('결제 버튼', { roomId: 'r1' })
   })
 
-  it('결과 줄 — 맞은 곳 앞뒤 글(강조) · 에이전트 · 누가 · 지금/지난 대화(시작한 날) · 언제, 다른 방이면 방 이름 · 지운 에이전트의 줄은 뺀다', async () => {
+  it('결과 줄 — 맞은 곳 앞뒤 글(강조) · 에이전트 · 누가 · 지금/지난 대화(시작한 날 — 지난 대화(11월 8일) 꼴) · 언제, 다른 방이면 방 이름 · 지운 에이전트의 줄은 뺀다', async () => {
     const started = NOW - 40 * DAY
     const d = new Date(started)
     const day = d.getFullYear() === new Date(NOW).getFullYear() ? `${d.getMonth() + 1}월 ${d.getDate()}일` : `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`
@@ -287,7 +292,7 @@ describe('검색창 — 대화 묶음', () => {
     expect(rows[1].querySelector('.pal-l1 mark')).toHaveTextContent(/^결제 버튼$/)
     expect(rows[1].querySelector('.pal-l2')).toHaveTextContent(/^서버 · 기획에게서 온 메시지 · 지금 대화$/)
     expect(rows[1].querySelector('.pal-tm')).toHaveTextContent('2시간 전')
-    expect(rows[2].querySelector('.pal-l2')).toHaveTextContent(`디자인 · Claude · 지난 대화(${day} 시작) · 사내 도구`)
+    expect(rows[2].querySelector('.pal-l2')).toHaveTextContent(`디자인 · Claude · 지난 대화(${day}) · 사내 도구`)
     expect(rows[2].querySelector('.pal-tm')).toHaveTextContent('2일 전')
   })
 
@@ -325,6 +330,60 @@ describe('검색창 — 대화 묶음', () => {
     await find('결제 버튼 ')
     await find('결제 버튼 색')
     expect(palette()).not.toHaveTextContent('결제 앞 결과')
+    expect(hitRows()).toEqual(['결제 버튼 새 결과'])
+  })
+
+  describe('가짜 시계 — 150 ms 기다림 안의 차례', () => {
+    beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+    const tick = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+    async function openFake() {
+      const { getStore } = await import('../../src/renderer/state/store')
+      const { App } = await import('../../src/renderer/App')
+      await act(async () => { await getStore().init() })
+      render(<App />)
+      await tick()
+      await ctrlK(document.body)
+      expect(palette()).not.toBeNull()
+    }
+
+    it('앞 찾기의 답이 다음 글자를 친 뒤 기다리는 사이에 와도 — 그 결과는 안 보이고 찾는 중 · 새 답이 오면 그것만', async () => {
+      let lateA: (r: SearchResult) => void = () => {}
+      search
+        .mockImplementationOnce(() => new Promise(r => { lateA = r }))
+        .mockResolvedValueOnce({ more: false, hits: [hit({ agentId: 'w', roomId: 'r1', t: NOW, snippet: '결제 버튼 새 결과', ranges: [[0, 5]] })] })
+      await openFake()
+      await type('결제')
+      await tick(200)
+      expect(search).toHaveBeenCalledTimes(1) // '결제' 를 찾는 중 — 답은 아직
+      await type('결제 버튼')
+      await tick(50)
+      await act(async () => { lateA({ more: false, hits: [hit({ agentId: 's', roomId: 'r1', t: NOW, snippet: '결제 앞 결과', ranges: [[0, 2]] })] }) })
+      await tick()
+      expect(search).toHaveBeenCalledTimes(1) // 아직 150 ms 안
+      expect(hitRows()).toEqual([])
+      expect(palette()).not.toHaveTextContent('결제 앞 결과')
+      expect(status()).toHaveTextContent('대화에서 찾는 중')
+      await tick(200)
+      expect(search).toHaveBeenLastCalledWith('결제 버튼', { roomId: 'r1' })
+      expect(hitRows()).toEqual(['결제 버튼 새 결과'])
+      expect(status()).not.toHaveTextContent('찾는 중')
+    })
+
+    it('결제 → 결제 버 → (150 ms 안에 지워) 결제 — 찾는 중으로 남지 않고 결제 결과', async () => {
+      search.mockImplementation(async q => ({ more: false, hits: [hit({ agentId: 'w', roomId: 'r1', t: NOW, snippet: `${q} 결과`, ranges: [[0, 2]] })] }))
+      await openFake()
+      await type('결제')
+      await tick(200)
+      expect(hitRows()).toEqual(['결제 결과'])
+      await type('결제 버')
+      await tick(50)
+      await type('결제')
+      await tick(200)
+      expect(hitRows()).toEqual(['결제 결과'])
+      expect(status()).not.toHaveTextContent('찾는 중')
+      expect(group(/대화에서/)).not.toHaveAttribute('aria-busy')
+      expect(group(/대화에서/)).toHaveTextContent('지난 대화 포함')
+    })
   })
 })
 
@@ -397,10 +456,12 @@ describe('고른 대화 줄로 가기', () => {
     await wait()
     await wait()
     expect(store.getState().selectedAgentId).toBe('w')
-    // 앞쪽은 한 번에 — 엔진은 부를 때마다 파일을 다시 읽는다
+    // 앞쪽은 한 번에, 상한까지만(HIT_MAX − 가진 수) — 엔진은 부를 때마다 파일을 다시 읽는다
+    const { HIT_MAX } = await import('../../src/renderer/state/store')
     const older = history.mock.calls.filter(([, o]) => o?.before !== undefined)
     const first = ALL[ALL.length - 500].t
-    expect(older).toEqual([['w', { before: first + 1, limit: Infinity }]])
+    expect(older).toEqual([['w', { before: first + 1, limit: HIT_MAX - 500 }]])
+    expect(store.getState().history.w).toHaveLength(ALL.length)
     // 같은 시각(first)의 줄은 한 번만 — 이미 가진 줄을 앞쪽에서 또 붙이지 않는다
     expect(conv().querySelectorAll(`[data-t="${first}"]`)).toHaveLength(1)
     const row = conv().querySelector<HTMLElement>(`:scope > [data-t="${target.t}"]`)!
@@ -409,6 +470,48 @@ describe('고른 대화 줄로 가기', () => {
     expect(row).toHaveClass('hit')
     expect(document.activeElement).toBe(row)
     expect(store.getState().hitFocus).toBeNull()
+  })
+
+  it('farJump — 긴 지금 대화의 너무 앞 줄: history 는 상한까지 한 번만 · 대화 목록은 늘리지 않고 지난 대화 탭(지난 대화가 없어도)에서 지금 대화를 그 줄로 연다', async () => {
+    const { HIT_MAX } = await import('../../src/renderer/state/store')
+    // 합성 긴 기록 — HIT_MAX + 600 항목(처음엔 끝 500 항목만)
+    const LONG: HistoryItem[] = Array.from({ length: HIT_MAX / 2 + 300 }, (_, i) => turn(10_000 + i * 10, i)).flat()
+    history.mockImplementation((_id, o) => {
+      const pool = o?.before === undefined ? LONG : LONG.filter(x => x.t < o.before!)
+      const limit = o?.limit ?? 500
+      return Promise.resolve(limit === Infinity ? pool : pool.slice(-limit))
+    })
+    conversations.mockResolvedValue([{ key: 's', current: true, title: '질문 0', at: NOW, turns: LONG.length / 2, lastReply: '답', resumable: false, why: null }])
+    conversation.mockImplementation(async (_id, _key, o) => (o?.limit === Infinity ? LONG : LONG.slice(-500)))
+    const target = LONG[4] // 질문 2 — 그 줄부터 끝까지 HIT_MAX 를 넘는다
+    const store = await renderApp()
+    await act(async () => { await store.openHit(hit({ agentId: 'w', roomId: 'r1', t: target.t, snippet: '질문 2', ranges: [[0, 2]] })) })
+    await wait()
+    await wait()
+    // 앞쪽은 한 번, 상한까지만 — 닿지 않았으니 대화 목록은 그대로(끝 500 항목 · 그린 줄은 한 쪽)
+    const first = LONG[LONG.length - 500].t
+    expect(history.mock.calls.filter(([, o]) => o?.before !== undefined)).toEqual([['w', { before: first + 1, limit: HIT_MAX - 500 }]])
+    expect(history.mock.calls.every(([, o]) => o?.limit !== Infinity)).toBe(true)
+    expect(store.getState().history.w).toHaveLength(500)
+    const chat = screen.getByRole('region', { name: '대화', hidden: true }) // 지난 대화 탭이 보이는 동안 숨어 있다
+    expect(chat.querySelectorAll(':scope > [data-t]').length).toBeLessThanOrEqual(300)
+    expect(chat.querySelector('.hit')).toBeNull()
+    // 지난 대화 탭 — 'w' 는 지난 대화가 없지만 지금 대화를 읽기로 보이는 동안은 탭이 있다
+    expect(screen.getByRole('tab', { name: /지난 대화/ })).toHaveAttribute('aria-selected', 'true')
+    const view = screen.getByRole('region', { name: '질문 0' })
+    const row = view.querySelector<HTMLElement>(`:scope > [data-t="${target.t}"]`)!
+    expect(row).toHaveClass('me')
+    expect(row).toHaveClass('hit')
+    expect(document.activeElement).toBe(row)
+    expect(conversation.mock.calls.filter(([, , o]) => o?.limit === Infinity)).toEqual([['w', 's', { limit: Infinity }]])
+    // 그렇게 연 까닭 · 돌아가기·이어 가기 단추는 없다(이미 지금 대화)
+    const foot = document.querySelector<HTMLElement>('.pc-back')!
+    expect(foot).toHaveTextContent('너무 앞이라 지난 대화 보기에서 열었어요')
+    expect(within(foot).queryAllByRole('button')).toHaveLength(0)
+    expect(store.getState().hitFocus).toBeNull()
+    // 대화 탭으로 가면 지난 대화 탭은 사라진다(지난 대화가 없다)
+    fireEvent.click(screen.getByRole('tab', { name: '대화' }))
+    expect(screen.queryByRole('tab', { name: /지난 대화/ })).toBeNull()
   })
 
   it('불러온 범위 안이면 더 부르지 않고 그 줄로 · 같은 시각의 줄이 여럿이면 누가와 맞는 첫 줄 · 차례 가운데 Claude 글은 그 답 줄', async () => {
@@ -500,6 +603,34 @@ describe('고른 대화 줄로 가기', () => {
       await wait()
       expect(conversation).toHaveBeenLastCalledWith('d', 'S0', undefined)
       expect(document.querySelector('.pc-view [data-t="42"]')).toHaveClass('hit')
+    })
+
+    it('숨은 동안 /clear 로 지금 대화가 지난 대화가 됐어도 — 그 줄을 고른 뒤 받은 목록으로 그 대화의 읽기를 그 줄에서 연다', async () => {
+      const summary = (key: string, current: boolean, title: string): ConversationSummary =>
+        ({ key, current, title, at: NOW, turns: 1, lastReply: '', resumable: !current, why: null })
+      conversations.mockResolvedValue([summary('S1', true, '버튼 크기 정하기'), summary('S0', false, '처음 대화')])
+      const store = await renderApp()
+      // 지난 대화 탭을 한 번 열어 목록을 받아 둔다 — 그때 S1 은 지금 대화
+      await act(async () => { store.focusAgent('d') })
+      await act(async () => { store.setPanelTab('d', 'past') })
+      await wait()
+      expect(screen.getByRole('button', { name: /버튼 크기 정하기/ })).toHaveTextContent('지금')
+      await act(async () => { store.setPanelTab('d', 'chat') }) // 숨는다 — 목록은 그대로 들고 있다
+      // 숨은 동안 /clear — S1 은 지난 대화가 되고 새 지금 대화 S2
+      conversations.mockResolvedValue([summary('S2', true, '새 대화'), summary('S1', false, '버튼 크기 정하기'), summary('S0', false, '처음 대화')])
+      snapshot = { ...snapshot, agents: snapshot.agents.map(a => (a.id === 'd' ? { ...a, pastCount: 2 } : a)) }
+      await act(async () => { await store.refresh() })
+      expect(conversations).toHaveBeenCalledTimes(1)
+
+      const target = PAST[PAST.length - 4]
+      await act(async () => { await store.openHit(hit({ agentId: 'd', roomId: 'r2', t: target.t, who: 'me', conversation: { key: 'S1', startedAt: PAST[0].t } })) })
+      await wait()
+      await wait()
+      expect(screen.getByRole('tab', { name: /지난 대화/ })).toHaveAttribute('aria-selected', 'true')
+      expect(screen.getByRole('region', { name: '버튼 크기 정하기' }).querySelector(`[data-t="${target.t}"]`)).toHaveClass('hit')
+      expect(store.getState().hitFocus).toBeNull()
+      // 탭을 열며 부른 목록 하나로 — 같은 목록을 두 번 부르지 않는다
+      expect(conversations).toHaveBeenCalledTimes(2)
     })
   })
 })

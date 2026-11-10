@@ -130,6 +130,7 @@ function PanelBody({ agentId, name, pins, chat, composer, seen }: {
       tab: s.panelTab[agentId] ?? 'chat',
       focus: f && f.agentId === agentId ? f : null,
       past: s.agents.find(a => a.id === agentId)?.pastCount ?? 0,
+      readCurrent: s.readCurrent === agentId,
     }
   })
   // 메시지 탭의 수·점 — 받은 것 + 보낸 것 / 이 에이전트가 받은 것 가운데 내 확인 필요(관계도 카드의 받은 메시지와 같은 셈)
@@ -140,9 +141,10 @@ function PanelBody({ agentId, name, pins, chat, composer, seen }: {
     const t: PanelTab[] = ['chat']
     if (tree.total > 0) t.push('subagents')
     if (msg.total > 0) t.push('messages')
-    if (v.past > 0) t.push('past')
+    // 지난 대화가 없어도 — 찾은 줄이 너무 앞이라 그 탭이 지금 대화를 읽기로 보이는 동안은(readCurrent)
+    if (v.past > 0 || (v.readCurrent && v.tab === 'past')) t.push('past')
     return t
-  }, [tree.total, msg.total, v.past])
+  }, [tree.total, msg.total, v.past, v.readCurrent, v.tab])
   const tabs = shownTabs.length > 1
   const tab = shownTabs.includes(v.tab) ? v.tab : 'chat'
   const base = useId()
