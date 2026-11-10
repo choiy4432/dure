@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react'
 import type { HistoryItem, RelayMessage } from '../../src/engine/types'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
+import { edges } from '../../src/renderer/state/selectors'
 
 const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
   id, roomId: 'r1', name: id, role: '역할', folder: 'C:\\w', sessionId: 's', started: true, auto: false, model: null,
@@ -135,6 +136,29 @@ describe('메시지 탭', () => {
     fireEvent.click(within(failed).getByRole('button', { name: '다시 시도' }))
     await settle()
     expect(retryMessage).toHaveBeenCalledWith('m5')
+  })
+
+  it('전달 못 한 메시지는 [다시 시도] 옆에 [버리기] 도 — 누르면 dismissMessage, 버리면 관계도의 전달 못 함 선이 사라진다', async () => {
+    const dismissMessage = vi.fn(async (_id: string) => {})
+    ;(window as any).dure.dismissMessage = dismissMessage
+    snapshot.messages = [{ ...msg('m5', 'w', 's', 'failed', 2_000, '쿠폰 API 고쳐 주세요.'), failReason: '폴더를 찾을 수 없어요' }]
+    await renderPanel()
+    fireEvent.click(msgTab())
+    const [failed] = rows()
+    const ab = failed.querySelector('.ab')!
+    expect(within(ab as HTMLElement).getByRole('button', { name: '다시 시도' })).toHaveClass('btn', 'sec', 'sm')
+    const drop = within(ab as HTMLElement).getByRole('button', { name: '버리기' })
+    expect(drop).toHaveClass('btn', 'sec', 'sm')
+    fireEvent.click(drop)
+    await settle()
+    expect(dismissMessage).toHaveBeenCalledTimes(1)
+    expect(dismissMessage).toHaveBeenCalledWith('m5')
+    // 버린 메시지는 관계도 선에서 빠진다
+    const ags = snapshot.agents
+    const before = edges('r1', ags, snapshot.messages, { now: NOW, mode: 'all' })
+    expect(before.map((e) => e.state)).toEqual(['failed'])
+    const after = edges('r1', ags, [{ ...snapshot.messages[0], state: 'dismissed' }], { now: NOW, mode: 'all' })
+    expect(after).toEqual([])
   })
 
   it('다시 시도가 거절되면(이미 처리됨) 그 까닭을 같은 줄 꼴로', async () => {

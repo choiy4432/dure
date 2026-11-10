@@ -63,7 +63,9 @@ const androidIssue = androidProblem({ apkInfo, version: androidVersion, sourceHa
 if (androidIssue) fail(androidIssue)
 
 const files = releaseFiles(version)
-const plan = releasePlan(version, notes)
+// 위에서 push 됐음을 확인한 바로 그 커밋 — 초안 태그를 여기에 못 박는다
+const sha = run('git', ['rev-parse', 'HEAD'])
+const plan = releasePlan(version, notes, sha)
 
 if (dry) {
   console.log('[dry-run] 올리지 않고 할 일만 보여 드려요.')

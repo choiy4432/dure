@@ -115,6 +115,9 @@ function MessageRow({ message: m, me, nameOf, now, open, onOpenChange }: {
                 <button type="button" className="btn sec sm" disabled={busy} onClick={() => call(() => window.dure.retryMessage(m.id))}>
                   다시 시도
                 </button>
+                <button type="button" className="btn sec sm" disabled={busy} onClick={() => call(() => window.dure.dismissMessage(m.id))}>
+                  버리기
+                </button>
               </div>
             </>
           ) : (

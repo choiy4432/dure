@@ -34,7 +34,7 @@ const AUTH = Buffer.alloc(16, 7).toString('base64url')
 const FCM = 'https://fcm.googleapis.com/fcm/send/fake-endpoint-0001'
 const sub = (endpoint = FCM): PhonePushSubscription => ({ endpoint, expirationTime: null, keys: { p256dh: P256DH, auth: AUTH } })
 const dev = (id: string, over: Partial<StoredPhoneDevice> = {}): StoredPhoneDevice => ({
-  id, name: `휴대폰 ${id}`, createdAt: 1000, lastSeen: null, push: false, tokenHash: 'a'.repeat(64), ...over,
+  id, name: `휴대폰 ${id}`, createdAt: Date.now(), lastSeen: null, push: false, tokenHash: 'a'.repeat(64), ...over,
 })
 const NOTICE: PhoneNotice = { title: '두레', body: '백엔드 · 승인을 기다려요', tag: 'dure-a1-approval-1', url: '/#agent=a1' }
 const VAPID = { publicKey: 'BFakePublicKey0000', privateKey: 'fake-private-key-0000' }
@@ -312,4 +312,21 @@ test('webPushOptions — 진짜 web-push 가 받아 요청을 만든다(보내�
   expect(String(r.headers.Authorization)).toMatch(/^vapid t=.+, k=/)
   expect(r.body).toBeInstanceOf(Buffer)
   expect(r.body?.toString('utf8')).not.toContain('두레') // 암호화됐다
+})
+
+test('30일 넘게 안 쓴 기기엔 정리(expireIdle) 전이어도 알림을 보내지 않는다 — lastSeen 이 없으면 createdAt 으로 센다', async () => {
+  const DAY = 24 * 60 * 60 * 1000
+  const t0 = Date.parse('2026-11-10T00:00:00Z')
+  const store = openPhoneStore(dir)
+  store.write({ devices: [dev('old', { createdAt: t0, lastSeen: t0, subscription: sub(), push: true }), dev('new', { createdAt: t0, lastSeen: t0 + 29 * DAY, subscription: sub(FCM + '2'), push: true })] })
+  const { send, calls } = fakeSend()
+  let now = t0 + 31 * DAY
+  const push = createPush(store, { send, now: () => now })
+  await push.sendTo('old', NOTICE)
+  expect(calls).toHaveLength(0)
+  await push.sendTo('new', NOTICE)
+  expect(calls).toHaveLength(1)
+  now = t0 + 60 * DAY
+  await push.sendTo('new', NOTICE)
+  expect(calls).toHaveLength(1)
 })

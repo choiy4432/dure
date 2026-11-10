@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { renameRetrying } from '../../engine/store'
 import {
-  DEFAULT_PHONE_SETTINGS, PHONE_NAME_DEFAULT, PHONE_NAME_MAX, type PhoneDevice, type PhoneSettings,
+  DEFAULT_PHONE_SETTINGS, PHONE_IDLE_MS, PHONE_NAME_DEFAULT, PHONE_NAME_MAX, type PhoneDevice, type PhoneSettings,
 } from '../../shared/phoneTypes'
 
 // <userData>/phone.json — 휴대폰 설정 · 짝 맺은 기기(토큰은 sha256 해시만) · 알림 구독 · VAPID 열쇠쌍.
@@ -17,6 +17,9 @@ export type PhonePushSubscription = {
 
 /** 파일에 든 기기 — 화면용 PhoneDevice 에 토큰 해시(sha256 hex)·알림 구독을 더한 것. push 는 구독이 있는지로 정해진다(파일엔 안 씀) */
 export type StoredPhoneDevice = PhoneDevice & { tokenHash: string; subscription?: PhonePushSubscription }
+
+/** 30일(PHONE_IDLE_MS) 넘게 안 쓴 기기인가 — lastSeen 이 없으면 createdAt 으로 센다(벽시계 now) */
+export const isIdleDevice = (d: Pick<PhoneDevice, 'lastSeen' | 'createdAt'>, now: number): boolean => now - (d.lastSeen ?? d.createdAt) > PHONE_IDLE_MS
 
 export type VapidKeys = { publicKey: string; privateKey: string }
 

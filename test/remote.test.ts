@@ -123,7 +123,27 @@ describe('remoteLaunchScript', () => {
     // 이 PC 의 claude 와 같은 환경(SPAWN_ENV_EXTRA) — 표식 바로 뒤, exec 바로 앞. ssh 는 환경을 넘기지 않는다
     const extra = Object.entries(SPAWN_ENV_EXTRA).map(([k, v]) => `export ${k}=${shq(v)}; `).join('');
     expect(extra).toContain("export MCP_TOOL_TIMEOUT='86400000'; ");
-    expect(s).toContain(`export DURE_RUN=ag1.ab12cd34; ${extra}exec "$c" `);
+    expect(s).toContain(`export DURE_RUN=ag1.ab12cd34; ${extra}unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; exec "$c" `);
+  });
+  it('서버 프로필이 내보낸 API 키·토큰은 exec 바로 앞에서 지운다', () => {
+    const s = make();
+    const u = s.indexOf('unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN');
+    expect(u).toBeGreaterThan(0);
+    expect(u).toBeLessThan(s.indexOf('exec "$c" '));
+  });
+  it.skipIf(!hasBash)('bash 로 돌려 보면: 프로필이 내보낸 ANTHROPIC_API_KEY·ANTHROPIC_AUTH_TOKEN 은 claude 에 안 넘어간다', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'dure-nokey-'));
+    try {
+      const home = join(tmp, 'home');
+      const bin = join(tmp, 'bin');
+      execFileSync('bash', ['-c', `mkdir -p ${shq(posix(home))}`]);
+      exe(join(bin, 'claude'), 'echo "KEY=[${ANTHROPIC_API_KEY-}][${ANTHROPIC_AUTH_TOKEN-}] KEEP=[${KEEP-}]"');
+      const script = remoteLaunchScript({ agentId: 'ag1', launchId: 'ab12cd34', folder: posix(tmp), claudeArgs: ['-p'] });
+      const r = spawnSync('bash', ['-c', `PATH=${shq(posix(bin))}:/usr/bin:/bin; export ANTHROPIC_API_KEY=k1 ANTHROPIC_AUTH_TOKEN=t1 KEEP=yes; ` + script], {
+        input: launchPreamble('{}', 'p'), encoding: 'utf8', env: { ...process.env, HOME: posix(home) },
+      });
+      expect(r.stdout).toContain('KEY=[][] KEEP=[yes]');
+    } finally { rmSync(tmp, { recursive: true, force: true }); }
   });
   it('cd·claude 찾기가 먼저 — 폴더나 claude 가 없으면 run 폴더·머리말 파일을 만들기 전에 끝난다 · umask 077 은 파일 쓰기에만 · pid·표식·exec 는 그 뒤', () => {
     const s = make('/home/a/web');
@@ -139,7 +159,7 @@ describe('remoteLaunchScript', () => {
     expect(order).toEqual([...order].sort((x, y) => x - y));
   });
   it('토큰·포트가 스크립트에 없다', () => {
-    expect(make()).not.toMatch(/Bearer|127\.0\.0\.1|token/i);
+    expect(make().replace('unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN', '')).not.toMatch(/Bearer|127\.0\.0\.1|token/i);
   });
   it('일반 인자는 shq', () => {
     const s = remoteLaunchScript({ agentId: 'a', launchId: 'b', folder: '/x', claudeArgs: ['-n', `it's me`] });

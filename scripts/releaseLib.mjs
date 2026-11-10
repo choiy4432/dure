@@ -30,8 +30,9 @@ export function releaseFiles(version) {
 }
 
 // gh 에 넘길 argv. 초안(--draft)으로 올린다 — 초안은 electron-updater 에 안 보여서, 사람이 Publish 를 누를 때까지 사용자에게 안 나간다. 셸 없이 그대로 spawn 하므로 제목·경로가 한 칸씩 유지된다.
-export function releaseArgs(version, notesFile) {
-  return ['release', 'create', `v${version}`, ...releaseFiles(version), '--title', `두레 ${version}`, '--notes-file', notesFile, '--draft']
+// --target <sha>: 초안의 태그는 Publish 때 기본 브랜치 끝에 만들어진다 — 그 사이 push 가 있어도 빌드한 커밋에 달리게 sha 를 못 박는다.
+export function releaseArgs(version, notesFile, sha) {
+  return ['release', 'create', `v${version}`, ...releaseFiles(version), '--title', `두레 ${version}`, '--notes-file', notesFile, '--target', sha, '--draft']
 }
 
 // 사람이 읽는 한 줄(실행하는 것과 같은 argv 를 따옴표로 감싸 보여 준다).
@@ -42,12 +43,12 @@ export function show(cmd, argv) {
 export const DRAFT_HINT = 'GitHub 에서 초안을 확인하고 [Publish release] 를 누르면 자동 업데이트가 나가요'
 
 // 올리는 순서: typecheck → 시험 → 빌드 → 올리기. shell 이 true 인 것은 npm(Windows 에서 npm.cmd)이고 인자가 고정이다.
-export function releasePlan(version, notesFile) {
+export function releasePlan(version, notesFile, sha) {
   return [
     { name: 'typecheck', cmd: 'npm run typecheck', args: [], shell: true },
     { name: 'test', cmd: 'npm test', args: [], shell: true },
     { name: 'dist', cmd: 'npm run dist', args: [], shell: true },
-    { name: 'upload', cmd: 'gh', args: releaseArgs(version, notesFile), shell: false },
+    { name: 'upload', cmd: 'gh', args: releaseArgs(version, notesFile, sha), shell: false },
   ]
 }
 

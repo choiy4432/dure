@@ -11,7 +11,7 @@ import { createPhoneController, phoneStaticDir, type PhoneController, type Phone
 import { startPhoneServer, type PhoneClient, type PhoneServer, type PhoneServerOptions } from '../src/main/phone/phoneServer'
 import { EVENT_NAMES } from '../src/shared/ipcContract'
 import { PHONE_DENIED } from '../src/shared/phoneAccess'
-import { DEFAULT_PHONE_SETTINGS, PAIR_TTL_MS, type PhoneState, type TailscaleState } from '../src/shared/phoneTypes'
+import { DEFAULT_PHONE_SETTINGS, PAIR_TTL_MS, PHONE_IDLE_MS, type PhoneState, type TailscaleState } from '../src/shared/phoneTypes'
 import { phoneCookieName } from '../src/shared/phoneWire'
 
 /** 443 으로 연 길의 기기 토큰 쿠키 이름 */
@@ -1331,4 +1331,29 @@ test('안드로이드 앱 — 모르는 패키지는 시험 빌드에서도 null
   const { c } = make({ androidTest: true })
   await c.ready
   expect(c.state().androidApp).toBeNull()
+})
+
+test('하루 한 번 30일 넘게 안 쓴 기기를 정리 — 오래 켜 둬도 낡은 기기가 목록에 남지 않고, dispose 가 타이머를 푼다', async () => {
+  const DAY = 24 * 60 * 60 * 1000
+  const t0 = Date.parse('2026-11-10T00:00:00Z')
+  let now = t0
+  const dev = (id: string) => ({ id, name: id, createdAt: t0, lastSeen: t0, tokenHash: id.padEnd(64, 'a') })
+  seed({ devices: [dev('a'), dev('b')] })
+  const ticks: { ms: number; fn: () => void }[] = []
+  const stopped = vi.fn()
+  const { c } = make({ now: () => now, sweepEvery: (ms, fn) => (ticks.push({ ms, fn }), stopped) })
+  await c.ready
+  expect(ticks.map((t) => t.ms)).toEqual([DAY])
+  now = t0 + PHONE_IDLE_MS - DAY // 아직 30일 전
+  ticks[0].fn()
+  expect(c.state().devices.map((d) => d.id)).toEqual(['a', 'b'])
+  now = t0 + PHONE_IDLE_MS + DAY // 켜 둔 채 30일을 넘김
+  ticks[0].fn()
+  expect(c.state().devices).toEqual([])
+  expect(saved().devices).toEqual([])
+  await c.dispose()
+  expect(stopped).toHaveBeenCalledTimes(1)
+  const before = ticks.length
+  ticks[0].fn() // dispose 뒤엔 아무것도 안 한다
+  expect(ticks).toHaveLength(before)
 })

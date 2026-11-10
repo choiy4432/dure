@@ -91,7 +91,7 @@ async function main() {
 
   await step('handoff', async () => {
     await engine.sendUser(A, [{ type: 'text', text: "B 에게 '안녕 두레' 라고 전해 줘. mcp__dure__send_message 를 써. 다른 일은 하지 마." }]);
-    await until('B 로 delivered 메시지', 120000, () => engine.messages().some((m) => m.to === B && m.state === 'delivered'));
+    await until('B 로 delivered 메시지', 120000, () => engine.messages().some((m) => m.to === B && (m.state === 'delivered' || m.state === 'read')));
     await until('B 의 result', 120000, () => results(B).length > 0);
   });
 

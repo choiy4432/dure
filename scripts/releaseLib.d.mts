@@ -1,6 +1,6 @@
 export function notesProblem(text: string): string | null
 export function releaseFiles(version: string): string[]
-export function releaseArgs(version: string, notesFile: string): string[]
+export function releaseArgs(version: string, notesFile: string, sha: string): string[]
 export function show(cmd: string, argv: string[]): string
 export const ANDROID_REAL_PACKAGE: string
 export const ANDROID_STALE: string
@@ -13,5 +13,5 @@ export function androidProblem(o: {
 }): string | null
 export const DRAFT_HINT: string
 export type ReleaseStep = { name: 'typecheck' | 'test' | 'dist' | 'upload'; cmd: string; args: string[]; shell: boolean }
-export function releasePlan(version: string, notesFile: string): ReleaseStep[]
+export function releasePlan(version: string, notesFile: string, sha: string): ReleaseStep[]
 export function runPlan(plan: ReleaseStep[], exec: (step: ReleaseStep) => number | null): string | null

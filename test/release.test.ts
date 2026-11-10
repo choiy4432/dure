@@ -7,12 +7,14 @@ import { ANDROID_REAL_PACKAGE, ANDROID_STALE, DRAFT_HINT, androidProblem, notesP
 describe('releaseArgs', () => {
   it('제목은 한 칸, 파일 셋, 노트 경로는 공백이 있어도 한 칸', () => {
     const notes = 'C:\\tmp\\my notes & 100%.md'
-    const a = releaseArgs('0.1.0', notes)
+    const sha = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+    const a = releaseArgs('0.1.0', notes, sha)
+    expect(a[a.indexOf('--target') + 1]).toBe(sha)
     expect(a.slice(0, 3)).toEqual(['release', 'create', 'v0.1.0'])
     expect(a.slice(3, 6)).toEqual(['dist/Dure-Setup-0.1.0.exe', 'dist/Dure-Setup-0.1.0.exe.blockmap', 'dist/latest.yml'])
     expect(a[a.indexOf('--title') + 1]).toBe('두레 0.1.0')
     expect(a[a.indexOf('--notes-file') + 1]).toBe(notes)
-    expect(a).toHaveLength(11)
+    expect(a).toHaveLength(13)
   })
   it('show 는 공백·특수문자 인자를 따옴표로 감싼다', () => {
     expect(show('gh', ['--title', '두레 0.1.0', 'a&b', 'plain'])).toBe('gh --title "두레 0.1.0" "a&b" plain')
@@ -63,7 +65,7 @@ it('릴리스 가드의 진짜 패키지 이름은 앱의 ANDROID_PACKAGE 와 �
 
 describe('릴리스 순서', () => {
   it('releaseRunsChecksFirst — typecheck → 시험 → 빌드 → 올리기, 앞이 실패하면 뒤는 돌리지 않는다', () => {
-    const plan = releasePlan('0.1.0', 'notes.md')
+    const plan = releasePlan('0.1.0', 'notes.md', 'abc123')
     expect(plan.map((s) => s.name)).toEqual(['typecheck', 'test', 'dist', 'upload'])
     expect(plan.map((s) => s.cmd)).toEqual(['npm run typecheck', 'npm test', 'npm run dist', 'gh'])
     const ran: string[] = []
@@ -78,7 +80,8 @@ describe('릴리스 순서', () => {
     }
   })
   it('releaseIsDraft — gh release create 는 --draft 로 올리고, 끝에 Publish 안내를 찍는다', () => {
-    expect(releaseArgs('0.1.0', 'n.md')).toContain('--draft')
+    expect(releaseArgs('0.1.0', 'n.md', 'abc123')).toContain('--draft')
+    expect(releasePlan('0.1.0', 'n.md', 'abc123')[3].args).toContain('abc123')
     expect(DRAFT_HINT).toBe('GitHub 에서 초안을 확인하고 [Publish release] 를 누르면 자동 업데이트가 나가요')
     const src = fs.readFileSync(path.join(__dirname, '../scripts/release.mjs'), 'utf8')
     expect(src).toContain('DRAFT_HINT')

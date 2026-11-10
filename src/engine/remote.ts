@@ -110,6 +110,8 @@ export function remoteLaunchScript(a: { agentId: string; launchId: string; folde
     // claude·그 Bash 명령·손자가 물려받는 표식 — 정리가 고아가 된 것도 찾는다. setsid 는 쓰지 않는다(이미 세션 리더, 쓰면 깨짐)
     `export DURE_RUN=${marker(a.agentId, a.launchId)}`,
     ...env,
+    // 서버의 로그인 프로필(bash -lc)이 내보냈을 수 있는 API 키·토큰 — 이 PC 쪽 claudeEnv 거름은 ssh 를 건너지 못한다. 구독 로그인만 쓴다
+    'unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN',
     `exec "$c" ${quoted.join(' ')}`,
   ].join('; ');
 }

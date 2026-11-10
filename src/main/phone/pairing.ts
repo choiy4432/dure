@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { performance } from 'node:perf_hooks'
-import { PAIR_TTL_MS, PHONE_IDLE_MS, type PhoneDevice } from '../../shared/phoneTypes'
-import { cleanDeviceName, publicDevice, type PhoneStore, type StoredPhoneDevice } from './phoneStore'
+import { PAIR_TTL_MS, type PhoneDevice } from '../../shared/phoneTypes'
+import { cleanDeviceName, isIdleDevice, publicDevice, type PhoneStore, type StoredPhoneDevice } from './phoneStore'
 
 // 짝 맺기 — PC 가 짝 코드(QR, 32바이트 hex)와 6자리 숫자를 하나씩 내고, 휴대폰이 그중 하나를 내면 기기 토큰(32바이트 base64url)을 준다.
 // 짝 코드·숫자는 메모리에만(해시로), 토큰은 phone.json 에 sha256 해시로만. 🔴 코드·숫자·토큰은 로그·오류 글에 싣지 않는다
@@ -104,7 +104,7 @@ export function createPairing(
     if (!oldest.done && fails.size >= FAIL_KEYS_MAX) fails.delete(oldest.value)
     fails.set(key, f)
   }
-  const idle = (d: StoredPhoneDevice) => now() - (d.lastSeen ?? d.createdAt) > PHONE_IDLE_MS
+  const idle = (d: StoredPhoneDevice) => isIdleDevice(d, now())
   /** 낡은 기기를 저장소에서 빼고 id 들을 준다 — 알림 구독도 같이 사라져 푸시가 더는 가지 않는다 */
   const dropIdle = (): string[] => {
     const cur = store.read().devices

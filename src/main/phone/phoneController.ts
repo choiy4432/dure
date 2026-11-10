@@ -26,6 +26,8 @@ export const PHONE_HTTPS_PORTS: readonly number[] = Object.freeze([443, PHONE_PO
 export const PHONE_RETRY_MS = 30_000
 /** 휴대폰이 올린 파일을 두는 폴더(<dataDir> 아래) — 시작·끄기·두레 끄기 때 비운다(올리기만 하고 안 보낸 것) */
 export const PHONE_INBOX = 'phone-inbox'
+/** 30일 넘게 안 쓴 기기를 가려 짝을 푸는 간격 — 두레를 오래 켜 둬도 하루 안에 정리된다 */
+export const PHONE_SWEEP_MS = 24 * 60 * 60 * 1000
 
 const E = {
   notReady: '휴대폰 연결이 아직 열리지 않았어요',
@@ -66,6 +68,10 @@ export interface PhoneControllerOptions {
   pcAway?: (fn: () => void) => () => void
   /** 시험만 — 미룬 알림의 다시 보기 타이머(기본 setInterval) */
   every?: (ms: number, fn: () => void) => () => void
+  /** 시험만 — 하루 한 번 안 쓴 기기를 정리하는 타이머(기본 setInterval, unref) */
+  sweepEvery?: (ms: number, fn: () => void) => () => void
+  /** 시험만 — 벽시계(30일 안 쓴 기기를 가른다), 기본 Date.now */
+  now?: () => number
   /** Windows 를 켜면 두레도 켜기 — 진짜는 설치본에서만 app.setLoginItemSettings, 개발 실행·시험은 가짜 */
   loginItem: { set(open: boolean): void }
   /** 앱 사건 'phone' — PC 창으로만 */
@@ -125,8 +131,8 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
   const store = openPhoneStore(o.dataDir)
   const inboxDir = path.join(o.dataDir, PHONE_INBOX)
   // 30일 안 쓴 기기가 풀리면 열린 연결을 닫고 PC 의 기기 목록을 새로 그린다(server·publish 는 아래서 정해진다 — 부를 때쯤엔 있다)
-  const pairing = createPairing(store, { onExpire: (id) => { server?.kick(id); publish() } })
-  const push = o.push ?? createPush(store)
+  const pairing = createPairing(store, { now: o.now, onExpire: (id) => { server?.kick(id); publish() } })
+  const push = o.push ?? createPush(store, { now: o.now })
   const startServer = o.startServer ?? startPhoneServer
   const log = o.log ?? console.error
   const retryMs = o.retryMs ?? PHONE_RETRY_MS
@@ -572,6 +578,15 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
     publish()
   }
 
+  // 하루 한 번 30일 넘게 안 쓴 기기 정리 — 시작·verify 때만이면 오래 켜 둔 동안 낡은 기기가 알림을 받고 목록에 남는다. unref(앱을 붙잡지 않음), dispose 에서 푼다
+  const stopSweep = (o.sweepEvery ?? ((ms, fn) => {
+    const t = setInterval(fn, ms)
+    t.unref?.()
+    return () => clearInterval(t)
+  }))(PHONE_SWEEP_MS, () => {
+    if (!disposed) safely('안 쓴 기기 정리', () => void pairing.expireIdle())
+  })
+
   const notifier = o.engine
     ? createPhoneNotifier({
       engine: o.engine,
@@ -705,6 +720,7 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
       disposed = true
       clearRetry()
       clearPairing()
+      stopSweep()
       if (notifier) safely('알림 끄기', () => notifier.dispose())
       shutServer() // 새 요청은 바로 거절 · 열린 소켓은 바로 끊는다
       const closingNow = closing

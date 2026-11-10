@@ -1,6 +1,6 @@
 import { parse as legacyUrlParse } from 'node:url'
 import webpush, { type RequestOptions } from 'web-push'
-import { pickSubscription, type PhonePushSubscription, type PhoneStore, type StoredPhoneDevice, type VapidKeys } from './phoneStore'
+import { isIdleDevice, pickSubscription, type PhonePushSubscription, type PhoneStore, type StoredPhoneDevice, type VapidKeys } from './phoneStore'
 
 // 웹 푸시(VAPID) — 휴대폰 알림을 PC 에서 바깥 알림 서버(구글·애플·모질라·마이크로소프트)로 보낸다.
 // 🔴 VAPID 비밀 열쇠·구독 주소·구독 열쇠는 로그·오류 글에 싣지 않는다. 알림 글은 PhoneNotice 네 칸뿐(명령·대화 글 없음)
@@ -134,13 +134,14 @@ function withoutSubscription(d: StoredPhoneDevice): StoredPhoneDevice {
   return { ...rest, push: false }
 }
 
-/** o.send — 시험은 가짜(네트워크 없음) · o.log — 실패 로그(기본 console.error, 주소·열쇠는 싣지 않는다) */
+/** o.send — 시험은 가짜(네트워크 없음) · o.now — 벽시계(30일 안 쓴 기기 가리기) · o.log — 실패 로그(기본 console.error, 주소·열쇠는 싣지 않는다) */
 export function createPush(
   store: PhoneStore,
-  o: { send?: PushSend; log?: (...args: unknown[]) => void } = {},
+  o: { send?: PushSend; now?: () => number; log?: (...args: unknown[]) => void } = {},
 ): Push {
   const send = o.send ?? webPushSend
   const log = o.log ?? console.error
+  const now = o.now ?? Date.now
 
   /** 저장된 열쇠쌍 — 없을 때만 만들어 저장한다 */
   const keys = (): VapidKeys => {
@@ -179,7 +180,10 @@ export function createPush(
 
     async sendTo(deviceId, n, delivery = ASK_DELIVERY) {
       try {
-        const sub = store.read().devices.find((d) => d.id === deviceId)?.subscription
+        const dev = store.read().devices.find((d) => d.id === deviceId)
+        // 30일 넘게 안 쓴 기기는 짝이 풀린 것 — 정리(expireIdle) 전이어도 보내지 않는다
+        if (!dev || isIdleDevice(dev, now())) return
+        const sub = dev.subscription
         if (!sub) return
         if (!isPushEndpoint(sub.endpoint)) {
           log('[두레] 휴대폰 알림 주소가 알려진 알림 서버가 아니라 보내지 않았어요')
