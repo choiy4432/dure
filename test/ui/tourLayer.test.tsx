@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, act, cleanup, fireEvent, within } from '@testing-library/react'
+import { render, screen, act, cleanup, fireEvent, within, waitFor } from '@testing-library/react'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 import type { AppPrefs, SetupState } from '../../src/shared/appTypes'
 import type { PendingRequest } from '../../src/engine/types'
@@ -380,15 +380,20 @@ describe('TourLayer — 진행', () => {
       const { store, show, closeDialog } = await mount('settings')
       act(() => store.setTour(at('settings', { rooms: 1, agents: 1 })))
       screen.getByRole('dialog', { name: '설정 안에는' })
-      await wait(50)
-      expect(dlg.style.translate).toBe('-66px 0')
+      // 재기는 requestAnimationFrame 으로 돈다 — 고정 시간(wait)이 아니라 결과가 될 때까지 기다린다(부하로 프레임이 늦어도 같은 결과)
+      await waitFor(() => expect(dlg.style.translate).toBe('-66px 0'), { timeout: 10000 })
       // 자리가 넉넉하면(1600 폭) 비키지 않는다
       window.innerWidth = 1600
       window.dispatchEvent(new Event('resize'))
-      await wait(50)
-      expect(dlg.style.translate).toBe('')
+      await waitFor(
+        () => {
+          expect(dlg.style.translate).toBe('')
+          expect(parseFloat(screen.getByRole('dialog', { name: '설정 안에는' }).style.left)).toBe(250 + 780 + 16) // 창과 겹치지 않는다
+        },
+        { timeout: 10000 },
+      )
       const c = screen.getByRole('dialog', { name: '설정 안에는' })
-      expect(parseFloat(c.style.left)).toBe(250 + 780 + 16) // 창과 겹치지 않는다
+      expect(parseFloat(c.style.left)).toBe(250 + 780 + 16)
       // 설정 위에 겹친 창이 뜨면 카드가 숨고, 투어의 닫기 요청은 설정 창을 그냥 닫는다
       show('settings')
       fireEvent.click(within(screen.getByRole('dialog', { name: '설정 안에는' })).getByRole('button', { name: '확인했어요' }))

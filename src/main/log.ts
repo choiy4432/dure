@@ -1,8 +1,28 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { inspect } from 'node:util'
 
 export interface Log {
   write(line: string): void
+}
+
+/**
+ * 글 속의 홈 경로(대소문자 무시 · `\` 와 `/` 둘 다)를 `~` 로 바꾼다 — 로그와 오류 상자에 내 Windows 사용자 이름이 남지 않게.
+ * home 이 비면 그대로. 홈 이름에 글자·숫자가 더 이어지면 바꾸지 않는다(`C:\Users\ab` 가 `C:\Users\abc` 를 건드리지 않게)
+ */
+export function redactHome(text: string, home: string): string {
+  const base = home.replace(/[\\/]+$/, '')
+  if (!base) return text
+  const src = base
+    .split(/[\\/]+/)
+    .map((seg) => seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[\\\\/]+')
+  return text.replace(new RegExp(`${src}(?![\\p{L}\\p{N}_-])`, 'giu'), '~')
+}
+
+/** 로그 한 줄로 — Error 는 stack, 그 밖은 문자열 그대로, 객체는 `[object Object]` 대신 inspect(depth 3) */
+export function formatLogArgs(args: unknown[]): string {
+  return args.map((a) => (a instanceof Error ? (a.stack ?? a.message) : typeof a === 'string' ? a : inspect(a, { depth: 3 }))).join(' ')
 }
 
 /**
@@ -10,7 +30,7 @@ export interface Log {
  * 가장 오래된 것은 버린다. 못 쓰면(폴더를 못 만듦·디스크 가득 등) 조용히 넘긴다 — 로그가 앱을 멈추게 하지 않는다.
  * 🔴 오류 글만 넘길 것 — 대화 글·토큰·쿠키는 쓰지 않는다.
  */
-export function openLog(dir: string, o: { maxBytes?: number; keep?: number } = {}): Log {
+export function openLog(dir: string, o: { maxBytes?: number; keep?: number; home?: string } = {}): Log {
   const maxBytes = o.maxBytes ?? 1024 * 1024
   const keep = o.keep ?? 3
   const file = path.join(dir, 'dure.log')
@@ -30,7 +50,7 @@ export function openLog(dir: string, o: { maxBytes?: number; keep?: number } = {
     write(line: string): void {
       try {
         fs.mkdirSync(dir, { recursive: true })
-        const text = `${new Date().toISOString()} ${line.replace(/\r?\n/g, ' ')}\n`
+        const text = `${new Date().toISOString()} ${redactHome(line, o.home ?? '').replace(/\r?\n/g, ' ')}\n`
         let size = 0
         try {
           size = fs.statSync(file).size
@@ -54,12 +74,14 @@ export function makeFatalReporter(o: {
   log: (...args: unknown[]) => void
   showBox: (title: string, body: string) => void
   noDialog: boolean
+  /** 상자 글에서 가릴 홈 경로(없으면 그대로) */
+  home?: string
 }): (err: unknown) => void {
   const shown = new Set<string>()
   return (err) => {
     o.log('[두레] uncaughtException:', err)
     if (o.noDialog) return
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = redactHome(err instanceof Error ? err.message : typeof err === 'string' ? err : inspect(err, { depth: 3 }), o.home ?? '')
     if (shown.has(msg)) return
     shown.add(msg)
     try {

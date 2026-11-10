@@ -515,6 +515,7 @@ const CREDENTIALS_FILE = '.credentials.json';
 const ATTACH_LEFT = '첨부 폴더를 다 지우지 못했어요 — 두레를 다시 켜면 다시 지워요';
 /** 아직 보내지 않은 내 입력(기다리는 줄 · 붙잡기)을 남기는 파일 — 데이터 폴더(user-data) 안. 바뀔 때마다 통째로 쓴다 */
 const HELD_FILE = 'held-input.json';
+const HELD_SAVE_DEBOUNCE_MS = 500; // 붙잡은 입력 저장 몰아 쓰기 — 마지막 바뀜 뒤 이만큼 지나면 한 번
 const HELD_SAVE_FAILED = '아직 보내지 않은 내 입력을 저장하지 못했어요 — 두레가 꺼지면 사라질 수 있어요';
 
 /** held-input.json 의 내 입력 하나 — written: Claude 에게 한 번 썼다 돌려받은 것(기록에 있다 — 버려도 첨부 사본은 둔다) */
@@ -710,6 +711,7 @@ class EngineImpl extends EventEmitter implements Engine {
   private remoteChain = new Map<AgentId, Promise<void>>(); // 에이전트마다 서버 정리 줄 — 같은 에이전트의 다음 띄우기는 이 줄이 끝난 뒤(startAfter)
   private remoteWork = new Set<Promise<void>>(); // 도는 서버 정리 — shutdown 이 상한 안에서 기다린다
   private cleaning = new Set<string>(); // 줄에 선 정리의 띄우기(`<에이전트>:<pid>.<띄우기>`) — 같은 띄우기를 두 번 세우지 않는다
+  private heldSaveTimer: NodeJS.Timeout | null = null; // 몰아 쓰려고 기다리는 saveHeld
   private finished = false; // shutdown 이 다 끝났다 — 그 뒤에 끝난 정리는 저장·기록하지 않는다(다음에 켤 때 다시)
   private cleanFailNoticed = new Set<string>(); // 정리 실패를 알린 지운 에이전트의 띄우기 — 켤 때마다 한 번만(기다리는 정리 목록에 남아 다음에 다시)
   private perms: Permissions;
@@ -2570,6 +2572,7 @@ class EngineImpl extends EventEmitter implements Engine {
   shutdown(): Promise<void> {
     this.closing ??= (async () => {
       this.closed = true;
+      if (this.heldSaveTimer) this.flushHeld(); // 기다리던 저장은 바로 — 이 뒤의 바뀜은 saveHeld 가 바로 쓴다
       for (const timer of this.coolTimers.values()) clearTimeout(timer);
       this.coolTimers.clear();
       if (this.sweepTimer) clearInterval(this.sweepTimer);
@@ -2982,6 +2985,23 @@ class EngineImpl extends EventEmitter implements Engine {
    * 기다리는 줄·붙잡기가 바뀌는 자리(emitHeld·emitHold)와 계획 모드 답을 기다리며 쥐거나 놓을 때 부른다. 끝난(shutdown) 뒤엔 쓰지 않는다
    */
   private saveHeld(): void {
+    if (this.finished) return;
+    // 몰아 쓰기 — 마지막 바뀜 뒤 HELD_SAVE_DEBOUNCE_MS 에 한 번. 끄는 중(shutdown)엔 바로 쓴다
+    if (this.closed) {
+      this.flushHeld();
+      return;
+    }
+    if (this.heldSaveTimer) clearTimeout(this.heldSaveTimer);
+    this.heldSaveTimer = setTimeout(() => this.flushHeld(), HELD_SAVE_DEBOUNCE_MS);
+    this.heldSaveTimer.unref?.();
+  }
+
+  /** 기다리는 saveHeld 를 지금 쓴다 */
+  private flushHeld(): void {
+    if (this.heldSaveTimer) {
+      clearTimeout(this.heldSaveTimer);
+      this.heldSaveTimer = null;
+    }
     if (this.finished) return;
     const agents: Record<AgentId, { since: number; inputs: SavedHeldInput[] }> = {};
     for (const id of new Set<AgentId>([...this.held.keys(), ...this.holds.keys(), ...this.sessions.keys()])) {

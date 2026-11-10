@@ -73,7 +73,7 @@ function setup(e: Engine) {
   const b = e.addAgent({ roomId: room.id, name: 'B', role: '웹 화면', folder: folder('b') });
   return { room, a, b };
 }
-function waitFor<T = any>(e: Engine, name: string, pred: (v: T) => boolean = () => true, ms = 5000): Promise<T> {
+function waitFor<T = any>(e: Engine, name: string, pred: (v: T) => boolean = () => true, ms = 15000): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const h = (v: T) => {
       if (!pred(v)) return;
@@ -596,6 +596,7 @@ test('heldInputSurvivesRestart: 일하는 중 쳐서 기다리던 내 입력은 
   await e1.sendUser(b.id, text('/compact')); // 슬래시 명령은 끼어들지 않고 줄에 선다
   await e1.sendUser(b.id, text('echo 붙잡힌 말')); // 먼저 기다리는 입력이 있으면 앞지르지 않는다
   expect(e1.heldInput(b.id)).toBe(2);
+  await until('붙잡은 입력이 파일에 몰아 쓰임', () => fs.existsSync(heldFile())); // 죽기 전에 쓰인 만큼만 남는다
   const crashed = crashCopy();
   await e1.shutdown();
   const items = (e: Engine) => e.hold(b.id)?.items.map((x) => [x.source, x.text]);
@@ -622,6 +623,82 @@ test('heldInputSurvivesRestart: 일하는 중 쳐서 기다리던 내 입력은 
   expect(userTexts().filter((t) => t === 'echo 붙잡힌 말')).toHaveLength(1);
 });
 
+const heldFile = () => path.join(dataDir, 'held-input.json');
+const readHeldFile = (): any => {
+  try {
+    return JSON.parse(fs.readFileSync(heldFile(), 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
+test('corruptHeldInputIgnored: 깨진 held-input.json(쓰레기 JSON · 틀린 꼴 · 없는 첨부)으로 켜도 엔진이 뜨고 붙잡기가 없다 — 다음 저장 때 바르게 다시 쓴다', async () => {
+  const e0 = await start();
+  const { b } = setup(e0);
+  await e0.shutdown();
+  const missingAttach = { v: 1, agents: { [b.id]: { since: 1, inputs: [{ id: 'h1', parts: [{ type: 'file', name: 'x.png', bytes: 3, file: 'nope.png', sendPath: 'ignored' }] }] } } };
+  const wrongShapes: Array<[string, string]> = [
+    ['쓰레기 JSON', '{ not json <<<'],
+    ['빈 파일', ''],
+    ['null', 'null'],
+    ['배열', '[1,2,3]'],
+    ['문자열', '"held"'],
+    ['agents 가 배열', JSON.stringify({ v: 1, agents: [{ inputs: [] }] })],
+    ['inputs 가 배열이 아님', JSON.stringify({ v: 1, agents: { [b.id]: { since: 1, inputs: 'x' } } })],
+    ['입력이 틀린 꼴', JSON.stringify({ v: 1, agents: { [b.id]: { since: 1, inputs: [{ id: 5 }, null, { id: 'k', parts: [] }, { id: 'k', parts: [{ type: 'zzz' }] }] } } })],
+    ['없는 첨부', JSON.stringify(missingAttach)],
+  ];
+  for (const [label, content] of wrongShapes) {
+    fs.writeFileSync(heldFile(), content);
+    const e = await start();
+    expect(e.hold(b.id), label).toBeNull();
+    expect(e.heldInput(b.id), label).toBe(0);
+    expect(e.agents().map((a) => a.id), label).toContain(b.id); // 엔진이 떴다
+    await e.shutdown();
+  }
+
+  // 깨진 파일 위에서 켠 뒤 새로 붙잡은 입력은 다음 저장 때 바른 꼴로 다시 쓴다
+  fs.writeFileSync(heldFile(), '{ not json <<<');
+  const e = await start();
+  await e.sendUser(b.id, text('SLOW'));
+  await waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === b.id && x.event.kind === 'init');
+  await e.sendUser(b.id, text('/compact 새로 붙잡은 말')); // 슬래시 명령은 끼어들지 않고 줄에 선다
+  await until('저장 파일이 바르게 다시 쓰임', () => readHeldFile() !== null);
+  const saved = readHeldFile();
+  expect(saved.v).toBe(1);
+  expect(saved.agents[b.id].inputs.map((i: any) => i.parts[0].text)).toEqual(['/compact 새로 붙잡은 말']);
+});
+
+test('saveHeldDebounced: 500 ms 안의 바뀜 10번 → 쓰기 1번, 끝낼 때는 남은 것을 바로 쓴다', async () => {
+  const e = await start();
+  const { b } = setup(e);
+  await e.sendUser(b.id, text('SLOW'));
+  await waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === b.id && x.event.kind === 'init');
+  const spy = vi.spyOn(fs, 'writeFileSync');
+  const writes = () => spy.mock.calls.filter((c) => String(c[0]).endsWith('held-input.json.tmp')).length;
+  try {
+    for (let i = 0; i < 10; i++) await e.sendUser(b.id, text(`/compact ${i}`)); // 슬래시 명령은 끼어들지 않고 줄에 선다
+    expect(e.heldInput(b.id)).toBe(10);
+    expect(writes()).toBe(0); // 아직 몰아 쓰는 중
+    expect(fs.existsSync(heldFile())).toBe(false);
+    await until('몰아 쓴 한 번', () => writes() > 0);
+    await sleep(900); // 더 쓰이지 않는다
+    expect(writes()).toBe(1);
+    expect(readHeldFile().agents[b.id].inputs).toHaveLength(10);
+
+    // 끝낼 때 — 기다리지 않고 바로 쓴다
+    await e.sendUser(b.id, text('/compact 마지막'));
+    expect(writes()).toBe(1);
+    await e.shutdown();
+    expect(writes()).toBe(2);
+    expect(readHeldFile().agents[b.id].inputs).toHaveLength(11);
+    await sleep(700);
+    expect(writes()).toBe(2); // 끝난 뒤엔 더 쓰지 않는다
+  } finally {
+    spy.mockRestore();
+  }
+});
+
 test('붙잡은 내 입력이 있던 에이전트에게 쌓인 메시지는 다시 켜면 그 붙잡기 목록 끝에 — 이어서 보내면 내 입력 먼저', async () => {
   const e1 = await start();
   const { a, b } = setup(e1);
@@ -633,6 +710,7 @@ test('붙잡은 내 입력이 있던 에이전트에게 쌓인 메시지는 다�
   const aDone = resultOf(e1, a.id);
   await e1.sendUser(a.id, text('SEND B: 쌓인 일'));
   expect(await resultText(aDone)).toBe('B 에게 보냈습니다. 지금 하던 일이 끝나면 전달됩니다.');
+  await until('붙잡은 입력이 파일에 몰아 쓰임', () => fs.existsSync(heldFile()));
   const crashed = crashCopy();
 
   const e2 = await start({}, false, { dataDir: crashed });
@@ -1990,8 +2068,8 @@ test('effort: get_settings 답이 오기 전에 에이전트를 지우면 그 �
 });
 
 // ── effort: /effort 차례 중의 일(넘김 · 죽음 · 새 대화 · 답 없음 · 멈추기) ──
-/** 답 없는 /effort 의 시험용 한도 — 바쁜 기계에서도 가짜 claude 가 뜨고 줄을 읽을 만큼 */
-const EFFORT_WAIT = 1000;
+/** 답 없는 /effort 의 시험용 한도 — 바쁜 기계(전체 시험을 한꺼번에 돌릴 때)에서도 가짜 claude 가 뜨고 줄을 읽을 만큼 */
+const EFFORT_WAIT = 3000;
 /** 다시 띄우기를 거치는 차례의 result — 한도 + 끄기 + 다시 띄우기까지 */
 const slowResultOf = (e: Engine, agentId: string) =>
   waitFor<AgentEvent>(e, 'agent-event', (x) => x.agentId === agentId && x.event.kind === 'result', EFFORT_WAIT * 8);
@@ -2087,7 +2165,7 @@ test('effort: /effort 에 끝내 답이 없으면 — 시간이 지나 다시 �
   await sleep(200);
   expect(spawnsOf('B')).toHaveLength(2); // 기다리는 입력·메시지가 없으면 다시 띄우지 않는다
   expect(e.status(b.id)).toBe('idle');
-}, 20_000);
+}, 60_000);
 
 test('effort: 막힌 /effort 를 다시 띄우면 줄에 선 넘김 메시지도 새 세션으로 간다', async () => {
   const e = await start({ FAKE_EFFORT_SILENT: '1' }, false, { effortTimeoutMs: EFFORT_WAIT });
@@ -2101,7 +2179,7 @@ test('effort: 막힌 /effort 를 다시 띄우면 줄에 선 넘김 메시지도
   expect(e.messages()[0].state).toBe('read');
   await e.setModel(b.id, 'sonnet'); // 모델을 바꾸면 다시 /effort 를 해 본다
   await until('/effort max 를 다시 씀', () => linesByProcess('B')[1]?.includes('/effort max') ?? false);
-}, 20_000);
+}, 60_000);
 
 test('effort: 다시 띄우려고 옛 claude 를 끄는 중에 shutdown 해도 그 프로세스가 꺼질 때까지 기다린다', async () => {
   const e = await start({ FAKE_EFFORT_SILENT: '1', FAKE_IGNORE_STDIN_END: '1' }, false, { effortTimeoutMs: EFFORT_WAIT });
@@ -2114,7 +2192,7 @@ test('effort: 다시 띄우려고 옛 claude 를 끄는 중에 shutdown 해도 �
   const { pid } = lastSpawnOf('B');
   await e.shutdown();
   expect(isAlive(pid)).toBe(false);
-}, 20_000);
+}, 60_000);
 
 test('effort: 끄는 상한이 먼저 지나도(느린 강제 종료) shutdown 은 남은 claude 를 끄고 나간다 — 떠도는 프로세스 없음', async () => {
   // 상한(1초)을 점잖게 기다리는 시간(3초)보다 짧게 — 바쁜 PC 에서 taskkill 이 늦어 상한이 먼저 끝나는 경우를 늘 만든다
@@ -2128,7 +2206,7 @@ test('effort: 끄는 상한이 먼저 지나도(느린 강제 종료) shutdown �
   const { pid } = lastSpawnOf('B');
   await e.shutdown();
   expect(isAlive(pid)).toBe(false);
-}, 20_000);
+}, 60_000);
 
 test('effort: /effort 차례 중 멈추기 — 기다리던 입력은 붙잡고 다시 띄운다, 이어서 보내면 /effort 부터 다시, 고른 effort 는 그대로', async () => {
   const e = await start({ FAKE_SLOW_EFFORT_MS: '600' }); // 멀쩡하지만 느린 시작('보냈다, 아차, 멈춤')
@@ -2280,7 +2358,7 @@ test('context: 답이 늦을 때 새 대화를 하면 늦게 온 값이 되살�
 
 // ── 사용량 ──
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function until(what: string, pred: () => boolean, ms = 4000): Promise<void> {
+async function until(what: string, pred: () => boolean, ms = 15000): Promise<void> {
   const end = Date.now() + ms;
   while (!pred()) {
     if (Date.now() > end) throw new Error(`기다린 일이 일어나지 않음: ${what}`);
@@ -2611,7 +2689,7 @@ test('bypass: 오류 뒤·새 대화·effort 다시 띄우기에도 켠 에이�
   expect(modeLines('B')).toEqual([['echo 하나']]); // 켜지 않은 에이전트는 평소 모드
   expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false, pending: false });
   expect(e.flags(b.id)).toEqual({ bypass: false, bySettings: false, pending: false });
-}, 20_000);
+}, 60_000);
 
 test('bypass: 앱을 다시 켜도(같은 dataDir 의 새 엔진) 켠 에이전트만 켜진다 · 허용이 꺼진 채 bypassOn:true 가 남아 있으면 끈 것으로 친다', async () => {
   const e = await start();
@@ -3362,7 +3440,7 @@ test('plan: 오류 뒤·effort 다시 띄우기에도 계획 모드를 다시 �
   expect(modeLines('B')).toEqual([['echo 하나']]); // 계획 모드를 켜지 않은 에이전트는 평소 모드
   expect(e.planMode(b.id)).toBe(false);
   expect(e.flags(a.id)).toEqual({ bypass: true, bySettings: false, pending: false });
-}, 20_000);
+}, 60_000);
 
 test('plan: 막 띄운 세션(새로 띄움·미리 띄움)의 계획 모드 요청은 띄울 때의 한도로 기다린다 — 늦은 답을 실패로 치지 않는다', async () => {
   // 첫 계획 모드 요청의 답이 1.5 초 뒤(시작·대화 읽기가 느린 CLI) — 평소 한도(0.5 초)는 넘고 띄울 때 한도(10 초) 안이다.

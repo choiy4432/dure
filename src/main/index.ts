@@ -6,7 +6,8 @@ import { writeFile } from 'node:fs/promises'
 import electronUpdater from 'electron-updater'
 import { killTree } from '../engine/killTree'
 import { authStatus, claudeEnv, claudeVersion, createEngine, locateClaude } from '../engine'
-import { makeFatalReporter, openLog } from './log'
+import { homedir } from 'node:os'
+import { formatLogArgs, makeFatalReporter, openLog } from './log'
 import type { Engine } from '../engine'
 import type { AppEventMap, ClaudeUpdateState } from '../shared/appTypes'
 import { appEnv, appIconFor, appUserModelId, loginItemNamer, loginItemSettings } from './appEnv'
@@ -155,12 +156,12 @@ const env = appEnv(process.env, app.isPackaged)
 if (env.DURE_USER_DATA) app.setPath('userData', env.DURE_USER_DATA)
 
 /** 설치본엔 콘솔이 없다 — 오류는 <userData>/logs/dure.log 에도 남긴다. 오류 글만(대화 글·토큰·쿠키는 쓰지 않는다) */
-const fileLog = openLog(join(app.getPath('userData'), 'logs'))
+const fileLog = openLog(join(app.getPath('userData'), 'logs'), { home: homedir() })
 function logError(...args: unknown[]): void {
   console.error(...args)
-  fileLog.write(args.map((a) => (a instanceof Error ? (a.stack ?? a.message) : String(a))).join(' '))
+  fileLog.write(formatLogArgs(args)) // 홈 경로는 openLog 가 ~ 로 가린다
 }
-const reportFatal = makeFatalReporter({ log: logError, showBox: (t, b) => dialog.showErrorBox(t, b), noDialog: process.env.DURE_NO_DIALOG === '1' })
+const reportFatal = makeFatalReporter({ log: logError, showBox: (t, b) => dialog.showErrorBox(t, b), noDialog: process.env.DURE_NO_DIALOG === '1', home: homedir() })
 process.on('uncaughtException', reportFatal)
 process.on('unhandledRejection', (reason) => logError('[두레] unhandledRejection:', reason))
 
