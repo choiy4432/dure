@@ -677,13 +677,20 @@ test('saveHeldDebounced: 500 ms 안의 바뀜 10번 → 쓰기 1번, 끝낼 때�
   const spy = vi.spyOn(fs, 'writeFileSync');
   const writes = () => spy.mock.calls.filter((c) => String(c[0]).endsWith('held-input.json.tmp')).length;
   try {
-    for (let i = 0; i < 10; i++) await e.sendUser(b.id, text(`/compact ${i}`)); // 슬래시 명령은 끼어들지 않고 줄에 선다
-    expect(e.heldInput(b.id)).toBe(10);
-    expect(writes()).toBe(0); // 아직 몰아 쓰는 중
-    expect(fs.existsSync(heldFile())).toBe(false);
-    await until('몰아 쓴 한 번', () => writes() > 0);
-    await sleep(900); // 더 쓰이지 않는다
-    expect(writes()).toBe(1);
+    // 몰아 쓰기 타이머만 가짜 시계로 — 입출력(프로세스·파일)은 진짜 그대로. 느린 PC 에서 10번 보내는 사이 500 ms 가 지나도 흔들리지 않는다
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      for (let i = 0; i < 10; i++) await e.sendUser(b.id, text(`/compact ${i}`)); // 슬래시 명령은 끼어들지 않고 줄에 선다
+      expect(e.heldInput(b.id)).toBe(10);
+      expect(writes()).toBe(0); // 아직 몰아 쓰는 중
+      expect(fs.existsSync(heldFile())).toBe(false);
+      vi.advanceTimersByTime(499);
+      expect(writes()).toBe(0); // 마지막 바뀜 뒤 499 ms — 아직
+      vi.advanceTimersByTime(2);
+      expect(writes()).toBe(1); // 500 ms 를 넘기면 한 번
+    } finally {
+      vi.useRealTimers();
+    }
     expect(readHeldFile().agents[b.id].inputs).toHaveLength(10);
 
     // 끝낼 때 — 기다리지 않고 바로 쓴다
