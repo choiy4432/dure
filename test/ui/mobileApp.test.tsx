@@ -176,7 +176,7 @@ describe('MobileApp — 흐름', () => {
     await settle()
     const before = api.history.mock.calls.filter(c => c[0] === 'a1').length
     await act(async () => { conn.onPhoneConn('reconnecting', true) })
-    expect(screen.getByRole('status')).toHaveTextContent('다시 잇는 중…')
+    expect(screen.getAllByRole('status').filter(n => !n.classList.contains('sr-only'))[0]).toHaveTextContent('다시 잇는 중…')
     await act(async () => { conn.onPhoneConn('open', true) })
     await settle()
     expect(api.history.mock.calls.filter(c => c[0] === 'a1').length).toBe(before + 1)
@@ -222,7 +222,7 @@ describe('MobileApp — 흐름', () => {
     expect(location.hash).toBe('#agent=a2')
     expect(screen.queryByRole('heading', { name: '방 3' })).toBeNull()
     expect(heading()).toHaveTextContent('대화')
-    expect(screen.getByRole('status')).toHaveTextContent('다시 잇는 중…')
+    expect(screen.getAllByRole('status').filter(n => !n.classList.contains('sr-only'))[0]).toHaveTextContent('다시 잇는 중…')
     reachable = true
     await act(async () => { conn.onPhoneConn('open', true) })
     await settle()
@@ -311,7 +311,7 @@ describe('MobileApp — 방 고르기', () => {
   it('끊김 — 위 띠(받은 시각) · 지난 내용은 누를 수 없음 · 안내', async () => {
     const { conn } = await renderPhone()
     await act(async () => { conn.onPhoneConn('reconnecting', true) })
-    expect(screen.getByRole('status')).toHaveTextContent(/다시 잇는 중… .+ 에 받은 내용이에요/)
+    expect(screen.getAllByRole('status').filter(n => !n.classList.contains('sr-only'))[0]).toHaveTextContent(/다시 잇는 중… .+ 에 받은 내용이에요/)
     expect(screen.getByText('끊김')).toBeInTheDocument()
     const pay = screen.getByText('결제 리팩터링').closest('.mr')!
     expect(pay.tagName).not.toBe('BUTTON')

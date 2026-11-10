@@ -194,12 +194,15 @@ export function createPush(
     },
 
     async sendTo(deviceId, n, delivery = ASK_DELIVERY) {
+      // 보낸 구독의 주소 — 보내는 사이 다시 구독돼도 거절은 보낸 구독에 센다
+      let sentEndpoint: string | undefined
       try {
         const dev = store.read().devices.find((d) => d.id === deviceId)
         // 30일 넘게 안 쓴 기기는 짝이 풀린 것 — 정리(expireIdle) 전이어도 보내지 않는다
         if (!dev || isIdleDevice(dev, now())) return
         const sub = dev.subscription
         if (!sub) return
+        sentEndpoint = sub.endpoint
         if (!isPushEndpoint(sub.endpoint)) {
           log('[두레] 휴대폰 알림 주소가 알려진 알림 서버가 아니라 보내지 않았어요')
           return
@@ -216,7 +219,7 @@ export function createPush(
         const code = safeFields(e).statusCode
         if (code === 401 || code === 403) {
           try {
-            const endpoint = store.read().devices.find((d) => d.id === deviceId)?.subscription?.endpoint
+            const endpoint = sentEndpoint
             if (endpoint) {
               const prev = authFails.get(deviceId)
               const n = (prev?.endpoint === endpoint ? prev.n : 0) + 1

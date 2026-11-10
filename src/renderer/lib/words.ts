@@ -358,12 +358,15 @@ export const CHAT_PANEL = {
   openFolder: (path: string) => `폴더 열기 · ${path}`,
   copyPath: (path: string) => `경로 복사 · ${path}`,
   openHint: '누르면 폴더를 열어요 · 오른쪽 클릭은 경로 복사',
-  remoteHint: '서버 폴더라 이 PC 에서 열 수 없어요 — 누르면 경로를 복사해요',
+  remoteHint: '서버 폴더예요 — 누르면 경로를 복사해요',
+  /** 휴대폰 — PC 탐색기를 못 여니 폴더가 어디든 누르면 복사 */
+  copyHint: '누르면 경로를 복사해요',
   copied: '경로를 복사했어요',
   copyFailed: '경로를 복사하지 못했어요',
   older: '이전 대화 더 보기',
   olderLoading: '이전 대화를 불러오는 중…',
   olderFailed: '이전 대화를 불러오지 못했어요 · 다시 시도',
+  olderFailedSr: '이전 대화를 불러오지 못했어요',
   newLines: (n: number) => `새 글 ${n}개`,
   toBottom: '맨 아래로 가요',
 } as const

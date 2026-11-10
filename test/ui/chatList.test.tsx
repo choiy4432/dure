@@ -354,6 +354,33 @@ describe('ChatList — 이전 대화 더 보기(불러온 것보다 앞 · 시�
     expect(document.activeElement).toBe(note(900))
   })
 
+  it('빈 덩이가 와도(500 의 배수라 앞이 없다) 단추가 사라지며 초점이 몸통으로 떨어지지 않고 맨 위 줄로', async () => {
+    history.mockResolvedValueOnce(notes(1000, 500))
+    await renderPanel()
+    unfold()
+    const b = older()!
+    b.focus()
+    expect(document.activeElement).toBe(b)
+    history.mockResolvedValueOnce([])
+    await act(async () => { fireEvent.click(b) })
+    await settle()
+    expect(older()).toBeNull()
+    expect(conv().querySelectorAll('.note')).toHaveLength(500)
+    expect(document.activeElement).toBe(note(1000))
+  })
+
+  it('빈 덩이여도 초점이 단추에 없었으면 초점을 훔치지 않는다', async () => {
+    history.mockResolvedValueOnce(notes(1000, 500))
+    await renderPanel()
+    unfold()
+    const box = screen.getByRole('textbox', { name: '웹 화면에게 보낼 메시지' })
+    history.mockResolvedValueOnce([])
+    await act(async () => { fireEvent.click(older()!) })
+    box.focus()
+    await settle()
+    expect(document.activeElement).toBe(box)
+  })
+
   it('이미 그린 줄은 번호(key · data-line)가 그대로 — 다시 그리지 않고, 앞에 붙은 줄은 그 앞 번호', async () => {
     history.mockResolvedValueOnce(notes(1000, 500))
     await renderPanel()
@@ -407,6 +434,7 @@ describe('ChatList — 이전 대화 더 보기(불러온 것보다 앞 · 시�
     expect(history).toHaveBeenCalledTimes(2)
     await act(async () => { fail(new Error('읽을 수 없어요')) })
     await settle()
+    expect(document.querySelector('.conv-wrap [role="status"]')).toHaveTextContent('이전 대화를 불러오지 못했어요')
     const retry = within(conv()).getByRole('button', { name: '이전 대화를 불러오지 못했어요 · 다시 시도' })
     expect(retry).toBe(busy) // 같은 단추 — 초점이 그대로
     history.mockResolvedValueOnce(notes(900, 101))
@@ -510,6 +538,33 @@ describe('ChatList — 새 글 알약(시안 ② A)', () => {
     expect(pill()).toHaveAccessibleName('새 글 2개')
     await emit('history', { agentId: 'w', item: { t: 11, kind: 'assistant', blocks: [{ type: 'text', text: '바꿀게요.' }] } })
     expect(pill()).toHaveAccessibleName('새 글 2개')
+  })
+
+  const sr = () => document.querySelector<HTMLElement>('.conv-wrap [role="status"]')!
+
+  it('알약이 나타날 때 한 번 읽는다 — 새 글이 늘어도 다시 읽지 않고, 사라지면 비운다', async () => {
+    const { el } = await readUp()
+    expect(sr()).toHaveClass('sr-only')
+    expect(sr()).toHaveAttribute('aria-live', 'polite')
+    expect(sr()).toHaveTextContent('')
+    await emit('history', { agentId: 'w', item: note(10) })
+    expect(sr()).toHaveTextContent('새 글 1개')
+    await emit('history', { agentId: 'w', item: note(11) })
+    expect(pill()).toHaveAccessibleName('새 글 2개')
+    expect(sr()).toHaveTextContent('새 글 1개') // 늘어도 그대로 — 다시 읽지 않는다
+    el.scrollTop = 600
+    fireEvent.scroll(el)
+    expect(sr()).toHaveTextContent('')
+  })
+
+  it('목록이 통째로 갈려도(새 대화) 위로 읽던 중이면 그 뒤 새 글에 알약이 뜬다', async () => {
+    await readUp()
+    await emit('history', { agentId: 'w', item: note(10) })
+    expect(pill()).not.toBeNull()
+    await emit('history', { agentId: 'w', item: { t: 20, kind: 'boundary' } })
+    expect(pill()).toBeNull() // 새 목록 — 아직 새 글 없음
+    await emit('history', { agentId: 'w', item: note(21) })
+    expect(pill()).toHaveAccessibleName('새 글 1개')
   })
 
   it('내가 보내면 사라진다(맨 아래로 붙는다)', async () => {

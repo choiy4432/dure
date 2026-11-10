@@ -314,7 +314,7 @@ function FolderLine({ agentId, folder, host, onError, onNotice }: {
       type="button"
       className="ph-fd"
       aria-label={canOpen ? W.openFolder(path) : W.copyPath(path)}
-      title={`${path}\n${canOpen ? W.openHint : W.remoteHint}`}
+      title={`${path}\n${canOpen ? W.openHint : host ? W.remoteHint : W.copyHint}`}
       onClick={canOpen ? open : () => void copy()}
       onContextMenu={e => {
         e.preventDefault()
@@ -322,8 +322,11 @@ function FolderLine({ agentId, folder, host, onError, onNotice }: {
       }}
     >
       <Folder className="i" size={13} aria-hidden="true" />
-      {head && <span className="ph-fd-h">{head}</span>}
-      <span className="ph-fd-t">{tail}</span>
+      {/* 앞·끝을 한 덩이로 — 버튼의 gap(아이콘과 글 사이)이 '…'와 마지막 마디 사이에 끼지 않게 */}
+      <span className="ph-fd-p">
+        {head && <span className="ph-fd-h">{head}</span>}
+        <span className="ph-fd-t">{tail}</span>
+      </span>
     </button>
   )
 }

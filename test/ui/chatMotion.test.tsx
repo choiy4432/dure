@@ -143,14 +143,14 @@ describe('대화 움직임 — 작업 중 줄', () => {
     const restore = fastMotion(1)
     await renderPanel()
     await status('working')
-    const row = screen.getByRole('status')
+    const row = screen.getAllByRole('status').filter(n => !n.classList.contains('sr-only'))[0]
     const enter = vi.mocked(animate).mock.calls.find(c => c[0] === row)
     expect(enter).toBeTruthy()
     expect((enter![1] as any).translateY.from).toBe(12)
     await status('idle')
-    expect(screen.getByRole('status')).toBe(row)
+    expect(screen.getAllByRole('status').filter(n => !n.classList.contains('sr-only'))[0]).toBe(row)
     expect(row.hasAttribute('inert')).toBe(true)
-    await waitFor(() => expect(screen.queryByRole('status')).toBeNull(), { timeout: 1500 })
+    await waitFor(() => expect(screen.queryAllByRole('status').filter(n => !n.classList.contains('sr-only'))).toHaveLength(0), { timeout: 1500 })
     restore()
   })
 
@@ -158,7 +158,7 @@ describe('대화 움직임 — 작업 중 줄', () => {
     allowMotion()
     snapshot.agents = [agent('w', { status: 'working' }), agent('p')]
     await renderPanel()
-    expect(screen.getByRole('status')).toBeTruthy()
+    expect(screen.getAllByRole('status').filter(n => !n.classList.contains('sr-only'))[0]).toBeTruthy()
     expect(vi.mocked(animate).mock.calls.find(c => (c[0] as HTMLElement).className === 'ci-work')).toBeUndefined()
   })
 })

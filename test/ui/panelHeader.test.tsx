@@ -608,6 +608,8 @@ describe('PanelHeader — 작업 폴더 줄(시안 ② A)', () => {
     expect(b.querySelector('.ph-fd-t')!.textContent).toBe('\\web')
     expect(screen.getByRole('button', { name: '폴더 열기 · C:\\work\\shop\\web' })).toBe(b)
     expect(b.title).toContain('오른쪽 클릭')
+    // 앞·끝은 한 덩이 — 버튼의 gap 이 그 사이에 끼지 않는다
+    expect(b.querySelector('.ph-fd-p')!.children).toHaveLength(2)
   })
 
   it('역할이 없으면 이름 바로 아래', async () => {
@@ -641,7 +643,7 @@ describe('PanelHeader — 작업 폴더 줄(시안 ② A)', () => {
     expect(shown).toBe(false) // preventDefault
     expect(writeText).toHaveBeenCalledWith('C:\\work\\shop\\web')
     expect(api.openAgentFolder).not.toHaveBeenCalled()
-    expect(screen.getByRole('status').textContent).toBe('경로를 복사했어요')
+    expect(screen.getAllByRole('status').filter(n => !n.classList.contains('sr-only'))[0].textContent).toBe('경로를 복사했어요')
   })
 
   it('서버 방 — "호스트:경로" 로 보이고 누르면 복사(이 PC 에서 열 수 없다)', async () => {
@@ -651,13 +653,21 @@ describe('PanelHeader — 작업 폴더 줄(시안 ② A)', () => {
     const b = line()
     expect(b.textContent).toBe('dev:/home/me/shop/api')
     expect(b.querySelector('.ph-fd-t')!.textContent).toBe('/api')
+    expect(b.title).toBe('dev:/home/me/shop/api\n서버 폴더예요 — 누르면 경로를 복사해요')
     expect(screen.getByRole('button', { name: '경로 복사 · dev:/home/me/shop/api' })).toBe(b)
     expect(b.querySelector('svg.lucide-folder')).not.toBeNull()
     await act(async () => { fireEvent.click(b) })
     await settle()
     expect(writeText).toHaveBeenCalledWith('dev:/home/me/shop/api')
     expect(api.openAgentFolder).not.toHaveBeenCalled()
-    expect(screen.getByRole('status').textContent).toBe('경로를 복사했어요')
+    expect(screen.getAllByRole('status').filter(n => !n.classList.contains('sr-only'))[0].textContent).toBe('경로를 복사했어요')
+  })
+
+  it('휴대폰 — 이 PC 폴더여도 서버 폴더라고 하지 않고 중립 안내', async () => {
+    Object.defineProperty((window as any).dure, Symbol.for('dure.phone'), { value: true, configurable: true })
+    snapshot.agents = [agent('w', { name: '웹 화면', folder: 'C:\\work\\shop\\web' })]
+    await renderPanel()
+    expect(line().title).toBe('C:\\work\\shop\\web\n누르면 경로를 복사해요')
   })
 
   it('복사하지 못하면 알린다', async () => {

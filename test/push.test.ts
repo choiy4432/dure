@@ -392,3 +392,29 @@ test('authFailuresDrop — 401/403 이 세 번 잇따르면 그 구독을 지움
   await p2.sendTo('d2', NOTICE)
   expect(has('d2')).toBe(true)
 })
+
+test('authFailuresDrop — 거절은 보낸 구독에 센다: 보내는 사이 다시 구독돼도 새 구독의 셈에 섞이지 않는다', async () => {
+  const store = openPhoneStore(dir)
+  store.write({ vapid: VAPID, devices: [dev('d1', { subscription: sub(), push: true })] })
+  let hook: (() => void) | null = null
+  const send: PushSend = async () => {
+    hook?.()
+    throw Object.assign(new Error('fake'), { statusCode: 401 })
+  }
+  const push = createPush(store, { send, log: vi.fn() })
+  const has = () => store.read().devices.find((d) => d.id === 'd1')?.subscription !== undefined
+  await push.sendTo('d1', NOTICE)
+  await push.sendTo('d1', NOTICE) // 옛 구독 두 번
+  hook = () => {
+    hook = null
+    push.subscribe('d1', sub(`${FCM}-new`)) // 세 번째를 보내는 사이 다시 구독
+  }
+  await push.sendTo('d1', NOTICE) // 옛 구독의 세 번째 — 새 구독에 세지 않는다
+  expect(has()).toBe(true)
+  expect(store.read().devices[0].subscription?.endpoint).toBe(`${FCM}-new`)
+  await push.sendTo('d1', NOTICE)
+  await push.sendTo('d1', NOTICE)
+  expect(has()).toBe(true) // 새 구독은 두 번뿐
+  await push.sendTo('d1', NOTICE)
+  expect(has()).toBe(false)
+})

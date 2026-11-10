@@ -1,4 +1,4 @@
-import { useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import type { AgentId, HistoryItem } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
@@ -124,6 +124,16 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
   useLayoutEffect(() => {
     now.current = { total, tail: all[all.length - 1], live: v.streaming.length }
   })
+  // 목록이 통째로 바뀌었다(origin) — 위로 올려 읽던 중이었으면 지워진 away 를 새 줄 수에서 다시 적는다(안 그러면 바닥에 닿기 전까지 알약이 없다)
+  // 비어 있던 목록에 첫 기록이 오는 것도 갈림이지만 그 줄들은 모두 새 글이다 — 0 줄에서 센다
+  const prevOrigin = useRef(origin)
+  useLayoutEffect(() => {
+    const was = prevOrigin.current
+    prevOrigin.current = origin
+    if (stick.current) return
+    const n = now.current
+    setAway(was === undefined ? { total: 0, tail: lineShape(undefined), live: n.live } : { total: n.total, tail: lineShape(n.tail), live: n.live })
+  }, [origin])
   // 맨 아래에 붙음 — 벗어나는 순간 그때 줄 수 · 마지막 줄 모양 · 흐르던 글 길이를 적고(새 글 알약), 다시 붙으면 지운다
   const setStick = (on: boolean) => {
     if (stick.current === on) return
@@ -150,6 +160,8 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
   const olderBusy = useRef(false)
   const olderButton = useRef<HTMLButtonElement>(null)
   const [olderState, setOlderState] = useState<'idle' | 'loading' | 'failed'>('idle')
+  // 빈 덩이가 와서 초점 둔 단추가 사라졌다 — 이 수가 오르면 초점을 맨 위 줄로
+  const [refocus, setRefocus] = useState(0)
 
   const onScroll = () => {
     const el = box.current
@@ -204,6 +216,18 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
     }
     measure()
   }, [v.items, shown, measure])
+
+  useLayoutEffect(() => {
+    const el = box.current
+    if (refocus === 0 || !el) return
+    const a = document.activeElement
+    if (a && a !== document.body) return // 초점이 다른 데 있다 — 건드리지 않는다
+    const head = el.querySelector<HTMLElement>(':scope > [data-line]')
+    if (head) {
+      head.tabIndex = -1
+      head.focus({ preventScroll: true })
+    }
+  }, [refocus])
 
   // 보는 동안 새로 온 줄만 아래에서 들어온다 — 처음 그린 것 · 더 보기 · 앞 기록 불러오기(번호가 그대로) · 기록 다시 받기 · 흐르던 글이 줄이 된 것은 아니다
   const snap = useRef<LineSnap | null>(null)
@@ -331,7 +355,11 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
       .then(
         () => {
           // 붙은 것이 없으면(빈 덩이 · 그새 목록이 갈림) 자리를 지킬 일도 없다
-          if (getStore().getState().history[agentId]?.[0] === anchor.current?.first) anchor.current = null
+          if (getStore().getState().history[agentId]?.[0] === anchor.current?.first) {
+            // 붙은 것이 없다 — 단추에 초점이 있었는데 단추가 사라지면 초점이 몸통으로 떨어진다. 맨 위 줄로
+            if (anchor.current?.focused) setRefocus(n => n + 1)
+            anchor.current = null
+          }
           setOlderState('idle')
         },
         () => {
@@ -359,6 +387,16 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
     measure()
     if (!onPhone()) getStore().focusInput(agentId)
   }
+
+  // 화면 읽기 프로그램에게만 — 새 글 알약이 나타날 때(0 → N) 한 번, 앞 대화를 못 불러왔을 때
+  const [said, setSaid] = useState('')
+  const hadUnread = useRef(false)
+  useEffect(() => {
+    if (unread > 0 && !hadUnread.current) setSaid(W.newLines(unread))
+    else if (unread === 0) setSaid('')
+    hadUnread.current = unread > 0
+  }, [unread])
+  const status = olderState === 'failed' ? W.olderFailedSr : said
 
   return (
     // 바깥 칸 — 위 끝에 바탕색으로 사라지는 짧은 막(.conv-wrap::before). 고정 카드 바로 아래로 스크롤되는 글이 줄처럼 끊겨 보이지 않게
@@ -401,6 +439,9 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
           <WorkingRow since={work.since} subagents={running.length} thinking={thinking ?? undefined} phase={phase} />
         </Presence>
       </section>
+      <div className="sr-only" role="status" aria-live="polite">
+        {status}
+      </div>
       <Presence show={unread > 0}>{unread > 0 && <NewLinesPill n={unread} onClick={toBottom} />}</Presence>
     </div>
   )

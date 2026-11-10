@@ -57,6 +57,8 @@ export function App() {
   const blocked = v.loadError !== null || preparing || setupPhase === 'checking' || v.claudeMissing
   // 찾을 것이 있을 때만(방이 있고 준비됨) — 위 띠의 방 버튼과 같은 때
   const canSearch = !blocked && v.roomId !== null
+  // 찾을 수 없게 되면(준비 화면 · 불러오기 오류 · 방 없음) 열린 창은 닫힌 것 — canSearch 가 돌아와도 저절로 다시 뜨지 않는다
+  if (!canSearch && searching) setSearching(false)
   useSearchShortcut(canSearch && !searching, openSearch)
 
   let body

@@ -187,6 +187,22 @@ describe('App 셸', () => {
     expect(within(bar).getByRole('dialog', { name: '사용량' }).classList.contains('up')).toBe(true)
   })
 
+  it('찾기 창이 열린 채 찾을 수 없게 됐다 돌아와도 저절로 다시 뜨지 않는다', async () => {
+    const handlers: Record<string, (p: unknown) => void> = {}
+    ;(window as any).dure.on = (name: string, fn: (p: unknown) => void) => { handlers[name] = fn; return () => {} }
+    snapshot = { ...snapshot, rooms: [room('r1')], agents: [agent('a', 'r1', '웹')] }
+    const store = await renderApp()
+    await act(async () => { store.selectRoom?.('r1') })
+    await act(async () => { fireEvent.keyDown(window, { key: 'k', ctrlKey: true }) })
+    expect(screen.getByRole('dialog', { name: '찾기 · 옮기기' })).toBeTruthy()
+    // 준비가 필요해졌다 — 창이 닫힌다
+    await act(async () => { handlers.setup({ phase: 'needs', install: { state: 'todo' }, login: { state: 'locked' } }) })
+    expect(screen.queryByRole('dialog', { name: '찾기 · 옮기기' })).toBeNull()
+    // 돌아와도 다시 뜨지 않는다
+    await act(async () => { handlers.setup({ phase: 'ready' }) })
+    expect(screen.queryByRole('dialog', { name: '찾기 · 옮기기' })).toBeNull()
+  })
+
   it('설정은 claude 가 없으면 막힘', async () => {
     snapshot = { ...snapshot, claudeMissing: true }
     setupState = { phase: 'needs', install: { state: 'todo' }, login: { state: 'locked' } }

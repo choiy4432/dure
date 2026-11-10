@@ -30,6 +30,8 @@ export const PHONE_INBOX = 'phone-inbox'
 export const PHONE_SWEEP_MS = 24 * 60 * 60 * 1000
 /** 길이 열려 있는 동안 이만큼마다 다시 확인 — 잠에서 깬 뒤·Tailscale 업데이트·PC 이름 바뀜을 설정 창 없이도 안다 */
 export const PHONE_ROUTE_RECHECK_MS = 10 * 60 * 1000
+/** 잠에서 깬 뒤 길을 다시 확인하기까지 — 막 깬 PC 는 네트워크·Tailscale 이 아직 안 올라왔을 수 있다 */
+export const PHONE_RESUME_CHECK_MS = 20 * 1000
 
 const E = {
   notReady: '휴대폰 연결이 아직 열리지 않았어요',
@@ -222,10 +224,25 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
 
   /** 켜짐 + 길 열림인 동안만 도는 10분 확인 — 아니면 멈춘다 */
   let stopRouteTimer: (() => void) | null = null
+  // 깬 직후엔 네트워크가 아직 없을 수 있다 — 20초 뒤에 확인(unref · 또 깨면 다시 센다 · 끄기·dispose 가 취소)
+  let resumeTimer: ReturnType<typeof setTimeout> | null = null
+  const clearResumeTimer = () => {
+    if (resumeTimer) clearTimeout(resumeTimer)
+    resumeTimer = null
+  }
   const routeCheck = () => {
     void serial(async () => {
       if (!disposed && open && settings().enabled) await recheckOpen(stops)
     }).catch(() => log('[두레] 휴대폰 길을 다시 확인하지 못했어요'))
+  }
+  const onResume = () => {
+    if (disposed) return
+    clearResumeTimer()
+    resumeTimer = setTimeout(() => {
+      resumeTimer = null
+      routeCheck()
+    }, PHONE_RESUME_CHECK_MS)
+    resumeTimer.unref?.()
   }
   const syncRouteTimer = () => {
     let want = false
@@ -242,7 +259,9 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
           return () => clearInterval(t)
         }))(PHONE_ROUTE_RECHECK_MS, routeCheck)
       })
-    } else if (!want && stopRouteTimer) {
+    }
+    if (!want) clearResumeTimer()
+    if (!want && stopRouteTimer) {
       const stop = stopRouteTimer
       stopRouteTimer = null
       safely('길 확인 타이머 멈추기', stop)
@@ -625,7 +644,7 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
 
   const stopResume = (() => {
     try {
-      return o.pcResume?.(routeCheck)
+      return o.pcResume?.(onResume)
     } catch {
       log('[두레] 휴대폰이 PC 깨어남을 듣지 못했어요')
       return undefined
@@ -767,6 +786,7 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
       clearPairing()
       stopSweep()
       safely('깨어남 듣기 풀기', () => stopResume?.())
+      clearResumeTimer()
       syncRouteTimer()
       if (notifier) safely('알림 끄기', () => notifier.dispose())
       shutServer() // 새 요청은 바로 거절 · 열린 소켓은 바로 끊는다
