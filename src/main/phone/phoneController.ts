@@ -28,6 +28,8 @@ export const PHONE_RETRY_MS = 30_000
 export const PHONE_INBOX = 'phone-inbox'
 /** 30일 넘게 안 쓴 기기를 가려 짝을 푸는 간격 — 두레를 오래 켜 둬도 하루 안에 정리된다 */
 export const PHONE_SWEEP_MS = 24 * 60 * 60 * 1000
+/** 길이 열려 있는 동안 이만큼마다 다시 확인 — 잠에서 깬 뒤·Tailscale 업데이트·PC 이름 바뀜을 설정 창 없이도 안다 */
+export const PHONE_ROUTE_RECHECK_MS = 10 * 60 * 1000
 
 const E = {
   notReady: '휴대폰 연결이 아직 열리지 않았어요',
@@ -70,6 +72,10 @@ export interface PhoneControllerOptions {
   every?: (ms: number, fn: () => void) => () => void
   /** 시험만 — 하루 한 번 안 쓴 기기를 정리하는 타이머(기본 setInterval, unref) */
   sweepEvery?: (ms: number, fn: () => void) => () => void
+  /** 시험만 — 길 다시 확인 타이머(켜짐 + 길 열림인 동안만 돈다, 기본 setInterval unref) */
+  routeEvery?: (ms: number, fn: () => void) => () => void
+  /** PC 가 잠에서 깼다는 신호 — 진짜는 powerMonitor 'resume'. 켜짐 + 길 열림이면 길을 한 번 다시 확인한다. 돌려준 함수로 푼다 */
+  pcResume?: (fn: () => void) => () => void
   /** 시험만 — 벽시계(30일 안 쓴 기기를 가른다), 기본 Date.now */
   now?: () => number
   /** Windows 를 켜면 두레도 켜기 — 진짜는 설치본에서만 app.setLoginItemSettings, 개발 실행·시험은 가짜 */
@@ -214,8 +220,38 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
     safely('상태 알리기', () => o.emit(s))
   }
 
+  /** 켜짐 + 길 열림인 동안만 도는 10분 확인 — 아니면 멈춘다 */
+  let stopRouteTimer: (() => void) | null = null
+  const routeCheck = () => {
+    void serial(async () => {
+      if (!disposed && open && settings().enabled) await recheckOpen(stops)
+    }).catch(() => log('[두레] 휴대폰 길을 다시 확인하지 못했어요'))
+  }
+  const syncRouteTimer = () => {
+    let want = false
+    try {
+      want = !disposed && open !== null && settings().enabled
+    } catch {
+      want = false
+    }
+    if (want && !stopRouteTimer) {
+      safely('길 확인 타이머', () => {
+        stopRouteTimer = (o.routeEvery ?? ((ms, fn) => {
+          const t = setInterval(fn, ms)
+          t.unref?.()
+          return () => clearInterval(t)
+        }))(PHONE_ROUTE_RECHECK_MS, routeCheck)
+      })
+    } else if (!want && stopRouteTimer) {
+      const stop = stopRouteTimer
+      stopRouteTimer = null
+      safely('길 확인 타이머 멈추기', stop)
+    }
+  }
+
   /** 길이 열린 동안 + keepAwake 면 절전 막기, 아니면 풀기 */
   const syncPower = () => {
+    syncRouteTimer()
     let want = false
     try {
       want = !disposed && open !== null && settings().keepAwake
@@ -587,6 +623,15 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
     if (!disposed) safely('안 쓴 기기 정리', () => void pairing.expireIdle())
   })
 
+  const stopResume = (() => {
+    try {
+      return o.pcResume?.(routeCheck)
+    } catch {
+      log('[두레] 휴대폰이 PC 깨어남을 듣지 못했어요')
+      return undefined
+    }
+  })()
+
   const notifier = o.engine
     ? createPhoneNotifier({
       engine: o.engine,
@@ -721,6 +766,8 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
       clearRetry()
       clearPairing()
       stopSweep()
+      safely('깨어남 듣기 풀기', () => stopResume?.())
+      syncRouteTimer()
       if (notifier) safely('알림 끄기', () => notifier.dispose())
       shutServer() // 새 요청은 바로 거절 · 열린 소켓은 바로 끊는다
       const closingNow = closing

@@ -50,7 +50,12 @@ export interface PhoneNotifierOptions {
   pcAway?: (fn: () => void) => () => void
   /** 미룬 기다림이 있는 동안만 도는 다시 보기 — 기본 setInterval(unref). 돌려준 함수로 멈춘다(시험은 가짜) */
   every?: (ms: number, fn: () => void) => () => void
+  /** 승인·질문 푸시가 일시 오류일 때 다시 보내기 타이머 — 기본 setTimeout(unref). 돌려준 함수로 취소한다(시험은 가짜) */
+  retryAfter?: (ms: number, fn: () => void) => () => void
 }
+
+/** 일시 오류로 못 보낸 승인·질문 푸시를 다시 보내는 간격 — 5 초·30 초·2 분 뒤, 최대 세 번 */
+export const ASK_RETRY_MS: readonly number[] = Object.freeze([5_000, 30_000, 120_000])
 
 /** 미룬 기다림이 있는 동안 PC 를 다시 보는 간격 — 잠그지 않고 자리를 떠 마지막 입력 뒤 2분이 지난 것을 이만큼 안에 안다 */
 export const PC_RECHECK_MS = 20_000
@@ -64,6 +69,12 @@ const defaultEvery = (ms: number, fn: () => void): (() => void) => {
   const h = setInterval(fn, ms)
   h.unref?.()
   return () => clearInterval(h)
+}
+
+const defaultRetryAfter = (ms: number, fn: () => void): (() => void) => {
+  const h = setTimeout(fn, ms)
+  h.unref?.()
+  return () => clearTimeout(h)
 }
 
 /** 알림 하나의 글 — 네 칸만. url 의 에이전트 id 는 주소 조각으로 옮긴다 */
@@ -97,9 +108,12 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): {
 } {
   const log = o.log ?? console.error
   const every = o.every ?? defaultEvery
+  const retryAfter = o.retryAfter ?? defaultRetryAfter
   let seq = Math.max(0, Math.floor((o.now ?? Date.now)()))
   let disposed = false
   const deferred = new Map<string, Deferred>()
+  const live = new Set<string>() // 아직 풀리지 않은 기다림(열쇠) — 다시 보내기는 이 안에서만
+  const retryCancels = new Map<string, Set<() => void>>() // 열쇠마다 기다리는 다시 보내기 타이머
   let stopPoll: (() => void) | null = null
 
   const asked = new Set<string>() // 알린(또는 판단한) 요청 id — 풀리면 뺀다
@@ -130,16 +144,70 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): {
 
   const kindOn = (s: PhoneSettings, kind: NoticeKind) => (kind === 'finished' ? s.notify.finished : s.notify.asks)
 
-  /** 알림 하나를 그 기기들에 — 보낼 때마다 새 tag(같은 tag 면 안드로이드가 다시 울리지 않는다) */
-  const send = (agent: { id: AgentId; name: string }, kind: NoticeKind, deviceIds: string[]) => {
+  /** 그 기다림의 다시 보내기 타이머를 다 취소 */
+  const cancelRetries = (key: string) => {
+    const set = retryCancels.get(key)
+    if (!set) return
+    retryCancels.delete(key)
+    for (const c of set) {
+      try {
+        c()
+      } catch {
+        log(JUDGE_FAILED)
+      }
+    }
+  }
+
+  /** 기다림이 풀렸다 — 미룬 것 · 다시 보내기를 지운다 */
+  const resolved = (key: string) => {
+    deferred.delete(key)
+    live.delete(key)
+    cancelRetries(key)
+  }
+
+  /** 다시 보낼 때 — 아직 그 기다림이고, 켜져 있고, 그 종류가 켜져 있고, 아는 에이전트이고, 그 기기가 구독 중이며 화면을 안 볼 때만 */
+  const stillWanted = (key: string, agentId: AgentId, kind: NoticeKind, id: string): { id: AgentId; name: string } | null => {
+    if (!live.has(key)) return null
+    const s = o.settings()
+    if (!s.enabled || !kindOn(s, kind)) return null
+    const agent = o.engine.agents().find((a) => a.id === agentId)
+    if (!agent) return null
+    if (!o.devices().some((d) => d.id === id && d.push) || o.isVisible(id)) return null
+    return agent
+  }
+
+  /** 한 기기에 보낸다 — 승인·질문(key 있음)은 일시 오류('retry')면 ASK_RETRY_MS 간격으로 다시(풀리면 그만) */
+  const deliver = (id: string, notice: PhoneNotice, delivery: PushDelivery, agentId: AgentId, kind: NoticeKind, key: string | undefined, attempt: number) => {
+    void Promise.resolve()
+      .then(() => o.push.sendTo(id, notice, delivery))
+      .then((r) => {
+        if (r !== 'retry' || key === undefined || disposed || attempt >= ASK_RETRY_MS.length || !live.has(key)) return
+        let cancel: (() => void) | null = null
+        const fire = () => {
+          const set = retryCancels.get(key)
+          if (cancel) set?.delete(cancel)
+          if (set?.size === 0) retryCancels.delete(key)
+          if (disposed) return
+          try {
+            if (stillWanted(key, agentId, kind, id)) deliver(id, notice, delivery, agentId, kind, key, attempt + 1)
+          } catch {
+            log(JUDGE_FAILED)
+          }
+        }
+        cancel = retryAfter(ASK_RETRY_MS[attempt], fire)
+        const set = retryCancels.get(key) ?? new Set<() => void>()
+        set.add(cancel)
+        retryCancels.set(key, set)
+      })
+      .catch(() => log('[두레] 휴대폰 알림을 보내지 못했어요'))
+  }
+
+  /** 알림 하나를 그 기기들에 — 보낼 때마다 새 tag(같은 tag 면 안드로이드가 다시 울리지 않는다). 다시 보내기는 같은 글 */
+  const send = (agent: { id: AgentId; name: string }, kind: NoticeKind, deviceIds: string[], key?: string) => {
     if (deviceIds.length === 0) return
     const notice = phoneNotice(agent, kind, ++seq)
     const delivery: PushDelivery = kind === 'finished' ? FINISHED_DELIVERY : ASK_DELIVERY
-    for (const id of deviceIds) {
-      void Promise.resolve()
-        .then(() => o.push.sendTo(id, notice, delivery))
-        .catch(() => log('[두레] 휴대폰 알림을 보내지 못했어요'))
-    }
+    for (const id of deviceIds) deliver(id, notice, delivery, agent.id, kind, kind === 'finished' ? undefined : key, 0)
   }
 
   /** 미룬 기다림이 있는 동안만 다시 보기 — 없으면 멈춘다 */
@@ -174,7 +242,11 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): {
    * key = 그 기다림(풀리면 미룬 것을 지운다) — 없으면(끝남) 미루지 않는다. 같은 열쇠의 앞서 미룬 것은 이 판단이 갈음한다(서버 방 문제가 바뀜)
    */
   const notify = (agentId: AgentId, kind: NoticeKind, key?: string) => {
-    if (key !== undefined) deferred.delete(key)
+    if (key !== undefined) {
+      deferred.delete(key)
+      cancelRetries(key) // 새 판단이 앞의 다시 보내기를 갈음한다
+      live.delete(key)
+    }
     const s = o.settings()
     if (!s.enabled || !kindOn(s, kind)) return
     const agent = o.engine.agents().find((a) => a.id === agentId)
@@ -182,8 +254,9 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): {
     const devices = o.devices().filter((d) => d.push).map((d) => d.id)
     if (devices.length === 0) return
     const later = pcInUse() ? devices : devices.filter((id) => o.isVisible(id))
+    if (key !== undefined) live.add(key)
     if (key !== undefined && later.length > 0) deferred.set(key, { agentId, kind, to: new Set(later) })
-    send(agent, kind, devices.filter((id) => !later.includes(id)))
+    send(agent, kind, devices.filter((id) => !later.includes(id)), key)
   }
 
   /**
@@ -212,7 +285,7 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): {
         }
       }
       if (w.to.size === 0) deferred.delete(key)
-      send(agent, w.kind, now)
+      send(agent, w.kind, now, key)
     }
   }
 
@@ -229,7 +302,7 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): {
 
     'request-resolved': guarded<'request-resolved'>((r) => {
       asked.delete(r.id)
-      deferred.delete(`request:${r.id}`)
+      resolved(`request:${r.id}`)
     }),
 
     message: guarded<'message'>((m) => {
@@ -240,7 +313,7 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): {
         }
       } else {
         pendingSeen.delete(m.id)
-        deferred.delete(`pending:${m.id}`)
+        resolved(`pending:${m.id}`)
       }
 
       const held = heldByRoom.get(m.roomId) ?? new Set<string>()
@@ -251,14 +324,14 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): {
         if (first) notify(m.to, 'handoff', `held:${m.roomId}`)
       } else if (held.delete(m.id) && held.size === 0) {
         heldByRoom.delete(m.roomId)
-        deferred.delete(`held:${m.roomId}`)
+        resolved(`held:${m.roomId}`)
       }
     }),
 
     hold: guarded<'hold'>(({ agentId, hold }) => {
       if (!hold) {
         holding.delete(agentId)
-        deferred.delete(`hold:${agentId}`)
+        resolved(`hold:${agentId}`)
         return
       }
       if (holding.has(agentId)) return
@@ -271,7 +344,7 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): {
       if (remoteIssue === undefined) return
       if (!remoteIssue) {
         issues.delete(agentId)
-        deferred.delete(`remote:${agentId}`)
+        resolved(`remote:${agentId}`)
         return
       }
       const key = issueKey(remoteIssue)
@@ -316,6 +389,8 @@ export function createPhoneNotifier(o: PhoneNotifierOptions): {
         log(JUDGE_FAILED)
       }
       deferred.clear()
+      live.clear()
+      for (const key of [...retryCancels.keys()]) cancelRetries(key)
       try {
         syncPoll()
       } catch {

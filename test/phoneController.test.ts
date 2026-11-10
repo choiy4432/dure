@@ -163,7 +163,7 @@ function make(over: Partial<PhoneControllerOptions> & {
   const loginItem = { set: vi.fn() }
   const emitted: PhoneState[] = []
   const inner = vi.fn<Dispatch>(async (method) => ({ ok: true, value: method }))
-  const push = { publicKey: vi.fn(() => 'PUBKEY'), subscribe: vi.fn(), sendTo: vi.fn(async () => {}) }
+  const push = { publicKey: vi.fn(() => 'PUBKEY'), subscribe: vi.fn(), sendTo: vi.fn(async (): Promise<'retry' | undefined> => undefined) }
   const idle = { now: 'locked' as 'active' | 'idle' | 'locked' | 'unknown' }
   const dataDir = over.dataDir ?? dir
   const c = createPhoneController({
@@ -1356,4 +1356,92 @@ test('하루 한 번 30일 넘게 안 쓴 기기를 정리 — 오래 켜 둬도
   const before = ticks.length
   ticks[0].fn() // dispose 뒤엔 아무것도 안 한다
   expect(ticks).toHaveLength(before)
+})
+
+test('routeRecheckOnResume — 켜짐 + 길 열림일 때 깨어남 신호가 길을 한 번 확인 · 꺼져 있으면 안 함 · dispose 가 듣기를 푼다', async () => {
+  const resumes = new Set<() => void>()
+  const unhook = vi.fn()
+  const ts = fakeTailscale()
+  const { c } = make({
+    ts,
+    pcResume: (fn) => {
+      resumes.add(fn)
+      return () => (unhook(), resumes.delete(fn))
+    },
+    routeEvery: () => () => {},
+  })
+  await c.ready
+  const wake = () => {
+    for (const f of [...resumes]) f()
+  }
+  // 꺼져 있다 — Tailscale 을 부르지 않는다
+  const n0 = ts.status.mock.calls.length
+  wake()
+  await new Promise((r) => setTimeout(r, 20))
+  expect(ts.status.mock.calls.length).toBe(n0)
+
+  await c.set({ enabled: true })
+  expect(c.state().url).not.toBeNull()
+  const before = ts.status.mock.calls.length
+  wake()
+  await vi.waitFor(() => expect(ts.status.mock.calls.length).toBe(before + 1))
+
+  // PC 이름이 바뀐 채 깨어났다 — 새 이름으로 다시 연다
+  ts.state = { kind: 'ready', dnsName: 'renamed-pc.tail0000.ts.net' }
+  wake()
+  await vi.waitFor(() => expect(c.state().url).toBe('https://renamed-pc.tail0000.ts.net/mobile.html'))
+
+  await c.set({ enabled: false })
+  const off = ts.status.mock.calls.length
+  wake()
+  await new Promise((r) => setTimeout(r, 20))
+  expect(ts.status.mock.calls.length).toBe(off)
+
+  await c.dispose()
+  expect(unhook).toHaveBeenCalledTimes(1)
+  expect(resumes.size).toBe(0)
+})
+
+test('routeRecheckEvery10min — 켜짐 + 길 열림인 동안만 10분 타이머 · 끄면 멈춤 · dispose 가 정리', async () => {
+  const MIN10 = 10 * 60 * 1000
+  const timers: { ms: number; fn: () => void; stopped: boolean }[] = []
+  const ts = fakeTailscale()
+  const { c } = make({
+    ts,
+    routeEvery: (ms, fn) => {
+      const t = { ms, fn, stopped: false }
+      timers.push(t)
+      return () => {
+        t.stopped = true
+      }
+    },
+  })
+  await c.ready
+  expect(timers).toHaveLength(0) // 꺼져 있다 — 타이머 없음
+
+  await c.set({ enabled: true })
+  expect(timers.map((t) => t.ms)).toEqual([MIN10])
+  expect(timers[0].stopped).toBe(false)
+
+  // 10분이 지나면 길을 한 번 확인 — 이름이 바뀌었으면 새 이름으로
+  const before = ts.status.mock.calls.length
+  timers[0].fn()
+  await vi.waitFor(() => expect(ts.status.mock.calls.length).toBe(before + 1))
+  ts.state = { kind: 'ready', dnsName: 'renamed-pc.tail0000.ts.net' }
+  timers[0].fn()
+  await vi.waitFor(() => expect(c.state().url).toBe('https://renamed-pc.tail0000.ts.net/mobile.html'))
+  // 다시 열어도 타이머는 하나만 돈다
+  expect(timers.filter((t) => !t.stopped)).toHaveLength(1)
+
+  await c.set({ enabled: false })
+  expect(timers.every((t) => t.stopped)).toBe(true)
+  const off = ts.status.mock.calls.length
+  timers[timers.length - 1].fn() // 멈춘 뒤 늦게 울려도 아무것도 안 한다
+  await new Promise((r) => setTimeout(r, 20))
+  expect(ts.status.mock.calls.length).toBe(off)
+
+  await c.set({ enabled: true })
+  expect(timers.filter((t) => !t.stopped)).toHaveLength(1)
+  await c.dispose()
+  expect(timers.every((t) => t.stopped)).toBe(true)
 })

@@ -41,9 +41,13 @@ function setup(o: { settings?: Partial<PhoneSettings>; devices?: PhoneDevice[]; 
   let idle: 'active' | 'idle' | 'locked' | 'unknown' = 'locked'
   const visible = new Set<string>()
   const sent: Sent[] = []
+  const failing = { on: false } // true 면 보낼 때마다 일시 오류('retry')
+  // 다시 보내기 타이머 — 가짜: 시험이 손으로 부른다(대기 ms 와 함께 쌓인다)
+  const retries: { ms: number; fn: () => void }[] = []
   const push = {
-    sendTo: vi.fn(async (deviceId: string, notice: PhoneNotice, delivery?: PushDelivery) => {
+    sendTo: vi.fn(async (deviceId: string, notice: PhoneNotice, delivery?: PushDelivery): Promise<'retry' | undefined> => {
       sent.push({ deviceId, notice, delivery })
+      return failing.on ? 'retry' : undefined
     }),
   }
   const log = vi.fn()
@@ -62,6 +66,14 @@ function setup(o: { settings?: Partial<PhoneSettings>; devices?: PhoneDevice[]; 
       away.add(fn)
       return () => away.delete(fn)
     },
+    retryAfter: (ms, fn) => {
+      const r = { ms, fn }
+      retries.push(r)
+      return () => {
+        const i = retries.indexOf(r)
+        if (i >= 0) retries.splice(i, 1)
+      }
+    },
     every: (ms, fn) => {
       const p = { ms, fn }
       polls.push(p)
@@ -70,7 +82,13 @@ function setup(o: { settings?: Partial<PhoneSettings>; devices?: PhoneDevice[]; 
   })
   disposers.push(() => notifier.dispose())
   return {
-    engine, notifier, sent, push, log, visible, held, devices, agents, away, polls,
+    engine, notifier, sent, push, log, visible, held, devices, agents, away, polls, failing, retries,
+    /** 기다리는 다시 보내기 중 가장 먼저 걸린 것을 지금 돌린다 */
+    fireRetry: async () => {
+      const r = retries.shift()
+      r?.fn()
+      await flush()
+    },
     setIdle: (s: typeof idle) => (idle = s),
     /** PC 를 잠갔다(lock-screen) — 그 순간 idle 상태가 아직 active 로 읽혀도 */
     lock: () => {
@@ -635,4 +653,98 @@ test('dispose — 엔진 사건을 더 듣지 않음', async () => {
   await flush()
   expect(t.sent).toHaveLength(0)
   t.notifier.dispose() // 두 번 불러도 괜찮다
+})
+
+test('askPushRetries — 일시 오류면 5 s·30 s·120 s 뒤 최대 세 번 다시 보냄(같은 알림 글) · 그다음엔 포기', async () => {
+  const t = setup()
+  t.failing.on = true
+  t.request('r1')
+  await flush()
+  expect(t.sent).toHaveLength(1)
+  expect(t.retries.map((r) => r.ms)).toEqual([5_000])
+  const first = t.sent[0].notice
+  await t.fireRetry()
+  expect(t.sent).toHaveLength(2)
+  expect(t.retries.map((r) => r.ms)).toEqual([30_000])
+  await t.fireRetry()
+  expect(t.sent).toHaveLength(3)
+  expect(t.retries.map((r) => r.ms)).toEqual([120_000])
+  await t.fireRetry()
+  expect(t.sent).toHaveLength(4) // 처음 + 세 번
+  expect(t.retries).toHaveLength(0) // 더 안 함
+  expect(t.sent.every((s) => s.notice.body === first.body && s.deviceId === 'd1' && s.delivery?.urgency === 'high')).toBe(true)
+})
+
+test('askPushRetries — 다시 보내다 성공하면 그만 · 기다림이 풀리면 그만 · 기기를 끊거나 끄면 그만', async () => {
+  // 성공하면 그만
+  let t = setup()
+  t.failing.on = true
+  t.request('r1')
+  await flush()
+  t.failing.on = false
+  await t.fireRetry()
+  expect(t.sent).toHaveLength(2)
+  expect(t.retries).toHaveLength(0)
+
+  // 기다림이 풀렸다(요청 풀림)
+  t = setup()
+  t.failing.on = true
+  t.request('r1')
+  await flush()
+  t.engine.emit('request-resolved', { id: 'r1', agentId: 'a1' })
+  expect(t.retries).toHaveLength(0)
+  expect(t.sent).toHaveLength(1)
+
+  // 넘기기 승인(pending)이 풀렸다
+  t = setup()
+  t.failing.on = true
+  t.message('m1', 'pending')
+  await flush()
+  expect(t.retries).toHaveLength(1)
+  t.message('m1', 'delivered')
+  expect(t.retries).toHaveLength(0)
+
+  // 타이머가 이미 울렸는데 그 사이 풀림·끊김·꺼짐 — 안 보냄
+  for (const stop of [
+    (x: ReturnType<typeof setup>) => x.devices.splice(0),
+    (x: ReturnType<typeof setup>) => x.set({ enabled: false }),
+    (x: ReturnType<typeof setup>) => x.set({ notify: { ...DEFAULT_PHONE_SETTINGS.notify, asks: false } }),
+    (x: ReturnType<typeof setup>) => x.agents.splice(0),
+    (x: ReturnType<typeof setup>) => x.visible.add('d1'),
+  ]) {
+    t = setup()
+    t.failing.on = true
+    t.request('r1')
+    await flush()
+    stop(t)
+    await t.fireRetry()
+    expect(t.sent).toHaveLength(1)
+    expect(t.retries).toHaveLength(0)
+  }
+
+  // dispose 가 기다리는 다시 보내기를 지운다
+  t = setup()
+  t.failing.on = true
+  t.request('r1')
+  await flush()
+  t.notifier.dispose()
+  expect(t.retries).toHaveLength(0)
+})
+
+test('askPushRetries — 끝 알림(finished)은 실패해도 다시 안 보냄 · 기기마다 따로', async () => {
+  const t = setup({
+    devices: [
+      { id: 'd1', name: 'a', createdAt: 1, lastSeen: null, push: true },
+      { id: 'd2', name: 'b', createdAt: 1, lastSeen: null, push: true },
+    ],
+  })
+  t.failing.on = true
+  t.history('a1', { t: 5, kind: 'result', ok: true, subtype: 'success' })
+  await flush()
+  expect(t.sent).toHaveLength(2)
+  expect(t.retries).toHaveLength(0)
+
+  t.request('r1')
+  await flush()
+  expect(t.retries).toHaveLength(2) // 기기마다 하나
 })

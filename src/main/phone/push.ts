@@ -38,8 +38,11 @@ export interface Push {
    * 그 사이 끊긴 기기면 아무것도 안 한다. 같은 주소를 가진 다른 기기의 구독은 뺀다(한 브라우저가 다시 짝을 맺은 것 — 두 번 울리지 않게)
    */
   subscribe(deviceId: string, sub: unknown): void
-  /** 그 기기로 알림 하나 — 구독이 없으면 안 보낸다. 404·410 이면 그 구독을 지운다. 던지지 않는다(실패는 로그에, 주소·열쇠 없이) */
-  sendTo(deviceId: string, n: PhoneNotice, o?: PushDelivery): Promise<void>
+  /**
+   * 그 기기로 알림 하나 — 구독이 없으면 안 보낸다. 404·410 이면 그 구독을 지운다 · 401/403 이 세 번 잇따르면(성공이 사이에 끼면 셈 0) 지운다.
+   * 던지지 않는다(실패는 로그에, 주소·열쇠 없이). 일시 오류(네트워크 오류·429·5xx)면 'retry' — 부른 쪽이 다시 보낼지 정한다. 그 밖엔 undefined
+   */
+  sendTo(deviceId: string, n: PhoneNotice, o?: PushDelivery): Promise<'retry' | undefined>
 }
 
 /**
@@ -102,6 +105,15 @@ function reasonOf(e: unknown): string {
   return f.statusCode !== undefined ? String(f.statusCode) : (f.code ?? '까닭 모름')
 }
 
+/** 401/403 이 이만큼 잇따르면 그 구독을 지운다 */
+export const AUTH_FAILURES_TO_DROP = 3
+
+/** 다시 보낼 만한 실패 — 답 번호가 없는 오류(네트워크·시간 초과) · 429 · 5xx */
+function isTransient(e: unknown): boolean {
+  const code = safeFields(e).statusCode
+  return code === undefined || code === 429 || code >= 500
+}
+
 /** 알림 서버가 이 시간 안에 답하지 않으면(소켓이 조용하면) 끊는다 */
 const SEND_TIMEOUT_MS = 15_000
 
@@ -153,6 +165,9 @@ export function createPush(
     return vapid
   }
 
+  /** 기기마다 잇따른 401/403 셈 — 어느 구독(주소)의 셈인지 함께(새로 구독하면 다시 센다). 메모리만 */
+  const authFails = new Map<string, { endpoint: string; n: number }>()
+
   /** 410·404 — 그 기기의 구독이 아직 그 주소일 때만 지운다(보내는 사이 새로 구독했으면 새것은 남긴다) */
   const forget = (deviceId: string, endpoint: string) => {
     const f = store.read()
@@ -192,10 +207,33 @@ export function createPush(
         // 네 칸만 — 부르는 쪽이 칸을 더 얹어도 나가지 않는다
         const payload = JSON.stringify({ title: n.title, body: n.body, tag: n.tag, url: n.url })
         const r = await send(sub, payload, keys(), { urgency: delivery.urgency, ttl: delivery.ttl })
-        if (r.gone) forget(deviceId, sub.endpoint)
+        if (r.gone) {
+          authFails.delete(deviceId)
+          forget(deviceId, sub.endpoint)
+        } else authFails.delete(deviceId)
       } catch (e) {
         log(`[두레] 휴대폰 알림을 보내지 못했어요(${reasonOf(e)})`)
+        const code = safeFields(e).statusCode
+        if (code === 401 || code === 403) {
+          try {
+            const endpoint = store.read().devices.find((d) => d.id === deviceId)?.subscription?.endpoint
+            if (endpoint) {
+              const prev = authFails.get(deviceId)
+              const n = (prev?.endpoint === endpoint ? prev.n : 0) + 1
+              if (n >= AUTH_FAILURES_TO_DROP) {
+                authFails.delete(deviceId)
+                forget(deviceId, endpoint)
+                log('[두레] 휴대폰 알림 구독이 거듭 거절돼 지웠어요')
+              } else authFails.set(deviceId, { endpoint, n })
+            }
+          } catch {
+            // 셈을 못 함 — 다음에
+          }
+          return undefined
+        }
+        return isTransient(e) ? 'retry' : undefined
       }
+      return undefined
     },
   }
 }

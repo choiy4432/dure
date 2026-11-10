@@ -261,7 +261,7 @@ test('보내기 실패 — 던지지 않고, 로그에 주소·열쇠가 없음'
   const failing: PushSend = async () => {
     throw Object.assign(new Error(`boom ${secretish}`), { statusCode: 500, endpoint: FCM })
   }
-  await expect(createPush(store, { send: failing, log }).sendTo('d1', NOTICE)).resolves.toBeUndefined()
+  await expect(createPush(store, { send: failing, log }).sendTo('d1', NOTICE)).resolves.toBe('retry') // 5xx — 부른 쪽이 다시 보낼 수 있다
   expect(log).toHaveBeenCalled()
   const logged = JSON.stringify(log.mock.calls)
   for (const s of [FCM, 'fake-endpoint', P256DH, AUTH, VAPID.privateKey, 'boom']) expect(logged).not.toContain(s)
@@ -329,4 +329,66 @@ test('30일 넘게 안 쓴 기기엔 정리(expireIdle) 전이어도 알림을 �
   now = t0 + 60 * DAY
   await push.sendTo('new', NOTICE)
   expect(calls).toHaveLength(1)
+})
+
+/** 던지는 가짜 send — 답 번호 또는 오류 이름만 */
+const failWith = (e: { statusCode?: number; code?: string }): PushSend => async () => {
+  throw Object.assign(new Error('fake failure'), e)
+}
+
+test('askPushRetries — 네트워크 오류·429·5xx 는 다시 보낼 만하다(retry), 그 밖의 4xx·성공·구독 없음은 아니다', async () => {
+  const store = openPhoneStore(dir)
+  store.write({ vapid: VAPID, devices: [dev('d1', { subscription: sub() })] })
+  const log = vi.fn()
+  const run = (e: { statusCode?: number; code?: string }) => createPush(store, { send: failWith(e), log }).sendTo('d1', NOTICE)
+  for (const e of [{ code: 'ENOTFOUND' }, { code: 'ETIMEDOUT' }, {}, { statusCode: 429 }, { statusCode: 500 }, { statusCode: 503 }]) {
+    expect(await run(e)).toBe('retry')
+  }
+  for (const e of [{ statusCode: 400 }, { statusCode: 413 }, { statusCode: 401 }, { statusCode: 403 }]) {
+    expect(await run(e)).toBeUndefined()
+  }
+  expect(await createPush(store, { send: fakeSend().send, log }).sendTo('d1', NOTICE)).toBeUndefined()
+  expect(await createPush(store, { send: fakeSend().send, log }).sendTo('없는-기기', NOTICE)).toBeUndefined()
+})
+
+test('authFailuresDrop — 401/403 이 세 번 잇따르면 그 구독을 지움 · 사이에 성공하면 셈이 0 · 404/410 은 바로', async () => {
+  const store = openPhoneStore(dir)
+  store.write({ vapid: VAPID, devices: [dev('d1', { subscription: sub(), push: true }), dev('d2', { subscription: sub(`${FCM}-2`), push: true })] })
+  let mode: 'ok' | 401 | 403 = 401
+  const send: PushSend = async () => {
+    if (mode === 'ok') return { gone: false }
+    throw Object.assign(new Error('fake'), { statusCode: mode })
+  }
+  const push = createPush(store, { send, log: vi.fn() })
+  const has = (id: string) => store.read().devices.find((d) => d.id === id)?.subscription !== undefined
+
+  await push.sendTo('d1', NOTICE)
+  mode = 403
+  await push.sendTo('d1', NOTICE)
+  expect(has('d1')).toBe(true) // 두 번 — 아직
+  mode = 'ok'
+  await push.sendTo('d1', NOTICE) // 성공 — 셈 0
+  mode = 401
+  await push.sendTo('d1', NOTICE)
+  await push.sendTo('d1', NOTICE)
+  expect(has('d1')).toBe(true) // 다시 두 번
+  mode = 403
+  await push.sendTo('d1', NOTICE)
+  expect(has('d1')).toBe(false) // 세 번 잇따름 — 지움
+  expect(store.read().devices.find((d) => d.id === 'd1')?.push).toBe(false)
+  expect(has('d2')).toBe(true) // 다른 기기는 그대로
+
+  // 셈은 기기마다 — d2 의 실패가 d1 의 셈에 섞이지 않는다 · 새 구독이면 셈을 다시 시작
+  mode = 401
+  await push.sendTo('d2', NOTICE)
+  await push.sendTo('d2', NOTICE)
+  push.subscribe('d2', sub(`${FCM}-3`))
+  await push.sendTo('d2', NOTICE)
+  expect(has('d2')).toBe(true)
+
+  // 셈은 메모리에만 — 새 push 는 0 부터
+  const p2 = createPush(store, { send: failWith({ statusCode: 401 }), log: vi.fn() })
+  await p2.sendTo('d2', NOTICE)
+  await p2.sendTo('d2', NOTICE)
+  expect(has('d2')).toBe(true)
 })

@@ -582,6 +582,11 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
           powerMonitor.on('lock-screen', fn)
           return () => powerMonitor.off('lock-screen', fn)
         },
+        // 잠에서 깨면 — 길(Tailscale 업데이트·PC 이름 바뀜)을 한 번 다시 확인
+        pcResume: (fn) => {
+          powerMonitor.on('resume', fn)
+          return () => powerMonitor.off('resume', fn)
+        },
         loginItem: { set: (open) => setLoginItem(open) },
         emit: (s) => {
           emitApp('phone', s)
