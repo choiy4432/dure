@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
+import { claudeEnv } from './claudeEnv';
 
 export function locateClaude(
   env: NodeJS.ProcessEnv = process.env,
@@ -23,7 +24,7 @@ type Run = (cmd: string, args: string[]) => Promise<{ stdout: string; code: numb
 
 const defaultRun: Run = (cmd, args) =>
   new Promise((resolve, reject) => {
-    execFile(cmd, args, { windowsHide: true, timeout: 15000 }, (err, stdout) => {
+    execFile(cmd, args, { windowsHide: true, timeout: 15000, env: claudeEnv(process.env) }, (err, stdout) => {
       if (!err) return resolve({ stdout: String(stdout), code: 0 });
       const code = (err as NodeJS.ErrnoException & { code?: unknown }).code;
       if (typeof code === 'number') return resolve({ stdout: String(stdout ?? ''), code });

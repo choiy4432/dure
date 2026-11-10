@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import { killTree } from '../engine/killTree'
+import { claudeEnv } from '../engine/claudeEnv'
 import type { ClaudeCommand } from './claudeCommand'
 
 /** `claude update` 를 기다리는 상한 — 넘으면 끄고 그냥 켠다 (실측: 갱신 ~8초, 이미 최신 ~2.6초) */
@@ -32,7 +33,7 @@ export function updateClaude(c: ClaudeCommand, o: UpdateClaudeOptions = {}): Cla
   const timeoutMs = o.timeoutMs ?? CLAUDE_UPDATE_TIMEOUT_MS
   let child: ReturnType<typeof nodeSpawn>
   try {
-    child = spawn(c.command, [...c.argsPrefix, 'update'], { windowsHide: true, stdio: 'ignore' })
+    child = spawn(c.command, [...c.argsPrefix, 'update'], { windowsHide: true, stdio: 'ignore', env: claudeEnv(process.env) })
   } catch {
     return { done: Promise.resolve('failed'), kill: () => Promise.resolve() }
   }

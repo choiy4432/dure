@@ -22,6 +22,7 @@ import { abortable, openAttachmentStore, REALPATH_FATAL, type AttachmentStore } 
 import { ATTACH_FAILED, ATTACH_MAX_BYTES, ATTACH_TOO_BIG, MEDIA_INLINE_MAX_B64, PDF_INLINE_MAX_BYTES, PDF_INLINE_MAX_PAGES } from '../shared/attachments';
 import { hasPdfHead, isPdfName, pdfPageCount } from './pdf';
 import { replayMatches, sentText } from './streamProtocol';
+import { claudeEnv } from './claudeEnv';
 import { buildArgs, buildMcpConfig, buildUsageArgs, CREATE_AGENT_TOOL, SPAWN_ENV_EXTRA } from './claudeArgs';
 import { buildRoomPrompt } from './roomPrompt';
 import { ClaudeSession } from './claudeSession';
@@ -1026,7 +1027,7 @@ class EngineImpl extends EventEmitter implements Engine {
       const child = execFile(
         ssh.command,
         args,
-        { windowsHide: true, timeout: o.timeoutMs ?? (quick ? REMOTE_QUICK_MS : REMOTE_CHECK_MS), env: { ...process.env, ...this.o.env }, encoding: 'utf8' },
+        { windowsHide: true, timeout: o.timeoutMs ?? (quick ? REMOTE_QUICK_MS : REMOTE_CHECK_MS), env: claudeEnv({ ...process.env, ...this.o.env }), encoding: 'utf8' },
         (err, stdout, stderr) => {
           if (!err) return resolve({ code: 0, stdout, stderr });
           const code: unknown = err.code;
@@ -1076,7 +1077,7 @@ class EngineImpl extends EventEmitter implements Engine {
       args: [...(ssh.argsPrefix ?? []), ...launchArgs({ host, remotePort: port, localPort: this.mcp.port, script })],
       cwd: runDir,
       // ssh 는 환경을 서버로 넘기지 않는다 — claude 의 환경(SPAWN_ENV_EXTRA)은 스크립트가 export 한다
-      env: { ...process.env, ...this.o.env },
+      env: claudeEnv({ ...process.env, ...this.o.env }),
       stdinPreamble: launchPreamble(mcpJson, prompt),
       onStderr: (chunk) => this.guard(id, () => this.noteRemotePid(id, run, chunk)),
       ...(gate ? { startAfter: gate } : {}),
@@ -1926,7 +1927,7 @@ class EngineImpl extends EventEmitter implements Engine {
     return new Promise((resolve, reject) => {
       let child: ChildProcess;
       try {
-        child = spawn(ssh.command, args, { windowsHide: true, env: { ...process.env, ...this.o.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+        child = spawn(ssh.command, args, { windowsHide: true, env: claudeEnv({ ...process.env, ...this.o.env }), stdio: ['pipe', 'pipe', 'pipe'] });
       } catch (e) {
         // 실행 파일이 아니다(EFTYPE) 등 — 원문엔 내 PC 의 ssh 경로가 실린다
         if ((e as NodeJS.ErrnoException | null)?.code === 'ENOENT') reject(new Error(NO_SSH));
@@ -3020,7 +3021,7 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   private spawnEnv(): NodeJS.ProcessEnv {
-    return { ...process.env, ...this.o.env, ...SPAWN_ENV_EXTRA };
+    return claudeEnv({ ...process.env, ...this.o.env, ...SPAWN_ENV_EXTRA });
   }
 
   /** 타이머를 끄고 떠 있는 사용량 전용 claude 를 끈다 — 상한 STOP_LIMIT_MS(세션 끝내기와 같은 까닭) */

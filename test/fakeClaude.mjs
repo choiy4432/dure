@@ -76,6 +76,15 @@ const log = (s) => {
   if (logFile) fs.appendFileSync(logFile, s + '\n');
 };
 
+// FAKE_ENV_LOG=<파일> — 뜰 때 받은 환경(API 키 변수 · PATH · CLAUDE_CONFIG_DIR)과 argv 를 한 줄 JSON 으로 덧붙인다(시험: 두레가 어떤 환경으로 띄웠나)
+if (process.env.FAKE_ENV_LOG) {
+  const e = process.env;
+  fs.appendFileSync(
+    process.env.FAKE_ENV_LOG,
+    JSON.stringify({ argv, ANTHROPIC_API_KEY: e.ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN: e.ANTHROPIC_AUTH_TOKEN, PATH: e.PATH ?? e.Path, CLAUDE_CONFIG_DIR: e.CLAUDE_CONFIG_DIR }) + '\n',
+  );
+}
+
 // 설치·로그인·갱신 갈래 — stream-json 세션 앞에서 갈라 바로 끝낸다(두레가 시작 때 부르는 claude 하위 명령).
 //   --version                  → "2.1.304 (Claude Code)"
 //   auth status --json         → {"loggedIn":…}. 우선순위: FAKE_CLAUDE_LOGIN_FILE 이 있고 그 파일이 존재하면 true(로그인 뒤),

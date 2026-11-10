@@ -4,3 +4,4 @@ export type * from './types';
 export { locateClaude, authStatus, claudeVersion } from './claudeSetup';
 export type { SshHostEntry } from './sshConfig';
 export type { RemoteIssueKind } from './remote';
+export { claudeEnv } from './claudeEnv';

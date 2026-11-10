@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import electronUpdater from 'electron-updater'
 import { killTree } from '../engine/killTree'
-import { authStatus, claudeVersion, createEngine, locateClaude } from '../engine'
+import { authStatus, claudeEnv, claudeVersion, createEngine, locateClaude } from '../engine'
+import { openLog } from './log'
 import type { Engine } from '../engine'
 import type { AppEventMap, ClaudeUpdateState } from '../shared/appTypes'
 import { appEnv, appIconFor, appUserModelId, loginItemNamer, loginItemSettings } from './appEnv'
@@ -92,7 +93,7 @@ function installCommand(raw: string | undefined): { command: string; args: strin
 /** 설치 스크립트를 돌리고 출력(stdout·stderr)을 줄로 쪼개 넘긴다 */
 function spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: number | null }>; kill(): Promise<void> } {
   const cmd = installCommand(env.DURE_SETUP_INSTALL)
-  const child = spawn(cmd.command, cmd.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(cmd.command, cmd.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: claudeEnv(process.env) })
   const feed = (stream: NodeJS.ReadableStream | null): void => {
     let rest = ''
     stream?.setEncoding('utf8')
@@ -128,6 +129,7 @@ function spawnLogin(c: ClaudeCommand): { kill(): Promise<void> } {
     windowsVerbatimArguments: true,
     detached: true,
     stdio: 'ignore',
+    env: claudeEnv(process.env),
   })
   let alive = true
   const gone = (): void => {
@@ -151,6 +153,15 @@ function emitApp<K extends keyof AppEventMap>(name: K, payload: AppEventMap[K]):
 // 설치본(app.isPackaged)에선 시험용 환경 변수를 모두 무시한다 — 아래 env 만 읽는다.
 const env = appEnv(process.env, app.isPackaged)
 if (env.DURE_USER_DATA) app.setPath('userData', env.DURE_USER_DATA)
+
+/** 설치본엔 콘솔이 없다 — 오류는 <userData>/logs/dure.log 에도 남긴다. 오류 글만(대화 글·토큰·쿠키는 쓰지 않는다) */
+const fileLog = openLog(join(app.getPath('userData'), 'logs'))
+function logError(...args: unknown[]): void {
+  console.error(...args)
+  fileLog.write(args.map((a) => (a instanceof Error ? (a.stack ?? a.message) : String(a))).join(' '))
+}
+process.on('uncaughtException', (err) => logError('[두레] uncaughtException:', err))
+process.on('unhandledRejection', (reason) => logError('[두레] unhandledRejection:', reason))
 
 /** Test-only hook: DURE_E2E_FOLDERS (JSON array) — pickFolder hands these out in order instead of opening the dialog, then null. */
 function e2eFolders(raw: string | undefined): (() => string | null) | null {
@@ -324,7 +335,7 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
           claudeAutoUpdate: () => prefs.claudeAutoUpdate,
           ...sleepKnob,
         })
-        logEngineErrors(engine)
+        logEngineErrors(engine, logError)
       }
       // 준비 흐름 — claude 찾기·설치·로그인. 엔진이 못 만들어졌으면(claude 없음) 로그인 뒤 두레를 다시 켠다
       const setupFlow = createSetupFlow({
@@ -616,10 +627,12 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
           emitApp('claude-update', s)
         },
         ready: () => markEngineReady(),
+        log: logError,
       })
     })
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err)
+      logError('[두레] 시작 실패:', message)
       if (env.DURE_NO_DIALOG !== '1') dialog.showErrorBox('두레를 시작하지 못했어요', message)
       // Go through the normal quit path (before-quit -> shutdown -> exit) so Chromium's helper processes are torn down.
       exitCode = 1
