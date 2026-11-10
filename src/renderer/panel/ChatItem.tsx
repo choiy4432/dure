@@ -36,18 +36,18 @@ const ICONS: Record<ToolIcon, ComponentType<LucideProps>> = {
 const ASKS_FIRST = new Set(['수정', '만듦', '실행', '웹에서 찾아봄'])
 
 /** 명령 출력 — 아는 출력(/compact)은 가운데 한국어 한 줄 + 접힌 '자세히'(영어 원문), 모르는 출력은 원문 상자 그대로 */
-function LocalLine({ text, index }: { text: string; index?: number }) {
+function LocalLine({ text, index, at }: { text: string; index?: number; at: number }) {
   const [open, setOpen] = useState(false)
   const id = useId()
   const summary = localSummary(text)
   if (!summary)
     return (
-      <Clamp className="clamp-mono pad" dataLine={index}>
+      <Clamp className="clamp-mono pad" dataLine={index} dataT={at}>
         <pre className="ci-local">{text}</pre>
       </Clamp>
     )
   return (
-    <div className="ci-sys" data-line={index}>
+    <div className="ci-sys" data-line={index} data-t={at}>
       <p className="note">
         {summary}
         <button type="button" className="lk sys-more" aria-expanded={open} aria-controls={id} onClick={() => setOpen(o => !o)}>
@@ -182,7 +182,10 @@ function LiveLine({ text }: { text: string }) {
 
 interface Props {
   line: ChatLine
-  /** 줄 번호(앞에 숨긴 줄 포함) — 뿌리 요소의 data-line. 새 줄이 들어올 때 ChatList 가 집는다 */
+  /**
+   * 줄 번호(앞에 숨긴 줄 포함) — 뿌리 요소의 data-line. 새 줄이 들어올 때 ChatList 가 집는다.
+   * 뿌리 요소엔 늘 data-t(그 줄을 연 기록의 시각)도 — 찾기에서 고른 줄로 갈 때 쓴다(hitJump · 흐르는 글 줄엔 없다)
+   */
   index?: number
   /** 이 대화의 에이전트 — 서브에이전트 요약 줄을 누르면 그 에이전트의 서브에이전트 탭으로 간다 · 보낸 그림을 그 에이전트 칸에서 읽는다 */
   agentId?: AgentId
@@ -195,7 +198,7 @@ function ChatItemView({ line, index, agentId, navigable = true }: Props) {
   switch (line.kind) {
     case 'me':
       return (
-        <div className="me" data-line={index}>
+        <div className="me" data-line={index} data-t={line.at}>
           {/* 그림 썸네일과 파일 칩은 한 줄에(넘치면 다음 줄로) — 그림이 먼저 */}
           {(line.images.length > 0 || line.files.length > 0) && (
             <div className="me-atts">
@@ -210,7 +213,7 @@ function ChatItemView({ line, index, agentId, navigable = true }: Props) {
     case 'relay': {
       // '기획에게서 온 메시지' 한 마디 — 이름만 굵게, 이름과 조사 사이를 나누지 않는다(한 칸 안에)
       return (
-        <div className="ci-relay" data-line={index} data-msg={line.messageId}>
+        <div className="ci-relay" data-line={index} data-t={line.at} data-msg={line.messageId}>
           <div className="who">
             <span className="who-p">
               {line.from ? (
@@ -232,7 +235,7 @@ function ChatItemView({ line, index, agentId, navigable = true }: Props) {
     }
     case 'claude':
       return (
-        <div className="ci-claude" data-line={index}>
+        <div className="ci-claude" data-line={index} data-t={line.at}>
           <div className="who">
             Claude
             {/* 답의 글만(하는 일 줄은 빼고) — 마크다운 원문 그대로 */}
@@ -257,9 +260,9 @@ function ChatItemView({ line, index, agentId, navigable = true }: Props) {
         </div>
       )
     case 'notice':
-      return <p className="note" data-line={index}>{line.text}</p>
+      return <p className="note" data-line={index} data-t={line.at}>{line.text}</p>
     case 'local':
-      return <LocalLine text={line.text} index={index} />
+      return <LocalLine text={line.text} index={index} at={line.at} />
     case 'streaming':
       return <LiveLine text={line.text} />
   }

@@ -308,6 +308,56 @@ export const PAST = {
   more: '앞 줄 모두 보기',
 } as const
 
+/**
+ * 찾기 · 옮기기(Ctrl+K) — 위 띠 칸 · 검색창 · 묶음 이름 · 결과 줄 · 안내 줄 · 화면 읽기 프로그램용 결과 수.
+ * 지난 대화의 날짜는 그 대화를 시작한 날(지난 대화 목록의 날짜는 마지막으로 이어 간 날이라 '시작'을 붙여 구별한다)
+ */
+export const SEARCH = {
+  title: '찾기 · 옮기기',
+  placeholder: '에이전트 · 방 이름이나 대화 내용',
+  key: 'Ctrl K',
+  shortcut: 'Ctrl+K',
+  names: '에이전트 · 방',
+  recent: '최근 고른 에이전트',
+  roomAgents: '이 방 에이전트',
+  convs: (n: number) => `대화에서 · ${n}곳`,
+  withPast: '지난 대화 포함',
+  agent: '에이전트',
+  room: '방',
+  currentRoom: '지금 방',
+  roomAgentCount: (n: number) => `에이전트 ${n}개`,
+  me: '나',
+  claude: 'Claude',
+  message: '받은 메시지',
+  from: (name: string) => `${name}에게서 온 메시지`,
+  current: '지금 대화',
+  past: (day: string | null) => (day ? `지난 대화(${day} 시작)` : '지난 대화'),
+  short: '두 글자부터 대화 내용도 찾아요',
+  searching: '대화에서 찾는 중…',
+  none: '대화에서 맞는 곳이 없어요',
+  nothing: '맞는 것이 없어요',
+  more: '더 있어요 — 낱말을 더 적어 보세요',
+  failed: '대화를 찾지 못했어요',
+  /** 아래 줄 — 키와 하는 일 */
+  hints: [['↑↓', '고르기'], ['Enter', '열기'], ['Esc', '닫기']] as const,
+  results: '찾은 결과',
+  /** 결과 수 — 에이전트·방 N개 · 대화 M곳(넘게) */
+  countNames: (n: number) => `에이전트·방 ${n}개`,
+  countRecent: (n: number) => `최근 에이전트 ${n}개`,
+  countConvs: (n: number, more: boolean) => `대화 ${n}곳${more ? ' 넘게' : ''}`,
+} as const
+
+/** 그날 — 오늘 · 어제 · 올해면 'M월 D일' · 아니면 'YYYY년 M월 D일'(로컬 시간) */
+export function dayText(at: number, now: number): string {
+  const d = new Date(at)
+  const n = new Date(now)
+  const same = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+  if (same(d, n)) return '오늘'
+  if (same(d, new Date(n.getFullYear(), n.getMonth(), n.getDate() - 1))) return '어제'
+  if (d.getFullYear() === n.getFullYear()) return `${d.getMonth() + 1}월 ${d.getDate()}일`
+  return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일`
+}
+
 /** 이어 갈 수 없는 이유 글(목록 셋째 줄 · 읽기 아래 줄) — 엔진이 거절하는 글과 같다(gone 은 30일이 넘은 대화만 '30일이 지나') */
 export { pastWhyText } from '../../shared/pastWhy'
 

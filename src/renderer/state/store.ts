@@ -1,5 +1,5 @@
 import { useRef, useSyncExternalStore } from 'react'
-import { SLEEP_DEFAULT_MIN, type AgentId, type AgentStatus, type EngineEventMap, type HistoryItem, type RoomId } from '../../engine/types'
+import { SLEEP_DEFAULT_MIN, type AgentId, type AgentStatus, type EngineEventMap, type HistoryItem, type RoomId, type SearchHit } from '../../engine/types'
 import type { DureApi, Snapshot } from '../../shared/ipcContract'
 import type { AppEventMap, AppInfo, AppPrefs, ClaudeUpdateState, SetupState, UpdateState } from '../../shared/appTypes'
 import type { PhoneState } from '../../shared/phoneTypes'
@@ -59,6 +59,11 @@ export type UiState = Snapshot & {
   subagentFocus: { agentId: AgentId; key: string; n: number } | null
   /** 메시지 탭의 '대화에서 보기'를 눌렀다 — 그 에이전트의 대화가 messageId 메시지 줄로 간다. 간 뒤엔 대화 목록이 지운다(다시 열려도 또 가지 않게) */
   messageFocus: { agentId: AgentId; messageId: string; n: number } | null
+  /**
+   * 찾기(Ctrl+K)에서 대화 줄을 골랐다(openHit) — 지금 대화(key null)면 대화 목록이, 지난 대화면 지난 대화 탭이 그 줄로 가서 잠깐 표시하고 지운다.
+   * 지금 대화 줄이 불러온 범위보다 앞이면 openHit 이 그 줄까지 불러 둔 뒤에 생긴다. 다른 에이전트를 고르면 지운다. n 은 부를 때마다 오른다
+   */
+  hitFocus: { hit: SearchHit; n: number } | null
   /** focusAgent 가 그 카드를 관계도에 보이게 해 달라고 했다 — 관계도가 카드가 밖에 있을 때만 옮긴다. n 은 부를 때마다 오른다 */
   mapFocus: { agentId: AgentId; n: number } | null
   /** 관계도 선 보기 — 이 PC 에 기억한다(EDGE_MODE_KEY), 처음엔 최근 */
@@ -125,6 +130,16 @@ export interface Store {
   showMessage(id: AgentId, messageId: string): void
   /** 대화 목록이 messageFocus(n)로 갔다 — 지운다. 그 사이 새로 누른 것(n 이 다르면)은 남긴다 */
   doneMessageFocus(n: number): void
+  /**
+   * 찾기에서 고른 대화 줄로 — 그 에이전트를 고르고(다른 방이면 방도 · 관계도에 카드), 지금 대화면 대화 탭 · 지난 대화면 지난 대화 탭으로.
+   * 지금 대화 줄이 불러온 범위보다 앞이면 history({ before }) 한 번으로 그 줄 조금 앞까지 불러 앞에 붙인 뒤 hitFocus 를 남긴다.
+   * 모르는 에이전트(그새 지움)면 아무것도 안 한다. 그사이 다른 줄을 골랐거나 다른 에이전트로 갔으면 hitFocus 를 남기지 않는다
+   */
+  openHit(hit: SearchHit): Promise<void>
+  /** 그 줄로 갔다(또는 갈 수 없다) — hitFocus(n)를 지운다. 그 사이 새로 고른 것은 남긴다 */
+  doneHitFocus(n: number): void
+  /** 최근 고른 에이전트 — 새로 고른 것부터(지금 고른 것 포함, 지운 에이전트는 뺀다). 찾기 창의 빈 입력이 쓴다 */
+  recentAgents(): AgentId[]
   /** 관계도 선 보기를 바꾸고 이 PC 에 기억한다 */
   setEdgeMode(mode: EdgeMode): void
   /** 그 에이전트의 방으로 바꾸고(다르면) 고르고, 관계도에 그 카드를 보이게 해 달라고 한다(mapFocus) — 기록도 불러온다. 모르는 id 면 아무것도 안 한다 */
@@ -184,6 +199,25 @@ function withPhase(phase: UiState['phase'], id: AgentId, to: Phase): UiState['ph
 /** 벽시계가 흐른 시간보다 이만큼 넘게 어긋나면 PC 시계를 바꾼 것 — 시간 동기화의 작은 보정은 그대로 둔다 */
 const CLOCK_JUMP_MS = 2000
 
+/** 최근 고른 에이전트를 몇 개까지 기억하나 */
+const RECENT_MAX = 8
+/** 찾은 줄로 가려고 앞쪽을 불러올 때 그 줄 앞에 더 남기는 기록 수(서브에이전트 줄은 세지 않는다) — 그 줄이 대화 맨 위에 붙지 않게 */
+const HIT_LEAD = 20
+
+/** 서브에이전트 줄 — 부모의 Agent 하는 일 아래에서 온 assistant·tool-result(엔진 history 의 자르기와 같은 셈) */
+const fromSubagent = (x: HistoryItem): boolean => (x.kind === 'assistant' || x.kind === 'tool-result') && typeof x.parent === 'string'
+
+/** i 번째 기록 앞으로 부모 기록 n 개만큼 물러선 자리(서브에이전트 줄은 세지 않고 함께 남긴다) */
+function leadFrom(items: HistoryItem[], i: number, n: number): number {
+  let left = n
+  let at = i
+  while (at > 0 && left > 0) {
+    at--
+    if (!fromSubagent(items[at])) left--
+  }
+  return at
+}
+
 /** 부모의 assistant 항목의 글(하는 일 블록은 뺀다) — 글이 없거나 서브에이전트의 줄이면 '' */
 function assistantText(item: HistoryItem): string {
   if (item.kind !== 'assistant' || item.parent) return ''
@@ -199,7 +233,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     app: { info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false, phone: null },
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
-    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, mapFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null,
+    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, hitFocus: null, mapFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null,
     tour: null,
   }
   const listeners = new Set<() => void>()
@@ -224,8 +258,22 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     tourShown = true
     state = { ...state, tour: tourAt('welcome', false, state) }
   }
+  // 최근 고른 에이전트 — 새로 고른 것이 맨 앞(카드 · 찾기 · 할 일 등 어디서 골랐든). 앱을 끄면 잊는다
+  const recent: AgentId[] = []
+  let lastSelected: AgentId | null = null
+  const noteSelected = () => {
+    const id = state.selectedAgentId
+    if (id === lastSelected) return
+    lastSelected = id
+    if (id === null) return
+    const at = recent.indexOf(id)
+    if (at >= 0) recent.splice(at, 1)
+    recent.unshift(id)
+    if (recent.length > RECENT_MAX) recent.length = RECENT_MAX
+  }
   const notify = () => {
     autoTour()
+    noteSelected()
     listeners.forEach(fn => fn())
   }
   const set = (next: UiState) => {
@@ -600,9 +648,20 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     }
   }
 
-  /** again — 이미 불러온 기록도 다시 받는다(resync): 받는 동안 지금 목록을 그대로 두고(불러오는 중 표시 없음) 받으면 갈음, 실패하면 그대로 */
-  const loadHistory = async (id: AgentId, again = false) => {
-    if ((!again && state.history[id]) || loading.has(id)) return
+  /**
+   * again — 이미 불러온 기록도 다시 받는다(resync): 받는 동안 지금 목록을 그대로 두고(불러오는 중 표시 없음) 받으면 갈음, 실패하면 그대로.
+   * 이미 불러오는 중이면 그 불러오기를 돌려준다(openHit 이 끝까지 기다린다). 절대 거절하지 않는다
+   */
+  const loads = new Map<AgentId, Promise<void>>()
+  const loadHistory = (id: AgentId, again = false): Promise<void> => {
+    if (loading.has(id)) return loads.get(id) ?? Promise.resolve()
+    if (!again && state.history[id]) return Promise.resolve()
+    const p = fetchHistory(id, again)
+    loads.set(id, p)
+    void p.then(() => { if (loads.get(id) === p) loads.delete(id) })
+    return p
+  }
+  const fetchHistory = async (id: AgentId, again: boolean) => {
     const keep = again && !!state.history[id]
     loading.set(id, [])
     if (!keep) set({ ...state, historyStatus: { ...state.historyStatus, [id]: { state: 'loading' } } })
@@ -650,6 +709,42 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       if (id && id in state.fresh) set({ ...state, fresh: without(state.fresh, id) })
     })
   }
+
+  /**
+   * 지금 대화의 t 시각 줄이 불러온 범위보다 앞이면 그 줄(조금 앞)까지 불러와 앞에 붙인다 — history 를 한 번만 부른다(엔진은 부를 때마다 파일을 다시 읽는다).
+   * before = 첫 줄 시각 + 1 · limit 끝없음: 첫 줄과 같은 시각(같은 ms)의 앞 줄도 빠지지 않는다. 이미 가진 같은 시각 줄은 받은 덩이 끝에서 덜어 낸다(파일 차례는 그대로).
+   * 그 줄보다 HIT_LEAD 개 앞에서 잘라 붙인다. 부르는 사이 목록이 갈렸으면(새 대화 · 다시 받기) 붙이지 않는다. 실패는 조용히 — 그 줄로 못 가도 대화는 그대로
+   */
+  const loadUpTo = async (id: AgentId, t: number) => {
+    const list = state.history[id]
+    const first = list?.[0]
+    if (!first || t >= first.t) return
+    let older: HistoryItem[]
+    try {
+      older = await api.history(id, { before: first.t + 1, limit: Infinity })
+    } catch {
+      return
+    }
+    const now = state.history[id]
+    if (!now || now[0] !== first) return
+    let held = 0
+    while (held < now.length && now[held].t === first.t) held++
+    let end = older.length
+    while (held > 0 && end > 0 && older[end - 1].t === first.t) {
+      end--
+      held--
+    }
+    const at = older.findIndex(x => x.t >= t)
+    const from = leadFrom(older, at < 0 || at > end ? end : at, HIT_LEAD)
+    if (from >= end) return
+    set({ ...state, history: { ...state.history, [id]: [...older.slice(from, end), ...now] } })
+  }
+
+  // 찾기에서 마지막으로 고른 줄 — 늦게 끝난 앞 고르기가 hitFocus 를 남기지 않게. hitN 은 hitFocus 의 n
+  let hitAsk = 0
+  let hitN = 0
+  /** 다른 에이전트로 가면 남은 hitFocus 는 버린다 — 나중에 그 에이전트를 다시 열 때 옛 줄로 뛰지 않게 */
+  const hitFor = (id: AgentId | null): UiState['hitFocus'] => (state.hitFocus && state.hitFocus.hit.agentId === id ? state.hitFocus : null)
 
   const endTour = async () => {
     tourShown = true
@@ -738,13 +833,13 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       if (keep) await loadHistory(keep, true)
     },
     selectAgent(id) {
-      set({ ...state, selectedAgentId: id, fresh: id ? without(state.fresh, id) : state.fresh })
+      set({ ...state, selectedAgentId: id, fresh: id ? without(state.fresh, id) : state.fresh, hitFocus: hitFor(id) })
       tellSelected(id)
       if (id) void loadHistory(id)
     },
     selectRoom(id) {
       if (!state.rooms.some(r => r.id === id)) return
-      set({ ...state, roomId: id, selectedAgentId: null })
+      set({ ...state, roomId: id, selectedAgentId: null, hitFocus: null })
       tellSelected(null)
     },
     focusAgent(id) {
@@ -753,7 +848,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       // 방을 바꾸면서 고르기 — selectRoom 은 고르기를 비우니 쓰지 않고 한 번에 바꾼다
       const roomId = state.rooms.some(r => r.id === a.roomId) ? a.roomId : state.roomId
       const mapFocus = { agentId: id, n: (state.mapFocus?.n ?? 0) + 1 }
-      set({ ...state, roomId, selectedAgentId: id, fresh: without(state.fresh, id), mapFocus })
+      set({ ...state, roomId, selectedAgentId: id, fresh: without(state.fresh, id), mapFocus, hitFocus: hitFor(id) })
       tellSelected(id)
       void loadHistory(id)
     },
@@ -790,6 +885,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
         fresh: without(state.fresh, id),
         panelTab: { ...state.panelTab, [id]: 'chat' },
         messageFocus: { agentId: id, messageId, n: (state.messageFocus?.n ?? 0) + 1 },
+        hitFocus: hitFor(id),
       })
       if (other) {
         tellSelected(id)
@@ -799,6 +895,43 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     doneMessageFocus(n) {
       if (state.messageFocus?.n !== n) return
       set({ ...state, messageFocus: null })
+    },
+    async openHit(hit) {
+      const a = state.agents.find(x => x.id === hit.agentId)
+      if (!a) return
+      const ask = ++hitAsk
+      const id = a.id
+      const current = hit.conversation.key === null
+      const other = state.selectedAgentId !== id
+      const roomId = state.rooms.some(r => r.id === a.roomId) ? a.roomId : state.roomId
+      set({
+        ...state,
+        roomId,
+        selectedAgentId: id,
+        fresh: without(state.fresh, id),
+        panelTab: { ...state.panelTab, [id]: current ? 'chat' : 'past' },
+        mapFocus: { agentId: id, n: (state.mapFocus?.n ?? 0) + 1 },
+        hitFocus: null,
+      })
+      if (other) tellSelected(id)
+      // 지금 대화 — 기록을 다 받은 뒤(불러오는 중이면 그것까지) 그 줄이 앞이면 그 줄까지. 지난 대화도 대화 탭은 기록이 있어야 한다
+      if (current) {
+        await loadHistory(id)
+        while (loading.has(id)) await loadHistory(id) // 불러오는 동안 돌아간 대화 경계가 와서 다시 불러오는 중
+        if (ask !== hitAsk || state.selectedAgentId !== id) return
+        await loadUpTo(id, hit.t)
+      } else {
+        void loadHistory(id)
+      }
+      if (ask !== hitAsk || state.selectedAgentId !== id) return
+      set({ ...state, hitFocus: { hit, n: ++hitN } })
+    },
+    doneHitFocus(n) {
+      if (state.hitFocus?.n !== n) return
+      set({ ...state, hitFocus: null })
+    },
+    recentAgents() {
+      return recent.filter(id => state.agents.some(a => a.id === id))
     },
     setEdgeMode(mode) {
       if (state.edgeMode === mode) return

@@ -368,6 +368,66 @@ code {
   flex: 1;
 }
 
+/* 위 띠 '찾기 · 옮기기' 칸(시안 ① A) — 입력칸처럼 보이는 단추. 누르면 가운데 찾기 창, 오른쪽에 단축키 */
+.top-find {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: clamp(168px, 22vw, 248px);
+  height: 30px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctl);
+  background: var(--subtle);
+  color: var(--muted);
+  font-size: 13px;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.top-find:hover {
+  border-color: var(--border-strong);
+  color: var(--text-3);
+}
+
+.top-find[aria-expanded="true"] {
+  border-color: var(--primary);
+  color: var(--text-3);
+}
+
+.top-find-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+/* 좁은 창 — 단축키는 접고 글만 */
+@media (max-width: 900px) {
+  .top-find .kbd {
+    display: none;
+  }
+}
+
+/* 키 모양 글자 — 위 띠 칸 · 찾기 창 · 설정의 단축키 줄 */
+.kbd {
+  flex: none;
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: 0;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
 /* 사용량 — 위 띠 막대(한 단추) + 펼침 */
 .usg-wrap {
   flex: none;
@@ -2953,6 +3013,39 @@ code {
   border-color: var(--border-strong);
 }
 
+/*
+ * 찾기에서 고른 줄 — 노란 테를 약 2초(hitJump HIT_MS) 두른다. 끝 무렵 옅어지고, 시간이 되면 테를 걷는다(움직임 줄이기면 옅어지지 않는다).
+ * 초점 고리(파랑) 대신 이 테 — 키보드로 와도 같은 모양. 말풍선·받은 메시지는 제 모서리 그대로
+ */
+.conv > .hit,
+.conv > .hit:focus-visible {
+  outline: 2px solid var(--hit-ring);
+  outline-offset: 4px;
+  animation: hit-fade 2s linear forwards;
+}
+
+.conv > .hit:where(.ci-claude, .note, .clamp, .ci-sys) {
+  border-radius: var(--radius-sm);
+}
+
+@keyframes hit-fade {
+  0%,
+  80% {
+    outline-color: var(--hit-ring);
+  }
+
+  100% {
+    outline-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conv > .hit,
+  .conv > .hit:focus-visible {
+    animation: none;
+  }
+}
+
 /* 사람 말풍선 — 오른쪽 */
 .me {
   align-self: flex-end;
@@ -4418,6 +4511,207 @@ code {
 .mi-n {
   font-size: 12px;
   color: var(--muted);
+}
+
+/* ── 찾기 · 옮기기(Ctrl+K · 시안 ① A) ───────────────
+ * 막은 위 띠(48px) 아래만 덮는다 — 위 띠는 보이고, 누르면(바깥 누르기) 닫힌다. 창은 가운데 위쪽, 결과가 많으면 상자 안에서만 스크롤
+ */
+.pal-bd {
+  position: fixed;
+  inset: 48px 0 0;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: min(9vh, 64px) 24px 24px;
+  background: var(--overlay);
+}
+
+.pal {
+  width: 600px;
+  max-width: 100%;
+  max-height: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* 시안 그대로 바탕 · 진한 테 — 다크에서 고른 줄(--hover)이 판과 또렷이 갈린다 */
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-node);
+  box-shadow: var(--shadow-dlg);
+}
+
+.pal:focus {
+  outline: none;
+}
+
+.pal-in {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 14px 0 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+}
+
+/* 입력칸 자체엔 테를 긋지 않는다 — 창이 곧 입력칸(초점은 늘 여기) */
+.pal-q {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  font: inherit;
+  font-size: 15px;
+  color: var(--text);
+  caret-color: var(--primary);
+}
+
+.pal-q::placeholder {
+  color: var(--muted);
+}
+
+.pal-res {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 8px 8px;
+}
+
+.pal-res::-webkit-scrollbar {
+  width: 10px;
+}
+
+.pal-res::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-box);
+  border: 3px solid var(--bg);
+}
+
+.pal-grp + .pal-grp {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.pal-gt {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px 4px;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.pal-gt-r {
+  font-weight: 500;
+}
+
+.pal-it {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius-ctl);
+  cursor: pointer;
+}
+
+.pal-it[aria-selected="true"] {
+  background: var(--hover);
+}
+
+.pal-av {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.pal-m {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pal-l1,
+.pal-l2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pal-l1 {
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text);
+}
+
+.pal-l2 {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.pal-path {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0;
+}
+
+.pal-tm {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.pal mark {
+  padding: 0 1px;
+  border-radius: var(--radius-xs);
+  background: var(--mark);
+  color: var(--text);
+}
+
+.pal-note {
+  margin: 0;
+  padding: 8px 10px 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.pal-f {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--subtle);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--muted);
+}
+
+.pal-f .kbd {
+  margin-right: 4px;
+}
+
+/* 설정 → 두레 탭의 단축키 줄 */
+.sx-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-2);
 }
 
 /* 확인 대화상자 */

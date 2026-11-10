@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { ChevronLeft } from 'lucide-react'
-import type { AgentId, ConversationSummary, HistoryItem } from '../../engine/types'
+import type { AgentId, ConversationSummary, HistoryItem, SearchWho } from '../../engine/types'
 import { getStore, useDure } from '../state/store'
 import { buildTranscript } from '../state/transcript'
 import { MOTION } from '../lib/motion'
@@ -10,17 +10,28 @@ import { errorMessage, PAST, pastWhyText, RESUME_BLOCK_WORD } from '../lib/words
 import { ChatItem } from './ChatItem'
 import { ViewShown } from './PanelTabs'
 import { nextAgentName, pastDateLine, resumeBlockOf } from './pastView'
+import { hitLineIndex, revealHit } from './hitJump'
 
 /** 엔진 conversation() 의 기본 줄 수 — 이만큼 왔으면 앞 줄이 더 있을 수 있다 */
 const LAST = 500
 
 const titleOf = (c: ConversationSummary) => c.title || PAST.untitled
 
+/** 찾기에서 고른 지난 대화 줄 — 읽기가 그 줄로 간다 */
+interface Jump {
+  key: string
+  t: number
+  who: SearchWho
+  n: number
+}
+
 /**
  * 지난 대화 탭(시안 pc-B1 목록 · pc-B2 읽기) — 같은 칸 안에서 목록 ↔ 읽기.
  * 목록 = 새것부터 한 줄씩(제목 · 날짜 줄 · 마지막 답 또는 이어 갈 수 없는 이유), 지금 대화는 '지금' 배지와 함께 — 누르면 대화 탭으로.
  * 목록은 탭을 열 때마다 · 지난 대화 수가 바뀔 때(경계) 다시 받는다 — 숨은 동안엔 받지 않는다(ViewShown).
  * 읽기를 닫으면(‹ · Esc) 연 줄로 초점이 돌아온다.
+ * 찾기(Ctrl+K)에서 이 에이전트의 지난 대화 줄을 골랐으면(hitFocus) 목록을 받은 뒤 그 대화의 읽기를 열어 그 줄로 간다 — 목록에 없는 대화
+ * (사람 말이 없는 대화)도 그 열쇠로 연다. 그새 그 대화로 돌아가 지금 대화가 됐으면 대화 탭의 그 줄로.
  */
 export function PastPanel({ agentId }: { agentId: AgentId }) {
   const shown = useContext(ViewShown)
@@ -29,6 +40,8 @@ export function PastPanel({ agentId }: { agentId: AgentId }) {
   const [list, setList] = useState<ConversationSummary[] | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   const [open, setOpen] = useState<ConversationSummary | null>(null)
+  const [jump, setJump] = useState<Jump | null>(null)
+  const hit = useDure(s => (s.hitFocus?.hit.agentId === agentId && s.hitFocus.hit.conversation.key !== null ? s.hitFocus : null))
   const ask = useRef(0)
 
   // 늦게 온 옛 답이 새 목록을 덮지 않게 — 마지막으로 부른 것만 받는다
@@ -46,6 +59,22 @@ export function PastPanel({ agentId }: { agentId: AgentId }) {
   useEffect(() => {
     if (shown) load()
   }, [shown, pastCount, load])
+
+  // 찾기에서 고른 줄 — 보이고 목록을 받은 뒤에. 요청(hitFocus)은 여기서 지우고, 그 줄로 가는 일은 읽기가 맡는다(jump)
+  useEffect(() => {
+    if (!hit || !shown || list === null) return
+    const h = hit.hit
+    const key = h.conversation.key!
+    const c = list.find(x => x.key === key)
+    if (c?.current) {
+      void getStore().openHit({ ...h, conversation: { ...h.conversation, key: null } })
+      return
+    }
+    setOpen(c ?? { key, current: false, title: '', at: h.conversation.startedAt ?? h.t, turns: 0, lastReply: '', resumable: false, why: null })
+    setJump({ key, t: h.t, who: h.who, n: hit.n })
+    getStore().doneHitFocus(hit.n)
+  }, [hit, shown, list])
+  const jumped = useCallback((n: number) => setJump(j => (j?.n === n ? null : j)), [])
 
   // 초점 — 읽기를 ‹·Esc 로 닫으면 연 줄로, 대화 탭으로 가면(지금 대화를 고름 · 돌아감) 입력창으로(숨은 칸에 있던 초점이 몸통으로 떨어지지 않게).
   // 목록이 다시 그려지고 탭이 바뀐 뒤에
@@ -79,7 +108,19 @@ export function PastPanel({ agentId }: { agentId: AgentId }) {
     setOpen(null)
   }, [])
 
-  if (open) return <PastRead key={open.key} agentId={agentId} conv={open} now={now} onBack={back} onResumed={resumed} />
+  if (open)
+    return (
+      <PastRead
+        key={open.key}
+        agentId={agentId}
+        conv={open}
+        now={now}
+        jump={jump?.key === open.key ? jump : null}
+        onJumped={jumped}
+        onBack={back}
+        onResumed={resumed}
+      />
+    )
 
   return (
     <section ref={box} className="pc-list" aria-label={PAST.tab}>
@@ -153,11 +194,14 @@ function PastRow({ conv: c, now, onChoose, rowRef }: {
  * '이 대화로 돌아가기'는 일하는 중·카드 기다림·붙잡은 입력이면 꺼지고 그 까닭이 안내 자리에 — 본문은 그대로.
  * '새 에이전트로 이어 가기'는 일하는 중에도 된다(돌아가기가 막힐 때의 다른 길). 이어 갈 수 없는 대화면 둘 다 꺼짐 + 이유.
  * 엔진이 거절하면 그 글을 안내 자리에(다음 동작까지).
+ * jump 면 그 줄로 가서 잠깐 두르고 초점을 옮긴다 — 끝 500줄보다 앞이면 앞 줄을 모두 받은 뒤(한 번에).
  */
-function PastRead({ agentId, conv, now, onBack, onResumed }: {
+function PastRead({ agentId, conv, now, jump, onJumped, onBack, onResumed }: {
   agentId: AgentId
   conv: ConversationSummary
   now: number
+  jump: Jump | null
+  onJumped: (n: number) => void
   onBack: () => void
   onResumed: () => void
 }) {
@@ -171,6 +215,7 @@ function PastRead({ agentId, conv, now, onBack, onResumed }: {
     return a ? resumeBlockOf(a) : null
   })
   const backBtn = useRef<HTMLButtonElement>(null)
+  const view = useRef<HTMLElement>(null)
   const noteId = useId()
   const ask = useRef(0)
   const key = conv.key
@@ -198,6 +243,21 @@ function PastRead({ agentId, conv, now, onBack, onResumed }: {
   }, [])
 
   const lines = useMemo(() => (items ? buildTranscript(items, undefined, Infinity).lines : []), [items])
+
+  // 찾기에서 고른 줄로 — 받은 끝 500줄보다 앞이면 앞 줄까지 모두 받고 다시 본다(못 받으면 다시 시도로 받을 때까지 기다린다).
+  // 줄(data-t 를 가진 자식)은 lines 와 같은 차례다
+  useLayoutEffect(() => {
+    if (!jump || items === null) return
+    if (!full && items.length >= LAST && (items.length === 0 || jump.t < items[0].t)) {
+      load(true)
+      return
+    }
+    const el = view.current
+    const k = hitLineIndex(lines, jump.t, jump.who)
+    const node = el && k >= 0 ? el.querySelectorAll<HTMLElement>(':scope > [data-t]')[k] : undefined
+    if (el && node) revealHit(el, node)
+    onJumped(jump.n)
+  }, [jump, items, full, lines, load, onJumped])
 
   const resume = async () => {
     setFailed(null)
@@ -249,7 +309,7 @@ function PastRead({ agentId, conv, now, onBack, onResumed }: {
         </b>
         <span className="pc-band-d">· {pastDateLine(conv.at, now)}</span>
       </div>
-      <section className="conv" aria-label={title} aria-busy={items === null}>
+      <section ref={view} className="conv" aria-label={title} aria-busy={items === null}>
         {items === null && !loadError && <p className="conv-st">대화를 불러오는 중…</p>}
         {loadError && (
           <p className="conv-st">

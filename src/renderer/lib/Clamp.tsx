@@ -10,6 +10,8 @@ interface Props {
   className?: string
   /** 뿌리 요소의 data-line — 대화 줄이 들어올 때 이 요소를 집는다 */
   dataLine?: number | string
+  /** 뿌리 요소의 data-t — 대화 줄을 연 기록의 시각(찾기에서 고른 줄로 갈 때) */
+  dataT?: number
   children: ReactNode
 }
 
@@ -17,7 +19,7 @@ interface Props {
  * 긴 내용은 `lines` 줄만 보이고 아래를 흐리게 — 누르면 펼친다.
  * 넘칠 때만 흐림·더 보기 버튼·손가락 커서가 생기고, 짧으면 그대로다. 넘침은 레이아웃에서 재서(scrollHeight) 폭이 바뀌면 다시 잰다.
  */
-export function Clamp({ lines = 3, className, dataLine, children }: Props) {
+export function Clamp({ lines = 3, className, dataLine, dataT, children }: Props) {
   const box = useRef<HTMLDivElement>(null)
   const id = useId()
   const [open, setOpen] = useState(false)
@@ -98,7 +100,7 @@ export function Clamp({ lines = 3, className, dataLine, children }: Props) {
   }
 
   return (
-    <div className="clamp" data-line={dataLine}>
+    <div className="clamp" data-line={dataLine} data-t={dataT}>
       {/* 상자 눌러 펼치기는 마우스 덤 — 키보드는 아래 버튼이 맡는다 */}
       <div
         ref={box}

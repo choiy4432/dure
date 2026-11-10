@@ -1,12 +1,12 @@
 import { getStore, useDure } from '../../state/store'
 import { workingCount } from '../../state/selectors'
-import { SETTINGS_UPDATE as W, updateErrorWhy } from '../../lib/words'
+import { SEARCH, SETTINGS_UPDATE as W, updateErrorWhy } from '../../lib/words'
 import { Row, Section, SwitchRow, useApply } from './parts'
 
 /** 업데이트 단추는 따로 바로 — 못 해도 결과 줄(사건)이 말해 준다 */
 const act = (call: () => Promise<unknown>) => () => void call().catch(() => {})
 
-/** 두레 — 업데이트(판 · 확인 · 받기·다시 켜기 줄) · 켤 때 claude 최신으로 · 처음 쓰는 안내 */
+/** 두레 — 업데이트(판 · 확인 · 받기·다시 켜기 줄) · 켤 때 claude 최신으로 · 처음 쓰는 안내 · 단축키 */
 export function AboutPane({ onReplayTour }: { onReplayTour: () => void }) {
   const info = useDure(s => s.app.info)
   const update = useDure(s => s.app.update)
@@ -86,6 +86,11 @@ export function AboutPane({ onReplayTour }: { onReplayTour: () => void }) {
           <button type="button" className="btn sec sm" aria-label={W.tour} onClick={onReplayTour}>
             다시 보기
           </button>
+        </Row>
+        <Row name="단축키">
+          <span className="sx-keys">
+            <kbd className="kbd">{SEARCH.shortcut}</kbd> {SEARCH.title}
+          </span>
         </Row>
       </Section>
     </>

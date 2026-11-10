@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { LucideProvider } from 'lucide-react'
 import { getStore, useDure } from './state/store'
 import { effectiveSetup } from './state/selectors'
@@ -19,6 +19,7 @@ import { useAttention } from './shell/useAttention'
 import { Announcer } from './shell/Announcer'
 import { UpdateToast } from './shell/UpdateToast'
 import { TourLayer } from './tour/TourLayer'
+import { SearchPalette, useSearchShortcut } from './shell/SearchPalette'
 
 type Dialog = 'room' | 'agent' | 'settings' | null
 
@@ -41,6 +42,11 @@ export function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
   /** 설정 위에 겹친 창(묻지 않고 실행 확인 · 휴대폰의 짝 맺기·앱 받기·끊기 확인)이 떠 있다 — 그동안 투어 카드가 가리지 않게 */
   const [settingsCovered, setSettingsCovered] = useState(false)
+  /** 찾기 · 옮기기 창(Ctrl+K · 위 띠 칸) — 다른 대화상자와 따로(그 창들이 떠 있으면 Ctrl+K 는 무시) */
+  const [searching, setSearching] = useState(false)
+  const closeSearch = useCallback(() => setSearching(false), [])
+  const openSearch = useCallback(() => setSearching(true), [])
+  const toggleSearch = useCallback(() => setSearching(s => !s), [])
   const close = () => setDialog(null)
   const openSettings = (tab: SettingsTab) => {
     setSettingsTab(tab)
@@ -49,6 +55,9 @@ export function App() {
   const setupPhase = effectiveSetup(v.setup, v.claudeMissing, v.setupLoadFailed).phase
   const preparing = setupPhase === 'needs' || setupPhase === 'relaunching'
   const blocked = v.loadError !== null || preparing || setupPhase === 'checking' || v.claudeMissing
+  // 찾을 것이 있을 때만(방이 있고 준비됨) — 위 띠의 방 버튼과 같은 때
+  const canSearch = !blocked && v.roomId !== null
+  useSearchShortcut(canSearch && !searching, openSearch)
 
   let body
   if (v.loadError !== null) {
@@ -96,11 +105,16 @@ export function App() {
           settingsDisabled={blocked}
           onSettings={() => openSettings('general')}
           onPhone={() => openSettings('phone')}
+          onSearch={canSearch ? toggleSearch : undefined}
+          searchOpen={searching && canSearch}
         />
         {body}
         <StatusBar />
         <Announcer {...announced} />
         <UpdateToast />
+        <Presence show={searching && canSearch}>
+          <SearchPalette onClose={closeSearch} />
+        </Presence>
         <Presence show={dialog === 'room'}>
           <NewRoomDialog onClose={close} />
         </Presence>

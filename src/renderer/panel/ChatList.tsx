@@ -11,11 +11,14 @@ import { MOTION, reducedMotion } from '../lib/motion'
 import { ViewShown } from './PanelTabs'
 import { StickyPrompt } from './StickyPrompt'
 import { STICKY_ZONE_PX, stickyPromptIndex, type PromptBox, type PromptLine } from './turnStart'
+import { hitLineIndex, revealHit } from './hitJump'
 
 /** 처음에 그리는 줄 수 · '더 보기' 한 번에 늘리는 수 */
 const PAGE = 300
 /** 바닥에서 이만큼 안이면 '맨 아래에 붙어 있다' */
 const STICK_PX = 24
+/** 찾기에서 고른 줄이 앞에 숨긴 줄이면 — 그 줄 위로 이만큼 더 그린다 */
+const HIT_CONTEXT = 4
 const NONE: HistoryItem[] = []
 const NO_IDS: string[] = []
 
@@ -29,6 +32,7 @@ const NO_IDS: string[] = []
  * 서브에이전트 탭으로 가면 숨을 뿐 그대로다(펼친 줄·불러온 이전 대화) — 다시 보이면 읽던 자리로(ViewShown).
  * 위로 올려 읽는 동안엔 화면 맨 위에 걸친 차례를 연 말(내 말 · 전달된 메시지)이 위에 고정된다(StickyPrompt — 누르면 그 말로).
  * 메시지 탭의 '대화에서 보기'(messageFocus)면 그 메시지 줄로 가서 다시 들어오게 보이고 초점을 옮긴 뒤 요청을 지운다.
+ * 찾기(Ctrl+K)에서 고른 지금 대화 줄(hitFocus)이면 그 줄로 가서 잠깐 노랗게 두르고 초점을 옮긴 뒤 지운다 — 앞에 숨긴 줄이면 그 줄까지 더 그린다.
  */
 export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number }) {
   const v = useDure(s => ({
@@ -47,6 +51,7 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
   // 생각 전 기다림 — 준비하는 중·Claude 답 받는 중·대화를 정리하는 중
   const phase = useDure(s => s.phase[agentId])
   const focus = useDure(s => (s.messageFocus?.agentId === agentId ? s.messageFocus : null))
+  const hit = useDure(s => (s.hitFocus?.hit.agentId === agentId && s.hitFocus.hit.conversation.key === null ? s.hitFocus : null))
   const runningSet = useMemo(() => new Set(running), [running])
   const [limit, setLimit] = useState(PAGE)
 
@@ -158,6 +163,33 @@ export function ChatList({ agentId, pin = 0 }: { agentId: AgentId; pin?: number 
     measure()
     getStore().doneMessageFocus(focus.n)
   }, [focus, lines, v.status, shown, measure])
+
+  // 찾기에서 고른 줄 — 그 기록이 든 줄(hitLineIndex)로 가서 잠깐 두르고 초점도 그 줄로. 기록을 다 받은 뒤에(앞쪽은 openHit 이 불러 두었다).
+  // 앞에 숨긴 줄이면 그 줄까지 더 그리고 다시 본다. 받은 기록보다 앞이거나 못 받았으면 요청만 지운다. 따라 내려가기 효과들 뒤 — 같은 그리기에서 이것이 이긴다
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!hit || !el || !visible.current) return
+    if (v.status === 'error') {
+      getStore().doneHitFocus(hit.n)
+      return
+    }
+    if (v.status !== 'ready') return
+    const all = hiddenBefore > 0 ? buildTranscript(v.items, undefined, Infinity, runningSet).lines : lines
+    const k = hitLineIndex(all, hit.hit.t, hit.hit.who)
+    if (k >= 0 && k < hiddenBefore) {
+      setLimit(l => Math.max(l, all.length - k + HIT_CONTEXT))
+      return
+    }
+    const node = k < 0 ? null : el.querySelector<HTMLElement>(`:scope > [data-line="${k}"]`)
+    if (node) {
+      stick.current = false
+      keep.current = null
+      revealHit(el, node)
+      top.current = el.scrollTop
+      measure()
+    }
+    getStore().doneHitFocus(hit.n)
+  }, [hit, lines, hiddenBefore, v.items, v.status, runningSet, shown, measure])
 
   // 칸이 줄어도(창 크기 · 위에 카드가 생김) 맨 아래에 붙어 있었으면 바닥을 지킨다 — 줄어드는 건 스크롤 이벤트가 안 온다.
   // 숨을 때(크기 0)는 건드리지 않는다
