@@ -1,5 +1,5 @@
 import type {
-  Agent, AgentDescription, RemoteIssue, RemoteIssueKind, SshHostEntry, AgentId, ConversationSummary, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, SleepBlock, ThemePref, UserPart,
+  Agent, AgentDescription, RemoteIssue, RemoteIssueKind, SshHostEntry, AgentId, ConversationSummary, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, SearchResult, SleepBlock, ThemePref, UserPart,
 } from '../engine/types'
 import type { AppEventMap, AppInfo, AppPrefs, ClaudeUpdateState, SetupState, UpdateState } from './appTypes'
 import type { PhonePairOffer, PhoneSettingsChange, PhoneState, TailscaleState } from './phoneTypes'
@@ -94,8 +94,16 @@ export interface DureApi {
   setEffort(id: AgentId, level: EffortLevel): Promise<void>
   refreshUsage(): Promise<void>
   describe(id: AgentId): Promise<AgentDescription>
-  /** all: 지난 대화까지 · limit: 마지막 N 개(기본 500, Infinity = 전부 — 내보내기) */
-  history(id: AgentId, o?: { all?: boolean; limit?: number }): Promise<HistoryItem[]>
+  /**
+   * all: 지난 대화까지 · limit: 마지막 N 개(기본 500, Infinity = 전부 — 내보내기) ·
+   * before: 그 시각(t)보다 앞 항목 가운데 마지막 limit 개(앞쪽 불러오기 — 맨 앞이면 [])
+   */
+  history(id: AgentId, o?: { all?: boolean; limit?: number; before?: number }): Promise<HistoryItem[]>
+  /**
+   * 대화 찾기 — 모든 방·에이전트의 지금·지난 대화(사람 글·Claude 글·받은 메시지). roomId(지금 방) 줄이 먼저, 그다음 새로운 순, 상한 50(넘으면 more).
+   * 새 찾기가 오면 main 이 앞 찾기를 끊는다 — 끊긴 찾기는 { hits: [], more: false, cancelled: true }(화면은 버린다). PC 창에서만
+   */
+  search(query: string, o?: { roomId?: RoomId }): Promise<SearchResult & { cancelled?: true }>
   /** 지난 대화 목록(새것부터, 지금 대화 포함) */
   conversations(id: AgentId): Promise<ConversationSummary[]>
   /** 지난 대화 한 편 읽기 — limit: 마지막 N 개 */
@@ -209,7 +217,7 @@ export const APP_METHODS = [
 /** invoke 로 부를 수 있는 엔진 쪽 이름 — DureApi 의 메서드 중 on·pathForFile(preload 안에서 처리)과 APP_METHODS 가 빠진다 */
 export const METHODS = [
   'snapshot', 'addRoom', 'sshAvailable', 'sshHosts', 'checkRemote', 'checkRemoteFolder', 'renameRoom', 'removeRoom', 'addAgent', 'updateAgent', 'removeAgent',
-  'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'conversations', 'conversation', 'resumeConversation', 'forkAgent', 'image', 'openAttachment',
+  'setSelected', 'sendUser', 'interrupt', 'newConversation', 'setModel', 'setEffort', 'refreshUsage', 'describe', 'history', 'search', 'conversations', 'conversation', 'resumeConversation', 'forkAgent', 'image', 'openAttachment',
   'approveMessage', 'dismissMessage', 'retryMessage', 'continueHeld', 'answerRequest', 'setAutoChainLimit',
   'setAllowBypass', 'setNotify', 'setTheme', 'setBypass',
   'sleep', 'sleepRoom', 'sleepBlock', 'sleepableIn', 'setSleepAfter',
@@ -226,7 +234,7 @@ const ALL_COVERED: [Uncovered] extends [never] ? true : Uncovered = true
  * 그 밖의 엔진 메서드는 main 의 engineReady 가 풀릴 때까지 기다린다(claude 를 띄우는 일이 업데이트와 겹치지 않게)
  */
 export const BEFORE_START = [
-  'snapshot', 'history', 'conversations', 'conversation', 'image', 'openAttachment', 'sshAvailable', 'sshHosts', 'sleepBlock', 'sleepableIn',
+  'snapshot', 'history', 'search', 'conversations', 'conversation', 'image', 'openAttachment', 'sshAvailable', 'sshHosts', 'sleepBlock', 'sleepableIn',
   'pickFolder', 'saveConversation', 'setTaskbar', 'flashWindow', 'focusWindow',
 ] as const satisfies readonly (typeof METHODS)[number][]
 

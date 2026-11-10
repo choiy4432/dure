@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { capPatch, lastN, openHistory, patchFromInput, trimToolInput } from '../src/engine/history';
+import { capPatch, lastBefore, lastN, openHistory, patchFromInput, trimToolInput } from '../src/engine/history';
 import { toolSummary } from '../src/renderer/lib/toolSummary';
 import { buildTranscript } from '../src/renderer/state/transcript';
 import type { HistoryItem } from '../src/engine/types';
@@ -217,4 +217,19 @@ test('lastN: read({ limit }) 의 자르기와 같다 — 서브에이전트 줄�
   for (const limit of [1, 2, 3, 10])
     expect(lastN(seq, limit)).toEqual(h.read('a', { limit }));
   expect(lastN(seq, 2).map((x) => x.t)).toEqual([3, 4, 5, 6]);
+});
+
+test('lastBefore·read({ before }) — 그 시각보다 앞의 마지막 limit 개(서브에이전트 줄은 세지 않는다) · file 은 기록 파일 경로', () => {
+  const h = openHistory(dir);
+  const sub = (n: number): HistoryItem => ({ t: n, kind: 'assistant', text: 's', parent: 'p' } as unknown as HistoryItem);
+  const seq = [note('1', 1), sub(2), note('2', 3), sub(4), sub(5), note('3', 6), note('4', 7)];
+  for (const x of seq) h.append('a', x);
+  const ts = (xs: HistoryItem[]) => xs.map((x) => x.t);
+  expect(ts(lastBefore(seq, 1, 6))).toEqual([3, 4, 5]); // 그 사이 서브에이전트 줄은 함께
+  expect(ts(lastBefore(seq, 2, 6))).toEqual([1, 2, 3, 4, 5]);
+  expect(lastBefore(seq, 500, 1)).toEqual([]); // 맨 앞
+  expect(lastBefore(seq, 2)).toEqual(lastN(seq, 2)); // before 가 없으면 lastN 그대로
+  expect(ts(h.read('a', { before: 7, limit: 1 }))).toEqual([6]);
+  expect(h.read('a', { before: 7 })).toEqual(seq.slice(0, 6));
+  expect(h.file('a')).toBe(path.join(dir, 'history', 'a.jsonl'));
 });

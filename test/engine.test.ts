@@ -1511,6 +1511,30 @@ test('engine: newConversation 뒤 history() 는 boundary 이후만, all:true 는
   expect(e.history(a.id, { limit: 1 }).map((x) => x.kind)).toEqual(['result']); // 마지막 N 개
 });
 
+test('history before — 그 시각보다 앞의 마지막 limit(기본 500)개, 지금 대화 안에서 · 맨 앞이면 빈 배열 · 기존 호출은 그대로', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const n = (t: number) => ({ t, kind: 'notice', text: `n${t}` });
+  const lines = [
+    ...Array.from({ length: 10 }, (_, i) => n(i + 1)), // 지난 대화 t 1..10
+    { t: 11, kind: 'boundary', ended: 'old-session' },
+    ...Array.from({ length: 1200 }, (_, i) => n(100 + i)), // 지금 대화 t 100..1299
+  ];
+  fs.mkdirSync(path.join(dataDir, 'history'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'history', `${a.id}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const ts = (o?: Parameters<Engine['history']>[1]) => e.history(a.id, o).map((x) => x.t);
+  const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
+  expect(ts()).toEqual(range(800, 1299)); // 그대로 — 마지막 500
+  expect(ts({ before: 800 })).toEqual(range(300, 799)); // 앞쪽 500
+  expect(ts({ before: 300 })).toEqual(range(100, 299)); // 지금 대화의 맨 앞까지만(지난 대화는 안 섞인다)
+  expect(ts({ before: 100 })).toEqual([]); // 맨 앞
+  expect(ts({ before: 800, limit: 3 })).toEqual([797, 798, 799]);
+  expect(ts({ before: 800.5, limit: 1 })).toEqual([800]);
+  expect(ts({ before: 100, all: true, limit: 3 })).toEqual([9, 10, 11]); // all 은 지난 대화·경계까지
+  expect(ts({ limit: 2 })).toEqual([1298, 1299]);
+});
+
 test('지금 대화는 세션으로 고른다 — resumed 경계 앞의 같은 세션 구간까지', async () => {
   const e1 = await start();
   const { a } = setup(e1);

@@ -8,7 +8,7 @@ export const PHONE_DENIED = '휴대폰에서는 할 수 없는 일이에요'
 
 /**
  * 메서드마다 휴대폰에서 되는가 — Record 라서 METHODS·APP_METHODS 에 새 이름을 더하면 여기 분류하기 전엔 타입 오류(기본 거절).
- * 'pc': 이 PC 의 창·대화상자·탐색기·작업 표시줄을 여는 일 · 새 서버 확인(ssh 설정 읽기) · 고른 에이전트(PC 화면 상태) · 앱 전체 설정 ·
+ * 'pc': 이 PC 의 창·대화상자·탐색기·작업 표시줄을 여는 일 · 새 서버 확인(ssh 설정 읽기) · 고른 에이전트(PC 화면 상태) · 앱 전체 설정 · 대화 찾기(search) ·
  * 앱 쪽(준비·업데이트·투어) 전부. addRoom 은 'phone' 이지만 서버 방(remote)은 phoneDispatcher 가 거절한다
  */
 export const PHONE_ACCESS: Readonly<Record<ApiMethod, PhoneAccess>> = Object.freeze({
@@ -39,6 +39,7 @@ export const PHONE_ACCESS: Readonly<Record<ApiMethod, PhoneAccess>> = Object.fre
   refreshUsage: 'phone',
   describe: 'phone',
   history: 'phone',
+  search: 'pc', // PC 창의 Ctrl+K 찾기만 — 휴대폰 화면은 쓰지 않는다(휴대폰이 닿는 범위를 넓히지 않는다)
   conversations: 'phone',
   conversation: 'phone',
   resumeConversation: 'phone',

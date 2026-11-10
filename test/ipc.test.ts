@@ -67,6 +67,7 @@ function fakeEngine() {
     history: rec('history', []),
     conversations: rec('conversations', []),
     conversation: rec('conversation', []),
+    search: rec('search', Promise.resolve({ hits: [], more: false })),
     pastCount: () => 4,
     remoteIssue: (id: string) => (id === 'a1' ? { kind: 'denied', detail: null } : null),
     sshAvailable: () => true,
@@ -294,7 +295,7 @@ describe('registerIpc', () => {
     for (const m of APP_METHODS) expect(METHODS as readonly string[], m).not.toContain(m)
     expect([...BEFORE_START].sort()).toEqual([
       'conversation', 'conversations', 'flashWindow', 'focusWindow', 'history', 'image', 'openAttachment', 'pickFolder', 'saveConversation',
-      'setTaskbar', 'sleepBlock', 'sleepableIn', 'snapshot', 'sshAvailable', 'sshHosts',
+      'search', 'setTaskbar', 'sleepBlock', 'sleepableIn', 'snapshot', 'sshAvailable', 'sshHosts',
     ])
     for (const m of BEFORE_START) expect(METHODS as readonly string[], m).toContain(m)
     expect([...APP_EVENT_NAMES].sort()).toEqual(['claude-update', 'phone', 'setup', 'update'])

@@ -222,6 +222,29 @@ export type HistoryItem = { t: number } & (
   | { kind: 'boundary'; ended?: string; resumed?: string }
 );
 
+/** 대화 찾기에서 맞은 글을 쓴 쪽 — me: 사람 글 · claude: Claude 글(서브에이전트 줄 빼고) · message: 받은 메시지 */
+export type SearchWho = 'me' | 'claude' | 'message';
+/**
+ * 대화 찾기의 한 줄 — conversation.key: null = 지금 대화(history), 아니면 conversation(id, key) 에 쓰는 열쇠 ·
+ * conversation.startedAt: 그 대화의 첫 줄 시각(모르면 null) · t: 맞은 기록 줄의 시각 · from: 받은 메시지를 보낸 에이전트의 지금 이름(알 때만) ·
+ * snippet: 맞은 곳 앞뒤 약 40자(잘렸으면 말줄임 '…', 줄바꿈·빈칸 줄은 빈칸 하나) · ranges: snippet 안의 맞은 범위 [시작, 끝) — JS 글자 자리
+ */
+export type SearchHit = {
+  agentId: AgentId;
+  roomId: RoomId;
+  conversation: { key: string | null; startedAt: number | null };
+  t: number;
+  who: SearchWho;
+  from?: string;
+  snippet: string;
+  ranges: [number, number][];
+};
+/** 찾기 결과 — more: 상한(limit)보다 많이 맞았다 */
+export interface SearchResult {
+  hits: SearchHit[];
+  more: boolean;
+}
+
 export type SessionStatus = 'idle' | 'working' | 'stopped' | 'error';
 export type AgentStatus = SessionStatus | 'awaiting'; // awaiting = 승인 대기 — 엔진이 겹쳐 계산
 

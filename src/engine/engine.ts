@@ -14,7 +14,8 @@ import { killTree } from './killTree';
 import { REMOTE_CLEANUP_FAILED, remoteIssueText, remotePortBlockedText } from '../shared/remoteTexts';
 import { readSshHosts, type SshHostEntry } from './sshConfig';
 import { openMessageLog, type MessageLog } from './messageLog';
-import { capPatch, lastN, openHistory, patchFromInput, trimToolInput, type History } from './history';
+import { capPatch, lastBefore, lastN, openHistory, patchFromInput, trimToolInput, type History } from './history';
+import { searchHistories } from './search';
 import { conversationFacts, splitConversations, type Conversation } from './conversations';
 import { claudeDirOf, existingSessions } from './claudeSessions';
 import { openImageStore, type ImageStore } from './imageStore';
@@ -36,7 +37,7 @@ import { EFFORT_LEVELS, SLEEP_CHOICES, SLEEP_DEFAULT_MIN, THEME_PREFS, type Effo
 import { toContextUsage } from './usage';
 import { UsageWatcher, USAGE_TIMING, type UsageTiming } from './usageWatcher';
 import type {
-  Agent, AgentDescription, ConversationSummary, AgentId, AgentPatch, AgentStatus, ContextUsage, CreateAgentInput, Decision, DiffHunk, EngineEventMap, FileInput, FileReady, HistoryItem, HistoryPart, Hold, HoldItem, PendingRequest, PlanUsage, ReadyPart, RelayMessage, RemoteIssue, Room, RoomId, StreamEvent, UserPart,
+  Agent, AgentDescription, ConversationSummary, AgentId, AgentPatch, AgentStatus, ContextUsage, CreateAgentInput, Decision, DiffHunk, EngineEventMap, FileInput, FileReady, HistoryItem, HistoryPart, Hold, HoldItem, PendingRequest, PlanUsage, ReadyPart, RelayMessage, RemoteIssue, Room, RoomId, SearchResult, StreamEvent, UserPart,
 } from './types';
 
 export interface EngineOptions {
@@ -264,7 +265,17 @@ export interface Engine extends EventEmitter {
   usage(): PlanUsage | null;
   /** 화면이 사용량을 볼 때 — 마지막 값이 1분보다 오래됐으면 다시 묻는다 */
   refreshUsage(): void;
-  history(id: AgentId, o?: { all?: boolean; limit?: number }): HistoryItem[];
+  /**
+   * 오래된 것부터 — 지금 대화(all: 지난 대화·경계까지)의 마지막 limit(기본 500)개. before 를 주면 그 시각(t)보다 앞 항목 가운데
+   * 마지막 limit 개(앞쪽 불러오기 — 맨 앞이면 []). 서브에이전트 줄은 세지 않는다
+   */
+  history(id: AgentId, o?: { all?: boolean; limit?: number; before?: number }): HistoryItem[];
+  /**
+   * 대화 찾기 — 모든 방·에이전트 기록 파일(지금·지난 대화)을 비동기로 줄 단위로 읽어 사람 글·Claude 글(서브에이전트 줄 빼고)·받은 메시지에서
+   * 찾는다(대소문자·NFKC 무시, 두 글자 미만이면 빈 결과). 지금 방(roomId) 먼저 → 새로운 순, 상한 limit(기본 50) — 넘으면 more.
+   * signal 이 끊기면 그만두고 AbortError 로 거절한다. 지우는 중인 에이전트는 뺀다
+   */
+  search(query: string, o?: { limit?: number; roomId?: RoomId; signal?: AbortSignal }): Promise<SearchResult>;
   /** 대화 목록 — 새것부터. user 없는 대화는 빠진다. Claude 대화 파일은 있는지만 본다(부를 때마다 새로) — 서버 방은 서버의 기록을 ssh 로(5초 한도, 못 보면 모두 이어 갈 수 있음) */
   conversations(id: AgentId): Promise<ConversationSummary[]>;
   /** 폴더 열기 대상 — 이 PC 방은 이 PC 폴더, 서버 방은 서버와 서버 폴더 */
@@ -2474,14 +2485,22 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   // ── 메시지·승인 ──
-  history(id: AgentId, o: { all?: boolean; limit?: number } = {}): HistoryItem[] {
+  history(id: AgentId, o: { all?: boolean; limit?: number; before?: number } = {}): HistoryItem[] {
     this.need(id);
-    if (o.all) return this.hist.read(id, { sinceBoundary: false, limit: o.limit ?? Infinity });
+    if (o.all) return this.hist.read(id, { sinceBoundary: false, limit: o.limit ?? Infinity, before: o.before });
     // 지금 대화 = 지금 세션의 모든 구간(돌아간 대화는 경계 앞에도 이어진다)
     const sid = this.store.agent(id)?.sessionId ?? '';
     const all = this.hist.read(id, { sinceBoundary: false, limit: Infinity });
     const cur = splitConversations(all, sid).find((c) => c.key === sid);
-    return cur ? lastN(cur.items, o.limit ?? 500) : [];
+    return cur ? lastBefore(cur.items, o.limit ?? 500, o.before) : [];
+  }
+  search(query: string, o: { limit?: number; roomId?: RoomId; signal?: AbortSignal } = {}): Promise<SearchResult> {
+    // 찾기를 시작할 때의 에이전트·세션 — 그새 지운 에이전트의 파일은 없으면 건너뛴다
+    const sources = this.store
+      .agents()
+      .filter((a) => !this.removing.has(a.id))
+      .map((a) => ({ agentId: a.id, roomId: a.roomId, file: this.hist.file(a.id), sessionId: a.sessionId }));
+    return searchHistories(sources, query, { ...o, senderName: (m) => this.senderNameOf(m) });
   }
   /** 기록을 대화로 나눈다 — 세션 id 를 모르는 지금 세션은 '' */
   private splitOf(id: AgentId): Conversation[] {

@@ -122,13 +122,20 @@ export function lastN(items: HistoryItem[], limit: number): HistoryItem[] {
   return items.slice(cutFor(items, limit));
 }
 
+/** 앞쪽 불러오기 — before 를 주면 그 시각(t)보다 앞 항목 가운데 마지막 limit 개, 없으면 lastN 그대로 */
+export function lastBefore(items: HistoryItem[], limit: number, before?: number): HistoryItem[] {
+  return lastN(before === undefined ? items : items.filter((x) => x.t < before), limit);
+}
+
 export interface History {
   append(agentId: AgentId, item: HistoryItem): void;
   /**
    * 오래된 것부터. sinceBoundary(기본 true)면 마지막 boundary 뒤만, limit(기본 500)은 그 가운데 마지막 N 개 —
-   * 서브에이전트 줄(parent)은 세지 않고 그 사이에 있으면 함께 돌려준다
+   * 서브에이전트 줄(parent)은 세지 않고 그 사이에 있으면 함께 돌려준다. before 를 주면 그 시각보다 앞 항목만 센다(lastBefore)
    */
-  read(agentId: AgentId, o?: { sinceBoundary?: boolean; limit?: number }): HistoryItem[];
+  read(agentId: AgentId, o?: { sinceBoundary?: boolean; limit?: number; before?: number }): HistoryItem[];
+  /** 그 에이전트의 기록 파일 경로 — 없을 수 있다. 대화 찾기(search)가 비동기로 줄 단위로 읽는다 */
+  file(agentId: AgentId): string;
   remove(agentId: AgentId): void;
 }
 
@@ -148,7 +155,7 @@ export function openHistory(dataDir: string): History {
       }
       fs.appendFileSync(file, `${JSON.stringify(item)}\n`);
     },
-    read(agentId, { sinceBoundary = true, limit = 500 } = {}) {
+    read(agentId, { sinceBoundary = true, limit = 500, before } = {}) {
       const file = fileOf(agentId);
       if (!fs.existsSync(file)) return [];
       let items: HistoryItem[] = [];
@@ -165,8 +172,9 @@ export function openHistory(dataDir: string): History {
         const i = items.map((x) => x.kind).lastIndexOf('boundary');
         if (i >= 0) items = items.slice(i + 1);
       }
-      return lastN(items, limit);
+      return lastBefore(items, limit, before);
     },
+    file: fileOf,
     remove(agentId) {
       closed.delete(agentId);
       fs.rmSync(fileOf(agentId), { force: true });

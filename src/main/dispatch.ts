@@ -69,6 +69,7 @@ const PARTS_BAD = '보낼 내용이 올바르지 않아요'
 const FILE_PART_BAD = `${ATTACH_FAILED} — 첨부 정보가 올바르지 않아요`
 const AGENT_BAD = '에이전트 정보가 올바르지 않아요'
 const HISTORY_BAD = '대화 기록을 부를 수 없어요'
+const SEARCH_BAD = '찾기 요청이 올바르지 않아요'
 const PHONE_DEVICE_BAD = '끊을 기기를 알 수 없어요'
 const MODEL_BAD = '모델 이름이 올바르지 않아요'
 const ROOM_NAME_BAD = '방 이름을 바꿀 수 없어요'
@@ -154,23 +155,70 @@ function checkedPatch(p: unknown): UiPatch {
 /** 몇 개까지 — 1 이상 정수 · Infinity(내보내기 — 창 IPC 만. 휴대폰 JSON 은 Infinity 를 null 로 바꿔 거절된다) */
 const isLimit = (v: unknown): v is number => typeof v === 'number' && (v === Infinity || (Number.isSafeInteger(v) && v >= 1))
 
-/** history 의 o — 없음, 또는 { all?: 참거짓, limit?: 1 이상 정수 · Infinity(내보내기) }. 값이 undefined 인 칸은 없는 것으로 */
-function checkedHistoryOpts(o: unknown): { all?: boolean; limit?: number } | undefined {
+/**
+ * history 의 o — 없음, 또는 { all?: 참거짓, limit?: 1 이상 정수 · Infinity(내보내기), before?: 유한한 수(앞쪽 불러오기 — 그 시각보다 앞) }.
+ * 값이 undefined 인 칸은 없는 것으로
+ */
+function checkedHistoryOpts(o: unknown): { all?: boolean; limit?: number; before?: number } | undefined {
   if (o === undefined) return undefined
   if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error(HISTORY_BAD)
-  const out: { all?: boolean; limit?: number } = {}
+  const out: { all?: boolean; limit?: number; before?: number } = {}
   for (const [k, v] of Object.entries(o)) {
-    if (k !== 'all' && k !== 'limit') throw new Error(HISTORY_BAD)
+    if (k !== 'all' && k !== 'limit' && k !== 'before') throw new Error(HISTORY_BAD)
     if (v === undefined) continue
     if (k === 'all') {
       if (typeof v !== 'boolean') throw new Error(HISTORY_BAD)
       out.all = v
+    } else if (k === 'before') {
+      if (!isFiniteNumber(v)) throw new Error(HISTORY_BAD)
+      out.before = v
     } else {
       if (!isLimit(v)) throw new Error(HISTORY_BAD)
       out.limit = v
     }
   }
   return out
+}
+
+/** search 의 o — 없음, 또는 { roomId?: 글 }(지금 방). 상한은 받지 않는다(엔진 기본 50). 값이 undefined 인 칸은 없는 것으로 */
+function checkedSearchOpts(o: unknown): { roomId?: string } {
+  if (o === undefined) return {}
+  if (!o || typeof o !== 'object' || Array.isArray(o)) throw new Error(SEARCH_BAD)
+  const out: { roomId?: string } = {}
+  for (const [k, v] of Object.entries(o)) {
+    if (k !== 'roomId') throw new Error(SEARCH_BAD)
+    if (v === undefined) continue
+    if (typeof v !== 'string') throw new Error(SEARCH_BAD)
+    out.roomId = v
+  }
+  return out
+}
+
+/** 끊긴 찾기의 답 — 화면은 버린다(늦게 온 앞 찾기 결과가 새 결과를 덮지 않게) */
+const SEARCH_CANCELLED = { hits: [], more: false, cancelled: true } as const
+
+/**
+ * search — 디스패처(창)마다 하나만 돈다: 새 찾기가 오면 앞 찾기의 AbortController 를 끊는다(엔진은 파일 읽기를 그만둔다).
+ * 끊긴 찾기는 끝난 꼴과 상관없이(그만둠·오류·늦게 끝남) SEARCH_CANCELLED. 꼴이 틀린 요청은 앞 찾기를 끊지 않고 거절
+ */
+function searchHandler(): Handler {
+  let running: AbortController | null = null
+  return async (e, _d, query, o) => {
+    if (typeof query !== 'string') throw new Error(SEARCH_BAD)
+    const { roomId } = checkedSearchOpts(o)
+    running?.abort()
+    const ac = new AbortController()
+    running = ac
+    try {
+      const found = await e.search(query, roomId !== undefined ? { roomId, signal: ac.signal } : { signal: ac.signal })
+      return ac.signal.aborted ? SEARCH_CANCELLED : found
+    } catch (err) {
+      if (ac.signal.aborted) return SEARCH_CANCELLED
+      throw err
+    } finally {
+      if (running === ac) running = null
+    }
+  }
 }
 
 /** conversation 의 o — 없음, 또는 { limit?: 1 이상 정수 · Infinity(내보내기) }. 값이 undefined 인 칸은 없는 것으로 */
@@ -255,7 +303,9 @@ function snapshot(engine: Engine | null): Snapshot {
 }
 
 type Handler = (e: Engine, deps: DispatchDeps, ...a: any[]) => unknown
-const HANDLERS: Record<(typeof METHODS)[number], Handler> = {
+type EngineMethod = (typeof METHODS)[number]
+/** 상태 없는 엔진·창 쪽 일 — search 는 디스패처마다 끊기 상태가 있어 createDispatcher 가 붙인다(searchHandler) */
+const HANDLERS: Record<Exclude<EngineMethod, 'search'>, Handler> = {
   snapshot: (e) => snapshot(e),
   addRoom: (e, _d, name, remote) => {
     if (typeof name !== 'string') throw new Error(REMOTE_BAD)
@@ -428,6 +478,7 @@ function messageOf(err: unknown): string {
 export function createDispatcher(engine: Engine | null, deps: DispatchDeps): Dispatch {
   // 기다리다 거절돼도(시작 실패) 문을 연다 — 엔진 메서드가 자기 오류를 말하게
   const ready = deps.engineReady.catch(() => {})
+  const handlers: Record<EngineMethod, Handler> = { ...HANDLERS, search: searchHandler() }
   return async (method, args) => {
     try {
       const a: unknown[] = Array.isArray(args) ? args : []
@@ -435,12 +486,12 @@ export function createDispatcher(engine: Engine | null, deps: DispatchDeps): Dis
         const value = await APP_HANDLERS[method as AppMethod](deps.app, ...a)
         return { ok: true, value: value ?? null }
       }
-      if (typeof method !== 'string' || !Object.hasOwn(HANDLERS, method)) throw new Error(NOT_ALLOWED)
+      if (typeof method !== 'string' || !Object.hasOwn(handlers, method)) throw new Error(NOT_ALLOWED)
       if (method === 'snapshot') return { ok: true, value: snapshot(engine) }
       if (!engine) throw new Error(CLAUDE_MISSING_ERROR)
       // claude 를 띄우거나 바꾸는 일은 엔진 시작(켤 때 claude 최신으로 뒤)까지 기다린다 — 읽기·창 쪽 일은 바로
       if (!STARTS_NOW.has(method)) await ready
-      const handler = HANDLERS[method as keyof typeof HANDLERS]
+      const handler = handlers[method as EngineMethod]
       const value = await handler(engine, deps, ...a)
       return { ok: true, value: value ?? null }
     } catch (err) {

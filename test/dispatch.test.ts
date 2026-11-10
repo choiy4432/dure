@@ -327,11 +327,16 @@ describe('인자 꼴 검사 — 창·휴대폰이 같이 탄다', () => {
     const { engine, calls } = fakeEngine({ history: () => [] })
     const dispatch = createDispatcher(engine, fakeDeps())
     // 화면이 보내는 꼴 — 지금 대화(o 없음) · 내보내기(limit: Infinity)
-    const goods: unknown[][] = [['a1'], ['a1', undefined], ['a1', {}], ['a1', { limit: Infinity }], ['a1', { all: true }], ['a1', { all: false, limit: 1 }], ['a1', { limit: 500 }]]
+    // 앞쪽 불러오기(before: 그 시각보다 앞)
+    const goods: unknown[][] = [
+      ['a1'], ['a1', undefined], ['a1', {}], ['a1', { limit: Infinity }], ['a1', { all: true }], ['a1', { all: false, limit: 1 }], ['a1', { limit: 500 }],
+      ['a1', { before: 1700000000000, limit: 500 }], ['a1', { before: 0 }], ['a1', { before: 12.5, limit: undefined }],
+    ]
     for (const args of goods) expect(await dispatch('history', args), JSON.stringify(args)).toEqual({ ok: true, value: [] })
     expect(calls).toEqual([
       ['history', ['a1', undefined]], ['history', ['a1', undefined]], ['history', ['a1', {}]], ['history', ['a1', { limit: Infinity }]],
       ['history', ['a1', { all: true }]], ['history', ['a1', { all: false, limit: 1 }]], ['history', ['a1', { limit: 500 }]],
+      ['history', ['a1', { before: 1700000000000, limit: 500 }]], ['history', ['a1', { before: 0 }]], ['history', ['a1', { before: 12.5 }]],
     ])
 
     calls.length = 0
@@ -341,6 +346,7 @@ describe('인자 꼴 검사 — 창·휴대폰이 같이 탄다', () => {
       ['a1', { limit: 0 }], ['a1', { limit: -1 }], ['a1', { limit: 1.5 }], ['a1', { limit: '5' }], ['a1', { limit: NaN }],
       ['a1', { limit: -Infinity }], ['a1', { limit: null }], ['a1', { limit: 2 ** 53 }],
       ['a1', { all: 'yes' }], ['a1', { all: 1 }], ['a1', { all: null }], ['a1', { sinceBoundary: false }], ['a1', { all: true, extra: 1 }],
+      ['a1', { before: '5' }], ['a1', { before: null }], ['a1', { before: NaN }], ['a1', { before: Infinity }], ['a1', { before: -Infinity }], ['a1', { before: {} }],
     ]
     for (const args of bads) expect(await dispatch('history', args), JSON.stringify(args)).toEqual(HISTORY_BAD)
     expect(calls).toEqual([])
@@ -430,13 +436,38 @@ describe('인자 꼴 검사 — 창·휴대폰이 같이 탄다', () => {
     for (const args of bads) expect(await dispatch('conversation', args), JSON.stringify(args)).toEqual(CONV_BAD)
     expect(calls).toEqual([])
   })
+
+  it('search — 글 · o 는 없음 또는 { roomId?: 글 } · 엔진엔 roomId 와 끊기 신호만(상한은 엔진 기본값) · 엔진 오류는 그대로', async () => {
+    const SEARCH_BAD = { ok: false, error: '찾기 요청이 올바르지 않아요' }
+    const found = { hits: [], more: false }
+    const { engine, calls } = fakeEngine({ search: () => found })
+    const dispatch = createDispatcher(engine, fakeDeps())
+    const goods: unknown[][] = [['배포'], ['배포', undefined], ['배포', {}], ['배포', { roomId: 'r1' }], ['배포', { roomId: undefined }], ['']]
+    for (const args of goods) expect(await dispatch('search', args), JSON.stringify(args)).toEqual({ ok: true, value: found })
+    const signal = expect.any(AbortSignal)
+    expect(calls).toEqual([
+      ['search', ['배포', { signal }]], ['search', ['배포', { signal }]], ['search', ['배포', { signal }]],
+      ['search', ['배포', { roomId: 'r1', signal }]], ['search', ['배포', { signal }]], ['search', ['', { signal }]],
+    ])
+    calls.length = 0
+    const bads: unknown[][] = [
+      [], [5], [null], [{ q: '배포' }],
+      ['배포', null], ['배포', 'r1'], ['배포', 5], ['배포', []], ['배포', { roomId: 5 }], ['배포', { roomId: null }],
+      ['배포', { limit: 10 }], ['배포', { signal: 1 }], ['배포', { roomId: 'r1', extra: 1 }],
+    ]
+    for (const args of bads) expect(await dispatch('search', args), JSON.stringify(args)).toEqual(SEARCH_BAD)
+    expect(calls).toEqual([])
+
+    const broken = createDispatcher(fakeEngine({ search: () => { throw new Error('기록을 못 읽었어요') } }).engine, fakeDeps())
+    expect(await broken('search', ['배포'])).toEqual({ ok: false, error: '기록을 못 읽었어요' })
+  })
 })
 
 describe('phoneDispatcher', () => {
   /** 계획이 정한 PC 전용 엔진 메서드 — 이것과 APP_METHODS 전부가 'pc' */
   const PC_ENGINE = [
     'pickFolder', 'openAgentFolder', 'saveConversation', 'setTaskbar', 'flashWindow', 'focusWindow', 'sshHosts', 'checkRemote',
-    'setSelected', 'setTheme', 'setAllowBypass', 'setAutoChainLimit', 'setSleepAfter', 'setNotify', 'openAttachment',
+    'setSelected', 'setTheme', 'setAllowBypass', 'setAutoChainLimit', 'setSleepAfter', 'setNotify', 'openAttachment', 'search',
   ]
 
   it('PHONE_ACCESS — pc 메서드 거절 글', async () => {
