@@ -1178,7 +1178,10 @@ class EngineImpl extends EventEmitter implements Engine {
     let blocked = false; // 포트를 다 바꿔 봐도 서버가 전달을 열지 않았다
     // 끊김이면 서버 claude 가 남았을 수 있다 — 다음에 띄울 때(저장된 pid 로) 정리한다. 그 밖은 지금(claude 는 없어도 토큰이 든 run 폴더가 남는다)
     if (issue?.kind !== 'disconnected') this.cleanExited(id, run);
-    this.guard(id, () => this.restoreInFlight(id, s));
+    // 시작도 못 하고(첫 줄 전) 포트·끊김이 아닌 까닭(서버 내려감·인증·로그인·키 바뀜 등)으로 끝났다 — 보낸 메시지는 전달 못 함(까닭과 함께 [다시 시도]).
+    // 포트(다른 포트로 다시)·시작 뒤의 끊김(이어서)은 지금처럼 기다리는 줄로
+    const failedWhy = !run.started && issue && issue.kind !== 'port' && issue.kind !== 'disconnected' ? remoteIssueText(run.host, issue) : undefined;
+    this.guard(id, () => this.restoreInFlight(id, s, failedWhy));
     this.perms.cancelForAgent(id, EXITED);
     if (issue?.kind !== 'port') this.portTries.delete(id); // 첫 줄 전에 다른 까닭으로 끝났다 — 다음 띄우기는 다시 처음부터
     if (issue?.kind === 'port') {
@@ -4137,13 +4140,13 @@ class EngineImpl extends EventEmitter implements Engine {
   }
 
   /** 보낸 줄을 읽기 전에 끝났다 — 메시지는 queued 로, 사람 입력은 기다리는 줄 맨 앞으로(다음 실행·flushAll 때 다시) */
-  private restoreInFlight(id: AgentId, s: ClaudeSession): void {
+  private restoreInFlight(id: AgentId, s: ClaudeSession, failReason?: string): void {
     const lost = this.inFlight.get(s) ?? [];
     this.inFlight.delete(s);
     this.clearMidGrace(s);
     const inputs: HeldInput[] = [];
     for (const x of lost) {
-      if (x.kind === 'relay') for (const m of x.messageIds) this.router.requeue(m);
+      if (x.kind === 'relay') for (const m of x.messageIds) failReason ? this.router.markFailed(m, failReason) : this.router.requeue(m);
       else inputs.push(x.input);
     }
     if (inputs.length) {

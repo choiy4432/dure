@@ -10,6 +10,7 @@ import { openMessageLog } from '../src/engine/messageLog';
 import { joinDeliveries } from '../src/engine/router';
 import { openStore } from '../src/engine/store';
 import { DENY } from '../src/shared/denyTexts';
+import { remoteIssueText } from '../src/shared/remoteTexts';
 import { ATTACH_MAX_BYTES, MEDIA_INLINE_MAX_B64, PDF_INLINE_MAX_BYTES, PDF_INLINE_MAX_PAGES } from '../src/shared/attachments';
 import { packedPdf, pdfOf } from './pdfFixtures';
 import type { ReadyPart } from '../src/engine/types';
@@ -6375,6 +6376,45 @@ describe('서버 방 띄우기', () => {
     expect(await resultText(aDone)).toBe('api 에게 전달했습니다.');
     expect(await resultText(bDone)).toBe('받음: [두레 메시지 — 보낸 쪽: web(화면)]\n화면 만들어 줘');
     expect(e.messages()).toMatchObject([{ from: web.id, to: api.id, state: 'read' }]);
+  }, 30_000);
+
+  test('서버에 못 닿아 시작도 못 한 전달 — 메시지는 까닭과 함께 failed · [다시 시도] 하면 서버가 돌아온 뒤 전달', async () => {
+    const { e, root, room, web, mode } = await remoteRoom();
+    fs.mkdirSync(path.join(root, 'home', 'a', 'api'), { recursive: true });
+    const api = e.addAgent({ roomId: room.id, name: 'api', role: '서버', folder: '/home/a/api' });
+    e.updateAgent(api.id, { auto: true });
+    mode('refused'); // 서버가 내려갔다 — ssh 가 첫 줄 전에 255
+    const failed = waitFor<RelayMessage>(e, 'message', (m) => m.to === api.id && m.state === 'failed');
+    await (e as any).router.send(web.id, 'api', '서버 내려간 사이');
+    const m = await failed;
+    expect(m.failReason).toBe(remoteIssueText('dev', e.remoteIssue(api.id)!));
+    expect(m.failReason).toContain('dev');
+    expect(e.messages({ to: api.id })).toMatchObject([{ state: 'failed', failReason: m.failReason }]);
+
+    mode(''); // 서버가 돌아왔다
+    const read = waitFor<RelayMessage>(e, 'message', (x) => x.id === m.id && x.state === 'read');
+    const done = resultOf(e, api.id);
+    e.retryMessage(m.id);
+    await read;
+    expect(await resultText(done)).toBe('받음: [두레 메시지 — 보낸 쪽: web(화면)]\n서버 내려간 사이');
+    expect(e.messages({ to: api.id })[0]).not.toHaveProperty('failReason');
+  }, 30_000);
+
+  test('읽은 줄이 하나라도 온 뒤의 끊김은 전달 못 함이 아니다 — 메시지는 queued 로 돌아와 이어서', async () => {
+    const muteFile = path.join(dir, 'mute-api');
+    fs.writeFileSync(muteFile, 'api:mute'); // 제어 요청에만 답한다(시작은 하지만 사용자 줄은 읽지 않는다)
+    const { e, root, room, web, mode } = await remoteRoom({ FAKE_DIE_FLAG_FILE: muteFile });
+    fs.mkdirSync(path.join(root, 'home', 'a', 'api'), { recursive: true });
+    const api = e.addAgent({ roomId: room.id, name: 'api', role: '서버', folder: '/home/a/api' });
+    e.updateAgent(api.id, { auto: true });
+    mode('drop:1500');
+    const states: string[] = [];
+    e.on('message', (m: RelayMessage) => states.push(m.state));
+    await (e as any).router.send(web.id, 'api', '끊기기 전에');
+    await until('끊김', () => e.remoteIssue(api.id)?.kind === 'disconnected', 10_000);
+    await until('다시 queued', () => e.messages({ to: api.id })[0]?.state === 'queued', 5000);
+    expect(states).not.toContain('failed');
+    expect(e.messages({ to: api.id })[0]).not.toHaveProperty('failReason');
   }, 30_000);
 
   test('멈추기(claude 를 내릴 때)·재우기·지우기 — ssh 를 끈 뒤 서버 정리 · 서버 claude 없음 · 저장된 pid 비움', async () => {

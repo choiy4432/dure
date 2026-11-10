@@ -157,6 +157,13 @@ export class Router extends EventEmitter {
     this.record(this.d.log.setState(messageId, 'queued'));
   }
 
+  /** 전달했는데 받는 쪽이 시작도 못 했다(서버에 못 닿음 등) — delivered 만 failed + 까닭으로(사람이 [다시 시도] 하면 queued) */
+  markFailed(messageId: string, failReason: string): void {
+    const m = this.d.log.get(messageId);
+    if (!m || m.state !== 'delivered') return;
+    this.record(this.d.log.setState(messageId, 'failed', { failReason }));
+  }
+
   /** 받는 쪽 차례가 그 메시지를 실제로 읽었다 — delivered 만 read 로(다시 켜도 다시 전달하지 않는다) */
   markRead(messageId: string): void {
     const m = this.d.log.get(messageId);
