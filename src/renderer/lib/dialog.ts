@@ -29,6 +29,30 @@ export function watchDialogs(fn: () => void): () => void {
   }
 }
 
+/** 글을 받지 않는 input 꼴 — 이런 칸에 초점이 있어도 쓰는 중이 아니다 */
+const NOT_TEXT = new Set(['button', 'checkbox', 'radio', 'range', 'submit', 'reset', 'file', 'color', 'image'])
+
+/**
+ * 글을 쓰는 중인 다른 칸(설정 숫자 칸 · 이름 고치기 · 찾기 창 등) — 입력창(Composer, .pnl-cmp)은 뺀다.
+ * Ctrl+K 를 무시하고(SearchPalette), 고른 에이전트의 입력창이 커서를 빼앗지 않는다(Composer)
+ */
+export function typingElsewhere(el: Element | null): boolean {
+  if (!(el instanceof HTMLElement) || el.closest('.pnl-cmp')) return false
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true
+  if (el instanceof HTMLInputElement) return !NOT_TEXT.has(el.type)
+  return el.isContentEditable === true
+}
+
+/**
+ * 초점을 옮기면 안 되는 때(focusNotStolen) — 대화상자 · 떠 있는 창(aria-modal, 나가는 중인 inert 는 빼고)이 열려 있거나
+ * 다른 칸에 글을 쓰는 중. 고른 에이전트의 입력창이 커서를 가져가기 전에 본다
+ */
+export function focusHeldElsewhere(): boolean {
+  if (openDialogs.length > 0) return true
+  for (const el of document.querySelectorAll('[aria-modal="true"]')) if (!el.closest('[inert]')) return true
+  return typingElsewhere(document.activeElement)
+}
+
 /** 초점을 돌려줄 수 있는 곳 — 문서에 붙어 있고 막히지 않았다(body 는 '연 자리 없음') */
 function focusable(el: HTMLElement | null | undefined): el is HTMLElement {
   return !!el && el !== document.body && el.isConnected && !(el as HTMLButtonElement).disabled && !el.closest('[inert]')

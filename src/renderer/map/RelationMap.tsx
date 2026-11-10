@@ -348,7 +348,7 @@ function MapCanvas({ roomId, onAddAgent, touch, focus }: { roomId: RoomId; onAdd
     }))
   }, [views, openPair])
 
-  // 키보드로 카드를 고르기 — 카드(노드)에 포커스가 있을 때 Enter·스페이스
+  // 키보드로 카드를 고르기 — 카드(노드)에 포커스가 있을 때 Enter·스페이스. 누르기처럼 그 입력창에 커서
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Enter' && e.key !== ' ') return
     const el = e.target as HTMLElement
@@ -356,7 +356,7 @@ function MapCanvas({ roomId, onAddAgent, touch, focus }: { roomId: RoomId; onAdd
     const id = el.getAttribute('data-id')
     if (!id) return
     e.preventDefault()
-    getStore().selectAgent(id)
+    getStore().selectAgent(id, { focusInput: !touch })
   }
 
   return (
@@ -386,7 +386,8 @@ function MapCanvas({ roomId, onAddAgent, touch, focus }: { roomId: RoomId; onAdd
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
-        onNodeClick={(_e, node) => getStore().selectAgent(node.id)}
+        // 카드를 고르면 그 입력창에 커서 — 휴대폰은 자판이 튀어 오르니 아니다
+        onNodeClick={(_e, node) => getStore().selectAgent(node.id, { focusInput: !touch })}
         nodeClickDistance={CLICK_SLOP_PX}
         nodeDragThreshold={CLICK_SLOP_PX}
         onNodeDragStop={onNodeDragStop}

@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { CircleAlert, Moon, ShieldAlert, Square, TriangleAlert, X } from 'lucide-react'
+import { CircleAlert, Folder, Moon, ShieldAlert, Square, TriangleAlert, X } from 'lucide-react'
 import type { AgentId } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { REMOTE_LOGIN_HELP, remoteIssueText } from '../../shared/remoteTexts'
 import { getStore, useDure } from '../state/store'
 import { displayStatus, restLook, shownIssue, type DisplayStatus } from '../state/selectors'
-import { errorMessage, fieldError, initial, REST_WORD, SLEEP_HINT, STATUS_WORD } from '../lib/words'
+import { CHAT_PANEL as W, errorMessage, fieldError, initial, REST_WORD, SLEEP_HINT, STATUS_WORD } from '../lib/words'
+import { folderText, splitTail } from '../lib/folder'
+import { onPhone } from '../lib/phone'
 import { ModelPicker, type Described } from './ModelPicker'
 import { EffortControl } from './EffortControl'
 import { AgentMenu } from './AgentMenu'
@@ -227,6 +229,7 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
                     {agent.role}
                   </div>
                 )}
+                {agent.folder && <FolderLine agentId={agent.id} folder={agent.folder} host={host} onError={setError} onNotice={setNotice} />}
               </div>
               <div className="ph-acts">
                 <button type="button" className="btn sec" data-tour="stop" disabled={!canStop} onClick={stop}>
@@ -275,6 +278,53 @@ export function PanelHeader({ agentId, description, onLoadDescription, onRetryDe
       </div>
       <PanelBands agent={agent} status={status} host={host} onError={setError} />
     </>
+  )
+}
+
+/**
+ * 작업 폴더 줄(시안 ② A) — 이름·역할 아래 [폴더 SVG] 경로(mono · 가운데 말줄임: 앞이 줄고 마지막 마디는 남는다).
+ * 누르면 폴더 열기(… 메뉴의 폴더 열기와 같은 openAgentFolder), 오른쪽 클릭은 경로 복사.
+ * 서버 방은 `호스트:경로`(이 PC 에서 열 수 없다) · 휴대폰은 PC 탐색기를 열 수 없다 — 누르기도 복사
+ */
+function FolderLine({ agentId, folder, host, onError, onNotice }: {
+  agentId: AgentId
+  folder: string
+  host: string | null
+  onError: (message: string | null) => void
+  onNotice: (message: string | null) => void
+}) {
+  const path = folderText(folder, host)
+  const canOpen = !host && !onPhone()
+  const { head, tail } = splitTail(path)
+  const copy = async () => {
+    onError(null)
+    try {
+      await navigator.clipboard.writeText(path)
+      onNotice(W.copied)
+    } catch {
+      onError(W.copyFailed)
+    }
+  }
+  const open = () => {
+    onError(null)
+    window.dure.openAgentFolder(agentId).catch(e => onError(errorMessage(e)))
+  }
+  return (
+    <button
+      type="button"
+      className="ph-fd"
+      aria-label={canOpen ? W.openFolder(path) : W.copyPath(path)}
+      title={`${path}\n${canOpen ? W.openHint : W.remoteHint}`}
+      onClick={canOpen ? open : () => void copy()}
+      onContextMenu={e => {
+        e.preventDefault()
+        void copy()
+      }}
+    >
+      <Folder className="i" size={13} aria-hidden="true" />
+      {head && <span className="ph-fd-h">{head}</span>}
+      <span className="ph-fd-t">{tail}</span>
+    </button>
   )
 }
 

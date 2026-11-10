@@ -12,6 +12,7 @@ import { ATTACH_FOLDER, ATTACH_NO_PATH, ATTACH_SENDING, ATTACH_UPLOADING, ATTACH
 import { onPhone, phoneUpload } from '../lib/phone'
 import { isImageType, prepareImage } from '../lib/image'
 import { ConfirmDialog } from '../shell/ConfirmDialog'
+import { focusHeldElsewhere } from '../lib/dialog'
 import type { Described } from './ModelPicker'
 import { matchCommands, slashOptionId, SlashMenu, type SlashEntry } from './SlashMenu'
 import { Presence } from '../lib/presence'
@@ -135,6 +136,15 @@ export function Composer({ agentId, name, description, onLoadCommands, onRetryCo
   useEffect(() => {
     if (slashing) onLoadCommands()
   }, [slashing, onLoadCommands])
+
+  // 고르면 커서 — 카드 · 찾기 창 · 할 일의 [대화 보기]로 이 에이전트를 골랐다(inputFocus). 다른 칸에 쓰는 중이거나 창이 떠 있으면 그대로(focusNotStolen).
+  // 레이아웃 효과 뒤에 — 닫히는 찾기 창이 초점을 연 자리로 돌려준 다음이라 이것이 이긴다. 숨은 입력창(다른 탭)은 초점을 받지 않는다
+  const focusAsk = useDure(s => (s.inputFocus?.agentId === agentId ? s.inputFocus.n : 0))
+  useEffect(() => {
+    const el = area.current
+    if (!focusAsk || !el || document.activeElement === el || focusHeldElsewhere()) return
+    el.focus({ preventScroll: true })
+  }, [focusAsk])
 
   // 글에 맞춰 높이를 — 2줄부터 8줄까지
   useLayoutEffect(() => {

@@ -584,6 +584,91 @@ describe('AgentMenu', () => {
   })
 })
 
+describe('PanelHeader — 작업 폴더 줄(시안 ② A)', () => {
+  let writeText: ReturnType<typeof vi.fn>
+  beforeEach(() => {
+    writeText = vi.fn(async (_text: string) => {})
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+  })
+  const line = () => document.querySelector<HTMLButtonElement>('.ph .ph-fd')!
+
+  it('이름·역할 아래 한 줄 — lucide 폴더 SVG(이모지 아님) + 전체 경로 mono, 가운데 말줄임(앞이 줄고 마지막 마디는 남는다)', async () => {
+    snapshot.agents = [agent('w', { name: '웹 화면', role: '화면 구현', folder: 'C:\\work\\shop\\web' })]
+    await renderPanel()
+    const b = line()
+    expect(b.tagName).toBe('BUTTON')
+    expect(b.closest('.ph-id')).not.toBeNull()
+    expect(b.previousElementSibling?.classList.contains('pr')).toBe(true) // 역할 바로 아래
+    const svg = b.querySelector('svg')!
+    expect(svg.classList.contains('lucide-folder')).toBe(true)
+    expect(svg.getAttribute('aria-hidden')).toBe('true')
+    expect(b.textContent).toBe('C:\\work\\shop\\web')
+    expect(b.textContent).not.toMatch(/\p{Extended_Pictographic}/u)
+    expect(b.querySelector('.ph-fd-h')!.textContent).toBe('C:\\work\\shop')
+    expect(b.querySelector('.ph-fd-t')!.textContent).toBe('\\web')
+    expect(screen.getByRole('button', { name: '폴더 열기 · C:\\work\\shop\\web' })).toBe(b)
+    expect(b.title).toContain('오른쪽 클릭')
+  })
+
+  it('역할이 없으면 이름 바로 아래', async () => {
+    snapshot.agents = [agent('w', { name: '웹 화면', role: '', folder: 'C:\\w' })]
+    await renderPanel()
+    expect(line().previousElementSibling?.classList.contains('pn')).toBe(true)
+  })
+
+  it('누르면 폴더 열기 — 메뉴의 폴더 열기와 같은 openAgentFolder(복사는 안 한다)', async () => {
+    snapshot.agents = [agent('w', { name: '웹 화면', folder: 'C:\\work\\shop\\web' })]
+    await renderPanel()
+    await act(async () => { fireEvent.click(line()) })
+    expect(api.openAgentFolder).toHaveBeenCalledWith('w')
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('못 열면 머리에 엔진 문구', async () => {
+    api.openAgentFolder.mockRejectedValueOnce(new Error('폴더가 없어요'))
+    await renderPanel()
+    await act(async () => { fireEvent.click(line()) })
+    await settle()
+    expect(screen.getByRole('alert').textContent).toBe('폴더가 없어요')
+  })
+
+  it('오른쪽 클릭은 경로 복사 — 기본 메뉴를 막고 "경로를 복사했어요"(열지 않는다)', async () => {
+    snapshot.agents = [agent('w', { name: '웹 화면', folder: 'C:\\work\\shop\\web' })]
+    await renderPanel()
+    let shown = true
+    await act(async () => { shown = fireEvent.contextMenu(line()) })
+    await settle()
+    expect(shown).toBe(false) // preventDefault
+    expect(writeText).toHaveBeenCalledWith('C:\\work\\shop\\web')
+    expect(api.openAgentFolder).not.toHaveBeenCalled()
+    expect(screen.getByRole('status').textContent).toBe('경로를 복사했어요')
+  })
+
+  it('서버 방 — "호스트:경로" 로 보이고 누르면 복사(이 PC 에서 열 수 없다)', async () => {
+    snapshot.rooms = [{ id: 'r1', name: '웹 리뉴얼', createdAt: 1, remote: { host: 'dev' } }]
+    snapshot.agents = [agent('w', { name: '웹 화면', folder: '/home/me/shop/api' })]
+    await renderPanel()
+    const b = line()
+    expect(b.textContent).toBe('dev:/home/me/shop/api')
+    expect(b.querySelector('.ph-fd-t')!.textContent).toBe('/api')
+    expect(screen.getByRole('button', { name: '경로 복사 · dev:/home/me/shop/api' })).toBe(b)
+    expect(b.querySelector('svg.lucide-folder')).not.toBeNull()
+    await act(async () => { fireEvent.click(b) })
+    await settle()
+    expect(writeText).toHaveBeenCalledWith('dev:/home/me/shop/api')
+    expect(api.openAgentFolder).not.toHaveBeenCalled()
+    expect(screen.getByRole('status').textContent).toBe('경로를 복사했어요')
+  })
+
+  it('복사하지 못하면 알린다', async () => {
+    writeText.mockRejectedValueOnce(new Error('denied'))
+    await renderPanel()
+    await act(async () => { fireEvent.contextMenu(line()) })
+    await settle()
+    expect(screen.getByRole('alert').textContent).toBe('경로를 복사하지 못했어요')
+  })
+})
+
 describe('PanelHeader — 띠', () => {
   it('오류면 머리 아래 빨간 띠 — 오류 글과 다시 켜지는 안내(누르는 것처럼 보이는 굵은 글 없음)', async () => {
     snapshot.agents = [agent('w', { name: '웹 화면', status: 'error', errorText: '프로세스가 예기치 않게 끝났어요 (코드 1)' })]

@@ -29,6 +29,17 @@ export type UiState = Snapshot & {
   selectedAgentId: AgentId | null
   history: Record<AgentId, HistoryItem[]>
   historyStatus: Record<AgentId, { state: 'loading' | 'ready' | 'error'; error?: string }>
+  /**
+   * 불러온 기록의 첫 항목보다 앞 기록이 (있을 수) 있다 — 마지막으로 받은 덩이(처음 불러오기 · 앞쪽 불러오기)가 꽉 찼다(HISTORY_PAGE).
+   * 대화 맨 위 [이전 대화 더 보기]가 이것을 본다. 덜 찬 덩이 · 새 대화(경계)면 false
+   */
+  hasOlder: Record<AgentId, boolean>
+  /**
+   * 그 에이전트의 입력창에 커서를 놓아 달라는 신호 — 카드 · 찾기 창 · 할 일의 [대화 보기]로 골랐다(selectAgent·focusAgent 의 focusInput)
+   * · 새 글 알약(focusInput). 입력창이 받아 초점을 옮긴다 — 다른 칸에 쓰는 중이거나 창이 떠 있으면 그대로(focusHeldElsewhere).
+   * 다른 길로 고르면 지운다(남은 신호로 나중에 커서가 가지 않게). n 은 부를 때마다 오른다
+   */
+  inputFocus: { agentId: AgentId; n: number } | null
   streaming: Record<AgentId, string>
   /**
    * Claude 가 생각하는 중인 에이전트 — tokens = 지금까지 생각한 추정 토큰 수(모르면 null). 없으면 생각 중이 아니다.
@@ -127,7 +138,16 @@ export interface Store {
    * 다시 받아 자리에서 갈음한다(불러오는 중 표시 없이). 다른 에이전트의 불러 둔 기록·흐르는 글은 잊는다(열 때 다시 받는다)
    */
   resync(): Promise<void>
-  selectAgent(id: AgentId | null): void
+  /** 그 에이전트를 고른다(기록도 불러온다) — focusInput 이면 그 입력창에 커서(inputFocus) */
+  selectAgent(id: AgentId | null, o?: { focusInput?: boolean }): void
+  /** 고른 에이전트의 입력창에 커서를 놓아 달라고 한다(inputFocus) — 고른 에이전트가 아니면 아무것도 안 한다 */
+  focusInput(id: AgentId): void
+  /**
+   * [이전 대화 더 보기] — 대화 목록 첫 기록보다 앞 HISTORY_PAGE 항목을 history({ before, limit }) 한 번으로 불러 앞에 붙인다.
+   * 이미 불러오는 중이면 그 약속. 앞 기록이 없다고 알면(hasOlder) · 기록이 없으면 아무것도 안 한다. 부르는 사이 목록이 갈렸으면(새 대화 · 다시 받기) 붙이지 않는다.
+   * 못 받으면 거절한다(목록은 그대로)
+   */
+  loadOlder(id: AgentId): Promise<void>
   selectRoom(id: RoomId): void
   setPanelTab(id: AgentId, tab: PanelTab): void
   /** 서브에이전트 탭으로 바꾸고 key(노드 id)가 든 차례를 보이게 한다 */
@@ -149,8 +169,11 @@ export interface Store {
   recentAgents(): AgentId[]
   /** 관계도 선 보기를 바꾸고 이 PC 에 기억한다 */
   setEdgeMode(mode: EdgeMode): void
-  /** 그 에이전트의 방으로 바꾸고(다르면) 고르고, 관계도에 그 카드를 보이게 해 달라고 한다(mapFocus) — 기록도 불러온다. 모르는 id 면 아무것도 안 한다 */
-  focusAgent(id: AgentId): void
+  /**
+   * 그 에이전트의 방으로 바꾸고(다르면) 고르고, 관계도에 그 카드를 보이게 해 달라고 한다(mapFocus) — 기록도 불러온다. 모르는 id 면 아무것도 안 한다.
+   * focusInput 이면 그 입력창에 커서(inputFocus — 찾기 창에서 고름)
+   */
+  focusAgent(id: AgentId, o?: { focusInput?: boolean }): void
   /** 방 목록을 열어 달라고 요청한다 — roomMenuRequest 가 하나 오른다 */
   requestRoomMenu(): void
   /** 갈래 창을 연다 */
@@ -216,8 +239,37 @@ const HIT_LEAD = 20
  */
 export const HIT_MAX = 3000
 
+/**
+ * 기록 한 덩이(부모 기록 수) — 엔진 history 의 기본 limit 과 같다(처음 불러오기). [이전 대화 더 보기]도 한 번에 이만큼.
+ * 받은 덩이가 이만큼 꽉 차면 그 앞이 더 있을 수 있다(hasOlder) — 앞 기록이 꼭 이만큼이면 한 번 더 눌러 빈 덩이를 받고서야 단추가 사라진다
+ */
+export const HISTORY_PAGE = 500
+
 /** 서브에이전트 줄 — 부모의 Agent 하는 일 아래에서 온 assistant·tool-result(엔진 history 의 자르기와 같은 셈) */
 const fromSubagent = (x: HistoryItem): boolean => (x.kind === 'assistant' || x.kind === 'tool-result') && typeof x.parent === 'string'
+
+/** 부모 기록 수 — 엔진의 limit 이 세는 것(서브에이전트 줄은 세지 않는다) */
+function parentCount(items: HistoryItem[]): number {
+  let n = 0
+  for (const x of items) if (!fromSubagent(x)) n++
+  return n
+}
+
+/**
+ * 앞쪽 덩이(history({ before: 첫 시각 + 1 }))에서 이미 가진 기록을 덜어 낸 끝 — 같은 시각(같은 ms)의 앞 기록이 빠지지 않게 첫 시각까지 받으니,
+ * 목록 맨 앞의 같은 시각 기록만큼을 받은 덩이 끝에서 뺀다(파일 차례는 그대로). 찾은 줄로 가기(loadUpTo)와 [이전 대화 더 보기](loadOlder)가 같이 쓴다
+ */
+function freshEnd(older: HistoryItem[], list: HistoryItem[]): number {
+  const t = list[0].t
+  let held = 0
+  while (held < list.length && list[held].t === t) held++
+  let end = older.length
+  while (held > 0 && end > 0 && older[end - 1].t === t) {
+    end--
+    held--
+  }
+  return end
+}
 
 /** i 번째 기록 앞으로 부모 기록 n 개만큼 물러선 자리(서브에이전트 줄은 세지 않고 함께 남긴다) */
 function leadFrom(items: HistoryItem[], i: number, n: number): number {
@@ -244,7 +296,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   let state: UiState = {
     app: { info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false, phone: null },
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
-    roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
+    roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, hasOlder: {}, inputFocus: null, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
     statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, hitFocus: null, readCurrent: null, mapFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null,
     tour: null,
   }
@@ -484,7 +536,12 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
           void loadHistory(agentId)
           break
         }
-        state = { ...state, history: { ...state.history, [agentId]: boundary ? [] : [...list, item] } }
+        state = {
+          ...state,
+          history: { ...state.history, [agentId]: boundary ? [] : [...list, item] },
+          // 새 대화 — 그 앞은 이 대화가 아니다
+          hasOlder: boundary && state.hasOlder[agentId] ? { ...state.hasOlder, [agentId]: false } : state.hasOlder,
+        }
         break
       }
       case 'agent-event': {
@@ -682,9 +739,12 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       const pending = loading.get(id) ?? []
       loading.delete(id)
       // 불러오는 동안 새 대화가 시작됐으면(경계가 맨 앞에 남아 있다) 경계 뒤에 온 것만 — 경계 뒤에 읽었어도 그 항목들은 이벤트로 이미 왔다
-      const list = pending[0]?.kind === 'boundary'
+      const renewed = pending[0]?.kind === 'boundary'
+      const list = renewed
         ? pending.slice(1)
         : [...loaded, ...pending.filter(it => !loaded.some(l => sameItem(l, it)))]
+      // 받은 덩이가 꽉 찼으면(엔진 기본 HISTORY_PAGE) 그 앞이 더 있을 수 있다
+      const older = !renewed && parentCount(loaded) >= HISTORY_PAGE
       // 다시 켠 뒤엔 이벤트로 온 글이 없다 — 불러온 기록의 마지막 글로 채운다(더 새 글이 이미 있으면 그대로)
       let lastText = state.lastText
       for (let i = list.length - 1; i >= 0; i--) {
@@ -697,6 +757,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
         ...state,
         history: { ...state.history, [id]: list },
         historyStatus: { ...state.historyStatus, [id]: { state: 'ready' } },
+        hasOlder: { ...state.hasOlder, [id]: older },
         lastText,
       })
       if (reloadAfter.delete(id)) {
@@ -749,17 +810,43 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     if (older.length >= room && t < older[0].t) return false
     const now = state.history[id]
     if (!now || now[0] !== first) return true
-    let held = 0
-    while (held < now.length && now[held].t === first.t) held++
-    let end = older.length
-    while (held > 0 && end > 0 && older[end - 1].t === first.t) {
-      end--
-      held--
-    }
+    const end = freshEnd(older, now)
     const at = older.findIndex(x => x.t >= t)
     const from = leadFrom(older, at < 0 || at > end ? end : at, HIT_LEAD)
-    if (from < end) set({ ...state, history: { ...state.history, [id]: [...older.slice(from, end), ...now] } })
+    if (from < end) {
+      set({
+        ...state,
+        history: { ...state.history, [id]: [...older.slice(from, end), ...now] },
+        // 앞에 덜어 낸 기록이 있거나 받은 덩이가 꽉 찼으면 그 앞이 더 있다 — 덜 찼으면 대화 맨 앞까지 받았다
+        hasOlder: { ...state.hasOlder, [id]: from > 0 || parentCount(older) >= room },
+      })
+    }
     return true
+  }
+
+  // [이전 대화 더 보기] — 에이전트마다 한 번에 하나
+  const olderLoads = new Map<AgentId, Promise<void>>()
+  const loadOlder = (id: AgentId): Promise<void> => {
+    const busy = olderLoads.get(id)
+    if (busy) return busy
+    const first = state.history[id]?.[0]
+    if (!first || !state.hasOlder[id]) return Promise.resolve()
+    const p = (async () => {
+      // 엔진은 부를 때마다 기록 파일을 다시 읽는다 — 한 번에 한 덩이
+      const older = await api.history(id, { before: first.t + 1, limit: HISTORY_PAGE })
+      const now = state.history[id]
+      if (!now || now[0] !== first) return
+      const end = freshEnd(older, now)
+      set({
+        ...state,
+        history: end > 0 ? { ...state.history, [id]: [...older.slice(0, end), ...now] } : state.history,
+        hasOlder: { ...state.hasOlder, [id]: parentCount(older) >= HISTORY_PAGE },
+      })
+    })()
+    olderLoads.set(id, p)
+    const done = () => { if (olderLoads.get(id) === p) olderLoads.delete(id) }
+    p.then(done, done)
+    return p
   }
 
   // 찾기에서 마지막으로 고른 줄 — 늦게 끝난 앞 고르기가 hitFocus 를 남기지 않게. hitN 은 hitFocus 의 n
@@ -773,6 +860,9 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     hitFocus: state.hitFocus && state.hitFocus.hit.agentId === id ? state.hitFocus : null,
     readCurrent: state.readCurrent === id ? id : null,
   })
+  // 입력창 커서 신호 — 고를 때마다 새로 정한다: focusInput 이면 새 신호, 아니면 지운다(남은 신호가 나중에 커서를 옮기지 않게)
+  let inputN = 0
+  const inputFor = (id: AgentId | null, on: boolean | undefined): UiState['inputFocus'] => (on && id ? { agentId: id, n: ++inputN } : null)
 
   const endTour = async () => {
     tourShown = true
@@ -860,23 +950,28 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       set({ ...state, history: only(state.history), historyStatus: only(state.historyStatus), streaming: {}, thinking, phase, lastText, fresh })
       if (keep) await loadHistory(keep, true)
     },
-    selectAgent(id) {
-      set({ ...state, selectedAgentId: id, fresh: id ? without(state.fresh, id) : state.fresh, ...hitFor(id) })
+    selectAgent(id, o) {
+      set({ ...state, selectedAgentId: id, fresh: id ? without(state.fresh, id) : state.fresh, ...hitFor(id), inputFocus: inputFor(id, o?.focusInput) })
       tellSelected(id)
       if (id) void loadHistory(id)
     },
+    focusInput(id) {
+      if (state.selectedAgentId !== id) return
+      set({ ...state, inputFocus: inputFor(id, true) })
+    },
+    loadOlder,
     selectRoom(id) {
       if (!state.rooms.some(r => r.id === id)) return
-      set({ ...state, roomId: id, selectedAgentId: null, hitFocus: null, readCurrent: null })
+      set({ ...state, roomId: id, selectedAgentId: null, hitFocus: null, readCurrent: null, inputFocus: null })
       tellSelected(null)
     },
-    focusAgent(id) {
+    focusAgent(id, o) {
       const a = state.agents.find(x => x.id === id)
       if (!a) return
       // 방을 바꾸면서 고르기 — selectRoom 은 고르기를 비우니 쓰지 않고 한 번에 바꾼다
       const roomId = state.rooms.some(r => r.id === a.roomId) ? a.roomId : state.roomId
       const mapFocus = { agentId: id, n: (state.mapFocus?.n ?? 0) + 1 }
-      set({ ...state, roomId, selectedAgentId: id, fresh: without(state.fresh, id), mapFocus, ...hitFor(id) })
+      set({ ...state, roomId, selectedAgentId: id, fresh: without(state.fresh, id), mapFocus, ...hitFor(id), inputFocus: inputFor(id, o?.focusInput) })
       tellSelected(id)
       void loadHistory(id)
     },
@@ -914,6 +1009,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
         panelTab: { ...state.panelTab, [id]: 'chat' },
         messageFocus: { agentId: id, messageId, n: (state.messageFocus?.n ?? 0) + 1 },
         ...hitFor(id),
+        inputFocus: null, // 초점은 그 메시지 줄로
       })
       if (other) {
         tellSelected(id)
@@ -941,6 +1037,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
         mapFocus: { agentId: id, n: (state.mapFocus?.n ?? 0) + 1 },
         hitFocus: null,
         readCurrent: state.readCurrent === id ? id : null,
+        inputFocus: null, // 초점은 찾은 줄로(대화 목록 · 지난 대화 읽기)
       })
       if (other) tellSelected(id)
       // 지금 대화 — 기록을 다 받은 뒤(불러오는 중이면 그것까지) 그 줄이 앞이면 그 줄까지. 지난 대화도 대화 탭은 기록이 있어야 한다

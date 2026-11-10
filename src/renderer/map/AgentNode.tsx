@@ -8,6 +8,7 @@ import { displayStatus, issueLine, restLook, unreadFor, type DisplayStatus } fro
 import { createAgentPlan, requestTarget, requestTitle } from '../lib/toolSummary'
 import { ago, FRESH_WORD, initial, josa, lasting, nodeModelLabel, PHASE_WORD, QUESTION_LINK, REST_WORD, SLEEP_HINT, STATUS_LINE, STATUS_WORD } from '../lib/words'
 import { useNow } from '../lib/useNow'
+import { folderText, shortFolder } from '../lib/folder'
 import { MOTION, popOnce, useRise } from '../lib/motion'
 import { useMotion } from '../lib/presence'
 import { peekFresh, takeFresh } from './freshNodes'
@@ -57,6 +58,8 @@ function useCardView(agentId: AgentId) {
     const issue = issueLine(agent, s.requests, s.rooms)
     return {
       agent,
+      // 서버 방이면 그 서버 — 짧은 폴더 앞에 붙인다
+      host: s.rooms.find(r => r.id === agent.roomId)?.remote?.host ?? null,
       request,
       status: issue && status !== 'error' ? ('error' as const) : status,
       issue,
@@ -243,6 +246,12 @@ export function AgentCard({ agentId }: { agentId: AgentId }) {
             )}
             {meta && <span className="nr-meta keep">{meta}</span>}
           </span>
+          {/* 짧은 폴더 — 마지막 두 마디(서버 방은 호스트:), 전체 경로는 title */}
+          {agent.folder && (
+            <span className="nfd trunc" title={folderText(agent.folder, v.host)}>
+              {folderText(shortFolder(agent.folder), v.host)}
+            </span>
+          )}
         </div>
         {/* 묻지 않음(실제 모드 또는 예약)이면 그것만, 아니면 켜졌을 때만 '자동 켬' — '자동 끔' 은 기본이라 그리지 않는다 */}
         {byp ? <span className="au byp">묻지 않음</span> : agent.auto ? <span className="au on">자동 켬</span> : null}

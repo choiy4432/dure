@@ -971,6 +971,18 @@ code {
   grid-row: 2;
 }
 
+/* 짧은 폴더(시안 ② A) — 역할 아래 한 줄, 마지막 두 마디만 mono · 흐리게(전체 경로는 title) */
+.nh .nfd {
+  grid-column: 2 / 4;
+  grid-row: 3;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
 .av {
   flex: none;
   width: 36px;
@@ -1626,6 +1638,56 @@ code {
   font-size: 13px;
   line-height: 18px;
   color: var(--muted);
+}
+
+/*
+ * 작업 폴더 줄(시안 ② A) — 이름·역할 아래 [폴더] 경로, mono · 보조 글색. 가운데 말줄임: 앞(.ph-fd-h)이 줄고 마지막 마디(.ph-fd-t)는 남는다.
+ * 누르면 열기(서버 방은 복사) · 오른쪽 클릭 복사 — 누를 수 있는 줄이라 마우스를 올리면 옅은 바탕. 아이콘이 이름 글 줄에 맞게 왼쪽 여백만큼 당긴다
+ */
+.ph-fd {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% + 6px);
+  min-width: 0;
+  height: 24px;
+  margin: 1px 0 0 -6px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  letter-spacing: 0;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.ph-fd .i {
+  color: var(--muted);
+}
+
+.ph-fd:hover {
+  background: var(--hover);
+  color: var(--text-2);
+}
+
+.ph-fd:hover .i {
+  color: var(--text-3);
+}
+
+.ph-fd-h {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ph-fd-t {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ph-acts {
@@ -2997,6 +3059,9 @@ code {
 .conv-more {
   align-self: center;
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 28px;
   padding: 0 12px;
   border: 1px solid var(--border);
@@ -3008,9 +3073,50 @@ code {
   box-shadow: var(--shadow-sm);
 }
 
-.conv-more:hover {
+.conv-more:hover:not([aria-disabled="true"]) {
   background: var(--subtle);
   border-color: var(--border-strong);
+}
+
+/* 앞 기록을 불러오는 중 — 누를 수 없지만 초점은 남는다(disabled 는 초점을 놓는다) */
+.conv-more[aria-disabled="true"] {
+  cursor: default;
+  color: var(--muted);
+}
+
+/*
+ * 새 글 알약(시안 ② A) — 위로 올려 읽는 중 새 글이 오면 대화 칸 아래 가운데(입력창 바로 위). 칸과 함께 스크롤되지 않는다.
+ * 가운데는 자리로(transform 은 나타나는 움직임이 쓴다)
+ */
+.conv-new {
+  position: absolute;
+  z-index: 2;
+  left: 0;
+  right: 10px;
+  bottom: 12px;
+  width: max-content;
+  margin: 0 auto;
+}
+
+.conv-new-b {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 14px 0 12px;
+  border-radius: var(--radius-pill);
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: var(--shadow-pop);
+  transition: box-shadow 0.15s;
+}
+
+/* 바탕을 밝히지 않고 옅은 고리 — 다크의 --primary-hover 는 흰 글과 4.5:1 이 안 된다 */
+.conv-new-b:hover {
+  box-shadow: var(--shadow-pop), var(--ring-soft);
 }
 
 /*

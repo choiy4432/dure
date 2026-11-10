@@ -5,6 +5,7 @@ import { alwaysAllowLabel, requestTarget, requestTitle } from '../../lib/toolSum
 import { commandLines, detailRows, requestWhy } from '../../lib/requestDetails'
 import { ago } from '../../lib/words'
 import { getStore } from '../../state/store'
+import { onPhone } from '../../lib/phone'
 import { useCall } from './useCall'
 import { useMotion } from '../../lib/presence'
 import { MOTION } from '../../lib/motion'
@@ -82,7 +83,7 @@ export function PermissionCard({ request, agent, now, inInbox = false }: Props) 
         </button>
         {inInbox ? (
           // 목록에서 눈에 안 띄게 영구 허용까지 하지 않게 — 대화를 보고 정하도록 그 에이전트 패널로 보낸다
-          <button type="button" className="lk" onClick={() => getStore().selectAgent(request.agentId)}>
+          <button type="button" className="lk" onClick={() => getStore().selectAgent(request.agentId, { focusInput: !onPhone() })}>
             대화 보기
           </button>
         ) : (

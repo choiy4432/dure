@@ -11,7 +11,7 @@ const agent = (id: string, over: Partial<AgentView> = {}): AgentView => ({
 
 let snapshot: Snapshot
 let handlers: Record<string, ((p: any) => void)[]>
-let history: Mock<(id: string) => Promise<HistoryItem[]>>
+let history: Mock<(id: string, o?: { before?: number; limit?: number }) => Promise<HistoryItem[]>>
 
 const emit = <K extends keyof EngineEventMap>(k: K, p: EngineEventMap[K]) => act(() => (handlers[k] ?? []).forEach(f => f(p)))
 const frames = () => act(async () => { await new Promise(r => setTimeout(r, 60)) })
@@ -45,7 +45,7 @@ beforeEach(() => {
   history = vi.fn(async (_id: string) => CANON)
   ;(window as any).dure = {
     snapshot: async () => snapshot,
-    history: (id: string) => history(id),
+    history: (id: string, o?: { before?: number; limit?: number }) => (o === undefined ? history(id) : history(id, o)),
     describe: async () => ({ commands: [], models: [], permissionMode: 'default' }),
     sendUser: async () => {},
     on: (k: string, fn: (p: any) => void) => {
@@ -298,6 +298,229 @@ describe('ChatList — 아주 긴 대화(Review Focus 1)', () => {
     history.mockResolvedValueOnce(many(300))
     await renderPanel()
     expect(within(conv()).queryByRole('button', { name: /이전 대화/ })).toBeNull()
+  })
+})
+
+describe('ChatList — 이전 대화 더 보기(불러온 것보다 앞 · 시안 ② A)', () => {
+  const notes = (from: number, n: number): HistoryItem[] =>
+    Array.from({ length: n }, (_, i) => ({ t: from + i, kind: 'notice' as const, text: `알림 ${from + i}` }))
+  const older = () => within(conv()).queryByRole('button', { name: '이전 대화 더 보기' })
+  /** 앞에 그리지 않은 줄을 다 편다 — 그다음에야 앞 기록을 불러오는 단추 */
+  const unfold = () => {
+    for (let b = within(conv()).queryByRole('button', { name: /^이전 대화 \d+개 더 보기$/ }); b; b = within(conv()).queryByRole('button', { name: /^이전 대화 \d+개 더 보기$/ })) fireEvent.click(b)
+  }
+  const note = (n: number) => within(conv()).getByText(`알림 ${n}`)
+  afterEach(() => vi.restoreAllMocks())
+
+  it('받은 기록이 500 항목보다 적으면(대화 맨 앞까지 받았다) 없다', async () => {
+    history.mockResolvedValueOnce(notes(1000, 499))
+    await renderPanel()
+    unfold()
+    expect(conv().querySelectorAll('.note')).toHaveLength(499)
+    expect(older()).toBeNull()
+  })
+
+  it('500 항목을 받았으면 그린 줄을 다 편 뒤 맨 위에 — 누르면 history(before: 첫 시각 + 1, limit: 500) 한 번, 같은 시각의 가진 줄은 겹치지 않는다', async () => {
+    history.mockResolvedValueOnce(notes(1000, 500))
+    await renderPanel()
+    expect(older()).toBeNull() // 그리지 않은 앞 줄(이전 대화 200개 더 보기)이 먼저
+    unfold()
+    const b = older()!
+    expect(conv().firstElementChild).toBe(b)
+    expect(b.querySelector('svg.lucide-arrow-up')).not.toBeNull()
+    // 엔진: t < 1001 인 것 가운데 마지막 500 — 이미 가진 1000 도 덩이 끝에 온다
+    history.mockResolvedValueOnce(notes(501, 500))
+    await act(async () => { fireEvent.click(b) })
+    await settle()
+    expect(history).toHaveBeenCalledTimes(2)
+    expect(history).toHaveBeenLastCalledWith('w', { before: 1001, limit: 500 })
+    expect(conv().querySelectorAll('.note')).toHaveLength(999)
+    expect(within(conv()).getAllByText('알림 1000')).toHaveLength(1)
+    expect(conv().querySelector('.note')).toHaveTextContent('알림 501')
+    expect(older()).not.toBeNull() // 덩이가 꽉 찼다 — 그 앞이 더 있을 수 있다
+  })
+
+  it('맨 앞까지 오면(받은 덩이가 500 보다 적다) 단추가 없다 — 누른 단추에 있던 초점은 맨 위 줄로', async () => {
+    history.mockResolvedValueOnce(notes(1000, 500))
+    await renderPanel()
+    unfold()
+    const b = older()!
+    b.focus()
+    history.mockResolvedValueOnce(notes(900, 101))
+    await act(async () => { fireEvent.click(b) })
+    await settle()
+    expect(older()).toBeNull()
+    expect(conv().querySelectorAll('.note')).toHaveLength(600)
+    expect(document.activeElement).toBe(note(900))
+  })
+
+  it('이미 그린 줄은 번호(key · data-line)가 그대로 — 다시 그리지 않고, 앞에 붙은 줄은 그 앞 번호', async () => {
+    history.mockResolvedValueOnce(notes(1000, 500))
+    await renderPanel()
+    unfold()
+    const first = note(1000)
+    expect(first.dataset.line).toBe('0')
+    history.mockResolvedValueOnce(notes(900, 101))
+    await act(async () => { fireEvent.click(older()!) })
+    await settle()
+    expect(note(1000)).toBe(first)
+    expect(first.dataset.line).toBe('0')
+    expect(note(900).dataset.line).toBe('-100')
+  })
+
+  it('스크롤 자리 유지 — 앞에 줄이 붙어도 보던 줄이 그 자리에 그대로', async () => {
+    history.mockResolvedValueOnce(notes(1000, 500))
+    await renderPanel()
+    unfold()
+    const el = conv()
+    // jsdom 은 배치를 하지 않는다 — 대화 칸 맨 위는 0, 칸 안 요소는 차례대로 20px 씩
+    const ROW = 20
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => el.children.length * ROW })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 400 })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const i = this.parentElement === el ? Array.prototype.indexOf.call(el.children, this) : -1
+      const top = i >= 0 ? i * ROW - el.scrollTop : 0
+      const height = this === el ? 400 : ROW
+      return { top, bottom: top + height, left: 0, right: 0, width: 0, height, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    })
+    el.scrollTop = 30
+    fireEvent.scroll(el)
+    const seen = note(1000) // 맨 위에 걸친 줄 — 위 10px 이 칸 밖
+    expect(seen.getBoundingClientRect().top).toBe(-10)
+    history.mockResolvedValueOnce(notes(501, 500))
+    await act(async () => { fireEvent.click(older()!) })
+    await settle()
+    expect(seen.getBoundingClientRect().top).toBe(-10)
+    expect(el.scrollTop).toBe(30 + 499 * ROW)
+  })
+
+  it('불러오는 동안 다시 눌러도 한 번만 · 실패하면 "다시 시도" — 다시 누르면 다시 부른다', async () => {
+    history.mockResolvedValueOnce(notes(1000, 500))
+    await renderPanel()
+    unfold()
+    let fail!: (e: Error) => void
+    history.mockReturnValueOnce(new Promise<HistoryItem[]>((_, reject) => { fail = reject }))
+    fireEvent.click(older()!)
+    const busy = within(conv()).getByRole('button', { name: '이전 대화를 불러오는 중…' })
+    expect(busy).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(busy)
+    expect(history).toHaveBeenCalledTimes(2)
+    await act(async () => { fail(new Error('읽을 수 없어요')) })
+    await settle()
+    const retry = within(conv()).getByRole('button', { name: '이전 대화를 불러오지 못했어요 · 다시 시도' })
+    expect(retry).toBe(busy) // 같은 단추 — 초점이 그대로
+    history.mockResolvedValueOnce(notes(900, 101))
+    await act(async () => { fireEvent.click(retry) })
+    await settle()
+    expect(history).toHaveBeenCalledTimes(3)
+    expect(conv().querySelectorAll('.note')).toHaveLength(600)
+  })
+
+  it('새 대화(경계)가 오면 앞 기록은 없다', async () => {
+    history.mockResolvedValueOnce(notes(1000, 500))
+    await renderPanel()
+    unfold()
+    expect(older()).not.toBeNull()
+    await emit('history', { agentId: 'w', item: { t: 2000, kind: 'boundary' } })
+    expect(older()).toBeNull()
+  })
+})
+
+describe('ChatList — 새 글 알약(시안 ② A)', () => {
+  function fakeScroll(el: HTMLElement, o: { scrollHeight: number; clientHeight: number }) {
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => o.scrollHeight })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => o.clientHeight })
+  }
+  const pill = () => screen.queryByRole('button', { name: /^새 글/ })
+  const note = (t: number): HistoryItem => ({ t, kind: 'notice', text: `새 알림 ${t}` })
+  /** 위로 올려 읽는 중(바닥에서 벗어남) */
+  async function readUp() {
+    const r = await renderPanel()
+    const el = conv()
+    const size = { scrollHeight: 1000, clientHeight: 400 }
+    fakeScroll(el, size)
+    el.scrollTop = 100
+    fireEvent.scroll(el)
+    return { ...r, el, size }
+  }
+
+  it('맨 아래에 붙어 있으면 새 줄이 와도 없다', async () => {
+    await renderPanel()
+    const el = conv()
+    fakeScroll(el, { scrollHeight: 1000, clientHeight: 400 })
+    el.scrollTop = 600
+    fireEvent.scroll(el)
+    await emit('history', { agentId: 'w', item: note(10) })
+    expect(pill()).toBeNull()
+  })
+
+  it('위로 올려 읽는 중 새 줄이 오면 대화 칸 아래 가운데 "↓ 새 글 N개" — 누르면 맨 아래로, 알약은 사라지고 커서는 입력창', async () => {
+    const { el, size } = await readUp()
+    expect(pill()).toBeNull()
+    await emit('history', { agentId: 'w', item: note(10) })
+    expect(pill()).toHaveAccessibleName('새 글 1개')
+    expect(pill()!.querySelector('svg.lucide-arrow-down')).not.toBeNull()
+    expect(pill()!.closest('.conv-wrap')).not.toBeNull()
+    expect(el.contains(pill())).toBe(false) // 글과 함께 스크롤되지 않는다
+    await emit('history', { agentId: 'w', item: note(11) })
+    expect(pill()).toHaveAccessibleName('새 글 2개')
+    expect(el.scrollTop).toBe(100) // 따라 내려가지 않는다
+    size.scrollHeight = 1200
+    fireEvent.click(pill()!)
+    expect(el.scrollTop).toBe(1200)
+    expect(pill()).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: '웹 화면에게 보낼 메시지' }))
+    await emit('history', { agentId: 'w', item: note(12) })
+    expect(pill()).toBeNull() // 다시 바닥에 붙었다
+  })
+
+  it('바닥까지 스크롤하면 사라진다', async () => {
+    const { el } = await readUp()
+    await emit('history', { agentId: 'w', item: note(10) })
+    expect(pill()).not.toBeNull()
+    el.scrollTop = 600
+    fireEvent.scroll(el)
+    expect(pill()).toBeNull()
+  })
+
+  it('Claude 답이 흐르기 시작해도 1 — 다 흘러 줄이 되어도 1(두 번 세지 않는다)', async () => {
+    await readUp()
+    await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '새 답을 쓰는 중' } })
+    expect(pill()).toHaveAccessibleName('새 글 1개')
+    await emit('history', { agentId: 'w', item: { t: 10, kind: 'assistant', blocks: [{ type: 'text', text: '새 답을 쓰는 중이에요.' }] } })
+    expect(pill()).toHaveAccessibleName('새 글 1개')
+  })
+
+  it('읽던 차례의 Claude 답이 이어 자라도(같은 줄) 1 — 흐르는 글이 또 와도 1', async () => {
+    history.mockResolvedValueOnce(CANON.slice(0, 5)) // 차례가 아직 안 끝났다
+    await readUp()
+    await emit('history', { agentId: 'w', item: { t: 10, kind: 'assistant', blocks: [{ type: 'text', text: '이어서 테스트도 돌렸어요.' }] } })
+    expect(pill()).toHaveAccessibleName('새 글 1개')
+    await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '하나 더' } })
+    expect(pill()).toHaveAccessibleName('새 글 1개')
+    await emit('history', { agentId: 'w', item: { t: 11, kind: 'assistant', blocks: [{ type: 'text', text: '하나 더 고쳤어요.' }] } })
+    expect(pill()).toHaveAccessibleName('새 글 1개')
+  })
+
+  it('받은 메시지 뒤에 Claude 답이 흐르면 2 — 다 흘러도 2', async () => {
+    await readUp()
+    await emit('history', { agentId: 'w', item: { t: 10, kind: 'user', source: 'relay', parts: [{ type: 'text', text: '[두레 메시지 — 보낸 쪽: 기획(기획서 · 문구)]\n배너 문구 바꿔 주세요' }] } })
+    expect(pill()).toHaveAccessibleName('새 글 1개')
+    await emit('agent-event', { agentId: 'w', event: { kind: 'text-delta', text: '바꿀게요' } })
+    expect(pill()).toHaveAccessibleName('새 글 2개')
+    await emit('history', { agentId: 'w', item: { t: 11, kind: 'assistant', blocks: [{ type: 'text', text: '바꿀게요.' }] } })
+    expect(pill()).toHaveAccessibleName('새 글 2개')
+  })
+
+  it('내가 보내면 사라진다(맨 아래로 붙는다)', async () => {
+    await readUp()
+    await emit('history', { agentId: 'w', item: note(10) })
+    expect(pill()).not.toBeNull()
+    const box = screen.getByRole('textbox', { name: '웹 화면에게 보낼 메시지' })
+    fireEvent.change(box, { target: { value: '이것도 해 줘' } })
+    fireEvent.keyDown(box, { key: 'Enter' })
+    await settle()
+    expect(pill()).toBeNull()
   })
 })
 

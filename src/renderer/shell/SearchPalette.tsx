@@ -3,7 +3,7 @@ import { Monitor, Search, Server } from 'lucide-react'
 import type { SearchHit } from '../../engine/types'
 import type { AgentView } from '../../shared/ipcContract'
 import { getStore, useDure } from '../state/store'
-import { openDialogCount, useDialogFocus } from '../lib/dialog'
+import { openDialogCount, typingElsewhere, useDialogFocus } from '../lib/dialog'
 import { MOTION } from '../lib/motion'
 import { useMotion } from '../lib/presence'
 import { useNow } from '../lib/useNow'
@@ -16,17 +16,6 @@ export const SEARCH_WAIT_MS = 150
 /** Ctrl+K(맥 Cmd+K) — Shift·Alt 가 같이 눌렸으면 아니다. 한글 자판이어도 같은 자리(code)면 */
 export function isSearchKey(e: Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>): boolean {
   return (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.code === 'KeyK' || e.key.toLowerCase() === 'k')
-}
-
-/** 글을 받지 않는 input 꼴 — 이런 칸에 초점이 있어도 Ctrl+K 는 연다 */
-const NOT_TEXT = new Set(['button', 'checkbox', 'radio', 'range', 'submit', 'reset', 'file', 'color', 'image'])
-
-/** 글을 쓰는 중인 다른 칸(설정 숫자 칸 · 이름 고치기 등) — 입력창(Composer)은 빼고. 그 칸의 글쓰기를 빼앗지 않는다 */
-function typingElsewhere(el: Element | null): boolean {
-  if (!(el instanceof HTMLElement) || el.closest('.pnl-cmp')) return false
-  if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true
-  if (el instanceof HTMLInputElement) return !NOT_TEXT.has(el.type)
-  return el.isContentEditable === true
 }
 
 /**
@@ -181,8 +170,9 @@ export function SearchPalette({ onClose }: { onClose: () => void }) {
   const choose = useCallback((o: Option) => {
     onClose()
     const store = getStore()
+    // 에이전트는 그 입력창에 커서까지 — 대화 줄은 그 줄이 초점을 받는다(openHit)
     if (o.kind === 'hit') void store.openHit(o.hit)
-    else if (o.row.kind === 'agent') store.focusAgent(o.row.agent.id)
+    else if (o.row.kind === 'agent') store.focusAgent(o.row.agent.id, { focusInput: true })
     else store.selectRoom(o.row.room.id)
   }, [onClose])
 

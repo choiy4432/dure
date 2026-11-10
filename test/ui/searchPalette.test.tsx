@@ -243,6 +243,23 @@ describe('검색창 — 에이전트 · 방 묶음', () => {
     expect(store.getState().roomId).toBe('r1')
     expect(store.getState().selectedAgentId).toBeNull()
   })
+
+  it('에이전트를 고르면 그 에이전트 입력창에 커서 — 앞 에이전트 입력창에서 열었어도(그 입력창은 사라진다, 몸통에 떨어지지 않게)', async () => {
+    const store = await renderApp()
+    await act(async () => { store.selectAgent('w') })
+    await wait()
+    const mine = screen.getByRole('textbox', { name: '웹에게 보낼 메시지' })
+    mine.focus()
+    await ctrlK(mine)
+    expect(palette()).not.toBeNull()
+    await type('서버')
+    expect(optionNames()[0]).toBe('서버')
+    await key('Enter')
+    await wait()
+    expect(palette()).toBeNull()
+    expect(store.getState().selectedAgentId).toBe('s')
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: '서버에게 보낼 메시지' }))
+  })
 })
 
 describe('검색창 — 대화 묶음', () => {

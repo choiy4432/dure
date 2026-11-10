@@ -686,3 +686,40 @@ describe('AgentNode — 서버 방 문제는 오류처럼', () => {
     expect(card.querySelector<HTMLElement>('.nf-err')!.title).toBe('포트 전달이 막혀 있어요')
   })
 })
+
+describe('AgentNode — 짧은 폴더(시안 ② A)', () => {
+  const folderOf = (card: HTMLElement) => card.querySelector<HTMLElement>('.nfd')
+
+  it.each([
+    ['C:\\work\\shop\\web', '…\\shop\\web'],
+    ['C:\\w', 'C:\\w'],
+    ['D:\\projects\\app\\', 'D:\\projects\\app'],
+    ['\\\\nas\\share\\proj\\web', '…\\proj\\web'],
+  ])('%s → %s — 역할 아래 한 줄, 전체 경로는 title', async (folder, short) => {
+    snapshot.agents = [agent('d', { name: '디자인', role: '화면 설계', folder })]
+    const { card } = await renderCard()
+    const f = folderOf(card)!
+    expect(f.textContent).toBe(short)
+    expect(f.title).toBe(folder)
+    expect(f.previousElementSibling?.classList.contains('nr')).toBe(true)
+  })
+
+  it('역할이 없어도 이름 아래에 있다', async () => {
+    snapshot.agents = [agent('d', { name: '디자인', role: '', folder: 'C:\\work\\shop\\web' })]
+    const { card } = await renderCard()
+    expect(folderOf(card)!.textContent).toBe('…\\shop\\web')
+  })
+
+  it.each([
+    ['~/shop/api', 'dev:~/shop/api'],
+    ['/home/me/shop/api', 'dev:…/shop/api'],
+    ['/srv/app', 'dev:/srv/app'],
+  ])('서버 방은 호스트:경로 — %s → %s', async (folder, short) => {
+    snapshot.rooms = [{ id: 'r1', name: '웹 리뉴얼', createdAt: 1, remote: { host: 'dev' } }]
+    snapshot.agents = [agent('d', { name: '서버', folder })]
+    const { card } = await renderCard()
+    const f = folderOf(card)!
+    expect(f.textContent).toBe(short)
+    expect(f.title).toBe(`dev:${folder}`)
+  })
+})

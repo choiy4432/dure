@@ -352,6 +352,22 @@ export const SEARCH = {
   countConvs: (n: number, more: boolean) => `대화 ${n}곳${more ? ' 넘게' : ''}`,
 } as const
 
+/** 대화 패널 다듬기(시안 ② A) — 머리의 폴더 줄 · 대화 맨 위 앞 기록 불러오기 · 위로 읽는 중 새 글 알약 */
+export const CHAT_PANEL = {
+  /** 폴더 줄 이름 — 보이는 경로를 그대로 담는다(이름에 보이는 글이 든다) */
+  openFolder: (path: string) => `폴더 열기 · ${path}`,
+  copyPath: (path: string) => `경로 복사 · ${path}`,
+  openHint: '누르면 폴더를 열어요 · 오른쪽 클릭은 경로 복사',
+  remoteHint: '서버 폴더라 이 PC 에서 열 수 없어요 — 누르면 경로를 복사해요',
+  copied: '경로를 복사했어요',
+  copyFailed: '경로를 복사하지 못했어요',
+  older: '이전 대화 더 보기',
+  olderLoading: '이전 대화를 불러오는 중…',
+  olderFailed: '이전 대화를 불러오지 못했어요 · 다시 시도',
+  newLines: (n: number) => `새 글 ${n}개`,
+  toBottom: '맨 아래로 가요',
+} as const
+
 /** 그날 — 오늘 · 어제 · 올해면 'M월 D일' · 아니면 'YYYY년 M월 D일'(로컬 시간) */
 export function dayText(at: number, now: number): string {
   const d = new Date(at)

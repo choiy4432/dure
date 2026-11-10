@@ -1322,3 +1322,115 @@ describe('Composer — 휴대폰 첨부', () => {
     expect(chipText(fileChips()[0])).toEqual(['huge.png', '10 B'])
   })
 })
+
+describe('Composer — 고르면 입력창에 커서(시안 ② A · focusNotStolen)', () => {
+  const box = (name: string) => screen.getByRole('textbox', { name: `${name}에게 보낼 메시지` })
+
+  /** 관계도 + 패널 — 처음엔 아무도 고르지 않았다(패널은 내가 할 일) */
+  async function renderApp() {
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { RelationMap } = await import('../../src/renderer/map/RelationMap')
+    const { AgentPanel } = await import('../../src/renderer/panel/AgentPanel')
+    await act(async () => { await getStore().init() })
+    const r = render(<><RelationMap /><AgentPanel /></>)
+    await settle()
+    return { ...r, store: getStore() }
+  }
+  const card = (container: HTMLElement, id: string) => container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"]`)!
+
+  it('관계도 카드를 누르면 그 에이전트 입력창에 커서 — 지금 고른 카드를 다시 눌러도', async () => {
+    const { container } = await renderApp()
+    await act(async () => { fireEvent.click(card(container, 'p')) })
+    await settle()
+    expect(document.activeElement).toBe(box('기획'))
+    box('기획').blur()
+    await act(async () => { fireEvent.click(card(container, 'p')) })
+    await settle()
+    expect(document.activeElement).toBe(box('기획'))
+  })
+
+  it('카드에서 Enter 로 골라도 커서가 입력창으로', async () => {
+    const { container } = await renderApp()
+    const node = card(container, 'w')
+    node.focus()
+    await act(async () => { fireEvent.keyDown(node, { key: 'Enter' }) })
+    await settle()
+    expect(document.activeElement).toBe(box('웹 화면'))
+  })
+
+  it('할 일의 [대화 보기](새 결과) — 그 에이전트 입력창에 커서', async () => {
+    await renderApp()
+    await emit('history', { agentId: 'p', item: { t: 5, kind: 'result', ok: true, subtype: 'success' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '대화 보기' })) })
+    await settle()
+    expect(document.activeElement).toBe(box('기획'))
+  })
+
+  it('할 일의 승인 카드 [대화 보기] — 그 에이전트 입력창에 커서', async () => {
+    snapshot.agents = [agent('w', { name: '웹 화면', status: 'awaiting' }), agent('p', { name: '기획' })]
+    snapshot.requests = [{ id: 'q1', agentId: 'w', toolName: 'Write', input: { file_path: 'C:\\w\\a.ts' }, kind: 'permission', createdAt: Date.now() }]
+    await renderApp()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '대화 보기' })) })
+    await settle()
+    expect(document.activeElement).toBe(box('웹 화면'))
+  })
+
+  it('다른 길로 고르면(알림 누르기 · 안내 투어 · 다시 시도 등) 커서를 옮기지 않는다 — 남은 신호로 나중에 가지도 않는다', async () => {
+    const { store } = await renderPanel()
+    expect(document.activeElement).toBe(document.body)
+    await act(async () => store.selectAgent('p'))
+    expect(document.activeElement).toBe(document.body)
+    await act(async () => store.focusAgent('w'))
+    expect(document.activeElement).toBe(document.body)
+    await act(async () => store.selectAgent('p', { focusInput: true }))
+    expect(document.activeElement).toBe(box('기획'))
+    box('기획').blur()
+    await act(async () => store.selectAgent('w'))
+    await act(async () => store.selectAgent('p'))
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('focusNotStolen — 다른 입력칸(설정 숫자 칸 등)에 쓰는 중이면 커서를 빼앗지 않는다', async () => {
+    const { store } = await renderPanel()
+    const other = document.createElement('input')
+    other.type = 'number'
+    document.body.append(other)
+    other.focus()
+    try {
+      await act(async () => store.selectAgent('p', { focusInput: true }))
+      expect(box('기획')).toBeInTheDocument()
+      expect(document.activeElement).toBe(other)
+    } finally {
+      other.remove()
+    }
+  })
+
+  it('focusNotStolen — 창(확인 대화상자 · 떠 있는 창)이 떠 있으면 그대로', async () => {
+    const { store } = await renderPanel()
+    type('/clear')
+    await settle()
+    key('Enter')
+    const dlg = screen.getByRole('alertdialog', { name: '지금까지 대화를 접고 새로 시작할까요?' })
+    const was = document.activeElement
+    expect(dlg.contains(was)).toBe(true)
+    await act(async () => store.selectAgent('w', { focusInput: true }))
+    expect(document.activeElement).toBe(was)
+    fireEvent.click(within(dlg).getByRole('button', { name: '취소' }))
+
+    // 대화상자 차례에 들지 않은 떠 있는 창(aria-modal)도 — 나가는 중(inert)인 창은 아니다
+    const modal = document.createElement('div')
+    modal.setAttribute('role', 'dialog')
+    modal.setAttribute('aria-modal', 'true')
+    document.body.append(modal)
+    try {
+      ;(document.activeElement as HTMLElement | null)?.blur()
+      await act(async () => store.selectAgent('p', { focusInput: true }))
+      expect(document.activeElement).toBe(document.body)
+      modal.setAttribute('inert', '')
+      await act(async () => store.selectAgent('p', { focusInput: true }))
+      expect(document.activeElement).toBe(box('기획'))
+    } finally {
+      modal.remove()
+    }
+  })
+})

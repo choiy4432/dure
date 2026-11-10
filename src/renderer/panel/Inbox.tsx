@@ -10,6 +10,7 @@ import { MOTION } from '../lib/motion'
 import { createAgentPlan, requestTitle } from '../lib/toolSummary'
 import { FRESH_WORD, PHASE_WORD, ago, elapsed, panelWord } from '../lib/words'
 import { Clamp } from '../lib/Clamp'
+import { onPhone } from '../lib/phone'
 import { MessageCard } from './cards/MessageCard'
 import { PlanCard } from './cards/PlanCard'
 import { PermissionCard } from './cards/PermissionCard'
@@ -17,6 +18,8 @@ import { HeldChainCard } from './cards/HeldChainCard'
 import { readQuestions } from './cards/QuestionCard'
 
 const select = (id: AgentId) => getStore().selectAgent(id)
+/** [대화 보기] — 그 에이전트로 가서 입력창에 커서(휴대폰은 자판이 튀어 오르니 아니다) */
+const viewChat = (id: AgentId) => getStore().selectAgent(id, { focusInput: !onPhone() })
 
 /** 질문 항목 — 보기를 여기서 고르게 하지 않고(길다) 첫 질문 한 줄만 보여 그 에이전트 패널로 보낸다 */
 function QuestionItem({ request, name, now }: { request: PendingRequest; name: string; now: number }) {
@@ -82,7 +85,7 @@ function FreshItem({ agentId, name, text, at, now }: { agentId: AgentId; name: s
         </Clamp>
       )}
       <div className="ab">
-        <button type="button" className="btn sec sm" onClick={() => select(agentId)}>
+        <button type="button" className="btn sec sm" onClick={() => viewChat(agentId)}>
           대화 보기
         </button>
       </div>
