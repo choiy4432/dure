@@ -25,7 +25,7 @@ final class LaunchUrls {
         final String host;
         /** CONFIRM: [바꾸기] 를 누르면 할 일(OPEN — 새 PC 를 기억하고 받은 주소를 연다) */
         final Decision change;
-        /** CONFIRM: [그대로] 를 누르면 할 일(OPEN — 기억한 PC 를 늘 하던 대로 연다) */
+        /** CONFIRM: [그대로] 를 누르면 할 일(OPEN — 기억한 PC 를 늘 하던 대로 연다) · 기억한 PC 가 없는 첫 확인이면 null([취소] = 저장 없이 처음 쓰기) */
         final Decision keep;
 
         private Decision(Kind kind, String url, String save, String host, Decision change, Decision keep) {
@@ -52,7 +52,7 @@ final class LaunchUrls {
 
     /**
      * 무엇을 할지 — received: VIEW 인텐트로 받은 주소(없으면 null) · saved: 기억한 값(없으면 null) · versionCode: 앱 판(?app=).
-     * - 받은 주소가 맞으면(https *.ts.net): 기억한 게 없으면 그 origin 을 기억하고 열기 · 같은 PC 면 그냥 열기 · 다른 PC 면 묻기
+     * - 받은 주소가 맞으면(https *.ts.net): 같은 PC 면 그냥 열기 · 기억한 게 없거나 다른 PC 면 묻기(기억한 게 없을 때의 [취소] = keep 이 null)
      *   (*.ts.net 이면 Funnel 로 공개된 남의 주소일 수도 있다 — 모르는 새 PC 로 몰래 바뀌지 않게)
      * - 받은 주소가 없거나 맞지 않으면: 기억한 PC 의 origin + /mobile.html 을 열기(기억한 것은 덮지 않는다) · 그것도 없으면 처음 쓰기
      * 기억은 origin 만 한다 — 받은 주소의 경로·쿼리·#(짝 맺기 열쇠·깊은 링크)은 그때 한 번만 연다.
@@ -63,8 +63,8 @@ final class LaunchUrls {
         String url = acceptedUrl(received);
         if (url == null) return keep == null ? Decision.firstRun() : keep;
         String origin = originOf(url);
-        if (savedOrigin == null) return Decision.open(launchUrl(url, versionCode), origin);
-        if (origin.equals(savedOrigin)) return Decision.open(launchUrl(url, versionCode), null);
+        if (savedOrigin != null && origin.equals(savedOrigin)) return Decision.open(launchUrl(url, versionCode), null);
+        // 기억한 PC 가 없을 때(keep == null)도 묻는다 — 거절하면 아무것도 기억하지 않고 처음 쓰기 화면
         return Decision.confirm(origin.substring(origin.indexOf("://") + 3), Decision.open(launchUrl(url, versionCode), origin), keep);
     }
 

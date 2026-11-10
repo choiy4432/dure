@@ -59,11 +59,19 @@ public class LaunchUrlsTest {
     // ── decide: 시작 화면이 할 일 ──
 
     @Test
-    public void decideNewPcWithNothingSavedSavesOriginAndOpensFullUrl() {
+    public void firstOriginAsks() {
+        // 기억한 PC 가 없어도 받은 *.ts.net 주소는 묻는다 — 묻기 전에는 아무것도 기억하지 않고 열지도 않는다
         LaunchUrls.Decision d = LaunchUrls.decide(PC + "/mobile.html?x=1#pair=k", null, 3);
-        assertEquals(LaunchUrls.Decision.Kind.OPEN, d.kind);
-        assertEquals(PC + "/mobile.html?x=1&app=3#pair=k", d.url);
-        assertEquals(PC, d.save); // 기억은 origin 만(쿼리·# 은 그때 한 번 연다)
+        assertEquals(LaunchUrls.Decision.Kind.CONFIRM, d.kind);
+        assertEquals("pc.tail0000.ts.net:47615", d.host);
+        assertNull(d.url);
+        assertNull(d.save);
+        // [잇기] — origin 만 기억하고(쿼리·# 은 그때 한 번 연다) 받은 주소를 연다
+        assertEquals(LaunchUrls.Decision.Kind.OPEN, d.change.kind);
+        assertEquals(PC + "/mobile.html?x=1&app=3#pair=k", d.change.url);
+        assertEquals(PC, d.change.save);
+        // [취소] — 기억할 것이 없다(keep 없음 = 저장 없이 처음 쓰기 화면)
+        assertNull(d.keep);
     }
 
     @Test
@@ -142,6 +150,10 @@ public class LaunchUrlsTest {
         // 못 읽거나 *.ts.net 이 아닌 값은 기억한 게 없는 것으로
         assertEquals(LaunchUrls.Decision.Kind.FIRST_RUN, LaunchUrls.decide(null, "not a url", 3).kind);
         assertEquals(LaunchUrls.Decision.Kind.FIRST_RUN, LaunchUrls.decide(null, "https://evil.example", 3).kind);
-        assertEquals(PC, LaunchUrls.decide(PC + "/mobile.html", "https://evil.example", 3).save);
+        // 망가진 기억값도 기억 없음과 같다 — 묻는다
+        LaunchUrls.Decision d = LaunchUrls.decide(PC + "/mobile.html", "https://evil.example", 3);
+        assertEquals(LaunchUrls.Decision.Kind.CONFIRM, d.kind);
+        assertEquals(PC, d.change.save);
+        assertNull(d.keep);
     }
 }

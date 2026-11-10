@@ -702,7 +702,7 @@ test('켜진 채 PC 이름을 바꾸면 — 다시 열기 전에 문부터: 예�
 })
 
 const MOVED = '주소가 바뀌었어요 — 휴대폰을 다시 짝 맺어 주세요'
-const DEVICE = { id: 'd1', name: '폰1', createdAt: 1, lastSeen: null, tokenHash: HASH }
+const DEVICE = { id: 'd1', name: '폰1', createdAt: Date.now(), lastSeen: null, tokenHash: HASH }
 
 test('Funnel 때문에 포트를 옮겨 다시 열면 — 짝 맺은 휴대폰이 있으면 주소가 바뀌었다는 알림 · 봤다고 하면 지운다', async () => {
   seed({ devices: [DEVICE] })
@@ -1045,6 +1045,20 @@ test('끊기 — unpair 와 kick 을 같은 틱에', async () => {
   expect(c.state().devices).toEqual([])
 })
 
+test('idleDeviceExpires — 켤 때 30일 넘게 안 쓴 기기는 목록에서 빠지고(알림 구독도) 쓴 기기는 남는다', async () => {
+  const DAY = 24 * 60 * 60 * 1000
+  seed({
+    devices: [
+      { id: 'old', name: '옛 폰', createdAt: Date.now() - 90 * DAY, lastSeen: Date.now() - 31 * DAY, tokenHash: HASH, subscription: SUB },
+      { id: 'new', name: '새 폰', createdAt: Date.now() - 90 * DAY, lastSeen: Date.now() - 29 * DAY, tokenHash: 'b'.repeat(64) },
+    ],
+  })
+  const { c } = make()
+  await c.set({ enabled: true })
+  expect(c.state().devices.map((d) => d.id)).toEqual(['new'])
+  expect(saved().devices.map((d: { id: string }) => d.id)).toEqual(['new'])
+})
+
 test('connected — 소켓이 열린 기기 수 · 바뀔 때만 phone 사건', async () => {
   const { c, servers, emitted } = make()
   await c.set({ enabled: true })
@@ -1104,8 +1118,8 @@ test('서버에 잇는 것 — 휴대폰 디스패처(휴대폰 메서드 거절
 test('알림 — PC 쓰는 중(idle active)이면 안 보냄 · 화면 보는 기기는 건너뜀', async () => {
   seed({
     devices: [
-      { id: 'd1', name: '폰1', createdAt: 1, lastSeen: null, tokenHash: HASH, subscription: SUB },
-      { id: 'd2', name: '폰2', createdAt: 1, lastSeen: null, tokenHash: 'b'.repeat(64), subscription: { ...SUB, endpoint: 'https://fcm.googleapis.com/fcm/send/def' } },
+      { id: 'd1', name: '폰1', createdAt: Date.now(), lastSeen: null, tokenHash: HASH, subscription: SUB },
+      { id: 'd2', name: '폰2', createdAt: Date.now(), lastSeen: null, tokenHash: 'b'.repeat(64), subscription: { ...SUB, endpoint: 'https://fcm.googleapis.com/fcm/send/def' } },
     ],
   })
   const engine = Object.assign(new EventEmitter(), { agents: () => [{ id: 'a1', name: '백엔드' }], heldInput: () => 0 })
@@ -1127,8 +1141,8 @@ test('알림 — PC 쓰는 중(idle active)이면 안 보냄 · 화면 보는 �
 test('알림 — PC 쓰는 중이라 미룬 것은 잠그면(lock-screen) 보냄 · 화면 보던 휴대폰이 나가면(onVisible) 그 휴대폰에 · dispose 면 잠금 신호를 풂', async () => {
   seed({
     devices: [
-      { id: 'd1', name: '폰1', createdAt: 1, lastSeen: null, tokenHash: HASH, subscription: SUB },
-      { id: 'd2', name: '폰2', createdAt: 1, lastSeen: null, tokenHash: 'b'.repeat(64), subscription: { ...SUB, endpoint: 'https://fcm.googleapis.com/fcm/send/def' } },
+      { id: 'd1', name: '폰1', createdAt: Date.now(), lastSeen: null, tokenHash: HASH, subscription: SUB },
+      { id: 'd2', name: '폰2', createdAt: Date.now(), lastSeen: null, tokenHash: 'b'.repeat(64), subscription: { ...SUB, endpoint: 'https://fcm.googleapis.com/fcm/send/def' } },
     ],
   })
   const engine = Object.assign(new EventEmitter(), { agents: () => [{ id: 'a1', name: '백엔드' }], heldInput: () => 0 })

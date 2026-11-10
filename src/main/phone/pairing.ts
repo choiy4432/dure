@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { performance } from 'node:perf_hooks'
-import { PAIR_TTL_MS, type PhoneDevice } from '../../shared/phoneTypes'
+import { PAIR_TTL_MS, PHONE_IDLE_MS, type PhoneDevice } from '../../shared/phoneTypes'
 import { cleanDeviceName, publicDevice, type PhoneStore, type StoredPhoneDevice } from './phoneStore'
 
 // 짝 맺기 — PC 가 짝 코드(QR, 32바이트 hex)와 6자리 숫자를 하나씩 내고, 휴대폰이 그중 하나를 내면 기기 토큰(32바이트 base64url)을 준다.
@@ -37,8 +37,10 @@ export interface Pairing {
    * from = 소켓의 원격 주소(tailscale serve 뒤라 사실상 하나) — 짝 하나당 상한(PAIR_TOTAL_FAIL_MAX)은 from 과 상관없다
    */
   redeem(secret: string, deviceName: string, from: string): RedeemResult
-  /** 토큰이 짝 맺은 기기의 것이면 그 기기(화면용 칸만), 아니면 null — store 의 캐시를 보므로 디스크를 읽지 않는다 */
+  /** 토큰이 짝 맺은 기기의 것이면(30일 넘게 안 쓴 기기면 그 자리에서 지우고 null — 짝이 풀린 것) 그 기기(화면용 칸만), 아니면 null — store 의 캐시를 보므로 디스크를 읽지 않는다 */
   verify(token: string): PhoneDevice | null
+  /** 30일(PHONE_IDLE_MS) 넘게 안 쓴 기기를 모두 지우고 그 id 들을 준다 — 켤 때 부른다 */
+  expireIdle(): string[]
   /** 기기 지우기 — 그 토큰은 바로 verify 안 됨(열린 연결 닫기는 서버의 kick) */
   unpair(id: string): void
   /** 마지막 접속을 지금으로 — 그 기기를 TOUCH_MIN_MS 안에 이미 썼으면(짝 맺기 포함) 쓰지 않는다 */
@@ -79,7 +81,7 @@ type Fails = { at: number[]; lockedUntil: number }
  */
 export function createPairing(
   store: PhoneStore,
-  o: { now?: () => number; clock?: () => number; randomBytes?: (n: number) => Buffer } = {},
+  o: { now?: () => number; clock?: () => number; randomBytes?: (n: number) => Buffer; onExpire?: (id: string) => void } = {},
 ): Pairing {
   const now = o.now ?? Date.now
   const clock = o.clock ?? o.now ?? (() => performance.now())
@@ -101,6 +103,19 @@ export function createPairing(
     const oldest = fails.keys().next()
     if (!oldest.done && fails.size >= FAIL_KEYS_MAX) fails.delete(oldest.value)
     fails.set(key, f)
+  }
+  const idle = (d: StoredPhoneDevice) => now() - (d.lastSeen ?? d.createdAt) > PHONE_IDLE_MS
+  /** 낡은 기기를 저장소에서 빼고 id 들을 준다 — 알림 구독도 같이 사라져 푸시가 더는 가지 않는다 */
+  const dropIdle = (): string[] => {
+    const cur = store.read().devices
+    const gone = cur.filter(idle).map((d) => d.id)
+    if (gone.length === 0) return []
+    store.write({ devices: cur.filter((d) => !gone.includes(d.id)) })
+    for (const id of gone) {
+      touchedAt.delete(id)
+      try { o.onExpire?.(id) } catch { /* 알림 쪽 탈은 짝 풀기를 막지 않는다 */ }
+    }
+    return gone
   }
   /** 기기 줄 하나를 바꾸거나 빼서 쓴다 — 없는 id 면 쓰지 않는다. 썼으면 true */
   const editDevices = (id: string, edit: (all: StoredPhoneDevice[]) => StoredPhoneDevice[]): boolean => {
@@ -168,8 +183,14 @@ export function createPairing(
       for (const d of store.read().devices) {
         if (crypto.timingSafeEqual(Buffer.from(d.tokenHash, 'hex'), h) && !found) found = d
       }
+      if (found && idle(found)) {
+        dropIdle()
+        return null
+      }
       return found ? publicDevice(found) : null
     },
+
+    expireIdle: dropIdle,
 
     unpair(id) {
       editDevices(id, (all) => all.filter((d) => d.id !== id))

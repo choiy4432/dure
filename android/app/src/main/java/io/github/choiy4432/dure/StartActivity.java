@@ -35,8 +35,8 @@ import java.util.List;
 /**
  * 두레 앱의 시작 화면 — 보이는 화면에서 TWA 를 연다(androidbrowserhelper 의 투명한 LauncherActivity 는 안드로이드 17 에서 아무것도 안 했다, 실측).
  * 무엇을 할지는 LaunchUrls.decide 가 정한다(순수 Java · JUnit):
- * - VIEW 인텐트(크롬의 [두레 앱으로 열기] · 알림 누름)로 https *.ts.net 주소가 오면 — 처음이면 그 PC 의 origin 을 기억하고 그 주소로,
- *   기억한 PC 와 같으면 그냥 그 주소로, 다른 PC 면 '다른 PC 로 바꿀까요?' 를 묻는다.
+ * - VIEW 인텐트(크롬의 [두레 앱으로 열기] · 알림 누름)로 https *.ts.net 주소가 오면 — 기억한 PC 와 같으면 그냥 그 주소로,
+ *   처음이면 '이 PC 와 이을까요?'(잇기 = 그 origin 을 기억하고 그 주소로 · 취소 = 아무것도 기억하지 않고 처음 쓰기), 다른 PC 면 '다른 PC 로 바꿀까요?' 를 묻는다.
  * - 아니면 기억한 PC 의 origin + /mobile.html 로. 기억한 게 없으면 '처음 쓰기' 안내.
  * - 여는 주소에는 앱 판(?app=)을 싣는다 — 웹이 앱 안인 것과 앱 판을 안다.
  * - TWA 는 크롬으로 연다(TwaProvider — 짝 쿠키가 크롬 프로필에 있다. 기본 브라우저가 삼성 인터넷·엣지여도). 크롬이 TWA 를 못 열 때만 androidbrowserhelper 가 고른다.
@@ -143,12 +143,13 @@ public class StartActivity extends Activity {
 
     /** 기억한 PC 와 다른 PC 의 주소 — 바꿀지 묻는다(*.ts.net 이라도 Funnel 로 공개된 남의 주소일 수 있다). 묻는 동안은 로고만, 연결은 아직 */
     private void askSwitch(LaunchUrls.Decision d) {
+        boolean first = d.keep == null; // 기억한 PC 가 없는 첫 주소 — 거절하면 아무것도 기억하지 않는다
         showStart(false);
         ask = new AlertDialog.Builder(this, R.style.Theme_Dure_Dialog)
-                .setTitle(R.string.switch_title)
+                .setTitle(first ? R.string.first_ask_title : R.string.switch_title)
                 .setMessage(d.host)
-                .setPositiveButton(R.string.switch_change, (dialog, which) -> open(d.change))
-                .setNegativeButton(R.string.switch_keep, (dialog, which) -> keep(d.keep))
+                .setPositiveButton(first ? R.string.first_ask_connect : R.string.switch_change, (dialog, which) -> open(d.change))
+                .setNegativeButton(first ? R.string.first_ask_cancel : R.string.switch_keep, (dialog, which) -> keep(d.keep))
                 .setOnCancelListener(dialog -> keep(d.keep)) // 뒤로 = 그대로(바꾸지 않는다)
                 .create();
         ask.setCanceledOnTouchOutside(false);
@@ -157,7 +158,8 @@ public class StartActivity extends Activity {
 
     /** [그대로] — 늘 하던 대로(아이콘으로 연 것과 같다): 다른 시작 화면이 이미 앱을 띄워 두었으면 그쪽을 보이고, 아니면 기억한 PC 를 연다 */
     private void keep(LaunchUrls.Decision d) {
-        if (alive > 1) finish();
+        if (d == null) showFirstRun(); // 첫 확인을 거절 — 저장 없이 처음 쓰기 화면
+        else if (alive > 1) finish();
         else open(d);
     }
 

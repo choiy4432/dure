@@ -9,7 +9,7 @@ import WebSocket, { WebSocketServer, type RawData } from 'ws'
 import { safeName } from '../../engine/attachmentStore'
 import { ATTACH_MAX_BYTES, ATTACH_TOO_BIG } from '../../shared/attachments'
 import type { InvokeResult } from '../../shared/ipcContract'
-import type { PhoneDevice } from '../../shared/phoneTypes'
+import { PHONE_IDLE_MS, type PhoneDevice } from '../../shared/phoneTypes'
 import {
   PHONE_CLOSE_UNPAIRED, PHONE_PATHS, PHONE_WS_MESSAGE_MAX, phoneCookieName, type PhoneAndroidApp, type PhoneMeResponse, type PhoneServerMessage,
 } from '../../shared/phoneWire'
@@ -43,7 +43,7 @@ const SEND_BUFFER_MAX = 16 * 1024 * 1024
 /** 끊기(kick) 뒤 닫기 인사가 안 끝나도 이만큼 뒤엔 끊는다 */
 const KICK_GRACE_MS = 2_000
 /** 쿠키 수명 — 브라우저 상한(400일). WebSocket 을 열 때마다 새로 붙여 늘린다 */
-const COOKIE_MAX_AGE_S = 400 * 24 * 60 * 60
+const COOKIE_MAX_AGE_S = PHONE_IDLE_MS / 1000
 /** 머리글을 받는 시간 상한 — 조금씩 흘려 보내 연결을 붙잡기(slowloris)를 막는다 · 몸은 위의 조용한 시간으로 잰다(requestTimeout 0) */
 const HEADERS_TIMEOUT_MS = 30_000
 /**
@@ -880,6 +880,7 @@ export async function startPhoneServer(o: PhoneServerOptions): Promise<PhoneServ
       }
       c.alive = false
       safely(() => c.ws.ping())
+      safely(() => o.pairing.touch(c.deviceId)) // 오래 열어 둔 연결도 쓰는 중이다 — 유휴 만료로 풀리지 않게(60초에 한 번만 쓴다)
     }
   }, o.limits?.pingMs ?? WS_PING_MS)
   pinger.unref()

@@ -384,6 +384,8 @@ describe('phoneServer', () => {
     expect(pair).toBe(`__Host-dure_phone_47615=${token}`)
     expect(attrs).toEqual(expect.arrayContaining(['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/']))
     expect(attrs.some((a) => /^Max-Age=\d+$/.test(a))).toBe(true)
+    // idleDeviceExpires — 쿠키도 30일(쓸 때마다 다시 붙여 늘린다)
+    expect(attrs).toContain(`Max-Age=${30 * 24 * 60 * 60}`)
     expect(attrs.some((a) => /^domain=/i.test(a))).toBe(false)
     // 옛 이름·다른 포트의 쿠키는 받지 않는다
     for (const other of [`dure_phone=${token}`, `__Host-dure_phone=${token}`, cookie(token, 443), cookie(token, 4761)]) {

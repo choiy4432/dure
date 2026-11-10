@@ -7,7 +7,7 @@ import {
   cleanDeviceName, createPairing, PAIR_FAIL_MAX, PAIR_LOCK_MS, PAIR_TOTAL_FAIL_MAX, TOUCH_MIN_MS,
 } from '../src/main/phone/pairing';
 import { openPhoneStore, type PhoneStore } from '../src/main/phone/phoneStore';
-import { PAIR_TTL_MS, PHONE_NAME_DEFAULT, PHONE_NAME_MAX, type PhoneDevice } from '../src/shared/phoneTypes';
+import { PAIR_TTL_MS, PHONE_IDLE_MS, PHONE_NAME_DEFAULT, PHONE_NAME_MAX, type PhoneDevice } from '../src/shared/phoneTypes';
 
 let dir: string;
 let t: number;
@@ -391,4 +391,65 @@ test('open — 짝 코드가 살아 있는 동안만 true(썼음·취소·5분 �
   expect(p.open()).toBe(true);
   p.redeem(wrongPin(b.pin), 'x', 'from-last');
   expect(p.open()).toBe(false);
+});
+
+test('idleDeviceExpires — 30일 + 1ms 안 쓴 기기는 verify 가 null 이고 저장소에서도 빠짐 · 29일째 쓰면 계속 통함', () => {
+  const expired: string[] = [];
+  const p = createPairing(openPhoneStore(dir), { now, randomBytes: counterBytes(), onExpire: (id) => expired.push(id) });
+  const s = p.start();
+  const a = ok(p.redeem(s.pin, 'A', 'x'));
+  const s2 = p.start();
+  const b = ok(p.redeem(s2.pin, 'B', 'x'));
+  expect(PHONE_IDLE_MS).toBe(30 * 24 * 60 * 60 * 1000);
+  // 29일째 B 가 쓴다 → lastSeen 갱신
+  t += 29 * 24 * 60 * 60 * 1000;
+  expect(p.verify(b.token)?.id).toBe(b.device.id);
+  p.touch(b.device.id);
+  // A 는 짝 맺은 지 30일 + 1ms — 풀림
+  t += 24 * 60 * 60 * 1000 + 1;
+  expect(p.verify(a.token)).toBeNull();
+  expect(expired).toEqual([a.device.id]);
+  expect(openPhoneStore(dir).read().devices.map((d) => d.id)).toEqual([b.device.id]);
+  // B 는 29일째 썼으니 아직 통하고, 또 쓰면 계속 통함
+  expect(p.verify(b.token)?.id).toBe(b.device.id);
+  p.touch(b.device.id);
+  t += 29 * 24 * 60 * 60 * 1000;
+  expect(p.verify(b.token)?.id).toBe(b.device.id);
+  // 정확히 30일은 아직 통함
+  const c = p.start();
+  const d = ok(p.redeem(c.pin, 'C', 'x'));
+  t += PHONE_IDLE_MS;
+  expect(p.verify(d.token)?.id).toBe(d.device.id);
+  t += 1;
+  expect(p.verify(d.token)).toBeNull();
+});
+
+test('idleDeviceExpires — expireIdle 은 켤 때 낡은 기기를 한꺼번에 지우고 lastSeen 이 없으면 createdAt 으로 센다', () => {
+  const expired: string[] = [];
+  const store = openPhoneStore(dir);
+  const p = createPairing(store, { now, randomBytes: counterBytes(), onExpire: (id) => expired.push(id) });
+  const s = p.start();
+  const a = ok(p.redeem(s.pin, 'A', 'x'));
+  const f = store.read();
+  store.write({ devices: f.devices.map((d) => ({ ...d, lastSeen: null })) });
+  t += PHONE_IDLE_MS + 1;
+  expect(p.expireIdle()).toEqual([a.device.id]);
+  expect(expired).toEqual([a.device.id]);
+  expect(store.read().devices).toEqual([]);
+  expect(p.expireIdle()).toEqual([]);
+});
+
+test('newPairingClearsLock — 틀림 상한으로 막히고 짝이 닫힌 뒤에도 PC 가 새 짝 맺기를 시작하면 바로 낼 수 있음', () => {
+  const p = createPairing(openPhoneStore(dir), { now, randomBytes: counterBytes() });
+  const s = p.start();
+  for (let i = 0; i < PAIR_FAIL_MAX; i++) p.redeem(wrongPin(s.pin), 'x', '127.0.0.1');
+  expect(p.redeem(s.pin, 'x', '127.0.0.1')).toEqual({ error: 'locked' });
+  const s2 = p.start();
+  ok(p.redeem(s2.pin, '내 폰', '127.0.0.1'));
+  // 총 상한으로 짝이 닫힌 경우도
+  const s3 = p.start();
+  for (let i = 0; i < PAIR_TOTAL_FAIL_MAX; i++) p.redeem(wrongPin(s3.pin), 'x', `h${i}`);
+  expect(p.open()).toBe(false);
+  const s4 = p.start();
+  ok(p.redeem(s4.pin, '다시', 'h0'));
 });

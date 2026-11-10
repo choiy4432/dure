@@ -124,7 +124,8 @@ function koreanOr(e: unknown, fallback: string): string {
 export function createPhoneController(o: PhoneControllerOptions): PhoneController {
   const store = openPhoneStore(o.dataDir)
   const inboxDir = path.join(o.dataDir, PHONE_INBOX)
-  const pairing = createPairing(store)
+  // 30일 안 쓴 기기가 풀리면 열린 연결을 닫고 PC 의 기기 목록을 새로 그린다(server·publish 는 아래서 정해진다 — 부를 때쯤엔 있다)
+  const pairing = createPairing(store, { onExpire: (id) => { server?.kick(id); publish() } })
   const push = o.push ?? createPush(store)
   const startServer = o.startServer ?? startPhoneServer
   const log = o.log ?? console.error
@@ -267,6 +268,7 @@ export function createPhoneController(o: PhoneControllerOptions): PhoneControlle
 
   const ensureServer = async (): Promise<PhoneServer> => {
     if (server) return server
+    safely('안 쓴 기기 정리', () => void pairing.expireIdle()) // 켤 때 — 30일 넘게 안 쓴 기기는 짝이 풀린다
     const s = await startServer({
       port: settings().port,
       allowedHost: () => open?.host ?? null, // 길이 열리기 전·끈 뒤엔 모두 거절

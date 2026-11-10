@@ -6,6 +6,9 @@ export const PHONE_PORT_DEFAULT = 47615
 /** 짝 코드(QR)·6자리 숫자가 살아 있는 시간 */
 export const PAIR_TTL_MS = 5 * 60_000
 
+/** 기기가 이만큼 안 쓰이면(lastSeen, 없으면 createdAt) 짝이 풀린다 — 쿠키 Max-Age 도 같다. 잃어버린 휴대폰이 영영 통하지 않게 */
+export const PHONE_IDLE_MS = 30 * 24 * 60 * 60 * 1000
+
 /** 기기 이름 — 이 글자 수(그래핌 — 이어 붙인 이모지·결합 문자도 한 글자)까지, 비면 기본 이름 */
 export const PHONE_NAME_MAX = 40
 export const PHONE_NAME_DEFAULT = '휴대폰'
