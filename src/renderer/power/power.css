@@ -170,3 +170,66 @@
 .pw-spark svg { width: 100%; height: 66px; display: block; }
 .pw-spark rect { fill: var(--pw-spark); }
 .pw-spark rect[data-last] { fill: var(--pw-spark-head); }
+
+/* ---- 터미널 벽 — 팔레트는 여기 한 번만 선언하고 규칙에서는 var() 로 쓴다 ---- */
+.pw {
+  --pw-term-bg: #06080D;
+  --pw-term-ink: #C9D4E3;
+  --pw-term-gap: #1B2332;
+  --pw-term-ptl-bg: #0A0E16;
+  --pw-term-ptl-line: #121A27;
+  --pw-term-ptl-ink: #7D8BA1;
+  --pw-term-focus-bg: #0F1726;
+  --pw-term-focus-ink: #E5E9F0;
+  --pw-term-ok: #6EE7B7;
+  --pw-term-er: #FCA5A5;
+  --pw-term-am: #FCD34D;
+  --pw-term-bl: #93C5FD;
+  --pw-term-dim: #74839A;
+  --pw-term-vi: #C4B5FD;
+  --pw-term-cy: #67E8F9;
+  --pw-term-gn: #86EFAC;
+  --pw-term-add-bg: rgba(34, 197, 94, 0.08);
+  --pw-term-del-bg: rgba(239, 68, 68, 0.08);
+  --pw-term-cursor: #E5E9F0;
+  --pw-term-dot: #10B981;
+  --pw-term-dot-warn: #F59E0B;
+  --pw-term-bar-bg: #0D1320;
+  --pw-term-ses-bg: #10B981;
+  --pw-term-ses-ink: #04140D;
+  --pw-term-win-on: #1B2537;
+}
+.pw-t-wall { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--pw-term-bg); color: var(--pw-term-ink); font-family: var(--mono); }
+.pw-t-grid { flex: 1; display: grid; grid-template-columns: 1.15fr 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 1px; background: var(--pw-term-gap); min-height: 0; }
+.pw-t-pane { background: var(--pw-term-bg); display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.pw-t-ptl { height: 28px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 12px; color: var(--pw-term-ptl-ink); border-bottom: 1px solid var(--pw-term-ptl-line); background: var(--pw-term-ptl-bg); white-space: nowrap; overflow: hidden; }
+.pw-t-ptl i { width: 7px; height: 7px; border-radius: 50%; background: var(--pw-term-dot); flex: none; }
+.pw-t-ptl i[data-warn] { background: var(--pw-term-dot-warn); }
+.pw-t-pane[data-focus] .pw-t-ptl { color: var(--pw-term-focus-ink); background: var(--pw-term-focus-bg); }
+.pw-t-pb { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 8px 12px; font-size: 13px; line-height: 19px; }
+.pw-t-pb.pw-t-top { justify-content: flex-start; }
+.pw-t-sub { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; border-top: 1px dashed var(--pw-term-gap); margin-top: 8px; padding-top: 6px; }
+.pw-t-ln { white-space: pre; min-height: 19px; overflow: hidden; text-overflow: ellipsis; flex: none; }
+.pw-t-hd { background: var(--pw-term-focus-bg); }
+.pw-t-b { font-weight: 700; }
+.pw-t-ok { color: var(--pw-term-ok); }
+.pw-t-er { color: var(--pw-term-er); }
+.pw-t-am { color: var(--pw-term-am); }
+.pw-t-bl { color: var(--pw-term-bl); }
+.pw-t-dim { color: var(--pw-term-dim); }
+.pw-t-vi { color: var(--pw-term-vi); }
+.pw-t-cy { color: var(--pw-term-cy); }
+.pw-t-gn { color: var(--pw-term-gn); }
+.pw-t-add { color: var(--pw-term-gn); background: var(--pw-term-add-bg); }
+.pw-t-del { color: var(--pw-term-er); background: var(--pw-term-del-bg); }
+.pw-t-cur { display: inline-block; width: 8px; height: 15px; background: var(--pw-term-cursor); vertical-align: -3px; animation: pw-t-blink 1s steps(1) infinite; }
+@keyframes pw-t-blink { 50% { opacity: 0; } }
+.pw-stage[data-calm] .pw-t-cur { animation: none; }
+@media (prefers-reduced-motion: reduce) { .pw-t-cur { animation: none; } }
+.pw-t-bar { height: 30px; flex: none; display: flex; align-items: center; font-size: 12.5px; background: var(--pw-term-bar-bg); border-top: 1px solid var(--pw-term-gap); }
+.pw-t-ses { background: var(--pw-term-ses-bg); color: var(--pw-term-ses-ink); font-weight: 700; padding: 0 12px; height: 100%; display: flex; align-items: center; }
+.pw-t-wins { display: flex; height: 100%; }
+.pw-t-win { padding: 0 10px; color: var(--pw-term-ptl-ink); height: 100%; display: flex; align-items: center; }
+.pw-t-win[data-on] { color: var(--pw-term-focus-ink); background: var(--pw-term-win-on); }
+.pw-t-rt { margin-left: auto; padding: 0 14px; color: var(--pw-term-ptl-ink); }
+.pw-t-rt b { color: var(--pw-term-focus-ink); font-weight: 500; }
