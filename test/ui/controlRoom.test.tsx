@@ -44,6 +44,7 @@ async function mount(agents: object[], o: { onSettings?: () => void } = {}) {
   if (rooms.length) act(() => { store.selectRoom('r1') })
   await act(async () => { await store.setPower(true) })
   render(<ControlRoom onExit={() => {}} onSettings={o.onSettings} />)
+  return store
 }
 const wait = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
 const cards = () => document.querySelectorAll('.pw-card')
@@ -316,6 +317,26 @@ describe('관제실', () => {
     const exit = within(top as HTMLElement).getByRole('button', { name: '나가기' })
     expect(exit.compareDocumentPosition(top.querySelector('.pw-now')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(document.querySelector('[data-power-map] .pw-label')).toHaveTextContent('노드를 누르면 그 에이전트와 대화')
+  })
+
+  it('시계_한_틱·사건_한_묶음에_옆_칸의_대화_패널(AgentPanel)은_다시_그리지_않는다', async () => {
+    let renders = 0
+    vi.doMock('../../src/renderer/panel/AgentPanel', () => ({ AgentPanel: () => { renders++; return <div data-probe-panel /> } }))
+    try {
+      const store = await mount([agent('a', { name: '알파' })])
+      act(() => { store.selectAgent('a') })
+      expect(document.querySelector('[data-probe-panel]')).not.toBeNull()
+      const before = renders
+      await wait(1000) // 시계 한 틱 — 관제실은 다시 그린다(가동 0:00:01)
+      expect(screen.getByText('0:00:01')).toBeInTheDocument()
+      expect(renders).toBe(before)
+      await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'a.ts' }) })
+      await wait(250) // 사건 한 묶음 — 기록·숫자 띠는 바뀐다
+      expect(rows()).toHaveLength(1)
+      expect(renders).toBe(before)
+    } finally {
+      vi.doUnmock('../../src/renderer/panel/AgentPanel')
+    }
   })
 
   it('위_띠의_설정_단추는_나가기_앞_누르면_onSettings_—_없으면_단추도_없다', async () => {

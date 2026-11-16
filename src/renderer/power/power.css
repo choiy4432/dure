@@ -226,8 +226,9 @@
 .pw-mapov[data-crowd] .pw-mn:not([data-core]):not([data-warn]) .pw-mn-tx i { display: none; }
 .pw-hit { animation: pw-hit 0.55s ease-out; }
 @keyframes pw-hit { from { box-shadow: 0 0 0 8px color-mix(in srgb, var(--c) 45%, transparent), 0 0 30px var(--c); } }
-/* 옆 칸 — 머리의 [대화 | 기록] 전환 아래에 대화 패널(AgentPanel 그대로) 또는 실시간 기록 */
-.pw-side { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+/* 옆 칸 — 머리의 [대화 | 기록] 전환 아래에 대화 패널(AgentPanel 그대로) 또는 실시간 기록.
+   글꼴·크기·줄 높이·색은 앱 본문(base.css body)과 같게 여기서 정한다 — 놓인 자리(터미널 벽의 고정폭 글꼴)를 물려받지 않게 */
+.pw-side { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; font-family: var(--font); font-size: 14px; line-height: 22px; letter-spacing: -0.01em; color: var(--text); }
 .pw-side-hd { flex: none; display: flex; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border-soft); }
 .pw-seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--radius-ctl); background: var(--hover); }
 .pw-seg button { height: 26px; padding: 0 14px; border-radius: var(--radius-sm); font-size: 13px; color: var(--text-3); transition: background-color 0.15s, color 0.15s; }

@@ -50,6 +50,9 @@ export function ControlRoom({ onExit, onSettings }: { onExit: () => void; onSett
   const elapsed = Math.max(0, Math.floor((wallMs - mountedAt.current) / 1000)) // 벽시계 기준 — 멈췄다 와도 어긋나지 않는다
 
   const subagents = view.subagents.length
+  // 기록 요소는 넣는 값이 바뀔 때만 새로 — 시계 틱마다 옆 칸에 새 요소를 넘기지 않는다
+  const rate = snap.toolsPerMin
+  const log = useMemo(() => <LiveLog agents={agents} rate={rate} subscribe={subscribe} />, [agents, rate, subscribe])
   return (
     <div className="pw-inner" data-power-screen="control">
       <header className="pw-top">
@@ -81,7 +84,7 @@ export function ControlRoom({ onExit, onSettings }: { onExit: () => void; onSett
             <p className="pw-empty">이 방엔 에이전트가 없어요</p>
           )}
         </section>
-        <SidePanel log={<LiveLog agents={agents} rate={snap.toolsPerMin} subscribe={subscribe} />} />
+        <SidePanel log={log} />
       </div>
       <StatsStrip s={snap} subagents={subagents} />
     </div>
