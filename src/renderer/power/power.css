@@ -136,7 +136,7 @@
 .pw-rb { fill: none; stroke: var(--hover); stroke-width: 3; }
 .pw-rf { fill: none; stroke: var(--brand); stroke-width: 3; transition: stroke-dashoffset 0.6s; }
 .pw-pct { font-family: var(--mono); min-width: 30px; }
-.pw-more { font-size: 12.5px; color: var(--muted); padding: 0 4px; }
+.pw-more, .pw-dotsep { color: var(--muted); }
 .pw-map { background: var(--pw-map-bg); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .pw-mapbox { position: relative; flex: 1; min-height: 0; }
 /* 관계도(궤도++) — 캔버스 2장 위에 노드 카드. 카드 둘레 색 번짐은 이 화면에서만 허용하는 예외(설계) */
@@ -162,7 +162,7 @@
 @media (prefers-reduced-motion: reduce) { .pw-lr, .pw-dot, .pw-hit { animation: none; } }
 .pw-stats { height: 120px; flex: none; display: grid; grid-template-columns: repeat(6, 1fr) 1.9fr; gap: 12px; }
 .pw-tile { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
-.pw-tile .k { font-size: 12px; color: var(--muted); }
+.pw-tile .k { font-size: 12px; color: var(--muted); background: none; padding: 0; border-radius: 0; line-height: normal; font-weight: 400; }
 .pw-tile .v { font: 600 27px var(--mono); color: var(--text); letter-spacing: -0.01em; white-space: nowrap; }
 .pw-tile .v .p { color: var(--ok-text); }
 .pw-tile .d { font: 12px var(--mono); color: var(--ok-text); }

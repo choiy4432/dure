@@ -9,8 +9,10 @@ import { createStats } from './stats'
 import { usePowerFeed } from './usePowerFeed'
 
 const UP_START = 3 * 3600 + 42 * 60 + 17
-/** 가짜 방일 때 서브에이전트 숫자(시안 값) */
+/** 도는 서브에이전트가 없으면 지어낸 위성 4개(시안 값) */
 const FAKE_SUBAGENTS = 4
+/** 이 화면 어디서나 같은 규칙 — 진짜 수가 0보다 크면 그대로, 아니면 4 */
+export const shownSubagents = (view: { subagents: number }): number => (view.subagents > 0 ? view.subagents : FAKE_SUBAGENTS)
 
 const upText = (s: number) => `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 
@@ -52,7 +54,7 @@ export function ControlRoom({ seed, now }: { seed?: number; now?: () => number }
   }, [])
   const elapsed = Math.max(0, Math.floor((wallMs - mountedAt.current) / 1000)) // 벽시계 기준 — 멈췄다 와도 어긋나지 않는다
 
-  const subagents = agents.every(a => !a.real) ? FAKE_SUBAGENTS : view.subagents
+  const subagents = shownSubagents(view)
   return (
     <div className="pw-inner" data-power-screen="control">
       <header className="pw-top">

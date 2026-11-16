@@ -6,10 +6,12 @@ const MAX_CARDS = 5
 const RING_R = 8
 const RING_C = 2 * Math.PI * RING_R
 
-type CardState = { tool: string; target: string; done: number; total: number; ctx: number; n: number }
+type Line = { tool: string; target: string }
+/** real: 마지막 진짜 도구 줄(없으면 undefined) — 승인 기다리는 동안은 이것만 보인다 */
+type CardState = Line & { done: number; total: number; ctx: number; n: number; real?: Line }
 
 /** 켠 순간 카드가 비지 않게 채움 같은 첫 줄을 깐다 — 승인 기다리는 쪽은 지어내지 않는다 */
-const seedLine = (i: number, wait: boolean) => {
+const seedLine = (i: number, wait: boolean): Line => {
   if (wait) return { tool: '—', target: '' }
   const tool = TOOL_MIX[(i * 3) % TOOL_MIX.length]
   return { tool, target: TARGETS[tool][(i * 5) % TARGETS[tool].length] }
@@ -17,7 +19,7 @@ const seedLine = (i: number, wait: boolean) => {
 const initial = (i: number, wait: boolean): CardState => ({ ...seedLine(i, wait), done: 3 + ((i * 5) % 7), total: 10 + ((i * 7) % 7), ctx: 20 + ((i * 13) % 50), n: 0 })
 
 /** 할 일·문맥 수는 장식 — 그 에이전트의 도구 호출이 쌓일수록 천천히 오른다 */
-function advance(c: CardState, tool: string, target: string): CardState {
+function advance(c: CardState, tool: string, target: string, real: boolean): CardState {
   const n = c.n + 1
   let { done, total, ctx } = c
   if (n % 6 === 0) done++
@@ -26,7 +28,7 @@ function advance(c: CardState, tool: string, target: string): CardState {
     total = 10 + (n % 7)
   }
   if (n % 4 === 0) ctx = ctx >= 95 ? 20 : ctx + 1
-  return { tool, target, done, total, ctx, n }
+  return { tool, target, done, total, ctx, n, real: real ? { tool, target } : c.real }
 }
 
 export function AgentCards({ agents, awaiting, subscribe }: { agents: PowerAgent[]; awaiting: Set<string>; subscribe: (fn: (ev: ScreenEvent) => void) => () => void }) {
@@ -38,7 +40,7 @@ export function AgentCards({ agents, awaiting, subscribe }: { agents: PowerAgent
     () =>
       subscribe(ev => {
         if (ev.kind !== 'tool') return
-        setCards(prev => (prev[ev.agentId] ? { ...prev, [ev.agentId]: advance(prev[ev.agentId], ev.tool, ev.target) } : prev))
+        setCards(prev => (prev[ev.agentId] ? { ...prev, [ev.agentId]: advance(prev[ev.agentId], ev.tool, ev.target, ev.real) } : prev))
       }),
     [subscribe],
   )
@@ -47,7 +49,15 @@ export function AgentCards({ agents, awaiting, subscribe }: { agents: PowerAgent
   return (
     <section className="pw-agents" aria-label="에이전트">
       <div className="pw-label">
-        에이전트 {agents.length}
+        <span>
+          에이전트 {agents.length}
+          {agents.length > MAX_CARDS && (
+            <>
+              {' '}
+              <span className="pw-dotsep">·</span> <span className="pw-more">외 {agents.length - MAX_CARDS}명</span>
+            </>
+          )}
+        </span>
         <span>
           작업 중 <b>{busy}</b>
         </span>
@@ -55,6 +65,8 @@ export function AgentCards({ agents, awaiting, subscribe }: { agents: PowerAgent
       {shown.map(a => {
         const c = cards[a.id]
         const wait = awaiting.has(a.id)
+        // 기다리는 동안엔 지어낸 줄을 숨기고 진짜 마지막 줄만(없으면 —) — 진짜 기다림과 헷갈리지 않게
+        const line: Line = wait ? (c.real ?? { tool: '—', target: '' }) : c
         return (
           <div key={a.id} className="pw-card" data-agent={a.id} data-warn={wait || undefined} style={{ ['--c' as string]: a.color }}>
             <div className="pw-r1">
@@ -66,8 +78,8 @@ export function AgentCards({ agents, awaiting, subscribe }: { agents: PowerAgent
               </span>
             </div>
             <div className="pw-tool">
-              <span className="pw-tn">{c.tool}</span>
-              <span className="pw-tg">{c.target}</span>
+              <span className="pw-tn">{line.tool}</span>
+              <span className="pw-tg">{line.target}</span>
             </div>
             <div className="pw-r3">
               <div className="pw-bar">
@@ -85,7 +97,6 @@ export function AgentCards({ agents, awaiting, subscribe }: { agents: PowerAgent
           </div>
         )
       })}
-      {agents.length > MAX_CARDS && <div className="pw-more">외 {agents.length - MAX_CARDS}명</div>}
     </section>
   )
 }

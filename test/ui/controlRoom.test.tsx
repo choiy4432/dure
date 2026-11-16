@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 import { render, screen, act, cleanup, within } from '@testing-library/react'
 import { clockText } from '../../src/renderer/power/control/LiveLog'
+import { shownSubagents } from '../../src/renderer/power/ControlRoom'
 
 // 관제실 — 카드 · 기록 · 승인 기다림 · 숫자 띠
 
@@ -66,6 +67,10 @@ describe('관제실', () => {
     await mount(Array.from({ length: 7 }, (_, i) => agent(`x${i}`)))
     expect(cards()).toHaveLength(5)
     expect(screen.getByText('외 2명')).toBeInTheDocument()
+    // 머리 줄 안에 있고, 카드 뒤에 따로 매달린 요소는 없다
+    expect(document.querySelector('.pw-agents .pw-label')).toHaveTextContent('외 2명')
+    expect(document.querySelector('.pw-agents')!.lastElementChild!.classList.contains('pw-card')).toBe(true)
+    expect(document.querySelector('.pw-agents > .pw-more')).toBeNull()
   })
 
   it('tool_사건이_오면_카드_도구_줄과_기록_맨_위가_바뀐다', async () => {
@@ -171,5 +176,60 @@ describe('관제실', () => {
     cleanup()
     await mount([])
     for (const c of cards()) expect(c.querySelector('.pw-tn')!.textContent).not.toBe('')
+  })
+
+  const tn = (id: string) => card(id).querySelector('.pw-tn')!.textContent
+  const tg = (id: string) => card(id).querySelector('.pw-tg')!.textContent
+  const setStatus = (agentId: string, status: string) => emit('status', { agentId, status, errorText: null })
+
+  it('채움_줄만_있던_에이전트가_나중에_승인_기다림이_되면_줄은_—', async () => {
+    await mount([agent('a', { name: '알파' })])
+    expect(tn('a')).not.toBe('—')
+    await setStatus('a', 'awaiting')
+    await wait(250)
+    expect(within(card('a')).getByText('승인 기다림')).toBeInTheDocument()
+    expect(tn('a')).toBe('—')
+    expect(tg('a')).toBe('')
+  })
+
+  it('마지막이_진짜_사건이던_에이전트가_승인_기다림이_되면_그_줄이_남는다', async () => {
+    await mount([agent('a', { name: '알파' })])
+    await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'real.ts' }) })
+    await wait(250)
+    await setStatus('a', 'awaiting')
+    await wait(250)
+    expect(within(card('a')).getByText('승인 기다림')).toBeInTheDocument()
+    expect(tn('a')).toBe('Read')
+    expect(tg('a')).toBe('real.ts')
+  })
+
+  it('승인_기다림에서_나오면_다음_채움_사건이_줄에_다시_뜬다', async () => {
+    await mount([agent('a', { name: '알파' })])
+    await setStatus('a', 'awaiting')
+    await wait(250)
+    expect(tn('a')).toBe('—')
+    await wait(15000)
+    expect(tn('a')).toBe('—') // 기다리는 동안 채움 없음
+    await setStatus('a', 'working')
+    await wait(15000)
+    expect(tn('a')).not.toBe('—')
+  })
+
+  it('머리_줄에_작업_중_숫자가_있다', async () => {
+    await mount([agent('a', { name: '알파' })])
+    expect(document.querySelector('.pw-agents .pw-label')).toHaveTextContent('작업 중 1')
+  })
+
+  it('shownSubagents_진짜_수가_0보다_크면_그대로_아니면_4', () => {
+    expect(shownSubagents({ subagents: 0 })).toBe(4)
+    expect(shownSubagents({ subagents: 2 })).toBe(2)
+  })
+
+  it('숫자_띠와_위_띠가_같은_서브에이전트_수를_보인다', async () => {
+    await mount([agent('a', { name: '알파' })])
+    expect(document.querySelector('.pw-room')).toHaveTextContent('서브에이전트 4')
+    expect(document.querySelector('.pw-tile .k + .v')).not.toBeNull()
+    const tile = [...document.querySelectorAll('.pw-tile')].find(t => t.textContent!.includes('서브에이전트'))!
+    expect(tile.querySelector('.v')!.textContent).toBe('4')
   })
 })
