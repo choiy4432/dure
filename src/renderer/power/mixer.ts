@@ -22,6 +22,7 @@ export function createMixer(o: { agents: PowerAgent[]; seed: number; quietMs?: n
   return {
     real(ev) {
       const e: ScreenEvent = { ...ev, real: true }
+      if (e.kind === 'handoff') e.text = oneLine(e.text, 80)
       if (e.kind === 'tool') {
         e.target = oneLine(e.target, 80)
         quietUntil.set(e.agentId, Math.max(quietUntil.get(e.agentId) ?? -Infinity, e.at + quietMs))
@@ -33,6 +34,8 @@ export function createMixer(o: { agents: PowerAgent[]; seed: number; quietMs?: n
       for (const a of o.agents) {
         let t = nextTool.get(a.id)
         if (t === undefined) t = now + gap(TOOL_GAP)
+        // 창이 숨었다 돌아오는 등 긴 공백이면 밀린 걸 되풀이하지 않고 지금부터 다시 잡는다.
+        if (now - t > TOOL_GAP[1]) t = now + gap(TOOL_GAP)
         while (t <= now) {
           const q = quietUntil.get(a.id) ?? -Infinity
           if (t < q) t = q + gap(TOOL_GAP)
@@ -44,6 +47,7 @@ export function createMixer(o: { agents: PowerAgent[]; seed: number; quietMs?: n
         nextTool.set(a.id, t)
       }
       if (nextHand === null) nextHand = now + gap(HAND_GAP)
+      if (now - nextHand > HAND_GAP[1]) nextHand = now + gap(HAND_GAP)
       while (nextHand <= now) {
         const h = filler.handoff(nextHand)
         if (h) out.push(h)

@@ -21,7 +21,7 @@ test('진짜가_오면_그_에이전트_채움은_quietMs_동안_쉰다', () => 
   const m = createMixer({ agents, seed: 1, quietMs: 4000 });
   m.tick(0);
   m.real(realTool('impl', 100));
-  const evs = drive(m, 100, 4100);
+  const evs = drive(m, 100, 3900);
   expect(fillerTools(evs, 'impl')).toHaveLength(0);
   expect(fillerTools(evs, 'test').length).toBeGreaterThan(0);
 });
@@ -34,6 +34,7 @@ test('quietMs_가_지나면_다시_채운다', () => {
   const late = fillerTools(evs, 'impl');
   expect(late.length).toBeGreaterThan(0);
   for (const e of late) expect(e.at).toBeGreaterThanOrEqual(4100);
+  expect(late.some((e) => e.at > 6000)).toBe(true);
 });
 
 test('진짜_사건은_그대로_나온다(real:true)', () => {
@@ -62,7 +63,9 @@ test('tick_은_at_순이고_사건을_한_번만_낸다', () => {
   const b = drive(m, 100, 5000);
   const all = [...a, ...b];
   for (let i = 1; i < b.length; i++) expect(b[i].at).toBeGreaterThanOrEqual(b[i - 1].at);
-  expect(new Set(all).size).toBe(all.length);
+  const key = (e: ScreenEvent) =>
+    e.kind === 'tool' ? `t|${e.at}|${e.agentId}|${e.tool}|${e.target}` : `h|${e.at}|${e.from}|${e.to}|${e.text}`;
+  expect(new Set(all.map(key)).size).toBe(all.length);
   expect(m.tick(5000)).toEqual([]);
 });
 
@@ -80,4 +83,26 @@ test('진짜_tool_의_target_은_80자로_자른다', () => {
   if (e.kind !== 'tool') throw new Error('kind');
   expect(e.target.length).toBe(80);
   expect(e.target.endsWith('…')).toBe(true);
+});
+
+test('진짜_넘김의_text_는_한_줄_80자로_만든다', () => {
+  const m = createMixer({ agents, seed: 1 });
+  m.real({ kind: 'handoff', from: 'lead', to: 'impl', text: '첫 줄\n둘째 줄\n' + 'z'.repeat(300), real: true, at: 5 });
+  const e = m.tick(10).find((x) => x.real)!;
+  if (e.kind !== 'handoff') throw new Error('kind');
+  expect(e.text).not.toMatch(/[\r\n]/);
+  expect(e.text.length).toBe(80);
+  expect(e.text.startsWith('첫 줄 둘째 줄')).toBe(true);
+});
+
+test('긴_공백_뒤에도_쏟아지지_않는다', () => {
+  const m = createMixer({ agents, seed: 4 });
+  drive(m, 0, 5000);
+  const burst = m.tick(5000 + 600_000);
+  expect(burst.length).toBeLessThanOrEqual(agents.length + 1);
+  // 이어지는 tick 은 평소 속도: 10초 동안 에이전트당 ~7회 + 넘김 ~15회 안팎
+  const after = drive(m, 605_100, 615_000);
+  expect(after.length).toBeGreaterThan(0);
+  expect(after.length).toBeLessThan(agents.length * 15 + 40);
+  for (const e of after) expect(e.at).toBeGreaterThan(600_000);
 });

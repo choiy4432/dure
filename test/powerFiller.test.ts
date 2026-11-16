@@ -46,6 +46,13 @@ test('oneLine 은 줄바꿈을 칸으로, 길면 …', () => {
   expect(s.endsWith('…')).toBe(true);
 });
 
+test('oneLine 은 max 를 넘지 않는다(0 이하는 빈 문자열)', () => {
+  expect(oneLine('abc', 0)).toBe('');
+  expect(oneLine('abc', -3)).toBe('');
+  expect(oneLine('abc', 1).length).toBeLessThanOrEqual(1);
+  expect(oneLine('abcdef', 3).length).toBe(3);
+});
+
 test('채움_경로는_window_dure_를_부르지_않는다', () => {
   for (const f of ['filler.ts', 'mixer.ts', 'fakeWorld.ts']) {
     const src = fs.readFileSync(`src/renderer/power/${f}`, 'utf8');
