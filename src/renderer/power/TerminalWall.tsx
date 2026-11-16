@@ -50,8 +50,12 @@ function WallLog({ agents, subscribe }: { agents: PowerAgent[]; subscribe: (fn: 
 export function TerminalWall({ onExit, onSettings }: { onExit: () => void; onSettings?: () => void }) {
   const { view, subscribe } = usePowerFeed()
   const selected = useDure(s => s.selectedAgentId)
-  // 창을 누르면 관제실의 카드처럼 그 에이전트를 고르고 입력창에 커서 — 옆 칸이 대화로 바뀐다
-  const pick = useCallback((id: string) => getStore().selectAgent(id, { focusInput: true }), [])
+  // 창을 누르면 관제실의 카드처럼 그 에이전트를 고르고 옆 칸을 대화로 — 입력창에 커서는 주지 않는다(Esc 길게가 되게, ControlRoom 과 같다)
+  const [picks, setPicks] = useState(0)
+  const pick = useCallback((id: string) => {
+    getStore().selectAgent(id)
+    setPicks(n => n + 1)
+  }, [])
   // 6명을 넘으면 기다림 → 일하는 중 → 나머지로 뽑되, 자리는 방 순서 — 상태가 바뀔 때마다 읽던 창이 옮겨 다니지 않게
   const shown = useMemo(() => {
     const picked = new Set(pickPanes(view.agents, view.state))
@@ -98,7 +102,7 @@ export function TerminalWall({ onExit, onSettings }: { onExit: () => void; onSet
             <p className="pw-t-empty">이 방엔 에이전트가 없어요</p>
           </div>
         )}
-        <SidePanel log={<WallLog agents={view.agents} subscribe={subscribe} />} />
+        <SidePanel log={<WallLog agents={view.agents} subscribe={subscribe} />} picks={picks} />
       </div>
       <div className="pw-t-bar">
         <span className="pw-t-ses">[두레]</span>

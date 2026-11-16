@@ -269,15 +269,31 @@ describe('관제실', () => {
     expect(card('a').tagName).toBe('BUTTON')
     expect(card('a')).toHaveAttribute('aria-pressed', 'false')
     act(() => { card('b').click() })
-    expect(spy).toHaveBeenCalledWith('b', { focusInput: true })
+    // 고르기만 — 입력창 커서 요청은 없다(초점이 카드에 남아야 Esc 길게가 된다)
+    expect(spy).toHaveBeenCalledWith('b')
+    expect(getStore().getState().inputFocus).toBeNull()
     expect(getStore().getState().selectedAgentId).toBe('b')
     expect(card('b')).toHaveAttribute('aria-pressed', 'true')
     expect(card('a')).toHaveAttribute('aria-pressed', 'false')
     // 관계도 노드도 같은 고르기 — 고른 표시가 노드에도
     expect(document.querySelector('[data-node="b"]')).toHaveAttribute('aria-pressed', 'true')
     act(() => { (document.querySelector('[data-node="a"]') as HTMLElement).click() })
-    expect(spy).toHaveBeenLastCalledWith('a', { focusInput: true })
+    expect(spy).toHaveBeenLastCalledWith('a')
     expect(card('a')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('기록을_보는_중에_같은_카드·노드를_다시_누르면_옆_칸이_대화로', async () => {
+    await mount([agent('a', { name: '알파' }), agent('b', { name: '베타' })])
+    const tab = (name: string) => screen.getByRole('tab', { name })
+    act(() => { card('a').click() })
+    expect(tab('대화')).toHaveAttribute('aria-selected', 'true')
+    act(() => { tab('기록').click() })
+    expect(tab('기록')).toHaveAttribute('aria-selected', 'true')
+    act(() => { card('a').click() })
+    expect(tab('대화')).toHaveAttribute('aria-selected', 'true')
+    act(() => { tab('기록').click() })
+    act(() => { (document.querySelector('[data-node="a"]') as HTMLElement).click() })
+    expect(tab('대화')).toHaveAttribute('aria-selected', 'true')
   })
 
   it('상태가_바뀌면_카드_5장을_다시_고른다_기다림_일함_나머지_무리_안에선_방_순서', async () => {

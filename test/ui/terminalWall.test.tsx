@@ -214,7 +214,9 @@ describe('터미널 벽', () => {
     expect(title('a')).toHaveAttribute('aria-pressed', 'false')
     act(() => { body('b').click() })
     expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy).toHaveBeenCalledWith('b', { focusInput: true })
+    // 고르기만 — 입력창 커서 요청은 없다(초점이 창에 남아야 Esc 길게가 된다)
+    expect(spy).toHaveBeenCalledWith('b')
+    expect(store.getState().inputFocus).toBeNull()
     expect(store.getState().selectedAgentId).toBe('b')
     expect(title('b')).toHaveAttribute('aria-pressed', 'true')
     expect(title('a')).toHaveAttribute('aria-pressed', 'false')
@@ -223,8 +225,18 @@ describe('터미널 벽', () => {
     // 제목 단추(키보드로 닿는다)도 같은 고르기 — 한 번만
     act(() => { title('a').click() })
     expect(spy).toHaveBeenCalledTimes(2)
-    expect(spy).toHaveBeenLastCalledWith('a', { focusInput: true })
+    expect(spy).toHaveBeenLastCalledWith('a')
     expect(title('a')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('기록을_보는_중에_같은_창을_다시_누르면_옆_칸이_대화로', async () => {
+    await mount([agent('a', { name: '알파' })])
+    const tab = (name: string) => screen.getByRole('tab', { name })
+    act(() => { title('a').click() })
+    expect(tab('대화')).toHaveAttribute('aria-selected', 'true')
+    act(() => { tab('기록').click() })
+    act(() => { body('a').click() })
+    expect(tab('대화')).toHaveAttribute('aria-selected', 'true')
   })
 
   it('창의_글을_끌어_고르던_누르기는_고르지_않는다(고른_글이_풀리지_않게)', async () => {
@@ -243,7 +255,7 @@ describe('터미널 벽', () => {
     expect(spy).toHaveBeenCalledTimes(1)
     window.getSelection()!.removeAllRanges()
     act(() => { body('a').click() })
-    expect(spy).toHaveBeenLastCalledWith('a', { focusInput: true })
+    expect(spy).toHaveBeenLastCalledWith('a')
   })
 
   it('오른쪽에_SidePanel', async () => {

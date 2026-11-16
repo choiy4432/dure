@@ -36,8 +36,11 @@ async function mount() {
   await act(async () => { await store.init() })
   act(() => { store.selectRoom('r1') })
   await act(async () => { await store.setPower(true) })
-  render(<SidePanel log={<p>기록 줄</p>} />)
-  return store
+  const log = <p>기록 줄</p>
+  const view = render(<SidePanel log={log} picks={0} />)
+  /** 화면(카드·노드·창)이 다시 골랐다 — 고를 때마다 오르는 picks 를 넘긴다 */
+  const repick = (n: number) => view.rerender(<SidePanel log={log} picks={n} />)
+  return Object.assign(store, { repick })
 }
 
 const tab = (name: '대화' | '기록') => screen.getByRole('tab', { name })
@@ -83,11 +86,30 @@ describe('옆 칸', () => {
     expect(composer('베타')).toBeInTheDocument()
   })
 
-  it('기록을 보는 중에 같은 에이전트를 다시 골라도(카드 클릭 = 입력창 커서 요청) 대화로', async () => {
+  it('기록을 보는 중에 화면에서 같은 에이전트를 다시 고르면(picks 가 오른다 — 입력창 커서 요청 없이) 대화로', async () => {
     const store = await mount()
-    act(() => { store.selectAgent('a', { focusInput: true }) })
+    act(() => { store.selectAgent('a') })
+    store.repick(1)
     fireEvent.click(tab('기록'))
-    act(() => { store.selectAgent('a', { focusInput: true }) })
+    act(() => { store.selectAgent('a') })
+    store.repick(2)
+    expect(tab('대화')).toHaveAttribute('aria-selected', 'true')
+    expect(composer('알파')).toBeInTheDocument()
+  })
+
+  it('picks 가 그대로면 같은 에이전트를 다시 골라도 기록 그대로(고르기만 바뀌는 다른 길 — 예: 투어)', async () => {
+    const store = await mount()
+    act(() => { store.selectAgent('a') })
+    fireEvent.click(tab('기록'))
+    act(() => { store.selectAgent('a') })
+    expect(tab('기록')).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('기록을 보는 중에 찾기 창이 같은 에이전트를 고르면(입력창 커서 요청) 대화로', async () => {
+    const store = await mount()
+    act(() => { store.selectAgent('a') })
+    fireEvent.click(tab('기록'))
+    act(() => { store.focusAgent('a', { focusInput: true }) })
     expect(tab('대화')).toHaveAttribute('aria-selected', 'true')
     expect(composer('알파')).toBeInTheDocument()
   })

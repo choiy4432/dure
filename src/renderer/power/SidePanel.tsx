@@ -9,20 +9,21 @@ const ORDER: View[] = ['chat', 'log']
 const LABEL: Record<View, string> = { chat: '대화', log: '기록' }
 
 /**
- * 고르면(카드·노드·찾기) 대화로 — 고른 에이전트가 바뀌거나, 같은 에이전트라도 입력창 커서 요청(카드 클릭)이 새로 오면.
+ * 고르면 대화로 — 고른 에이전트가 바뀌거나, 같은 에이전트라도 화면에서 다시 골랐거나(picks — 카드·노드·창을 누를 때마다 오른다)
+ * 찾기 창이 입력창 커서를 새로 청했으면(inputFocus).
  * 대화 칸은 대화 탭일 때만 그린다(기록을 보는 동안 숨은 입력창이 커서를 받지 않게 — 숨겨 두고 마운트하면 효과가 두 벌 돈다).
  * 그래서 대화 탭의 aria-controls 는 대화 칸이 있을 때만. 기록은 늘 그려 두고 숨기기만 해 줄이 계속 쌓인다.
  * 대화 패널 요소는 하나로 굳힌다 — 화면이 시계·사건마다 다시 그려져도 대화 패널은 제 스토어 구독으로만 다시 그린다.
  */
-export function SidePanel({ log }: { log: ReactNode }) {
+export function SidePanel({ log, picks }: { log: ReactNode; picks: number }) {
   const sel = useDure(s => (s.agents.some(a => a.id === s.selectedAgentId) ? s.selectedAgentId : null))
   const ask = useDure(s => s.inputFocus?.n ?? 0)
   const [view, setView] = useState<View>(sel ? 'chat' : 'log')
-  // 고르기·커서 요청이 바뀐 그 그리기에서 바로 대화로(효과를 기다리면 기록이 한 번 비친다)
-  const [seen, setSeen] = useState({ sel, ask })
-  if (seen.sel !== sel || seen.ask !== ask) {
-    setSeen({ sel, ask })
-    if (sel && (seen.sel !== sel || ask !== 0)) setView('chat')
+  // 고르기·다시 고르기·커서 요청이 바뀐 그 그리기에서 바로 대화로(효과를 기다리면 기록이 한 번 비친다)
+  const [seen, setSeen] = useState({ sel, ask, picks })
+  if (seen.sel !== sel || seen.ask !== ask || seen.picks !== picks) {
+    setSeen({ sel, ask, picks })
+    if (sel && (seen.sel !== sel || seen.picks !== picks || (seen.ask !== ask && ask !== 0))) setView('chat')
   }
   const shown: View = sel ? view : 'log'
   const base = useId()

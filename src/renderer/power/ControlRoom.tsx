@@ -19,8 +19,13 @@ export function ControlRoom({ onExit, onSettings }: { onExit: () => void; onSett
   const { view, subscribe } = usePowerFeed()
   const agents = view.agents
   const selected = useDure(s => s.selectedAgentId)
-  // 카드·노드를 누르면 앱의 카드처럼 그 에이전트를 고르고 입력창에 커서 — 옆 칸이 대화로 바뀐다
-  const pick = useCallback((id: string) => getStore().selectAgent(id, { focusInput: true }), [])
+  // 카드·노드를 누르면 그 에이전트를 고르고 옆 칸을 대화로(picks — 같은 에이전트를 다시 눌러도). 입력창에 커서는 주지 않는다 —
+  // 초점이 누른 단추에 남아야 Esc 길게로 나갈 수 있다(입력창의 Esc 는 일하는 에이전트를 멈춘다). 쓰려면 입력창을 누른다
+  const [picks, setPicks] = useState(0)
+  const pick = useCallback((id: string) => {
+    getStore().selectAgent(id)
+    setPicks(n => n + 1)
+  }, [])
   const stats = useRef<ReturnType<typeof createStats> | undefined>(undefined)
   stats.current ??= createStats()
   // 사건은 모아서 stats 에 쌓고, 스냅샷은 그려질 때 한 번만 뜬다(같은 때 온 사건은 한 번에 그려진다)
@@ -84,7 +89,7 @@ export function ControlRoom({ onExit, onSettings }: { onExit: () => void; onSett
             <p className="pw-empty">이 방엔 에이전트가 없어요</p>
           )}
         </section>
-        <SidePanel log={log} />
+        <SidePanel log={log} picks={picks} />
       </div>
       <StatsStrip s={snap} subagents={subagents} />
     </div>
