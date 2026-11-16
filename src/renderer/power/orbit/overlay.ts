@@ -75,13 +75,16 @@ function tickLabels(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.textAlign = 'start'
 }
 
+/** 위성 이름표 불투명도 — 뒤쪽(먼 쪽)이 흐리되, 진짜 설명이라 가장 흐려도 관계도 판 위 대비 4.5:1(0.6 ≈ 5.2:1) */
+const SAT_LABEL_ALPHA = { far: 0.6, near: 0.95 }
+
 /** 위성 이름표 — 위성 바로 아래 가운데(진짜 설명, 없으면 '서브에이전트') */
 function satLabels(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.font = `11px ${w.fonts.mono}`
   ctx.textAlign = 'center'
   for (const s of w.sats) {
     satPoint(w, s, P)
-    ctx.fillStyle = shade(RGB.label, 0.35 + near(P, w.RA) * 0.6)
+    ctx.fillStyle = shade(RGB.label, SAT_LABEL_ALPHA.far + near(P, w.RA) * (SAT_LABEL_ALPHA.near - SAT_LABEL_ALPHA.far))
     ctx.fillText(trunc(s.name, SAT_LABEL_MAX), P.x, P.y + 16)
   }
   ctx.textAlign = 'start'

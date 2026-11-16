@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 import { render, screen, act, cleanup, within } from '@testing-library/react'
+import fs from 'node:fs'
+import path from 'node:path'
 import { clockText } from '../../src/renderer/power/control/LiveLog'
 
 // 관제실 — 카드 · 기록 · 승인 기다림 · 숫자 띠. 진짜 사건만, 숫자는 0부터
@@ -365,6 +367,25 @@ describe('관제실', () => {
     cleanup()
     await mount([agent('a', { name: '알파' })])
     expect(within(document.querySelector('.pw-top') as HTMLElement).queryByRole('button', { name: '설정' })).toBeNull()
+  })
+
+  it('긴_이름(40자까지)도_칸을_넘지_않는다_—_노드_이름은_말줄임·카드의_역할은_찌그러져_잘리지_않는다', () => {
+    const css = fs.readFileSync(path.resolve('src/renderer/power/power.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const decls = (sel: string) => {
+      const out: Record<string, string> = {}
+      for (const m of css.matchAll(new RegExp(`(?:^|\\n|\\})\\s*${sel.replace(/[.[\]']/g, c => `\\${c}`)}\\s*\\{([^}]*)\\}`, 'g')))
+        for (const d of m[1].split(';')) {
+          const i = d.indexOf(':')
+          if (i > 0) out[d.slice(0, i).trim()] = d.slice(i + 1).trim()
+        }
+      return out
+    }
+    // 노드 이름 — 도구 줄(132px)처럼 상한과 말줄임(카드가 서로 겹치거나 관계도 가장자리에서 잘리지 않게)
+    expect(decls('.pw-mn-tx b')).toMatchObject({ overflow: 'hidden', 'text-overflow': 'ellipsis' })
+    expect(decls('.pw-mn-tx b')['max-width']).toMatch(/^\d+px$/)
+    // 카드 역할 — 줄지 않고(이름이 먼저 말줄임) 너무 길면 제 상한에서 말줄임 — 한두 글자로 찌그러진 낱말이 다른 말처럼 보이지 않게
+    expect(decls('.pw-role')).toMatchObject({ flex: 'none', overflow: 'hidden', 'text-overflow': 'ellipsis' })
+    expect(decls('.pw-role')['max-width']).toBeTruthy()
   })
 
   it('숫자_띠와_위_띠가_같은_진짜_서브에이전트_수를_보인다', async () => {

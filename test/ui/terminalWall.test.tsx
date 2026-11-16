@@ -366,6 +366,22 @@ describe('터미널 벽', () => {
     expect(document.querySelector('.pw-t-grid')).not.toHaveTextContent(/zz-new|신입|새로 왔어요/)
   })
 
+  it('상태_줄의_창_이름은_좁으면_말줄임으로_줄고_외_N명은_줄지_않는다(긴_이름이_뒤_창·외_N명을_밀어내지_않게)', () => {
+    const css = fs.readFileSync(path.resolve('src/renderer/power/power.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const decls = (sel: string) => {
+      const out: Record<string, string> = {}
+      for (const m of css.matchAll(new RegExp(`(?:^|\\n|\\})\\s*${sel.replace(/\./g, '\\.')}\\s*\\{([^}]*)\\}`, 'g')))
+        for (const d of m[1].split(';')) {
+          const i = d.indexOf(':')
+          if (i > 0) out[d.slice(0, i).trim()] = d.slice(i + 1).trim()
+        }
+      return out
+    }
+    expect(decls('.pw-t-win')).toMatchObject({ 'min-width': '0', overflow: 'hidden', 'text-overflow': 'ellipsis', 'white-space': 'nowrap' })
+    expect(decls('.pw-t-win').display ?? 'block').not.toMatch(/flex/) // 말줄임은 블록 상자에서만 그려진다
+    expect(decls('.pw-t-more')).toMatchObject({ flex: 'none' })
+  })
+
   it('innerHTML_류를_쓰지_않는다(소스_확인)', async () => {
     await mount([agent('a', { name: '알파' })])
     await emit('history', { agentId: 'a', item: toolItem('Bash', { command: '<img src=x onerror=alert(1)>' }) })

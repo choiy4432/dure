@@ -11,7 +11,8 @@ import { mulberry32, type PowerAgent, type ScreenEvent } from '../../src/rendere
 // 관계도(궤도++) — 캔버스 2장 · 노드 카드 · rAF · 동기화 규칙. jsdom 엔 캔버스가 없어 그리는 쪽은 기록하는 가짜 컨텍스트로 본다
 // 혜성·조각·잎·위성은 진짜 사건과 진짜 서브에이전트에서만 — 떠도는 혜성·토큰 글·지어낸 위성·시간으로 터지는 동기화는 없다
 
-type Call = { fn: string; args: unknown[] }
+/** fill — 그 부름 때의 fillStyle */
+type Call = { fn: string; args: unknown[]; fill?: unknown }
 function fakeCtx(calls: Call[]): CanvasRenderingContext2D {
   const grad = { addColorStop() {} }
   const props: Record<string | symbol, unknown> = {}
@@ -21,7 +22,7 @@ function fakeCtx(calls: Call[]): CanvasRenderingContext2D {
       if (k === 'measureText') return (s: string) => ({ width: s.length * 7 })
       if (k === 'createRadialGradient' || k === 'createLinearGradient') return () => grad
       return (...args: unknown[]) => {
-        calls.push({ fn: String(k), args })
+        calls.push({ fn: String(k), args, fill: t.fillStyle })
       }
     },
     set(t, k, v) {
@@ -522,6 +523,23 @@ describe('관계도 장면', () => {
     run(w, 0.2)
     drawOverlay(fakeCtx(calls), w, null, 2)
     expect(texts()).toContain('결제 흐름 조사')
+  })
+
+  it('위성_이름표는_뒤쪽으로_돌아가도_읽힌다(진짜_설명이라_흐려져도_불투명도_0.6_이상_—_관계도_판_위_대비_4.5:1_이상)', () => {
+    const names = ['결제 흐름 조사', '테스트 빈틈 찾기']
+    const w = createWorld({ agents: who(), W: 748, H: 580, calm: false, rand: mulberry32(3), satellites: names.map((label, i) => ({ agentId: i ? 'lead' : 'impl', label })) })
+    const alphas: number[] = []
+    let now = 0
+    for (let i = 0; i < 160; i++) {
+      now = run(w, 0.25, now)
+      calls.length = 0
+      drawOverlay(fakeCtx(calls), w, null, 2)
+      for (const c of calls)
+        if (c.fn === 'fillText' && names.includes(String(c.args[0]))) alphas.push(Number(/,\s*([\d.]+)\)$/.exec(String(c.fill))![1]))
+    }
+    expect(alphas.length).toBeGreaterThan(200)
+    expect(Math.min(...alphas)).toBeGreaterThanOrEqual(0.6)
+    expect(Math.max(...alphas) - Math.min(...alphas)).toBeGreaterThan(0.1) // 깊이감(앞쪽이 더 또렷)은 남는다
   })
 
   it('오래_멈췄다_와도_시간이_튀지_않는다', () => {
