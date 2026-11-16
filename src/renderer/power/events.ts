@@ -54,7 +54,7 @@ export function mulberry32(seed: number): () => number {
 /** 화면이 사건을 모아 한 번에 그리는 간격 — 사건마다 React 상태를 바꾸지 않게 */
 export const BATCH_MS = 100
 /** 한 번에 모아 두는 사건 상한(넘치면 오래된 것부터 버린다) */
-const BATCH_MAX = 200
+export const BATCH_MAX = 200
 
 /** 사건을 모아 ms 마다 한 번에 넘긴다 — 같은 때 온 사건은 한 번에 그려진다. 끄는 함수를 돌려준다 */
 export function batched(subscribe: (fn: (ev: ScreenEvent) => void) => () => void, fn: (evs: ScreenEvent[]) => void, ms = BATCH_MS): () => void {

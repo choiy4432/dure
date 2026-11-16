@@ -4,10 +4,14 @@ import { oneLine, type DiffLine, type ScreenEvent } from './events'
 
 /** 화면 사건 글 한 줄의 상한 */
 export const TEXT_MAX = 80
+/** 도구 이름의 상한 */
+export const TOOL_MAX = 40
 /** 결과 하나에 싣는 diff 줄 상한 */
 export const DIFF_MAX = 12
 /** 기록 한 줄에서 내는 답 글 줄 상한 */
 export const SAY_MAX = 3
+/** 답 글에서 문단 첫 줄을 찾아 훑는 앞부분 글자 수 — 긴 답 글을 통째로 나누지 않는다 */
+const SAY_SCAN = 4000
 
 const TARGET_KEYS = ['file_path', 'path', 'command', 'pattern', 'query', 'description']
 
@@ -22,12 +26,36 @@ export function toolTarget(input: unknown): string {
   return ''
 }
 
-/** 글의 첫 줄(빈 줄은 건너뛴다) — 없으면 '' */
-const firstLine = (s: string): string => (s.split(/\r?\n/).find(l => l.trim()) ?? '').trim()
+/** 글의 첫 줄(빈 줄은 건너뛴다) — 없으면 ''. 앞에서부터 한 줄씩 보다가 찾으면 멈춘다(긴 결과 글을 통째로 나누지 않는다) */
+function firstLine(s: string): string {
+  for (let at = 0; at < s.length; ) {
+    const nl = s.indexOf('\n', at)
+    const end = nl < 0 ? s.length : nl
+    const l = s.slice(at, end).trim()
+    if (l) return l
+    at = end + 1
+  }
+  return ''
+}
 
-/** 글을 문단(빈 줄로 나뉜)마다 첫 줄로 */
-const paragraphHeads = (s: string): string[] =>
-  s.split(/\r?\n[ \t]*\r?\n/).map(firstLine).filter(Boolean)
+/** 글을 문단(빈 줄로 나뉜)마다 첫 줄로 — 앞 SAY_SCAN 글자만 훑고, max 개를 찾으면 멈춘다 */
+function paragraphHeads(s: string, max: number): string[] {
+  const text = s.length > SAY_SCAN ? s.slice(0, SAY_SCAN) : s
+  const gap = /\r?\n[ \t]*\r?\n/g
+  const out: string[] = []
+  let from = 0
+  while (out.length < max) {
+    const m = gap.exec(text)
+    const head = firstLine(text.slice(from, m ? m.index : text.length))
+    if (head) out.push(head)
+    if (!m) break
+    from = m.index + m[0].length
+  }
+  return out
+}
+
+/** patch 의 줄 끝 표시(`\ No newline at end of file`) — 고친 줄이 아니다 */
+const NO_EOL = '\\'
 
 /** patch → 더한·지운 줄 수(전체)와 앞 DIFF_MAX 줄 */
 function diffOf(patch: DiffHunk[] | undefined): { added: number; removed: number; diff: DiffLine[] } {
@@ -36,6 +64,7 @@ function diffOf(patch: DiffHunk[] | undefined): { added: number; removed: number
   const diff: DiffLine[] = []
   for (const h of patch ?? [])
     for (const l of h.lines) {
+      if (l[0] === NO_EOL) continue
       const sign = l[0] === '+' || l[0] === '-' ? l[0] : ' '
       if (sign === '+') added++
       else if (sign === '-') removed++
@@ -54,10 +83,9 @@ export function historyEvents(agentId: string, item: HistoryItem, at: number): S
     const out: ScreenEvent[] = []
     let says = 0
     for (const b of item.blocks) {
-      if (b.type === 'tool_use') out.push({ kind: 'tool', agentId, tool: b.name, target: toolTarget(b.input), at })
-      else
-        for (const head of paragraphHeads(b.text)) {
-          if (says >= SAY_MAX) break
+      if (b.type === 'tool_use') out.push({ kind: 'tool', agentId, tool: oneLine(b.name, TOOL_MAX), target: toolTarget(b.input), at })
+      else if (says < SAY_MAX)
+        for (const head of paragraphHeads(b.text, SAY_MAX - says)) {
           says++
           out.push({ kind: 'say', agentId, text: oneLine(head, TEXT_MAX), at })
         }
