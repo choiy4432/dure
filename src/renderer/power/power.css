@@ -1,0 +1,48 @@
+/* 파워 모드 덮개 — 대화상자(50)·투어(60) 위. 여기만 쓰는 색은 이 파일에 */
+.pw {
+  --pw-backdrop: #0B1120;
+  --pw-ink: #E2E8F0;
+  --pw-ring: #60A5FA;
+  --pw-hint-bg: rgba(15, 23, 42, 0.9);
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--pw-backdrop);
+  overflow: hidden;
+  outline: none;
+  color: var(--pw-ink);
+}
+.pw[data-idle] { cursor: none; }
+.pw-stage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1600px;
+  height: 900px;
+  transform-origin: center center;
+  overflow: hidden;
+}
+.pw-exit {
+  position: absolute;
+  right: 16px;
+  top: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 500 13px var(--font);
+  pointer-events: none;
+}
+.pw-exit svg { transform: rotate(-90deg); }
+.pw-exit .trk { stroke: rgba(226, 232, 240, 0.25); }
+.pw-exit .fil { stroke: var(--pw-ring); }
+.pw-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--pw-hint-bg);
+  font: 500 14px var(--font);
+  pointer-events: none;
+}

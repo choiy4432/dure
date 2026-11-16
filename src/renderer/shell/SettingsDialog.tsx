@@ -10,6 +10,7 @@ import { GeneralPane } from './settings/GeneralPane'
 import { AgentsPane } from './settings/AgentsPane'
 import { NotifyPane } from './settings/NotifyPane'
 import { AboutPane } from './settings/AboutPane'
+import { SettingsCloseContext } from './settings/parts'
 
 export type SettingsTab = 'general' | 'agents' | 'notify' | 'phone' | 'about'
 
@@ -174,7 +175,11 @@ function Frame({
         </div>
         <div className="st-main">
           <div ref={pane} id={`${id}-pane`} className="st-pane" role="tabpanel" aria-labelledby={`${id}-tab-${tab}`}>
-            {tab === 'general' && <GeneralPane />}
+            {tab === 'general' && (
+              <SettingsCloseContext.Provider value={onClose}>
+                <GeneralPane />
+              </SettingsCloseContext.Provider>
+            )}
             {tab === 'agents' && <AgentsPane onCoveredChange={covered} />}
             {tab === 'notify' && <NotifyPane />}
             {tab === 'phone' && phonePane?.({ onCoveredChange: covered })}

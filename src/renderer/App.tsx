@@ -20,6 +20,7 @@ import { Announcer } from './shell/Announcer'
 import { UpdateToast } from './shell/UpdateToast'
 import { TourLayer } from './tour/TourLayer'
 import { SearchPalette, useSearchShortcut } from './shell/SearchPalette'
+import { PowerLayer } from './power/PowerLayer'
 
 type Dialog = 'room' | 'agent' | 'settings' | null
 
@@ -113,6 +114,7 @@ export function App() {
         {body}
         <StatusBar />
         <Announcer {...announced} />
+        <PowerLayer />
         <UpdateToast />
         <Presence show={searching && canSearch}>
           <SearchPalette onClose={closeSearch} />

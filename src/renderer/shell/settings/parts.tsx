@@ -1,6 +1,9 @@
-import { useCallback, useId, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useId, useRef, useState, type ReactNode } from 'react'
 import { getStore } from '../../state/store'
 import { errorMessage } from '../../lib/words'
+
+/** 설정 창을 닫는 함수 — 판이 스스로 창을 닫아야 할 때(파워 모드를 켜면 닫힌다) */
+export const SettingsCloseContext = createContext<() => void>(() => {})
 
 /** 설정 탭 안의 묶음 — 작은 이름 줄 + 둥근 상자(줄들은 옅은 선으로 나뉜다) */
 export function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
