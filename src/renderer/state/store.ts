@@ -374,19 +374,33 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   const powerListeners = new Set<(ev: ScreenEvent) => void>()
   const powerSeen = new Set<string>() // 켤 때 이미 있던 + 켠 뒤 본 메시지 id
   let powerCall = 0 // setPower 호출 순번 — 늦게 거절된 옛 호출이 새 상태를 덮지 않게
+  // 파워 모드는 진짜 일을 건드리지 않는다 — 듣기나 듣는 이가 던져도 스토어는 사건을 적용하고 알린다.
+  // 남기는 건 고정 문구와 오류 종류뿐(사건 내용·오류 글에 대화·파일 이름이 들 수 있다)
+  const powerFailed = (e: unknown) => console.error('두레: 파워 모드 화면 사건을 처리하지 못했어요', e instanceof Error ? e.name : typeof e)
   const tapPower = (ev: Ev, at: number) => {
-    if (!state.power.on) return
-    let out: ScreenEvent[] = []
-    if (ev.name === 'message') {
-      const m = ev.payload
-      if (powerSeen.has(m.id)) return
-      powerSeen.add(m.id)
-      if (powerListeners.size && m.roomId === state.power.roomId) out = [handoffEvent(m, at)]
-    } else if (ev.name === 'history') {
-      const a = state.agents.find(x => x.id === ev.payload.agentId)
-      if (powerListeners.size && a && a.roomId === state.power.roomId) out = toolEvents(a.id, ev.payload.item, at)
+    try {
+      if (!state.power.on) return
+      let out: ScreenEvent[] = []
+      if (ev.name === 'message') {
+        const m = ev.payload
+        if (powerSeen.has(m.id)) return
+        powerSeen.add(m.id)
+        if (powerListeners.size && m.roomId === state.power.roomId) out = [handoffEvent(m, at)]
+      } else if (ev.name === 'history') {
+        const a = state.agents.find(x => x.id === ev.payload.agentId)
+        if (powerListeners.size && a && a.roomId === state.power.roomId) out = toolEvents(a.id, ev.payload.item, at)
+      }
+      for (const e of out)
+        for (const fn of [...powerListeners]) {
+          try {
+            fn(e)
+          } catch (err) {
+            powerFailed(err)
+          }
+        }
+    } catch (err) {
+      powerFailed(err)
     }
-    for (const e of out) for (const fn of [...powerListeners]) fn(e)
   }
 
   const applyEvent = (ev: Ev, at: number) => {
@@ -536,8 +550,8 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
           // 보낸 줄은 Claude 에게 쓴 순간 기록된다(working 알림과 어느 쪽이 먼저 와도 된다) — 요청이 나갈 때까지 준비. 같은 때에 생각도 끝난다
           phase: item.kind === 'user' ? withPhase(state.phase, agentId, 'preparing') : thoughtEnds ? without(state.phase, agentId) : state.phase,
           lastText,
-          // 못 본 결과 — 고르지 않았거나 창에 초점이 없다. 새 대화는 앞 결과를 지운다
-          fresh: item.kind === 'result' && (state.selectedAgentId !== agentId || !hasFocus()) ? { ...state.fresh, [agentId]: item.t }
+          // 못 본 결과 — 고르지 않았거나 창에 초점이 없다(파워 모드 덮개가 떠 있어도 못 본다). 새 대화는 앞 결과를 지운다
+          fresh: item.kind === 'result' && (state.selectedAgentId !== agentId || state.power.on || !hasFocus()) ? { ...state.fresh, [agentId]: item.t }
             : boundary ? without(state.fresh, agentId)
             : state.fresh,
         }
@@ -1095,7 +1109,10 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       const call = ++powerCall
       const before = state.power
       if (on) for (const m of state.messages) powerSeen.add(m.id)
-      set({ ...state, power: on ? { on: true, roomId: state.roomId } : { on: false, roomId: null } })
+      // 끄면 고른 에이전트의 대화가 다시 보인다 — 초점을 되찾을 때처럼 '끝남 · 새 결과' 를 지운다(켜 둔 동안엔 못 본 것으로 남겼다)
+      const sel = state.selectedAgentId
+      const fresh = !on && sel && sel in state.fresh && hasFocus() ? without(state.fresh, sel) : state.fresh
+      set({ ...state, power: on ? { on: true, roomId: state.roomId } : { on: false, roomId: null }, fresh })
       try {
         await api.setPowerMode(on)
         if (!on && call === powerCall) powerSeen.clear()

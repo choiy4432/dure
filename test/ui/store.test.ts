@@ -1116,6 +1116,20 @@ describe('store 끝남 · 새 결과', () => {
     expect(s.getState().fresh).toEqual({ b: 8 })
   })
 
+  it('파워 모드가 켜져 있으면 초점이 있어도 고른 에이전트의 result 는 fresh — 끄면 초점을 되찾은 것처럼 지운다', async () => {
+    const { api, emit } = fake()
+    ;(api as any).setPowerMode = vi.fn(async () => {})
+    const s = createStore(api, { hasFocus: () => true })
+    await s.init()
+    s.selectAgent('a')
+    await s.setPower(true)
+    send(emit, 'a', result(7))
+    send(emit, 'b', result(8))
+    expect(s.getState().fresh).toEqual({ a: 7, b: 8 })
+    await s.setPower(false)
+    expect(s.getState().fresh).toEqual({ b: 8 })
+  })
+
   it('고른 에이전트 + 초점 있음 → fresh 없음', async () => {
     const { api, emit } = fake()
     const s = createStore(api, { hasFocus: () => true })
@@ -1706,6 +1720,44 @@ describe('파워 모드', () => {
     rejectOld(new Error('늦음'))
     await firstDone
     expect(s.getState().power.on).toBe(true)
+  })
+
+  it('듣는_이가_던져도_스토어는_history·message_를_적용하고_알리고_다른_듣는_이도_받는다', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { s, emit } = await power()
+    await s.selectAgent('b')
+    await s.setPower(true)
+    const got: any[] = []
+    s.onPowerEvent(() => { throw new Error('듣는 쪽 고장 src/a.ts') })
+    s.onPowerEvent(e => got.push(e))
+    let notified = 0
+    s.subscribe(() => { notified++ })
+    expect(() => emit('history', { agentId: 'b', item: tool('Read', { file_path: 'src/a.ts' }) })).not.toThrow()
+    expect(s.getState().history.b.at(-1)).toMatchObject({ kind: 'assistant' })
+    expect(() => emit('message', relay('n1', 'pending', { text: '넘겨요' }))).not.toThrow()
+    expect(s.getState().messages.map(m => m.id)).toContain('n1')
+    expect(notified).toBe(2)
+    expect(got).toMatchObject([{ kind: 'tool', agentId: 'b' }, { kind: 'handoff', text: '넘겨요' }])
+    // 남긴 기록엔 사건 내용·오류 글이 없다
+    expect(logged).toHaveBeenCalledTimes(2)
+    expect(JSON.stringify(logged.mock.calls)).not.toMatch(/src\/a\.ts|고장|넘겨요/)
+    logged.mockRestore()
+  })
+
+  it('스냅샷을_기다리며_모아_둔_사건을_다시_적용할_때_듣는_이가_던져도_모두_적용된다', async () => {
+    let release: (v: Snapshot) => void = () => {}
+    let first = true
+    const { s, emit } = await power({ snapshot: () => (first ? ((first = false), Promise.resolve(snap())) : new Promise<Snapshot>(r => { release = r })) })
+    await s.setPower(true)
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    s.onPowerEvent(() => { throw new Error('듣는 쪽 고장') })
+    const again = s.refresh()
+    emit('message', relay('n1', 'pending'))
+    emit('message', relay('n2', 'pending'))
+    release(snap())
+    await expect(again).resolves.toBeUndefined()
+    expect(s.getState().messages.map(m => m.id)).toEqual(['n1', 'n2'])
+    logged.mockRestore()
   })
 
   it('듣는_이가_없어도_본_id_는_기록된다', async () => {

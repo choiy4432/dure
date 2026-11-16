@@ -138,7 +138,8 @@ export function useAttention(opts: AttentionOpts = {}): Announcement {
       }
       syncTitle(s, todoCounts(s).total)
 
-      const focused = hasFocus()
+      // 파워 모드 덮개가 떠 있으면 창은 초점·전체 화면이어도 사용자는 자리에 없다 — 초점 없음과 같이 알린다
+      const focused = hasFocus() && !s.power.on
       const notify = optsRef.current.notify ?? defaultNotify
       const nameOf = (id: AgentId) => s.agents.find(a => a.id === id)?.name ?? id
 
