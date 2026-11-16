@@ -14,6 +14,8 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  document.body.querySelectorAll('[data-t]').forEach(n => n.remove())
+  vi.doUnmock('../../src/renderer/power/ControlRoom')
   vi.useRealTimers()
 })
 
@@ -130,5 +132,124 @@ describe('PowerLayer', () => {
     expect(app).toHaveAttribute('data-idle')
     fireEvent.pointerMove(app)
     expect(app).not.toHaveAttribute('data-idle')
+  })
+
+  const EVENTS: Array<[string, (el: Element) => unknown]> = [
+    ['keydown', el => fireEvent.keyDown(el, { key: 'a' })],
+    ['keyup', el => fireEvent.keyUp(el, { key: 'a' })],
+    ['pointerdown', el => fireEvent.pointerDown(el)],
+    ['pointerup', el => fireEvent.pointerUp(el)],
+    ['click', el => fireEvent.click(el)],
+    ['wheel', el => fireEvent.wheel(el)],
+    ['contextmenu', el => fireEvent.contextMenu(el)],
+  ]
+  describe.each(EVENTS)('삼키기 — %s', (type, fire) => {
+    const probe = () => {
+      const onDoc = vi.fn()
+      const onWin = vi.fn()
+      document.addEventListener(type, onDoc)
+      window.addEventListener(type, onWin)
+      return { onDoc, onWin, off: () => { document.removeEventListener(type, onDoc); window.removeEventListener(type, onWin) } }
+    }
+    it('켜져 있으면 덮개 밖 document·window 리스너에 안 닿는다', async () => {
+      await mount()
+      const p = probe()
+      fire(document.body)
+      p.off()
+      expect(p.onDoc).not.toHaveBeenCalled()
+      expect(p.onWin).not.toHaveBeenCalled()
+    })
+    it('꺼져 있으면 닿는다', async () => {
+      await mount(false)
+      const p = probe()
+      fire(document.body)
+      p.off()
+      expect(p.onDoc).toHaveBeenCalled()
+      expect(p.onWin).toHaveBeenCalled()
+    })
+  })
+
+  it('Esc keydown 도 밖으로 새지 않고 기본 동작이 막힌다', async () => {
+    await mount()
+    const onDoc = vi.fn()
+    document.addEventListener('keydown', onDoc)
+    const notPrevented = fireEvent.keyDown(document.body, { key: 'Escape' })
+    document.removeEventListener('keydown', onDoc)
+    expect(onDoc).not.toHaveBeenCalled()
+    expect(notPrevented).toBe(false)
+  })
+
+  it.each(['a', 'Tab', 'Enter', ' '])('키 %j 의 기본 동작이 막힌다', async k => {
+    await mount()
+    expect(fireEvent.keyDown(document.body, { key: k })).toBe(false)
+  })
+
+  it('클릭·휠·우클릭 기본 동작도 막힌다', async () => {
+    await mount()
+    expect(fireEvent.click(document.body)).toBe(false)
+    expect(fireEvent.wheel(document.body)).toBe(false)
+    expect(fireEvent.contextMenu(document.body)).toBe(false)
+  })
+
+  it('덮개 밖 요소에 초점이 가면 덮개로 되돌린다', async () => {
+    await mount()
+    const b = document.createElement('button')
+    b.dataset.t = '1'
+    document.body.appendChild(b)
+    b.focus()
+    expect(document.activeElement).toBe(screen.getByRole('application'))
+  })
+
+  it('켜진 동안 body 의 다른 자식은 inert · 꺼지면 원래대로 (원래 inert 였던 것은 그대로)', async () => {
+    const a = document.createElement('div')
+    const pre = document.createElement('div')
+    a.dataset.t = pre.dataset.t = '1'
+    pre.setAttribute('inert', '')
+    document.body.append(a, pre)
+    const { store } = await mount()
+    const app = screen.getByRole('application')
+    expect(a).toHaveAttribute('inert')
+    expect(app).not.toHaveAttribute('inert')
+    const late = document.createElement('div')
+    late.dataset.t = '1'
+    document.body.appendChild(late)
+    await act(async () => { await Promise.resolve() })
+    expect(late).toHaveAttribute('inert')
+    await act(async () => { await store.setPower(false) })
+    expect(a).not.toHaveAttribute('inert')
+    expect(late).not.toHaveAttribute('inert')
+    expect(pre).toHaveAttribute('inert')
+  })
+
+  it('나가기가 실패하면 2000ms 동안 안내가 뜬다', async () => {
+    const { store } = await mount()
+    vi.spyOn(store, 'setPower').mockRejectedValue(new Error('x'))
+    key('keydown', 'Escape')
+    await wait(1500)
+    expect(screen.getByText('나가지 못했어요 — 다시 Esc 를 길게 눌러 주세요')).toBeInTheDocument()
+    await wait(2000)
+    expect(screen.queryByText('나가지 못했어요 — 다시 Esc 를 길게 눌러 주세요')).toBeNull()
+  })
+
+  it('Esc 를 누르는 동안 아래 화면은 다시 그려지지 않는다', async () => {
+    let renders = 0
+    vi.doMock('../../src/renderer/power/ControlRoom', () => ({ ControlRoom: () => { renders++; return <div data-power-screen="control" /> } }))
+    await mount()
+    const before = renders
+    key('keydown', 'Escape')
+    await wait(600)
+    expect(screen.getByText('나가는 중…')).toBeInTheDocument()
+    expect(renders).toBe(before)
+  })
+
+  it('움직임 줄이기면 stage 에 data-calm', async () => {
+    const mm = (matches: boolean) => { window.matchMedia = ((q: string) => ({ matches, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} })) as any }
+    mm(true)
+    const { view } = await mount()
+    expect(view.baseElement.querySelector('.pw-stage')).toHaveAttribute('data-calm')
+    cleanup()
+    mm(false)
+    const again = await mount()
+    expect(again.view.baseElement.querySelector('.pw-stage')).not.toHaveAttribute('data-calm')
   })
 })

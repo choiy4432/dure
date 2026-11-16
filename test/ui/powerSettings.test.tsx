@@ -65,4 +65,13 @@ describe('설정 — 파워 모드 구역', () => {
     expect(setPrefsApi).toHaveBeenCalledWith({ powerTerminal: true })
     expect(within(dlg).getByRole('radio', { name: '터미널 벽' })).toHaveAttribute('aria-checked', 'true')
   })
+
+  it('설정이 닫힌 뒤에도 초점은 덮개에 있다 (연 단추로 돌아가지 않는다)', async () => {
+    const { dlg } = await open()
+    fireEvent.click(within(dlg).getByRole('switch', { name: '파워 모드' }))
+    await settle()
+    await act(async () => { await new Promise(r => setTimeout(r, 400)) })
+    expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
+    expect(document.activeElement).toBe(screen.getByRole('application', { name: '파워 모드' }))
+  })
 })
