@@ -1646,11 +1646,75 @@ describe('파워 모드', () => {
     expect(got).toMatchObject([{ kind: 'handoff', from: 'a', to: 'b', text: '넘겨요', real: true }])
   })
 
-  it('듣는_이가_없으면_history_상태는_그대로', async () => {
+  it('듣는_이가_있어도_history_상태는_파워_없을_때와_같다', async () => {
+    const hist = [{ t: 1, kind: 'assistant', blocks: [{ type: 'text', text: '앞' }] } as HistoryItem]
+    const run = async (on: boolean) => {
+      const { s, emit } = await power({ history: async () => hist } as any)
+      await s.selectAgent('b')
+      if (on) { await s.setPower(true); s.onPowerEvent(() => {}) }
+      emit('history', { agentId: 'b', item: tool('Read', { path: 'x' }) })
+      emit('history', { agentId: 'c', item: tool('Read', { path: 'y' }) })
+      const st = s.getState()
+      return { history: st.history, lastText: st.lastText }
+    }
+    expect(await run(true)).toEqual(await run(false))
+  })
+
+  it('끄기가_실패해도_본_메시지는_그대로(옛_메시지_갱신은_안_쏜다)', async () => {
+    const old = [relay('o1', 'delivered')]
+    let fail = false
+    const { s, emit } = await power({ snapshot: async () => snap({ messages: old }) }, async () => { if (fail) throw new Error('x') })
+    const got: any[] = []
+    s.onPowerEvent(e => got.push(e))
+    await s.setPower(true)
+    fail = true
+    await expect(s.setPower(false)).rejects.toThrow('x')
+    expect(s.getState().power.on).toBe(true)
+    emit('message', relay('o1', 'read', { updatedAt: 9 }))
+    expect(got).toEqual([])
+  })
+
+  it('켜진_채_setPower_true_는_굳힌_방과_본_메시지를_안_건드린다', async () => {
+    const { api, s, emit } = await power()
+    const got: any[] = []
+    s.onPowerEvent(e => got.push(e))
+    await s.setPower(true)
+    emit('message', relay('n1', 'pending'))
+    s.selectRoom('r2')
+    expect(s.getState().power.roomId).toBe('r1')
+    await s.setPower(true)
+    expect(s.getState().power.roomId).toBe('r1')
+    expect((api as any).setPowerMode).toHaveBeenCalledTimes(1)
+    emit('message', relay('n1', 'read', { updatedAt: 9 }))
+    expect(got).toHaveLength(1)
+  })
+
+  it('꺼진_채_setPower_false_는_api_를_안_부른다', async () => {
+    const { api, s } = await power()
+    await s.setPower(false)
+    expect((api as any).setPowerMode).not.toHaveBeenCalled()
+  })
+
+  it('겹친_호출의_늦은_거절은_새_호출_상태를_덮지_않는다', async () => {
+    let rejectOld: (e: Error) => void = () => {}
+    let n = 0
+    const { s } = await power({}, () => (++n === 1 ? new Promise<void>((_, rj) => { rejectOld = rj }) : Promise.resolve()))
+    const first = s.setPower(true)
+    const firstDone = first.catch(() => {})
+    await s.setPower(false)
+    await s.setPower(true)
+    rejectOld(new Error('늦음'))
+    await firstDone
+    expect(s.getState().power.on).toBe(true)
+  })
+
+  it('듣는_이가_없어도_본_id_는_기록된다', async () => {
     const { s, emit } = await power()
     await s.setPower(true)
-    emit('history', { agentId: 'b', item: tool('Read', { path: 'x' }) })
-    expect(s.getState().history.b).toBeUndefined()
-    expect(s.getState().lastText).toEqual({})
+    emit('message', relay('n1', 'pending'))
+    const got: any[] = []
+    s.onPowerEvent(e => got.push(e))
+    emit('message', relay('n1', 'delivered', { updatedAt: 9 }))
+    expect(got).toEqual([])
   })
 })

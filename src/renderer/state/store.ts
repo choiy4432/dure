@@ -373,6 +373,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   // 파워 모드 듣기 — 스토어가 버리기 전의 'history'·'message' 사건을 본다(상태는 안 건드린다)
   const powerListeners = new Set<(ev: ScreenEvent) => void>()
   const powerSeen = new Set<string>() // 켤 때 이미 있던 + 켠 뒤 본 메시지 id
+  let powerCall = 0 // setPower 호출 순번 — 늦게 거절된 옛 호출이 새 상태를 덮지 않게
   const tapPower = (ev: Ev, at: number) => {
     if (!state.power.on) return
     let out: ScreenEvent[] = []
@@ -380,10 +381,10 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       const m = ev.payload
       if (powerSeen.has(m.id)) return
       powerSeen.add(m.id)
-      if (m.roomId === state.power.roomId) out = [handoffEvent(m, at)]
+      if (powerListeners.size && m.roomId === state.power.roomId) out = [handoffEvent(m, at)]
     } else if (ev.name === 'history') {
       const a = state.agents.find(x => x.id === ev.payload.agentId)
-      if (a && a.roomId === state.power.roomId) out = toolEvents(a.id, ev.payload.item, at)
+      if (powerListeners.size && a && a.roomId === state.power.roomId) out = toolEvents(a.id, ev.payload.item, at)
     }
     for (const e of out) for (const fn of [...powerListeners]) fn(e)
   }
@@ -1090,15 +1091,19 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       return recent.filter(id => state.agents.some(a => a.id === id))
     },
     async setPower(on) {
+      if (state.power.on === on) return // 켜진 동안 굳힌 방·본 id 는 그대로, 꺼진 채 끄기는 할 일 없음
+      const call = ++powerCall
       const before = state.power
-      powerSeen.clear()
       if (on) for (const m of state.messages) powerSeen.add(m.id)
       set({ ...state, power: on ? { on: true, roomId: state.roomId } : { on: false, roomId: null } })
       try {
         await api.setPowerMode(on)
+        if (!on && call === powerCall) powerSeen.clear()
       } catch (e) {
-        powerSeen.clear()
-        set({ ...state, power: before })
+        if (call === powerCall) { // 더 새 호출이 있으면 그쪽 상태를 덮지 않는다
+          if (on) powerSeen.clear()
+          set({ ...state, power: before })
+        }
         throw e
       }
     },
