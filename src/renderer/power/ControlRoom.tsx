@@ -4,6 +4,7 @@ import { BrandMark } from '../shell/BrandMark'
 import { AgentCards } from './control/AgentCards'
 import { clockText, LiveLog } from './control/LiveLog'
 import { StatsStrip } from './control/StatsStrip'
+import { OrbitMap } from './orbit/OrbitMap'
 import { createStats } from './stats'
 import { usePowerFeed } from './usePowerFeed'
 
@@ -24,6 +25,7 @@ export function ControlRoom({ seed, now }: { seed?: number; now?: () => number }
   const [tokensPerMin, setTokensPerMin] = useState(0)
   const mountedAt = useRef(Date.now())
   const [wallMs, setWallMs] = useState(() => Date.now())
+  const flowRef = useRef<HTMLElement>(null)
 
   useEffect(
     () =>
@@ -74,10 +76,10 @@ export function ControlRoom({ seed, now }: { seed?: number; now?: () => number }
           <div className="pw-label">
             관계도 · 실시간 넘김
             <span>
-              지난 1시간 <b>{snap.handoffs}</b>건
+              지난 1시간 <b>{snap.handoffs}</b>건 · 지금 오가는 데이터 <b ref={flowRef}>0</b>개
             </span>
           </div>
-          <div className="pw-mapbox" />
+          <OrbitMap agents={agents} awaiting={view.awaiting} subagents={view.subagents} subscribe={subscribe} flowRef={flowRef} />
         </section>
         <LiveLog agents={agents} rate={snap.toolsPerMin} subscribe={subscribe} />
       </div>
