@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pinnedAgent, roomView } from '../../src/renderer/power/roomView'
+import { AGENT_COLORS, pinnedAgent, roomView } from '../../src/renderer/power/roomView'
 
 const ag = (id: string, roomId: string, over: object = {}) => ({ id, roomId, name: `${id}이름`, role: `${id}역`, status: 'idle', subagentsRunning: [], ...over })
 const st = (over: object = {}): any => ({
@@ -54,6 +54,12 @@ describe('roomView', () => {
     expect(after.agents.map(a => a.id)).toEqual(['a', 'd'])
     expect(after.agents[1].color).toBe(before.agents[2].color)
     expect(Object.keys(after.state)).toEqual(['a', 'd'])
+  })
+
+  it('색은_굳힌_차례대로_다섯_색을_돌려_쓴다(여섯째는_첫_색)', () => {
+    const many = Array.from({ length: 7 }, (_, i) => ag(`x${i}`, 'r1'))
+    const v = roomView(st({ agents: many, power: { on: true, roomId: 'r1', agentIds: many.map(a => a.id) } }))
+    expect(v.agents.map(a => a.color)).toEqual([...AGENT_COLORS, AGENT_COLORS[0], AGENT_COLORS[1]])
   })
 
   it('state_가_스토어_상태를_따른다', () => {
