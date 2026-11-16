@@ -26,7 +26,7 @@ const toolItem = (name: string, input: unknown) => ({ t: 5, kind: 'assistant', b
 let handlers: Record<string, ((p: any) => void)[]>
 const emit = (k: string, p: unknown) => act(() => { (handlers[k] ?? []).forEach(f => f(p)) })
 
-async function mount(agents: object[]) {
+async function mount(agents: object[], o: { onSettings?: () => void } = {}) {
   const rooms = agents.length ? [{ id: 'r1', name: '진짜 방', createdAt: 1 }] : []
   vi.resetModules()
   handlers = {}
@@ -43,7 +43,7 @@ async function mount(agents: object[]) {
   await act(async () => { await store.init() })
   if (rooms.length) act(() => { store.selectRoom('r1') })
   await act(async () => { await store.setPower(true) })
-  render(<ControlRoom onExit={() => {}} />)
+  render(<ControlRoom onExit={() => {}} onSettings={o.onSettings} />)
 }
 const wait = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
 const cards = () => document.querySelectorAll('.pw-card')
@@ -316,6 +316,18 @@ describe('관제실', () => {
     const exit = within(top as HTMLElement).getByRole('button', { name: '나가기' })
     expect(exit.compareDocumentPosition(top.querySelector('.pw-now')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(document.querySelector('[data-power-map] .pw-label')).toHaveTextContent('노드를 누르면 그 에이전트와 대화')
+  })
+
+  it('위_띠의_설정_단추는_나가기_앞_누르면_onSettings_—_없으면_단추도_없다', async () => {
+    const onSettings = vi.fn()
+    await mount([agent('a', { name: '알파' })], { onSettings })
+    const top = document.querySelector('.pw-top') as HTMLElement
+    expect([...top.querySelectorAll('.pw-ctls button')].map(b => b.textContent)).toEqual(['설정', '나가기Esc'])
+    within(top).getByRole('button', { name: '설정' }).click()
+    expect(onSettings).toHaveBeenCalledTimes(1)
+    cleanup()
+    await mount([agent('a', { name: '알파' })])
+    expect(within(document.querySelector('.pw-top') as HTMLElement).queryByRole('button', { name: '설정' })).toBeNull()
   })
 
   it('숫자_띠와_위_띠가_같은_진짜_서브에이전트_수를_보인다', async () => {

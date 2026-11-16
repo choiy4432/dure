@@ -171,9 +171,12 @@
 .pw-room b { color: var(--text); font-weight: 600; }
 .pw-clock { display: flex; align-items: center; gap: 12px; font: 14px var(--mono); color: var(--muted); flex: none; }
 .pw-clock b { color: var(--text-2); font-weight: 500; }
-.pw-out { display: inline-flex; align-items: center; gap: 8px; margin-left: 4px; padding: 5px 8px 5px 12px; font: 500 13px var(--font); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); transition: background-color 0.15s, color 0.15s; }
-.pw-out:hover { color: var(--text); background: var(--hover); }
-.pw-out kbd { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--border-strong); border-radius: var(--radius-xs); padding: 0 5px; line-height: 17px; }
+/* [설정] · [나가기 Esc] — 두 화면이 같은 부품(PowerControls). 여기는 관제실 위 띠의 생김새, 터미널 벽은 아래 상태 줄 규칙이 덮는다 */
+.pw-ctls { display: inline-flex; align-items: center; gap: 8px; margin-left: 4px; }
+.pw-ctl { display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; font: 500 13px var(--font); color: var(--text-2); border: 1px solid var(--border-strong); border-radius: var(--radius-ctl); transition: background-color 0.15s, color 0.15s; }
+.pw-ctl:has(kbd) { padding-right: 8px; }
+.pw-ctl:hover { color: var(--text); background: var(--hover); }
+.pw-ctl kbd { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--border-strong); border-radius: var(--radius-xs); padding: 0 5px; line-height: 17px; }
 .pw-now { font-size: 22px; color: var(--text); font-weight: 600; }
 .pw-main { flex: 1; display: grid; grid-template-columns: 330px minmax(0, 1fr) 440px; gap: 16px; min-height: 0; }
 .pw-label { font-size: 12.5px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 2px 10px; flex: none; white-space: nowrap; }
@@ -352,7 +355,9 @@
 .pw-t-win[data-on] { color: var(--pw-term-focus-ink); background: var(--pw-term-win-on); }
 .pw-t-more { color: var(--pw-term-dim); }
 .pw-t-rt { margin-left: auto; flex: none; display: flex; align-items: center; gap: 14px; height: 100%; padding: 0 14px 0 12px; color: var(--pw-term-ptl-ink); }
-.pw-t-out { display: inline-flex; align-items: center; gap: 7px; height: 22px; padding: 0 6px 0 9px; font: 12px var(--mono); color: var(--pw-term-focus-ink); border: 1px solid var(--pw-term-gap); border-radius: var(--radius-xs); transition: background-color 0.15s; }
-.pw-t-out:hover { background: var(--pw-term-win-on); }
-.pw-t-out kbd { font: 10.5px var(--mono); color: var(--pw-term-dim); }
+.pw-t-rt .pw-ctls { gap: 6px; margin-left: 0; }
+.pw-t-rt .pw-ctl { gap: 7px; height: 22px; padding: 0 9px; font: 12px var(--mono); color: var(--pw-term-focus-ink); border-color: var(--pw-term-gap); border-radius: var(--radius-xs); }
+.pw-t-rt .pw-ctl:has(kbd) { padding-right: 6px; }
+.pw-t-rt .pw-ctl:hover { background: var(--pw-term-win-on); }
+.pw-t-rt .pw-ctl kbd { font: 10.5px var(--mono); color: var(--pw-term-dim); border: 0; padding: 0; line-height: normal; }
 .pw-t-now { color: var(--pw-term-focus-ink); font-weight: 500; }

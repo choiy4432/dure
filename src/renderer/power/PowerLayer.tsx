@@ -33,12 +33,15 @@ function holdEscapeAllowed(): boolean {
   return true
 }
 
-/** 파워 모드가 켜져 있을 때만 전체 화면 덮개를 body 에 그린다 — 일하는 화면이라 입력은 막지 않는다 */
-export function PowerLayer() {
+/**
+ * 파워 모드가 켜져 있을 때만 전체 화면 덮개를 body 에 그린다 — 일하는 화면이라 입력은 막지 않는다.
+ * onSettings: 덮개의 [설정] 이 여는 앱의 설정 창(덮개 위에 뜬다). 설정을 열 수 없는 때는 없다 — 단추도 없다
+ */
+export function PowerLayer({ onSettings }: { onSettings?: () => void }) {
   const on = useDure(s => s.power.on)
   const terminal = useDure(s => s.app.prefs?.powerTerminal ?? false)
   if (!on) return null
-  return createPortal(<Overlay terminal={terminal} />, document.body)
+  return createPortal(<Overlay terminal={terminal} onSettings={onSettings} />, document.body)
 }
 
 /** Esc 를 누르고 있는 동안 차오르는 고리 — 진행률은 여기서만 다시 그려 아래 화면은 건드리지 않는다 */
@@ -63,7 +66,7 @@ function ExitRing({ onDone }: { onDone: () => void }) {
  * 입력을 삼키지 않고 초점을 붙잡지 않는다: 켤 때 한 번만 덮개로 초점을 옮겨(Esc 길게가 바로 되게) 그 뒤로는 건드리지 않는다.
  * 판은 창 크기 그대로 흐른다(늘리고 줄이지 않는다) — 안의 대화 패널이 제 크기 글자·화면 좌표(떠 있는 메뉴·스크롤)를 그대로 쓴다.
  */
-function Overlay({ terminal }: { terminal: boolean }) {
+function Overlay({ terminal, onSettings }: { terminal: boolean; onSettings?: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [hint, setHint] = useState<string | null>(null)
   const hintTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -82,7 +85,10 @@ function Overlay({ terminal }: { terminal: boolean }) {
   useEffect(() => () => clearTimeout(hintTimer.current), [])
 
   // 안내가 뜨고 져도 아래 화면은 다시 그리지 않는다(같은 요소)
-  const screen = useMemo(() => (terminal ? <TerminalWall onExit={exit} /> : <ControlRoom onExit={exit} />), [terminal, exit])
+  const screen = useMemo(
+    () => (terminal ? <TerminalWall onExit={exit} onSettings={onSettings} /> : <ControlRoom onExit={exit} onSettings={onSettings} />),
+    [terminal, exit, onSettings],
+  )
   return (
     <div ref={ref} className="pw" role="region" aria-label="파워 모드" tabIndex={-1}>
       <div className="pw-stage" data-calm={reducedMotion() || undefined}>

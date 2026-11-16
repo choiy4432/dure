@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getStore, useDure } from '../state/store'
 import { LiveLog } from './control/LiveLog'
 import { batched, type PowerAgent, type ScreenEvent } from './events'
+import { PowerControls } from './PowerControls'
 import { SidePanel } from './SidePanel'
 import { createStats } from './stats'
 import { createPaneLines, Pane, type PaneLines } from './terminal/Pane'
@@ -46,7 +47,7 @@ function WallLog({ agents, subscribe }: { agents: PowerAgent[]; subscribe: (fn: 
   return <LiveLog agents={agents} rate={rate} subscribe={subscribe} />
 }
 
-export function TerminalWall({ onExit }: { onExit: () => void }) {
+export function TerminalWall({ onExit, onSettings }: { onExit: () => void; onSettings?: () => void }) {
   const { view, subscribe } = usePowerFeed()
   const selected = useDure(s => s.selectedAgentId)
   // 창을 누르면 관제실의 카드처럼 그 에이전트를 고르고 입력창에 커서 — 옆 칸이 대화로 바뀐다
@@ -110,9 +111,7 @@ export function TerminalWall({ onExit }: { onExit: () => void }) {
           {view.agents.length > n && <span className="pw-t-win pw-t-more">외 {view.agents.length - n}명</span>}
         </span>
         <span className="pw-t-rt">
-          <button type="button" className="pw-t-out" title="Esc 를 길게 눌러도 나가요" onClick={onExit}>
-            나가기<kbd aria-hidden="true">Esc</kbd>
-          </button>
+          <PowerControls onSettings={onSettings} onExit={onExit} />
           <Clock />
         </span>
       </div>

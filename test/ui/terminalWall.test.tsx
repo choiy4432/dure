@@ -293,6 +293,24 @@ describe('터미널 벽', () => {
     expect(document.querySelector('[data-power-screen="terminal"]')).toBeNull()
   })
 
+  it('덮개가_넘긴_설정은_상태_줄의_설정_단추(나가기_앞)로_—_관제실과_같은_부품', async () => {
+    vi.resetModules()
+    api([agent('a', { name: '알파' })], { terminalPref: true })
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { PowerLayer } = await import('../../src/renderer/power/PowerLayer')
+    const store = getStore()
+    await act(async () => { await store.init() })
+    act(() => { store.selectRoom('r1') })
+    await act(async () => { await store.setPower(true) })
+    const onSettings = vi.fn()
+    const view = render(<PowerLayer onSettings={onSettings} />)
+    expect([...bar().querySelectorAll('.pw-ctls button')].map(b => b.textContent)).toEqual(['설정', '나가기Esc'])
+    act(() => { within(bar()).getByRole('button', { name: '설정' }).click() })
+    expect(onSettings).toHaveBeenCalledTimes(1)
+    view.rerender(<PowerLayer />)
+    expect(within(bar()).queryByRole('button', { name: '설정' })).toBeNull()
+  })
+
   it('켠_뒤에_방에_들어온_에이전트가_넘겨도_날_id_가_창에_새지_않는다', async () => {
     const list: object[] = [agent('a', { name: '알파' })]
     const store = await mount(list)

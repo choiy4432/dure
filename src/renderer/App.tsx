@@ -51,9 +51,19 @@ export function App() {
   const openSearch = useCallback(() => setSearching(true), [])
   const toggleSearch = useCallback(() => setSearching(s => !s), [])
   const close = () => setDialog(null)
-  const openSettings = (tab: SettingsTab) => {
+  const openSettings = useCallback((tab: SettingsTab) => {
     setSettingsTab(tab)
     setDialog('settings')
+  }, [])
+  /** 파워 모드 덮개의 [설정] — 늘 같은 함수(덮개가 화면을 다시 그리지 않게) */
+  const openGeneral = useCallback(() => openSettings('general'), [openSettings])
+  /** 안내 다시 보기 — 투어는 앱 화면을 가리킨다. 파워 모드 덮개가 그것을 가리고 있으면 먼저 끄고 시작한다(끄지 못하면 시작하지 않는다) */
+  const replayTour = () => {
+    close()
+    const s = getStore()
+    const start = () => s.startTour(s.getState().rooms.length > 0)
+    if (s.getState().power.on) void s.setPower(false).then(start, () => {})
+    else start()
   }
   const setupPhase = effectiveSetup(v.setup, v.claudeMissing, v.setupLoadFailed).phase
   const preparing = setupPhase === 'needs' || setupPhase === 'relaunching'
@@ -120,7 +130,8 @@ export function App() {
           <StatusBar />
         </div>
         <Announcer {...announced} />
-        <PowerLayer />
+        {/* 덮개의 [설정] 은 위 띠 톱니와 같은 때만(막혀 있으면 단추도 없다) — 설정 창은 이 밖(포털)이라 덮개 위에 뜬다 */}
+        <PowerLayer onSettings={blocked ? undefined : openGeneral} />
         <UpdateToast />
         <Presence show={searching && canSearch}>
           <SearchPalette onClose={closeSearch} />
@@ -140,10 +151,7 @@ export function App() {
             initialTab={settingsTab}
             onCoveredChange={setSettingsCovered}
             phonePane={o => <PhonePane onCoveredChange={o.onCoveredChange} />}
-            onReplayTour={() => {
-              close()
-              getStore().startTour(getStore().getState().rooms.length > 0)
-            }}
+            onReplayTour={replayTour}
           />
         </Presence>
         {/* 안내 투어·승인 한 번 — 대화상자 위 겹. 열린 창을 보고 단계를 넘기고, 새 방·에이전트 추가 창 · 설정 위에 겹친 창이 떠 있는 동안은 숨는다 */}

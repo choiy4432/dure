@@ -120,6 +120,19 @@ describe('PowerLayer — 덮개', () => {
     expect(overlay()).not.toHaveAttribute('data-idle')
   })
 
+  it('onSettings 를 넘기면 위 띠에 [설정] — 누르면 onSettings · 안 넘기면 단추도 없다', async () => {
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { PowerLayer } = await import('../../src/renderer/power/PowerLayer')
+    await act(async () => { await getStore().setPower(true) })
+    const onSettings = vi.fn()
+    const view = render(<PowerLayer onSettings={onSettings} />)
+    fireEvent.click(screen.getByRole('button', { name: '설정' }))
+    expect(onSettings).toHaveBeenCalledTimes(1)
+    view.rerender(<PowerLayer />)
+    expect(screen.queryByRole('button', { name: '설정' })).toBeNull()
+    expect(screen.getByRole('button', { name: '나가기' })).toBeInTheDocument()
+  })
+
   it('[나가기] 단추를 누르면 setPower(false)', async () => {
     const { spy } = await mount()
     fireEvent.click(screen.getByRole('button', { name: '나가기' }))

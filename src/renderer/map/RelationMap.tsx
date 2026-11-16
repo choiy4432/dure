@@ -316,12 +316,14 @@ function MapCanvas({ roomId, onAddAgent, touch, focus }: { roomId: RoomId; onAdd
   }, [])
   const closePair = useCallback(() => setPair(null), [])
 
-  // Esc 로 고르기 풀기 — 메시지 창이 열려 있으면 그 창의 Esc 가 먼저(닫기만), 패널·입력창에 초점이 있으면 그쪽 Esc 라 건드리지 않는다
+  // Esc 로 고르기 풀기 — 메시지 창이 열려 있으면 그 창의 Esc 가 먼저(닫기만), 패널·입력창에 초점이 있으면 그쪽 Esc 라 건드리지 않는다.
+  // 관계도가 inert 아래(다른 화면이 덮고 있다)면 듣지 않는다 — 창의 키는 inert 가 막지 못해 보이지 않는 관계도가 고르기를 풀게 된다
   const pairOpen = useRef(false)
   pairOpen.current = pair !== null
   useEffect(() => {
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented || pairOpen.current) return
+      if (wrap.current?.closest('[inert]')) return
       const at = document.activeElement
       if (at !== document.body && at !== null && !wrap.current?.contains(at)) return
       getStore().selectAgent(null)

@@ -8,13 +8,14 @@ import { clockText, LiveLog } from './control/LiveLog'
 import { StatsStrip } from './control/StatsStrip'
 import { OrbitMap } from './orbit/OrbitMap'
 import { batched } from './events'
+import { PowerControls } from './PowerControls'
 import { SidePanel } from './SidePanel'
 import { createStats } from './stats'
 import { usePowerFeed } from './usePowerFeed'
 
 const upText = (s: number) => `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 
-export function ControlRoom({ onExit }: { onExit: () => void }) {
+export function ControlRoom({ onExit, onSettings }: { onExit: () => void; onSettings?: () => void }) {
   const { view, subscribe } = usePowerFeed()
   const agents = view.agents
   const selected = useDure(s => s.selectedAgentId)
@@ -63,9 +64,7 @@ export function ControlRoom({ onExit }: { onExit: () => void }) {
         </div>
         <div className="pw-clock">
           가동 <b>{upText(elapsed)}</b>
-          <button type="button" className="pw-out" title="Esc 를 길게 눌러도 나가요" onClick={onExit}>
-            나가기<kbd aria-hidden="true">Esc</kbd>
-          </button>
+          <PowerControls onSettings={onSettings} onExit={onExit} />
           <span className="pw-now">{clockText(wallMs)}</span>
         </div>
       </header>
