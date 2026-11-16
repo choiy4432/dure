@@ -132,6 +132,22 @@ describe('관계도 화면', () => {
     expect(node('impl')).toHaveTextContent('승인 기다림')
   })
 
+  it('여덟_명부터는_궤도_카드를_작은_판으로_핵과_기다림은_표시', () => {
+    const f = feed()
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `a${i}`, name: `이름${i}`, role: '역할', color: '#60A5FA', real: true }))
+    const seven = render(<OrbitMap agents={many(7)} awaiting={new Set()} subagents={0} subscribe={f.subscribe} />)
+    expect(seven.container.querySelector('.pw-mapov')).not.toHaveAttribute('data-crowd')
+    expect(seven.container.querySelector('[data-node="a0"]')).toHaveAttribute('data-core')
+    seven.unmount()
+    const { container } = render(<OrbitMap agents={many(8)} awaiting={new Set(['a5'])} subagents={0} subscribe={f.subscribe} />)
+    expect(container.querySelector('.pw-mapov')).toHaveAttribute('data-crowd')
+    expect(container.querySelectorAll('[data-core]')).toHaveLength(1)
+    expect(container.querySelector('[data-node="a0"]')).toHaveAttribute('data-core')
+    // 기다리는 카드는 작은 판에서도 '승인 기다림' 줄을 남긴다(CSS 가 data-warn 으로 가른다)
+    expect(container.querySelector('[data-node="a5"]')).toHaveAttribute('data-warn')
+    expect(container.querySelector('[data-node="a5"]')).toHaveTextContent('승인 기다림')
+  })
+
   it('언마운트하면_rAF_가_취소된다', () => {
     const f = feed()
     const view = render(<OrbitMap agents={fakeAgents()} awaiting={new Set()} subagents={0} subscribe={f.subscribe} />)
@@ -288,6 +304,15 @@ describe('관계도 장면', () => {
     drawOverlay(ctx, w, null, 2)
     expect(texts()).not.toContain('테스트 다시 돌려 주세요')
     expect(texts().some(s => s.startsWith('전체 동기화'))).toBe(true)
+  })
+
+  it('오른쪽_위_궤도_값은_여섯_줄까지_넘치면_외_N', () => {
+    const agents = Array.from({ length: 12 }, (_, i) => ({ id: `a${i}`, name: `이름${i}`, color: '#60A5FA' }))
+    const w = createWorld({ agents, W: 748, H: 580, calm: false, rand: mulberry32(5), satellites: satelliteNames(0) })
+    run(w, 0.2)
+    drawOverlay(fakeCtx(calls), w, null, 2)
+    expect(texts().filter(s => s.startsWith('θ '))).toHaveLength(6)
+    expect(texts()).toContain('외 5')
   })
 
   it('넘김이_닿으면_물결_불꽃_토큰_말풍선_카드_번쩍', () => {

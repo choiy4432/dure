@@ -14,6 +14,8 @@ import { createWorld, resizeWorld, satelliteNames, setSatellites, toolLine, type
 const BOARD_W = 1600
 /** 캔버스 해상도 상한(배) */
 const MAX_RES = 2.5
+/** 이만큼부터는 궤도 카드를 작은 판으로(핵 카드는 그대로) — 카드가 겹쳐 쌓이지 않게 */
+const CROWD_AT = 8
 
 type Props = {
   agents: PowerAgent[]
@@ -159,8 +161,8 @@ export function OrbitMap({ agents, awaiting, subagents, subscribe, flowRef }: Pr
     <div ref={boxRef} className="pw-mapbox">
       <canvas ref={trailRef} aria-hidden="true" />
       <canvas ref={crispRef} aria-hidden="true" />
-      <div className="pw-mapov">
-        {agents.map(a => {
+      <div className="pw-mapov" data-crowd={agents.length >= CROWD_AT || undefined}>
+        {agents.map((a, i) => {
           const wait = awaiting.has(a.id)
           return (
             <div
@@ -171,6 +173,7 @@ export function OrbitMap({ agents, awaiting, subagents, subscribe, flowRef }: Pr
               }}
               className="pw-mn"
               data-node={a.id}
+              data-core={i === 0 || undefined}
               data-warn={wait || undefined}
               style={{ ['--c' as string]: a.color }}
             >

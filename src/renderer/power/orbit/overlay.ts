@@ -28,8 +28,8 @@ import { LIFE, colorOf, orbitTurn, satPoint, trunc, type World } from './world'
  * 해상도 k 에선 7·k/2 로 줄여야 시안과 같은 번짐(화면 기준 3.5px)이 된다.
  */
 export const BLOOM = { blur: 7, alpha: 0.55, atRes: 2 } as const
-/** 오른쪽 위 궤도 값은 이만큼까지(넘치면 '외 N') */
-const HUD_ORBIT_ROWS = 8
+/** 오른쪽 위 궤도 값은 이만큼까지(넘치면 '외 N') — 더 길면 잎 이름표와 겹친다 */
+const HUD_ORBIT_ROWS = 6
 const TAU = Math.PI * 2
 const P: Proj = { x: 0, y: 0, f: 0, d: 0 }
 

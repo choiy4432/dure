@@ -148,6 +148,11 @@
 .pw-mn-tx b { font-size: 14px; font-weight: 600; }
 .pw-mn-tx i { font: 11px var(--mono); font-style: normal; color: var(--muted); max-width: 132px; overflow: hidden; text-overflow: ellipsis; }
 .pw-mn[data-warn] .pw-mn-tx i { color: var(--warn-text); }
+/* 8명부터(data-crowd) 궤도 카드는 작은 판 — 이름만, 도구 줄은 숨긴다. 핵 카드와 기다리는 카드의 '승인 기다림' 줄은 남긴다 */
+.pw-mapov[data-crowd] .pw-mn:not([data-core]) { gap: 6px; padding: 4px 9px 4px 4px; border-radius: 10px; }
+.pw-mapov[data-crowd] .pw-mn:not([data-core]) .pw-av { width: 22px; height: 22px; font-size: 11px; }
+.pw-mapov[data-crowd] .pw-mn:not([data-core]) .pw-mn-tx b { font-size: 13px; max-width: 52px; overflow: hidden; text-overflow: ellipsis; }
+.pw-mapov[data-crowd] .pw-mn:not([data-core]):not([data-warn]) .pw-mn-tx i { display: none; }
 .pw-hit { animation: pw-hit 0.55s ease-out; }
 @keyframes pw-hit { from { box-shadow: 0 0 0 8px color-mix(in srgb, var(--c) 45%, transparent), 0 0 30px var(--c); } }
 .pw-log { background: var(--pw-log-bg); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
