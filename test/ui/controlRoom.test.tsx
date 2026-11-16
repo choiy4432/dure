@@ -72,6 +72,12 @@ describe('관제실', () => {
     expect(document.querySelector('.pw-agents > .pw-more')).toBeNull()
   })
 
+  it('7명_중_6번째가_승인_기다림이고_7번째가_일하면_둘_다_다섯_장_안에_기다림_일함_나머지_순', async () => {
+    await mount(Array.from({ length: 7 }, (_, i) => agent(`x${i}`, i === 5 ? { status: 'awaiting' } : i === 6 ? { status: 'working' } : {})))
+    expect([...cards()].map(c => c.getAttribute('data-agent'))).toEqual(['x5', 'x6', 'x0', 'x1', 'x2'])
+    expect(screen.getByText('외 2명')).toBeInTheDocument()
+  })
+
   it('tool_사건이_오면_카드_도구_줄과_기록_맨_위가_바뀐다', async () => {
     await mount([agent('a', { name: '알파' })])
     await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'src/one.ts' }) })
@@ -84,6 +90,23 @@ describe('관제실', () => {
     expect(within(card('a')).getByText('npm test')).toBeInTheDocument()
     expect(rows()[0]).toHaveTextContent('npm test')
     expect(rows()[1]).toHaveTextContent('src/one.ts')
+  })
+
+  it('켠_뒤에_방에_들어온_에이전트의_사건은_보이지_않는다(날_id_가_새지_않게)', async () => {
+    const list: object[] = [agent('a', { name: '알파' })]
+    await mount(list)
+    list.push(agent('zz-new', { name: '신입' }))
+    const { getStore } = await import('../../src/renderer/state/store')
+    await act(async () => { await getStore().refresh() })
+    expect(getStore().getState().agents.map(x => x.id)).toContain('zz-new')
+    await emit('history', { agentId: 'zz-new', item: toolItem('Read', { file_path: 'from-new.ts' }) })
+    await emit('message', { id: 'm1', roomId: 'r1', from: 'zz-new', to: 'a', text: '새로 왔어요', createdAt: 1, state: 'pending', updatedAt: 1 })
+    await emit('message', { id: 'm2', roomId: 'r1', from: 'a', to: 'zz-new', text: '반가워요', createdAt: 1, state: 'pending', updatedAt: 1 })
+    await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'from-known.ts' }) })
+    await wait(250)
+    const text = rows().map(r => r.textContent).join('\n')
+    expect(text).toContain('from-known.ts')
+    expect(text).not.toMatch(/zz-new|from-new|새로 왔어요|반가워요/)
   })
 
   it('기록은_26줄까지', async () => {
@@ -154,6 +177,25 @@ describe('관제실', () => {
     await wait(1000)
     expect(upText()).toBe('3:42:29') // 3:42:17 + 마운트 뒤 12초
     expect(nowText()).toBe(clockText(Date.now()))
+    vis.mockRestore()
+  })
+
+  it('숨어_있던_10분_동안_온_진짜_사건_1000개는_다시_보여도_쏟아지지_않는다', async () => {
+    const vis = vi.spyOn(document, 'visibilityState', 'get')
+    vis.mockReturnValue('visible')
+    await mount([agent('a', { name: '알파' })])
+    await wait(1000)
+    vis.mockReturnValue('hidden')
+    for (let i = 0; i < 1000; i++) {
+      await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: `stale${i}.ts` }) })
+      if (i % 100 === 99) await wait(60_000)
+    }
+    vis.mockReturnValue('visible')
+    await emit('history', { agentId: 'a', item: toolItem('Bash', { command: 'fresh-one' }) })
+    await wait(250)
+    expect(rows().some(r => r.textContent!.includes('stale'))).toBe(false)
+    expect(rows().some(r => r.textContent!.includes('fresh-one'))).toBe(true)
+    expect(card('a')).not.toHaveTextContent('stale')
     vis.mockRestore()
   })
 

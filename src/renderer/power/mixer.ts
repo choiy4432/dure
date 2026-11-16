@@ -4,6 +4,8 @@ import { createFiller } from './filler'
 
 const TOOL_GAP: [number, number] = [700, 2200]
 const HAND_GAP: [number, number] = [380, 950]
+/** tick 을 기다리는 진짜 사건은 이만큼까지(넘치면 오래된 것부터 버린다) — tick 이 오래 안 불려도 끝없이 쌓이지 않게 */
+const MAX_PENDING = 100
 
 export function createMixer(o: { agents: PowerAgent[]; seed: number; quietMs?: number }): {
   real(ev: ScreenEvent): void
@@ -28,6 +30,7 @@ export function createMixer(o: { agents: PowerAgent[]; seed: number; quietMs?: n
         quietUntil.set(e.agentId, Math.max(quietUntil.get(e.agentId) ?? -Infinity, e.at + quietMs))
       }
       pending.push(e)
+      if (pending.length > MAX_PENDING) pending.splice(0, pending.length - MAX_PENDING)
     },
     tick(now) {
       const out = pending.splice(0)

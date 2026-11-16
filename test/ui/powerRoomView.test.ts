@@ -43,6 +43,15 @@ describe('roomView', () => {
     expect(v.subagents).toBe(3)
   })
 
+  it('working_은_진짜로_일하는_에이전트만(승인_기다림은_빼고)_가짜_방은_비었다', () => {
+    const v = roomView(st({
+      agents: [ag('a', 'r1', { status: 'working' }), ag('b', 'r1', { status: 'working' }), ag('c', 'r1'), ag('d', 'r2', { status: 'working' })],
+      requests: [{ id: 'q', agentId: 'b' }],
+    }))
+    expect([...v.working]).toEqual(['a'])
+    expect(roomView(st({ power: { on: false, roomId: null } })).working.size).toBe(0)
+  })
+
   it('굳힌_방의_에이전트가_지워져도_던지지_않는다', () => {
     expect(() => roomView(st({ agents: [], rooms: [] }))).not.toThrow()
     expect(roomView(st({ agents: [], rooms: [] })).agents).toHaveLength(5)

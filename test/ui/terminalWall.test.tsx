@@ -112,6 +112,27 @@ describe('터미널 벽', () => {
     expect(panes()[0].querySelector('.pw-t-ptl i')).toHaveAttribute('data-warn')
   })
 
+  it('호박색_점은_진짜_승인_기다림_창만_시스템_창은_보통_점', async () => {
+    await mount([agent('a', { name: '알파' })])
+    expect(document.querySelectorAll('.pw-t-ptl i[data-warn]')).toHaveLength(0)
+    expect(panes()[5].querySelector('.pw-t-ptl i')).not.toBeNull()
+    cleanup()
+    await mount([agent('a', { name: '알파', status: 'awaiting' })])
+    const warned = [...document.querySelectorAll('.pw-t-ptl i[data-warn]')].map(i => panes().indexOf(i.closest('.pw-t-pane')!))
+    expect(warned).toEqual([0])
+  })
+
+  it('켠_뒤에_방에_들어온_에이전트가_대표에게_넘겨도_날_id_가_첫_창에_새지_않는다', async () => {
+    const list: object[] = [agent('a', { name: '알파' })]
+    await mount(list)
+    list.push(agent('zz-new', { name: '신입' }))
+    const { getStore } = await import('../../src/renderer/state/store')
+    await act(async () => { await getStore().refresh() })
+    await emit('message', { id: 'm1', roomId: 'r1', from: 'zz-new', to: 'a', text: '새로 왔어요', createdAt: 1, state: 'pending', updatedAt: 1 })
+    await wait(300)
+    expect(first()).not.toHaveTextContent(/zz-new|새로 왔어요/)
+  })
+
   it('줄은_텍스트_노드로만_넣는다', async () => {
     await mount([agent('a', { name: '알파' })])
     await emit('history', { agentId: 'a', item: toolItem('Bash', { command: '<img src=x onerror=alert(1)>' }) })

@@ -31,8 +31,20 @@ function advance(c: CardState, tool: string, target: string, real: boolean): Car
   return { tool, target, done, total, ctx, n, real: real ? { tool, target } : c.real }
 }
 
-export function AgentCards({ agents, awaiting, subscribe }: { agents: PowerAgent[]; awaiting: Set<string>; subscribe: (fn: (ev: ScreenEvent) => void) => () => void }) {
-  const shown = agents.slice(0, MAX_CARDS)
+/** 보일 카드 — 진짜 승인 기다림 → 진짜 일하는 중 → 나머지(무리 안에선 방 순서) 로 다섯 장까지. 기다리는 에이전트가 '외 N명'에 묻히지 않게 */
+function pickCards(agents: PowerAgent[], awaiting: Set<string>, working: Set<string>): PowerAgent[] {
+  const rank = (a: PowerAgent) => (awaiting.has(a.id) ? 0 : working.has(a.id) ? 1 : 2)
+  return [...agents].sort((x, y) => rank(x) - rank(y)).slice(0, MAX_CARDS)
+}
+
+export function AgentCards({ agents, awaiting, working, subscribe }: {
+  agents: PowerAgent[]
+  awaiting: Set<string>
+  working: Set<string>
+  subscribe: (fn: (ev: ScreenEvent) => void) => () => void
+}) {
+  // 켠 순간에 한 번 고른다 — 켜져 있는 동안 상태가 바뀌어도 카드가 자리를 바꾸지 않는다
+  const [shown] = useState(() => pickCards(agents, awaiting, working))
   const [cards, setCards] = useState<Record<string, CardState>>(() => Object.fromEntries(shown.map((a, i) => [a.id, initial(i, awaiting.has(a.id))])))
 
   // 한 틱의 사건은 한 번에 그려진다(React 가 같은 틱의 상태 갱신을 묶는다)
@@ -51,10 +63,10 @@ export function AgentCards({ agents, awaiting, subscribe }: { agents: PowerAgent
       <div className="pw-label">
         <span>
           에이전트 {agents.length}
-          {agents.length > MAX_CARDS && (
+          {agents.length > shown.length && (
             <>
               {' '}
-              <span className="pw-dotsep">·</span> <span className="pw-more">외 {agents.length - MAX_CARDS}명</span>
+              <span className="pw-dotsep">·</span> <span className="pw-more">외 {agents.length - shown.length}명</span>
             </>
           )}
         </span>

@@ -95,6 +95,14 @@ test('진짜_넘김의_text_는_한_줄_80자로_만든다', () => {
   expect(e.text.startsWith('첫 줄 둘째 줄')).toBe(true);
 });
 
+test('tick_없이_진짜_사건이_쌓여도_가장_최근_100개만_남긴다', () => {
+  const m = createMixer({ agents, seed: 1 });
+  for (let i = 0; i < 1000; i++) m.real(realTool('lead', i, `f${i}.ts`));
+  const reals = m.tick(1000).filter((e) => e.real);
+  expect(reals).toHaveLength(100);
+  expect(reals.map((e) => (e.kind === 'tool' ? e.target : ''))).toEqual(Array.from({ length: 100 }, (_, i) => `f${900 + i}.ts`));
+});
+
 test('긴_공백_뒤에도_쏟아지지_않는다', () => {
   const m = createMixer({ agents, seed: 4 });
   drive(m, 0, 5000);

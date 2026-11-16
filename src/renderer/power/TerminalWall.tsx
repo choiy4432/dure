@@ -191,7 +191,7 @@ export function TerminalWall({ seed, now }: { seed?: number; now?: () => number 
             <div className="pw-t-sub" ref={b5s} />
           </div>
         </Pane>
-        <Pane title={titles[5]} focus={focusPane === 5} warn bodyRef={b6} top />
+        <Pane title={titles[5]} focus={focusPane === 5} bodyRef={b6} top />
       </div>
       <div className="pw-t-bar">
         <span className="pw-t-ses">[두레]</span>

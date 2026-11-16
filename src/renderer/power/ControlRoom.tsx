@@ -70,7 +70,7 @@ export function ControlRoom({ seed, now }: { seed?: number; now?: () => number }
         </div>
       </header>
       <div className="pw-main">
-        <AgentCards agents={agents} awaiting={view.awaiting} subscribe={subscribe} />
+        <AgentCards agents={agents} awaiting={view.awaiting} working={view.working} subscribe={subscribe} />
         <section data-power-map className="pw-map">
           <div className="pw-label">
             관계도 · 실시간 넘김
