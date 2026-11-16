@@ -36,6 +36,15 @@ function subagentLabel(items: HistoryItem[] | undefined, toolUseId: string): str
 
 const stateOf = (s: ReturnType<typeof displayStatus>): AgentState => (s === 'awaiting' ? 'awaiting' : s === 'working' ? 'working' : 'resting')
 
+/**
+ * 파워 모드가 그리는 에이전트인가 — 켤 때 굳힌 목록에 있고 지금도 굳힌 방에 있으면 그 에이전트(켠 뒤 들어왔거나 옮겼거나 지워졌으면 없다).
+ * 듣기(스토어의 사건 거르기)와 그릴 방(roomView)이 같이 쓴다
+ */
+export function pinnedAgent<A extends { id: string; roomId: string }>(power: { roomId: string | null; agentIds: readonly string[] }, agents: readonly A[], id: string): A | undefined {
+  if (!power.roomId || !power.agentIds.includes(id)) return undefined
+  return agents.find(a => a.id === id && a.roomId === power.roomId)
+}
+
 export function roomView(s: UiState): PowerView {
   const room = s.power.roomId ? s.rooms.find(r => r.id === s.power.roomId) : undefined
   if (!room) return EMPTY
@@ -43,8 +52,8 @@ export function roomView(s: UiState): PowerView {
   const state: PowerView['state'] = {}
   const subagents: PowerView['subagents'] = []
   s.power.agentIds.forEach((id, i) => {
-    const a = s.agents.find(x => x.id === id && x.roomId === room.id)
-    if (!a) return // 켠 뒤 지워졌다
+    const a = pinnedAgent(s.power, s.agents, id)
+    if (!a) return // 켠 뒤 지워졌거나 옮겼다
     agents.push({ id: a.id, name: a.name, role: a.role, color: AGENT_COLORS[i % AGENT_COLORS.length] })
     state[a.id] = stateOf(displayStatus(a, s.requests))
     for (const t of a.subagentsRunning) {

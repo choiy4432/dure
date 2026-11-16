@@ -193,6 +193,32 @@ describe('PowerLayer — 덮개', () => {
     expect(spy).not.toHaveBeenCalled()
   })
 
+  it('누르는 사이 대화상자가 뜨면 1500ms 가 차도 나가지 않는다(끝날 때 한 번 더 본다)', async () => {
+    const { spy } = await mount()
+    key('keydown', 'Escape')
+    await wait(700)
+    expect(screen.getByText('나가는 중…')).toBeInTheDocument()
+    outside('div', { role: 'dialog' })
+    await wait(1000)
+    expect(spy).not.toHaveBeenCalled()
+    expect(screen.queryByText('나가는 중…')).toBeNull()
+  })
+
+  it('다른 곳이 이미 받은 Esc(기본 동작을 막은 것)는 길게 누르기를 시작하지 않는다', async () => {
+    const { spy } = await mount()
+    const take = (e: KeyboardEvent) => { if (e.key === 'Escape') e.preventDefault() }
+    document.addEventListener('keydown', take)
+    try {
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+      await wait(600)
+      expect(screen.queryByText('나가는 중…')).toBeNull()
+      await wait(1400)
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      document.removeEventListener('keydown', take)
+    }
+  })
+
   it('나가는 중(inert)인 창은 떠 있는 것으로 치지 않는다', async () => {
     const { spy } = await mount()
     outside('div', { role: 'dialog', inert: '' })

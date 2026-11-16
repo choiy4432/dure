@@ -29,10 +29,10 @@ export const oneLine = (s: string, max: number): string => {
 
 /**
  * 대상 글이 경로면 끝 두 조각만(`C:\work\shop\src\order\refund.ts` → `…\order\refund.ts`) — 좁은 칸에서 잘려도 파일 이름은 보이게.
- * 빈칸이 있으면(명령·검색어) 경로가 아니라 그대로
+ * 빈칸이 있으면(명령·검색어) · 주소(`://`)면 경로가 아니라 그대로(한 줄·길이 상한은 듣기가 이미 맞춰 둔다)
  */
 export function tailPath(s: string): string {
-  if (/\s/.test(s)) return s
+  if (/\s/.test(s) || s.includes('://')) return s
   const parts = s.split(/[\\/]/)
   if (parts.length <= 3) return s
   const sep = s.includes('\\') ? '\\' : '/'

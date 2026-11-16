@@ -7,6 +7,7 @@ import { displayStatus, effectiveSetup, type EdgeMode, type Phase } from './sele
 import { markFresh } from '../map/freshNodes'
 import { onPhone } from '../lib/phone'
 import { handoffEvent, historyEvents } from '../power/tap'
+import { pinnedAgent } from '../power/roomView'
 import type { ScreenEvent } from '../power/events'
 import { nextStep, tourAt, type TourState } from '../tour/tourSteps'
 
@@ -385,7 +386,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       const p = state.power
       if (!p.on) return
       // 굳힌 방에 지금도 있는, 켤 때부터 있던 에이전트만 — 켠 뒤 들어온 에이전트는 카드·이름이 없다
-      const pinned = (id: string) => p.agentIds.includes(id) && state.agents.some(a => a.id === id && a.roomId === p.roomId)
+      const pinned = (id: string) => pinnedAgent(p, state.agents, id) !== undefined
       let out: ScreenEvent[] = []
       if (ev.name === 'message') {
         const m = ev.payload

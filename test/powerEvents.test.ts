@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { batched, BATCH_MAX, oneLine, type ScreenEvent } from '../src/renderer/power/events'
+import { batched, BATCH_MAX, oneLine, tailPath, type ScreenEvent } from '../src/renderer/power/events'
 import { historyEvents, TEXT_MAX } from '../src/renderer/power/tap'
 import type { HistoryItem } from '../src/engine/types'
 
@@ -28,6 +28,26 @@ describe('oneLine', () => {
     expect(TEXT_MAX).toBe(80)
     expect(ev.target.length).toBe(80)
     expect(ev.target.endsWith('…')).toBe(true)
+  })
+})
+
+describe('tailPath', () => {
+  it('경로는_끝_두_조각_빈칸이_있으면(명령)_그대로', () => {
+    expect(tailPath('C:\\work\\shop\\src\\order\\refund.ts')).toBe('…\\order\\refund.ts')
+    expect(tailPath('src/a/b/c.ts')).toBe('…/b/c.ts')
+    expect(tailPath('src/a.ts')).toBe('src/a.ts')
+    expect(tailPath('npm test -- src/a/b/c.ts')).toBe('npm test -- src/a/b/c.ts')
+  })
+
+  it('주소(://)는_경로로_자르지_않는다_—_한_줄·80자_상한은_듣기에서_그대로', () => {
+    expect(tailPath('https://example.com/a/b/c')).toBe('https://example.com/a/b/c')
+    expect(tailPath('file:///C:/work/shop/a.ts')).toBe('file:///C:/work/shop/a.ts')
+    const [ev] = historyEvents('a', tool('mcp__web__fetch', { path: `https://example.com/${'a/'.repeat(100)}\nnext` }), 1)
+    if (ev.kind !== 'tool') throw new Error('tool 이 아니다')
+    expect(tailPath(ev.target)).toBe(ev.target)
+    expect(ev.target.startsWith('https://example.com/')).toBe(true)
+    expect(ev.target.length).toBe(TEXT_MAX)
+    expect(ev.target).not.toMatch(/[\r\n]/)
   })
 })
 

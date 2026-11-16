@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { roomView } from '../../src/renderer/power/roomView'
+import { pinnedAgent, roomView } from '../../src/renderer/power/roomView'
 
 const ag = (id: string, roomId: string, over: object = {}) => ({ id, roomId, name: `${id}이름`, role: `${id}역`, status: 'idle', subagentsRunning: [], ...over })
 const st = (over: object = {}): any => ({
@@ -9,6 +9,22 @@ const st = (over: object = {}): any => ({
   history: {},
   power: { on: true, roomId: 'r1', agentIds: ['a', 'b'] },
   ...over,
+})
+
+describe('pinnedAgent — 켤 때 굳힌 목록 안 + 지금도 그 방', () => {
+  const power = { roomId: 'r1', agentIds: ['a', 'b'] }
+  const agents = [ag('a', 'r1'), ag('b', 'r2'), ag('new', 'r1')]
+
+  it('굳힌_목록에_있고_지금도_그_방이면_그_에이전트', () => {
+    expect(pinnedAgent(power, agents, 'a')).toBe(agents[0])
+  })
+
+  it('켠_뒤_들어왔거나(목록_밖)_다른_방으로_옮겼거나_지워졌거나_꺼졌으면_없다', () => {
+    expect(pinnedAgent(power, agents, 'new')).toBeUndefined()
+    expect(pinnedAgent(power, agents, 'b')).toBeUndefined()
+    expect(pinnedAgent(power, agents, 'gone')).toBeUndefined()
+    expect(pinnedAgent({ roomId: null, agentIds: [] }, agents, 'a')).toBeUndefined()
+  })
 })
 
 describe('roomView', () => {
