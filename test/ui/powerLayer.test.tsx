@@ -152,6 +152,48 @@ describe('PowerLayer — 덮개', () => {
     expect(spy).toHaveBeenCalledWith(false)
   })
 
+  it('길게 눌러 나간 그 Esc — 떼기 전의 자동 반복은 어디에도 닿지 않고, 뗀 뒤 새로 누른 Esc 는 평소대로 닿는다', async () => {
+    const { spy } = await mount()
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    await wait(1500)
+    expect(spy).toHaveBeenCalledWith(false)
+    const onDoc = vi.fn()
+    document.addEventListener('keydown', onDoc)
+    try {
+      const passed = fireEvent.keyDown(document.body, { key: 'Escape', repeat: true })
+      expect(onDoc).not.toHaveBeenCalled()
+      expect(passed).toBe(false)
+      fireEvent.keyDown(document.body, { key: 'a', repeat: true }) // 다른 키는 그대로
+      expect(onDoc).toHaveBeenCalledTimes(1)
+      key('keyup', 'Escape')
+      fireEvent.keyDown(document.body, { key: 'Escape' })
+      expect(onDoc).toHaveBeenCalledTimes(2)
+      fireEvent.keyDown(document.body, { key: 'Escape', repeat: true }) // 새로 누른 Esc 의 반복은 삼키지 않는다
+      expect(onDoc).toHaveBeenCalledTimes(3)
+    } finally {
+      document.removeEventListener('keydown', onDoc)
+    }
+  })
+
+  it('Esc 를 1500ms 전에 떼면(나가지 않으면) 자동 반복도 삼키지 않는다', async () => {
+    const { spy } = await mount()
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    await wait(800)
+    const onDoc = vi.fn()
+    document.addEventListener('keydown', onDoc)
+    try {
+      fireEvent.keyDown(document.body, { key: 'Escape', repeat: true })
+      expect(onDoc).toHaveBeenCalledTimes(1)
+    } finally {
+      document.removeEventListener('keydown', onDoc)
+    }
+    key('keyup', 'Escape')
+    await wait(1000)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
   it('Esc 는 삼키지 않는다 — 덮개 밖 리스너에 닿고 기본 동작도 그대로', async () => {
     await mount()
     const onDoc = vi.fn()

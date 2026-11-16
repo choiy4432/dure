@@ -78,14 +78,14 @@ describe('설정 — 파워 모드 구역', () => {
 })
 
 describe('파워 모드 — 앱 아래층', () => {
-  async function withAgent() {
+  async function withAgent(over: { status?: 'idle' | 'working' } = {}) {
     const { getStore } = await import('../../src/renderer/state/store')
     const { App } = await import('../../src/renderer/App')
     const snap: Snapshot = {
       claudeMissing: false, rooms: [{ id: 'r1', name: '방', createdAt: 1 }],
       agents: [{
         id: 'a', roomId: 'r1', name: '알파', role: '역할', folder: '/x', sessionId: '', started: true, auto: false, model: null,
-        alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: 'idle',
+        alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: over.status ?? 'idle',
         errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null,
         subagentsRunning: [], pastCount: 0, remoteIssue: null,
       }],
@@ -186,16 +186,45 @@ describe('파워 모드 — 앱 아래층', () => {
     expect(screen.getByRole('tab', { name: '대화' })).toHaveAttribute('aria-selected', 'true')
   })
 
-  it('Esc 길게로 나가도 고르기는 그대로', async () => {
+  it('Esc 길게로 나가도 고르기는 그대로 — 나간 뒤에도 떼기 전의 자동 반복 Esc 는 아래 관계도에 닿지 않는다', async () => {
     const store = await withAgent()
     await act(async () => { await store.setPower(true) })
     ;(document.activeElement as HTMLElement | null)?.blur()
     fireEvent.keyDown(document.body, { key: 'Escape' })
     await act(async () => { await new Promise(r => setTimeout(r, 1600)) })
-    fireEvent.keyUp(document.body, { key: 'Escape' })
     expect(setPowerMode).toHaveBeenLastCalledWith(false)
     expect(screen.queryByRole('region', { name: '파워 모드' })).toBeNull()
+    // 아직 누르고 있다 — 운영체제의 자동 반복
+    act(() => {
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape', repeat: true })
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape', repeat: true })
+    })
+    fireEvent.keyUp(document.body, { key: 'Escape' })
     expect(store.getState().selectedAgentId).toBe('a')
+  })
+
+  it('입력창을 보던 에이전트가 일하는 중에 Esc 길게로 나가도 — 다시 붙은 앱 입력창이 자동 반복 Esc 로 그 일을 멈추지 않는다', async () => {
+    const interrupt = vi.fn(async () => {})
+    ;(window as any).dure.interrupt = interrupt
+    const store = await withAgent({ status: 'working' })
+    await act(async () => { await store.setPower(true) })
+    // 덮개의 카드를 누른 것처럼 — 고르고 입력창 커서 요청
+    act(() => { store.selectAgent('a', { focusInput: true }) })
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    await act(async () => { await new Promise(r => setTimeout(r, 1600)) })
+    expect(screen.queryByRole('region', { name: '파워 모드' })).toBeNull()
+    const box = screen.getByRole('textbox', { name: '알파에게 보낼 메시지' })
+    expect(document.activeElement).toBe(box) // 다시 붙은 앱 입력창이 커서를 가져갔다
+    act(() => {
+      fireEvent.keyDown(box, { key: 'Escape', repeat: true })
+      fireEvent.keyDown(box, { key: 'Escape', repeat: true })
+    })
+    fireEvent.keyUp(box, { key: 'Escape' })
+    expect(interrupt).not.toHaveBeenCalled()
+    // 손을 뗀 뒤 새로 누른 Esc 는 평소대로 멈춘다
+    act(() => { fireEvent.keyDown(box, { key: 'Escape' }) })
+    expect(interrupt).toHaveBeenCalledTimes(1)
   })
 
   it('끄고 나면 관계도의 Esc 고르기 풀기는 평소대로', async () => {
