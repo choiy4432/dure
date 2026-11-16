@@ -6,13 +6,10 @@ import { clockText, LiveLog } from './control/LiveLog'
 import { StatsStrip } from './control/StatsStrip'
 import { OrbitMap } from './orbit/OrbitMap'
 import { createStats } from './stats'
+import { shownSubagents } from './subagents'
 import { usePowerFeed } from './usePowerFeed'
 
 const UP_START = 3 * 3600 + 42 * 60 + 17
-/** 도는 서브에이전트가 없으면 지어낸 위성 4개(시안 값) */
-const FAKE_SUBAGENTS = 4
-/** 이 화면 어디서나 같은 규칙 — 진짜 수가 0보다 크면 그대로, 아니면 4 */
-export const shownSubagents = (view: { subagents: number }): number => (view.subagents > 0 ? view.subagents : FAKE_SUBAGENTS)
 
 const upText = (s: number) => `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 
@@ -81,7 +78,7 @@ export function ControlRoom({ seed, now }: { seed?: number; now?: () => number }
               지난 1시간 <b>{snap.handoffs}</b>건 · 지금 오가는 데이터 <b ref={flowRef}>0</b>개
             </span>
           </div>
-          <OrbitMap agents={agents} awaiting={view.awaiting} subagents={view.subagents} subscribe={subscribe} flowRef={flowRef} />
+          <OrbitMap agents={agents} awaiting={view.awaiting} subagents={subagents} subscribe={subscribe} flowRef={flowRef} />
         </section>
         <LiveLog agents={agents} rate={snap.toolsPerMin} subscribe={subscribe} />
       </div>

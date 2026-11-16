@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { render, act, cleanup } from '@testing-library/react'
 import { OrbitMap } from '../../src/renderer/power/orbit/OrbitMap'
 import { intake, stepWorld, syncBoost } from '../../src/renderer/power/orbit/step'
-import { createWorld, satelliteNames, type World } from '../../src/renderer/power/orbit/world'
+import { createWorld, resizeWorld, satelliteNames, type World } from '../../src/renderer/power/orbit/world'
 import { drawOverlay } from '../../src/renderer/power/orbit/overlay'
 import { drawScene } from '../../src/renderer/power/orbit/scene'
 import { fakeAgents } from '../../src/renderer/power/fakeWorld'
@@ -229,10 +229,12 @@ describe('관계도 장면', () => {
     let now = run(w, 0.5)
     w.sync.next = w.t // 다음 프레임에 동기화
     const yaw0 = w.cam.yaw
-    const comets0 = w.comets.length
+    let burstAdded = -1
     let maxShift = 0
     for (let i = 0; i < 60; i++) {
+      const before = w.comets.length
       stepWorld(w, (now += 1000 / 60))
+      if (i === 0) burstAdded = w.comets.length - before
       maxShift = Math.max(maxShift, Math.abs(w.cam.cx - w.cx0), Math.abs(w.cam.cy - w.cy0))
     }
     expect(w.syncing).toBe(true)
@@ -240,16 +242,30 @@ describe('관계도 장면', () => {
     expect(maxShift).toBe(0)
     expect(w.cam.yaw - yaw0).toBeCloseTo(60 * (1 / 60) * 0.05, 5) // 급회전 없이 평소 속도
     expect(w.hits).toEqual([])
-    // 동기화 폭죽 혜성(14개)이 없다 — 늘 도는 잔잔한 혜성만
-    expect(w.comets.length - comets0).toBeLessThan(14)
+    // 동기화 폭죽 혜성(14개)이 없다 — 동기화가 시작된 바로 그 프레임에 더해진 혜성이 0
+    expect(burstAdded).toBe(0)
 
     const loud = world(false)
     now = run(loud, 0.5)
     loud.sync.next = loud.t
     const lyaw = loud.cam.yaw
-    for (let i = 0; i < 60; i++) stepWorld(loud, (now += 1000 / 60))
+    const loud0 = loud.comets.length
+    stepWorld(loud, (now += 1000 / 60))
+    expect(loud.comets.length - loud0).toBeGreaterThanOrEqual(14) // 일반 모드는 첫 프레임에 폭죽 혜성 14개
+    for (let i = 1; i < 60; i++) stepWorld(loud, (now += 1000 / 60))
     expect(loud.cam.yaw - lyaw).toBeGreaterThan(0.5)
     expect(loud.hits.length).toBeGreaterThanOrEqual(5)
+  })
+
+  it('칸_크기가_0이면_자리_잡기를_건너뛰어_NaN이_없다', () => {
+    const w = world(false)
+    run(w, 0.3)
+    resizeWorld(w, 0, 0)
+    stepWorld(w, 1000)
+    for (const p of w.pos.values()) {
+      expect(Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.s) && Number.isFinite(p.o)).toBe(true)
+      expect(`translate(${p.x}px, ${p.y}px) scale(${p.s})`).not.toContain('NaN')
+    }
   })
 
   it('동기화_중엔_말풍선을_그리지_않는다', () => {

@@ -179,7 +179,7 @@ function ticks(x: CanvasRenderingContext2D, w: World): void {
 function core(x: CanvasRenderingContext2D, w: World): void {
   const t = w.t
   const c = w.pos.get(w.core.id)!
-  const fk = (t - w.flare) / 1.1
+  const fk = (t - w.flare) / LIFE.flare
   const fl = (fk >= 0 && fk < 1 ? 1 - fk : 0) * (w.calm ? FLARE_CALM : 1)
   const cr = 130 + w.energy * 70 + fl * 130
   const gr = x.createRadialGradient(c.x, c.y, 6, c.x, c.y, cr)

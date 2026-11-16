@@ -243,6 +243,7 @@ export const colorOf = (w: World, id: string): string => w.who.get(id)?.color ??
 
 /** 노드 자리 — 핵은 가운데, 궤도 에이전트는 제 궤도 위(시안 place) */
 export function place(w: World): void {
+  if (!w.W || !w.H) return // 칸 크기 0 — 반지름이 0 이라 나눗셈이 NaN 이 된다
   const c = w.pos.get(w.core.id)
   if (c) {
     projectTo(P, w.cam, 0, CORE_Y, 0)

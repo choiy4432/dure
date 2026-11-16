@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 import { render, screen, act, cleanup, within } from '@testing-library/react'
 import { clockText } from '../../src/renderer/power/control/LiveLog'
-import { shownSubagents } from '../../src/renderer/power/ControlRoom'
 
 // 관제실 — 카드 · 기록 · 승인 기다림 · 숫자 띠
 
@@ -218,11 +217,6 @@ describe('관제실', () => {
   it('머리_줄에_작업_중_숫자가_있다', async () => {
     await mount([agent('a', { name: '알파' })])
     expect(document.querySelector('.pw-agents .pw-label')).toHaveTextContent('작업 중 1')
-  })
-
-  it('shownSubagents_진짜_수가_0보다_크면_그대로_아니면_4', () => {
-    expect(shownSubagents({ subagents: 0 })).toBe(4)
-    expect(shownSubagents({ subagents: 2 })).toBe(2)
   })
 
   it('숫자_띠와_위_띠가_같은_서브에이전트_수를_보인다', async () => {

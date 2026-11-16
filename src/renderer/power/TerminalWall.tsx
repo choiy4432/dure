@@ -4,6 +4,7 @@ import { mulberry32 } from './events'
 import { Pane, appendLines, lineEl, setLines, typeInto } from './terminal/Pane'
 import { CODE } from './terminal/data'
 import { createPanes, savedLines, waitingLine } from './terminal/panes'
+import { shownSubagents } from './subagents'
 import { usePowerFeed } from './usePowerFeed'
 
 const STEP_MS = 32
@@ -13,11 +14,8 @@ const MAX_DT = 100
 const REAL_QUIET_MS = 4000
 const FOCUS_MS = 4200
 const FAKE_PATH = '~/work/order-service'
-const FAKE_SUBAGENTS = 4
 const SUB_ROWS_MAX = 4
 
-/** ControlRoom 의 shownSubagents 와 같은 규칙(도는 수가 0보다 크면 그대로, 아니면 4) — 관제실 모듈을 통째로 끌어오지 않으려고 한 줄만 옮겼다 */
-const shownSubagents = (n: number): number => (n > 0 ? n : FAKE_SUBAGENTS)
 const pad2 = (n: number) => String(n).padStart(2, '0')
 
 type Task = { due: number; run: () => number }
@@ -26,7 +24,7 @@ export function TerminalWall({ seed, now }: { seed?: number; now?: () => number 
   const { view, agents, subscribe } = usePowerFeed({ seed, now })
   const rep = agents[0]
   const winNames = agents.slice(0, 4).map(a => a.name)
-  const subN = shownSubagents(view.subagents)
+  const subN = shownSubagents(view)
   const waiting = !!rep && view.awaiting.has(rep.id)
   const fakeRoom = agents.every(a => !a.real)
 
