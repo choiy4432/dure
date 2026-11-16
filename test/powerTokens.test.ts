@@ -32,6 +32,17 @@ describe('덮개 토큰', () => {
     expect(rest.match(/#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/g) ?? []).toEqual([])
   })
 
+  it('둥근_모서리는_tokens.css_의_--radius-*_만_쓴다(앱의_base.css_처럼_—_0_은_예외)', () => {
+    const radii = [...power.matchAll(/border-radius:\s*([^;}]+)/g)].map(m => m[1].trim())
+    expect(radii.length).toBeGreaterThan(10)
+    const known = new Set([...tokens.matchAll(/(--radius-[\w-]+)\s*:/g)].map(m => m[1]))
+    for (const r of radii) {
+      if (r === '0') continue
+      const used = [...r.matchAll(/var\((--[\w-]+)\)/g)].map(m => m[1])
+      expect({ r, tokenOnly: used.length > 0 && used.every(v => known.has(v)) && r.replace(/var\(--[\w-]+\)|calc\(|\)|[-+\s\d.px]/g, '') === '' }).toEqual({ r, tokenOnly: true })
+    }
+  })
+
   it('애니메이션은_차분_모드와_모션_줄이기_둘_다에서_꺼진다', () => {
     const names = [...power.matchAll(/@keyframes (pw-[\w-]+)/g)].map(m => m[1])
     expect(names.length).toBeGreaterThan(0)
