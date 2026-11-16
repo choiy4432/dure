@@ -619,8 +619,10 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
         hidden: startHidden({ launchedHidden, trayActive: tray.active(), showRequested }),
       })
       mainWindow = win
-      // 파워 모드 — 화면이 다시 불리거나(did-start-loading) 사라지면 화면 꺼짐 막기를 푼다(화면이 꺼진 줄 모르고 막기만 남지 않게). ×(트레이로 숨기)에서는 풀지 않는다
-      win.webContents.on('did-start-loading', () => powerMode.release())
+      // 파워 모드 — 화면이 다시 불리거나(메인 프레임의 문서 바뀌는 이동) 사라지면 막기·전체 화면을 푼다(화면이 꺼진 줄 모르고 남지 않게). did-start-loading 은 하위 프레임·페이지 안 이동에도 울려 쓰지 않는다. ×(트레이로 숨기)에서는 풀지 않는다
+      win.webContents.on('did-start-navigation', (details) => {
+        if (details.isMainFrame && !details.isSameDocument) powerMode.release()
+      })
       win.webContents.on('destroyed', () => powerMode.release())
       win.webContents.on('render-process-gone', () => powerMode.release())
       // 창 닫기(×) — 막고 숨긴다(트레이로). 끄는 중(before-quit 이 정리를 시작함 · 업데이트 설치 · Windows 로그아웃)이면 닫힌다

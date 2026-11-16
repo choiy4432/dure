@@ -25,13 +25,27 @@ export function createPowerMode(deps: PowerDeps): { set(on: boolean): void; isOn
     blockerId = null
   }
 
+  /** 막기를 풀고 창을 켜기 전 모양으로 — 켜기 전부터 전체 화면이었으면 그대로 둔다 */
+  const restore = () => {
+    stopBlocker()
+    const w = deps.win()
+    if (w && !wasFull) {
+      w.setFullScreen(false)
+      if (wasMax) w.maximize()
+    }
+  }
+
   return {
     set(next) {
       if (next === on) return
-      on = next
-      const w = deps.win()
       if (next) {
-        blockerId = deps.blocker.start()
+        // 창이 없던 때의 값이 남아 나중에 maximize() 를 부르지 않게 켤 때마다 다시 잡는다
+        wasFull = false
+        wasMax = false
+        const w = deps.win()
+        const id = deps.blocker.start() // 던지면 켜진 것으로 치지 않는다
+        blockerId = id
+        on = true
         if (w) {
           wasFull = w.isFullScreen()
           wasMax = w.isMaximized()
@@ -40,20 +54,16 @@ export function createPowerMode(deps: PowerDeps): { set(on: boolean): void; isOn
           w.focus()
         }
       } else {
-        stopBlocker()
-        // 켜기 전부터 전체 화면이었으면 그대로 둔다
-        if (w && !wasFull) {
-          w.setFullScreen(false)
-          if (wasMax) w.maximize()
-        }
+        on = false
+        restore()
       }
     },
     isOn: () => on,
-    /** 창이 다시 불리거나 사라질 때·앱이 꺼질 때 — 켜져 있을 때만 막기를 풀고 꺼진 것으로(창 모양은 건드리지 않는다) */
+    /** 화면이 다시 불리거나 사라질 때·앱이 꺼질 때 — 켜져 있을 때만, 끄는 것과 똑같이 막기·전체 화면을 푼다 */
     release() {
       if (!on) return
       on = false
-      stopBlocker()
+      restore()
     },
   }
 }
