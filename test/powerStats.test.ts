@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createStats } from '../src/renderer/power/stats'
 import type { ScreenEvent } from '../src/renderer/power/events'
 
-const tool = (t: string): ScreenEvent => ({ kind: 'tool', agentId: 'a', tool: t, target: 'x', real: true, at: 0 })
+const tool = (t: string, target = 'x'): ScreenEvent => ({ kind: 'tool', agentId: 'a', tool: t, target, real: true, at: 0 })
 
 describe('createStats', () => {
   it('시작_값은_시안_그대로', () => {
@@ -42,6 +42,15 @@ describe('createStats', () => {
     const st = createStats(1)
     for (let i = 0; i < 75; i++) st.second()
     expect(st.snapshot().perSec).toHaveLength(60)
+  })
+
+  it('같은_파일을_두_번_읽어도_files_는_한_번만_오른다', () => {
+    const st = createStats(1)
+    st.apply(tool('Read', 'a.ts'))
+    st.apply(tool('Read', 'a.ts'))
+    expect(st.snapshot().files).toBe(313)
+    st.apply(tool('Read', 'b.ts'))
+    expect(st.snapshot().files).toBe(314)
   })
 
   it('second_는_그_초의_도구_호출을_막대로_옮긴다', () => {

@@ -22,6 +22,7 @@ export function createStats(seed: number) {
   let handoffs = 37
   let tokens = 1.82e6
   let sec = 0
+  const read = new Set<string>() // 고유 파일 — 이 세션에서 읽은 대상
   const recent: number[] = Array.from({ length: 60 }, () => int(1, 4))
 
   const snapshot = (): StatsSnapshot => ({
@@ -43,7 +44,10 @@ export function createStats(seed: number) {
       }
       tools++
       sec++
-      if (ev.tool === 'Read') files++
+      if (ev.tool === 'Read' && !read.has(ev.target)) {
+        read.add(ev.target)
+        files++
+      }
       if (ev.tool === 'Edit' || ev.tool === 'Write') {
         added += int(1, 24)
         removed += int(0, 10)

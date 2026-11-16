@@ -1,8 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 import { render, screen, act, cleanup, within } from '@testing-library/react'
+import { clockText } from '../../src/renderer/power/control/LiveLog'
 
 // 관제실 — 카드 · 기록 · 승인 기다림 · 숫자 띠
+
+const probe = vi.hoisted(() => ({ snapshots: 0 }))
+vi.mock('../../src/renderer/power/stats', async orig => {
+  const m = await orig<typeof import('../../src/renderer/power/stats')>()
+  return {
+    ...m,
+    createStats: (seed: number) => {
+      const st = m.createStats(seed)
+      return { ...st, snapshot: () => (probe.snapshots++, st.snapshot()) }
+    },
+  }
+})
 
 const agent = (id: string, over: object = {}) => ({
   id, roomId: 'r1', name: id, role: `${id}역`, folder: '/x', sessionId: '', started: true, auto: false, model: null,
@@ -118,5 +131,45 @@ describe('관제실', () => {
     expect(document.querySelector('[data-stat="tools"]')).toHaveTextContent('1,285')
     await wait(2000)
     expect(screen.getByText('3:42:19')).toBeInTheDocument()
+  })
+
+  it('창이_안_보이는_동안은_그리지_않고_다시_보이면_시계와_가동_시간이_맞다', async () => {
+    const vis = vi.spyOn(document, 'visibilityState', 'get')
+    vis.mockReturnValue('visible')
+    await mount([agent('a', { name: '알파' })])
+    const nowText = () => document.querySelector('.pw-now')!.textContent
+    const upText = () => document.querySelector('.pw-clock b')!.textContent
+    await wait(1000)
+    const before = { now: nowText(), up: upText() }
+    vis.mockReturnValue('hidden')
+    const before1 = probe.snapshots
+    await wait(10000)
+    expect(probe.snapshots).toBe(before1)
+    expect({ now: nowText(), up: upText() }).toEqual(before)
+    vis.mockReturnValue('visible')
+    await wait(1000)
+    expect(upText()).toBe('3:42:29') // 3:42:17 + 마운트 뒤 12초
+    expect(nowText()).toBe(clockText(Date.now()))
+    vis.mockRestore()
+  })
+
+  it('한_틱에_사건_20개가_와도_숫자_띠는_스냅샷을_한_번만_뜬다', async () => {
+    await mount([agent('a', { name: '알파' })])
+    for (let i = 0; i < 20; i++) await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: `f${i}.ts` }) })
+    const before = probe.snapshots
+    await wait(250)
+    expect(probe.snapshots - before).toBe(1)
+    expect(document.querySelector('[data-stat="tools"]')).toHaveTextContent('1,304')
+  })
+
+  it('첫_사건_전에도_카드_도구_줄이_비지_않고_기다리는_쪽은_지어내지_않는다', async () => {
+    await mount([agent('a', { name: '알파' }), agent('b', { name: '베타', status: 'awaiting' })])
+    const tn = (id: string) => within(card(id)).getByText((_, el) => el?.className === 'pw-tn').textContent
+    expect(tn('a')).not.toBe('')
+    expect(tn('a')).not.toBe('—')
+    expect(tn('b')).toBe('—')
+    cleanup()
+    await mount([])
+    for (const c of cards()) expect(c.querySelector('.pw-tn')!.textContent).not.toBe('')
   })
 })

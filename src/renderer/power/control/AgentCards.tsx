@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { PowerAgent, ScreenEvent } from '../events'
+import { TARGETS, TOOL_MIX } from '../fakeWorld'
 
 const MAX_CARDS = 5
 const RING_R = 8
@@ -7,7 +8,13 @@ const RING_C = 2 * Math.PI * RING_R
 
 type CardState = { tool: string; target: string; done: number; total: number; ctx: number; n: number }
 
-const initial = (i: number): CardState => ({ tool: '', target: '준비 중', done: 3 + ((i * 5) % 7), total: 10 + ((i * 7) % 7), ctx: 20 + ((i * 13) % 50), n: 0 })
+/** 켠 순간 카드가 비지 않게 채움 같은 첫 줄을 깐다 — 승인 기다리는 쪽은 지어내지 않는다 */
+const seedLine = (i: number, wait: boolean) => {
+  if (wait) return { tool: '—', target: '' }
+  const tool = TOOL_MIX[(i * 3) % TOOL_MIX.length]
+  return { tool, target: TARGETS[tool][(i * 5) % TARGETS[tool].length] }
+}
+const initial = (i: number, wait: boolean): CardState => ({ ...seedLine(i, wait), done: 3 + ((i * 5) % 7), total: 10 + ((i * 7) % 7), ctx: 20 + ((i * 13) % 50), n: 0 })
 
 /** 할 일·문맥 수는 장식 — 그 에이전트의 도구 호출이 쌓일수록 천천히 오른다 */
 function advance(c: CardState, tool: string, target: string): CardState {
@@ -24,7 +31,7 @@ function advance(c: CardState, tool: string, target: string): CardState {
 
 export function AgentCards({ agents, awaiting, subscribe }: { agents: PowerAgent[]; awaiting: Set<string>; subscribe: (fn: (ev: ScreenEvent) => void) => () => void }) {
   const shown = agents.slice(0, MAX_CARDS)
-  const [cards, setCards] = useState<Record<string, CardState>>(() => Object.fromEntries(shown.map((a, i) => [a.id, initial(i)])))
+  const [cards, setCards] = useState<Record<string, CardState>>(() => Object.fromEntries(shown.map((a, i) => [a.id, initial(i, awaiting.has(a.id))])))
 
   // 한 틱의 사건은 한 번에 그려진다(React 가 같은 틱의 상태 갱신을 묶는다)
   useEffect(

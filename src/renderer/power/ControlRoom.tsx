@@ -1,5 +1,5 @@
 // 관제실 — 위 띠 · 카드 · 관계도 칸 · 기록 · 숫자 띠. 사건은 usePowerFeed 가 먹인다.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { BrandMark } from '../shell/BrandMark'
 import { AgentCards } from './control/AgentCards'
 import { clockText, LiveLog } from './control/LiveLog'
@@ -17,36 +17,38 @@ export function ControlRoom({ seed, now }: { seed?: number; now?: () => number }
   const { view, agents, subscribe } = usePowerFeed({ seed, now })
   const stats = useRef<ReturnType<typeof createStats> | undefined>(undefined)
   stats.current ??= createStats(seed ?? Date.now())
-  const [snap, setSnap] = useState(() => stats.current!.snapshot())
-  const tokens = useRef<number[]>([stats.current.snapshot().tokens])
+  // 사건은 stats 에 바로 쌓고, 스냅샷은 그려질 때 한 번만 뜬다(같은 틱의 사건은 한 번에 그려진다)
+  const [version, bump] = useReducer((v: number) => v + 1, 0)
+  const snap = useMemo(() => stats.current!.snapshot(), [version]) // eslint-disable-line react-hooks/exhaustive-deps
+  const tokens = useRef<number[]>([snap.tokens])
   const [tokensPerMin, setTokensPerMin] = useState(0)
-  const [elapsed, setElapsed] = useState(0)
-  const [wall, setWall] = useState(() => clockText(Date.now()))
+  const mountedAt = useRef(Date.now())
+  const [wallMs, setWallMs] = useState(() => Date.now())
 
   useEffect(
     () =>
       subscribe(ev => {
         stats.current!.apply(ev)
-        setSnap(stats.current!.snapshot()) // 같은 틱의 사건은 한 번에 그려진다
+        bump()
       }),
     [subscribe],
   )
 
   useEffect(() => {
     const id = setInterval(() => {
+      if (document.visibilityState !== 'visible') return // 창이 안 보이는 동안은 그리기를 멈춘다
       const st = stats.current!
       st.second()
-      const next = st.snapshot()
-      setSnap(next)
       const t = tokens.current
-      t.push(next.tokens)
+      t.push(st.snapshot().tokens)
       if (t.length > 60) t.shift()
       setTokensPerMin(t.length > 1 ? Math.round(((t[t.length - 1] - t[0]) / (t.length - 1)) * 60 / 1000) : 0)
-      setElapsed(e => e + 1)
-      setWall(clockText(Date.now()))
+      setWallMs(Date.now())
+      bump()
     }, 1000)
     return () => clearInterval(id)
   }, [])
+  const elapsed = Math.max(0, Math.floor((wallMs - mountedAt.current) / 1000)) // 벽시계 기준 — 멈췄다 와도 어긋나지 않는다
 
   const subagents = agents.every(a => !a.real) ? FAKE_SUBAGENTS : view.subagents
   return (
@@ -63,7 +65,7 @@ export function ControlRoom({ seed, now }: { seed?: number; now?: () => number }
         </div>
         <div className="pw-clock">
           가동 <b>{upText(UP_START + elapsed)}</b>
-          <span className="pw-now">{wall}</span>
+          <span className="pw-now">{clockText(wallMs)}</span>
         </div>
       </header>
       <div className="pw-main">
