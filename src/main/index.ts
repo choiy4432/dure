@@ -625,6 +625,11 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
       })
       win.webContents.on('destroyed', () => powerMode.release())
       win.webContents.on('render-process-gone', () => powerMode.release())
+      // 창이 트레이로 숨거나 최소화되면 화면 꺼짐 막기만 풀고(파워 모드는 켜진 채), 다시 보이면 건다. 최소화된 채 보여지면 아직 안 보인다
+      win.on('hide', () => powerMode.setVisible(false))
+      win.on('minimize', () => powerMode.setVisible(false))
+      win.on('show', () => powerMode.setVisible(!win.isMinimized()))
+      win.on('restore', () => powerMode.setVisible(win.isVisible()))
       // 창 닫기(×) — 막고 숨긴다(트레이로). 끄는 중(before-quit 이 정리를 시작함 · 업데이트 설치 · Windows 로그아웃)이면 닫힌다
       win.on('close', (e) => {
         tray?.close(e, { quitting: quitControl.started() || sessionEnding, hide: () => win.hide() })

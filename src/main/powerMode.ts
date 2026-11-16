@@ -14,7 +14,7 @@ export type PowerDeps = {
   blocker: { start(): number; stop(id: number): void }
 }
 
-export function createPowerMode(deps: PowerDeps): { set(on: boolean): void; isOn(): boolean; release(): void } {
+export function createPowerMode(deps: PowerDeps): { set(on: boolean): void; isOn(): boolean; release(): void; setVisible(visible: boolean): void } {
   let on = false
   let blockerId: number | null = null
   let wasFull = false
@@ -64,6 +64,21 @@ export function createPowerMode(deps: PowerDeps): { set(on: boolean): void; isOn
       if (!on) return
       on = false
       restore()
+    },
+    /**
+     * 창이 숨거나(트레이·최소화) 다시 보일 때 — 켜진 동안만, 숨으면 막기를 풀고 보이면 다시 건다(두레가 안 보이는데 모니터만 깨워 두지 않게).
+     * 파워 모드 자체는 켜진 채다. 다시 걸기가 실패해도 던지지 않는다(창 사건에서 불린다) — 그땐 끌 때 풀 것이 없다
+     */
+    setVisible(visible) {
+      if (!on) return
+      if (!visible) stopBlocker()
+      else if (blockerId === null) {
+        try {
+          blockerId = deps.blocker.start()
+        } catch {
+          blockerId = null
+        }
+      }
     },
   }
 }
