@@ -83,10 +83,10 @@ describe('설정 — 파워 모드 구역', () => {
   })
 
   it('설정이 닫힌 뒤에도 초점은 덮개에 있다 (연 단추로 돌아가지 않는다)', async () => {
+    vi.useFakeTimers()
     const { dlg } = await open()
     fireEvent.click(within(dlg).getByRole('switch', { name: '파워 모드' }))
-    await settle()
-    await act(async () => { await new Promise(r => setTimeout(r, 400)) })
+    await wait(400)
     expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
     expect(document.activeElement).toBe(screen.getByRole('region', { name: '파워 모드' }))
   })
@@ -168,6 +168,7 @@ describe('파워 모드 — 앱 아래층', () => {
   })
 
   it('덮개에서 연 설정을 닫으면 초점이 덮개의 [설정] 단추로 돌아온다', async () => {
+    vi.useFakeTimers()
     const store = await withAgent()
     await act(async () => { await store.setPower(true) })
     const pw = screen.getByRole('region', { name: '파워 모드' })
@@ -176,7 +177,7 @@ describe('파워 모드 — 앱 아래층', () => {
     fireEvent.click(btn)
     const dlg = screen.getByRole('dialog', { name: '설정' })
     fireEvent.click(within(dlg).getByRole('button', { name: '닫기' }))
-    await act(async () => { await new Promise(r => setTimeout(r, 400)) })
+    await wait(400)
     expect(screen.queryByRole('dialog', { name: '설정' })).toBeNull()
     expect(document.activeElement).toBe(btn)
   })
@@ -209,11 +210,12 @@ describe('파워 모드 — 앱 아래층', () => {
   })
 
   it('Esc 길게로 나가도 고르기는 그대로 — 나간 뒤에도 떼기 전의 자동 반복 Esc 는 아래 관계도에 닿지 않는다', async () => {
+    vi.useFakeTimers()
     const store = await withAgent()
     await act(async () => { await store.setPower(true) })
     ;(document.activeElement as HTMLElement | null)?.blur()
     fireEvent.keyDown(document.body, { key: 'Escape' })
-    await act(async () => { await new Promise(r => setTimeout(r, 1600)) })
+    await wait(1500)
     expect(setPowerMode).toHaveBeenLastCalledWith(false)
     expect(screen.queryByRole('region', { name: '파워 모드' })).toBeNull()
     // 아직 누르고 있다 — 운영체제의 자동 반복
@@ -226,6 +228,7 @@ describe('파워 모드 — 앱 아래층', () => {
   })
 
   it('입력창을 보던 에이전트가 일하는 중에 Esc 길게로 나가도 — 다시 붙은 앱 입력창이 자동 반복 Esc 로 그 일을 멈추지 않는다', async () => {
+    vi.useFakeTimers()
     const interrupt = vi.fn(async () => {})
     ;(window as any).dure.interrupt = interrupt
     const store = await withAgent({ status: 'working' })
@@ -234,7 +237,7 @@ describe('파워 모드 — 앱 아래층', () => {
     act(() => { store.selectAgent('a', { focusInput: true }) })
     ;(document.activeElement as HTMLElement | null)?.blur()
     fireEvent.keyDown(document.body, { key: 'Escape' })
-    await act(async () => { await new Promise(r => setTimeout(r, 1600)) })
+    await wait(1500)
     expect(screen.queryByRole('region', { name: '파워 모드' })).toBeNull()
     const box = screen.getByRole('textbox', { name: '알파에게 보낼 메시지' })
     expect(document.activeElement).toBe(box) // 다시 붙은 앱 입력창이 커서를 가져갔다
