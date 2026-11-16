@@ -175,6 +175,8 @@ export interface DureApi {
   openReleasePage(): Promise<void>
   /** 투어 막이 떠 있는 동안 창 단추 띠를 막 색으로 물들인다(Windows 가 웹 화면 위에 그리는 단추는 막이 못 덮는다) */
   setTourVeil(on: boolean): Promise<void>
+  /** 파워 모드 — 켜면 창을 전체 화면으로 하고 화면 꺼짐을 막는다, 끄면 원래대로(PC 창 전용) */
+  setPowerMode(on: boolean): Promise<void>
 
   // ── 휴대폰으로 쓰기(APP_METHODS — PC 창에서만, PHONE_ACCESS 'pc') · 바뀌면 앱 사건 'phone' ──
   /** 휴대폰 설정·기기·접속 수·Tailscale 상태·주소·지금 짝 맺기(숫자·만료) */
@@ -210,7 +212,7 @@ export type ApiMethod = Exclude<keyof DureApi, PreloadOnly>
 /** 앱 쪽 메서드 — 엔진이 없어도(claude 가 없어도)·엔진 시작 전에도 main 의 AppHost 로 간다 */
 export const APP_METHODS = [
   'appInfo', 'prefs', 'setPrefs', 'setupState', 'installClaude', 'loginClaude', 'openSetupGuide',
-  'claudeUpdateState', 'updateState', 'checkUpdate', 'downloadUpdate', 'installUpdate', 'openReleasePage', 'setTourVeil',
+  'claudeUpdateState', 'updateState', 'checkUpdate', 'downloadUpdate', 'installUpdate', 'openReleasePage', 'setTourVeil', 'setPowerMode',
   'phoneState', 'setPhone', 'phoneCheck', 'phonePairStart', 'phonePairCancel', 'phoneUnpair', 'phoneNoticeSeen',
 ] as const satisfies readonly ApiMethod[]
 

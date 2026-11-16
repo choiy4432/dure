@@ -27,7 +27,7 @@ beforeEach(() => {
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 3, allowBypass: false,
     notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
   }
-  prefs = { tourDone: false, approvalTipSeen: true, claudeAutoUpdate: true, trayTipSeen: false }
+  prefs = { tourDone: false, approvalTipSeen: true, claudeAutoUpdate: true, trayTipSeen: false, powerTerminal: false }
   setupState = { phase: 'ready' }
   setPrefs = vi.fn(async (p: Partial<AppPrefs>) => (prefs = { ...prefs, ...p }))
   ;(window as any).dure = {

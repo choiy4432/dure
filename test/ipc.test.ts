@@ -105,7 +105,7 @@ const APP_URL = pathToFileURL(INDEX).href
 const fromApp = { senderFrame: { url: APP_URL } }
 const isAppPage = appPageMatcher({ indexFile: INDEX })
 
-const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true, trayTipSeen: false }
+const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true, trayTipSeen: false, powerTerminal: false }
 
 const PHONE_STATE: PhoneState = {
   settings: { ...DEFAULT_PHONE_SETTINGS, notify: { ...DEFAULT_PHONE_SETTINGS.notify } },
@@ -139,6 +139,7 @@ function fakeApp() {
     loginClaude: vi.fn(async () => {}),
     openSetupGuide: vi.fn(async () => {}),
     setTourVeil: vi.fn(async () => {}),
+    setPowerMode: vi.fn(async () => {}),
     claudeUpdateState: vi.fn(async () => 'running' as const),
     updateState: vi.fn(async () => ({ kind: 'dev' as const })),
     checkUpdate: vi.fn(async () => ({ kind: 'none' as const })),
@@ -290,7 +291,7 @@ describe('registerIpc', () => {
     expect([...APP_METHODS].sort()).toEqual([
       'appInfo', 'checkUpdate', 'claudeUpdateState', 'downloadUpdate', 'installClaude', 'installUpdate', 'loginClaude',
       'openReleasePage', 'openSetupGuide', 'phoneCheck', 'phoneNoticeSeen', 'phonePairCancel', 'phonePairStart', 'phoneState', 'phoneUnpair',
-      'prefs', 'setPhone', 'setPrefs', 'setTourVeil', 'setupState', 'updateState',
+      'prefs', 'setPhone', 'setPowerMode', 'setPrefs', 'setTourVeil', 'setupState', 'updateState',
     ])
     for (const m of APP_METHODS) expect(METHODS as readonly string[], m).not.toContain(m)
     expect([...BEFORE_START].sort()).toEqual([

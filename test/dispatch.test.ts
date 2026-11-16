@@ -56,7 +56,7 @@ function fakeEngine(over: Record<string, (...a: any[]) => unknown> = {}) {
   return { engine, calls }
 }
 
-const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true, trayTipSeen: false }
+const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true, trayTipSeen: false, powerTerminal: false }
 
 function fakeDeps(over: Partial<DispatchDeps> = {}): DispatchDeps {
   return {
@@ -69,6 +69,7 @@ function fakeDeps(over: Partial<DispatchDeps> = {}): DispatchDeps {
       loginClaude: vi.fn(async () => {}),
       openSetupGuide: vi.fn(async () => {}),
       setTourVeil: vi.fn(async () => {}),
+      setPowerMode: vi.fn(async () => {}),
       claudeUpdateState: vi.fn(async () => 'running' as const),
       updateState: vi.fn(async () => ({ kind: 'dev' as const })),
       checkUpdate: vi.fn(async () => ({ kind: 'none' as const })),
@@ -119,6 +120,7 @@ const CASES: [unknown, unknown][] = [
   ['prefs', []],
   ['setPrefs', [{ tourDone: false, x: 1 }]],
   ['setTourVeil', ['yes']],
+  ['setPowerMode', [true]],
   ['history', ['a1']],
   ['conversations', [1]],
   ['addRoom', ['방', { host: 'dev', x: 1 }]],

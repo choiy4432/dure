@@ -5,10 +5,10 @@ import type { PhoneState } from './phoneTypes'
  * 앱 설정 — settings.json 에 엔진 설정과 나란히(main 의 appPrefs.ts)
  * trayTipSeen: 창을 닫아 트레이로 숨었을 때의 첫 안내('두레는 트레이에서 계속 돌아요')를 봤다(main 이 써 둔다)
  */
-export type AppPrefs = { tourDone: boolean; approvalTipSeen: boolean; claudeAutoUpdate: boolean; trayTipSeen: boolean }
+export type AppPrefs = { tourDone: boolean; approvalTipSeen: boolean; claudeAutoUpdate: boolean; trayTipSeen: boolean; powerTerminal: boolean }
 
 /** 칸이 없거나 불리언이 아니면 이 값 */
-export const DEFAULT_APP_PREFS: AppPrefs = { tourDone: false, approvalTipSeen: false, claudeAutoUpdate: true, trayTipSeen: false }
+export const DEFAULT_APP_PREFS: AppPrefs = { tourDone: false, approvalTipSeen: false, claudeAutoUpdate: true, trayTipSeen: false, powerTerminal: false }
 
 export type AppInfo = { version: string; packaged: boolean }
 

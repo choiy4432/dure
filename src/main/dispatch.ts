@@ -452,6 +452,7 @@ const APP_HANDLERS: Record<AppMethod, (app: AppHost, ...a: unknown[]) => unknown
   installUpdate: (a) => a.installUpdate(),
   openReleasePage: (a) => a.openReleasePage(),
   setTourVeil: (a, on) => a.setTourVeil(on === true),
+  setPowerMode: (a, on) => a.setPowerMode(on === true),
   phoneState: (a) => a.phoneState(),
   setPhone: (a, p) => a.setPhone(pickPhoneChange(p)), // 불리언인 아는 칸만 — 포트·모르는 칸은 버린다
   phoneCheck: (a) => a.phoneCheck(),

@@ -13,6 +13,7 @@ import type { Engine } from '../engine'
 import type { AppEventMap, ClaudeUpdateState } from '../shared/appTypes'
 import { appEnv, appIconFor, appUserModelId, loginItemNamer, loginItemSettings } from './appEnv'
 import { initAppPrefsSafe, writeAppPrefs } from './appPrefs'
+import { createPowerMode } from './powerMode'
 import { resolveClaudeCommand, resolveSshCommand, type ClaudeCommand } from './claudeCommand'
 import { cmdArgs, startWaitLine } from './cmdLine'
 import { updateClaude, type ClaudeUpdateRun } from './claudeUpdate'
@@ -30,6 +31,11 @@ import { appPageMatcher, focusExisting, guardNavigation, HIDDEN_ARG, withoutHidd
 import { TITLE_BAR_HEIGHT, veiledColor, windowColors } from './windowTheme'
 
 let mainWindow: BrowserWindow | null = null
+/** 파워 모드 — 전체 화면 + 화면 꺼짐 막기(휴대폰 연결의 'prevent-app-suspension' 과 별개) */
+const powerMode = createPowerMode({
+  win: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null),
+  blocker: { start: () => powerSaveBlocker.start('prevent-display-sleep'), stop: (id) => powerSaveBlocker.stop(id) },
+})
 let engine: Engine | null = null
 let exitCode = 0
 let setup: SetupFlow | null = null
@@ -307,6 +313,7 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
     shutdown: async () => {
       // 트레이는 바로 거둔다 — 끄는 동안(최대 3초) 메뉴를 또 누르지 않게, 끈 뒤 알림 영역에 빈 아이콘이 남지 않게
       tray?.dispose()
+      powerMode.release() // 화면 꺼짐 막기를 남기지 않는다
       await Promise.all([bounded(setup?.dispose()), bounded(claudeUpdateRun?.kill()), bounded(phone?.dispose()), engine?.shutdown()])
     },
     exit: () => app.exit(exitCode),
@@ -413,6 +420,9 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
         },
         async installUpdate() {
           await updater.install()
+        },
+        async setPowerMode(on) {
+          powerMode.set(on)
         },
         async setTourVeil(on) {
           tourVeil = on
@@ -609,6 +619,10 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
         hidden: startHidden({ launchedHidden, trayActive: tray.active(), showRequested }),
       })
       mainWindow = win
+      // 파워 모드 — 화면이 다시 불리거나(did-start-loading) 사라지면 화면 꺼짐 막기를 푼다(화면이 꺼진 줄 모르고 막기만 남지 않게). ×(트레이로 숨기)에서는 풀지 않는다
+      win.webContents.on('did-start-loading', () => powerMode.release())
+      win.webContents.on('destroyed', () => powerMode.release())
+      win.webContents.on('render-process-gone', () => powerMode.release())
       // 창 닫기(×) — 막고 숨긴다(트레이로). 끄는 중(before-quit 이 정리를 시작함 · 업데이트 설치 · Windows 로그아웃)이면 닫힌다
       win.on('close', (e) => {
         tray?.close(e, { quitting: quitControl.started() || sessionEnding, hide: () => win.hide() })

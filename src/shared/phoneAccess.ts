@@ -86,6 +86,7 @@ export const PHONE_ACCESS: Readonly<Record<ApiMethod, PhoneAccess>> = Object.fre
   installUpdate: 'pc',
   openReleasePage: 'pc',
   setTourVeil: 'pc',
+  setPowerMode: 'pc',
   // 휴대폰 연결·짝 맺기 — PC 설정에서만(휴대폰이 스스로 켜고 끄거나 짝을 맺고 끊지 못하게)
   phoneState: 'pc',
   setPhone: 'pc',
