@@ -281,7 +281,7 @@
   .pw-exit { top: 66px; }
 }
 
-/* ---- 터미널 벽 — 팔레트는 여기 한 번만 선언하고 규칙에서는 var() 로 쓴다 ---- */
+/* ---- 터미널 벽 — [창 격자 | 옆 칸 440] · 아래 상태 줄. 팔레트는 여기 한 번만 선언하고 규칙에서는 var() 로 쓴다 ---- */
 .pw {
   --pw-term-bg: #06080D;
   --pw-term-ink: #C9D4E3;
@@ -296,51 +296,63 @@
   --pw-term-am: #FCD34D;
   --pw-term-bl: #93C5FD;
   --pw-term-dim: #74839A;
-  --pw-term-vi: #C4B5FD;
-  --pw-term-cy: #67E8F9;
-  --pw-term-gn: #86EFAC;
+  --pw-term-add: #86EFAC;
   --pw-term-add-bg: rgba(34, 197, 94, 0.08);
   --pw-term-del-bg: rgba(239, 68, 68, 0.08);
-  --pw-term-cursor: #E5E9F0;
-  --pw-term-dot: #10B981;
+  --pw-term-dot-ok: #10B981;
   --pw-term-dot-warn: #F59E0B;
+  --pw-term-dot-rest: #475569;
   --pw-term-bar-bg: #0D1320;
   --pw-term-ses-bg: #10B981;
   --pw-term-ses-ink: #04140D;
   --pw-term-win-on: #1B2537;
 }
 .pw-t-wall { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--pw-term-bg); color: var(--pw-term-ink); font-family: var(--mono); }
-.pw-t-grid { flex: 1; display: grid; grid-template-columns: 1.15fr 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 1px; background: var(--pw-term-gap); min-height: 0; }
-.pw-t-grid.pw-t-one { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+.pw-t-main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 440px; }
+/* 창 격자 — 1명 1칸 · 2명 2행 · 3~4명 2×2 · 5~6명 2×3. 홀수면 마지막 창이 한 줄을 다 쓴다(빈 칸을 남기지 않는다) */
+.pw-t-grid { display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: minmax(0, 1fr); gap: 1px; background: var(--pw-term-gap); min-width: 0; min-height: 0; }
+.pw-t-grid[data-n='3'], .pw-t-grid[data-n='4'], .pw-t-grid[data-n='5'], .pw-t-grid[data-n='6'] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pw-t-grid[data-n='3'] > .pw-t-pane:last-child, .pw-t-grid[data-n='5'] > .pw-t-pane:last-child { grid-column: span 2; }
+.pw-t-none { place-items: center; background: var(--pw-term-bg); }
+.pw-t-empty { margin: 0; font-size: 14px; color: var(--pw-term-dim); }
+/* 옆 칸은 관제실의 것 그대로 — 여기선 판 가장자리에 붙인다 */
+.pw-t-main > .pw-side { border-radius: 0; border-width: 0 0 0 1px; }
 .pw-t-pane { background: var(--pw-term-bg); display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
-.pw-t-ptl { height: 28px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 12px; color: var(--pw-term-ptl-ink); border-bottom: 1px solid var(--pw-term-ptl-line); background: var(--pw-term-ptl-bg); white-space: nowrap; overflow: hidden; }
-.pw-t-ptl i { width: 7px; height: 7px; border-radius: 50%; background: var(--pw-term-dot); flex: none; }
-.pw-t-ptl i[data-warn] { background: var(--pw-term-dot-warn); }
-.pw-t-pane[data-focus] .pw-t-ptl { color: var(--pw-term-focus-ink); background: var(--pw-term-focus-bg); }
-.pw-t-pb { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 8px 12px; font-size: 13px; line-height: 19px; }
-.pw-t-pb.pw-t-top { justify-content: flex-start; }
-.pw-t-sub { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: flex-end; overflow: hidden; border-top: 1px dashed var(--pw-term-gap); margin-top: 8px; padding-top: 6px; }
+/* 제목줄 = 단추(키보드로 고르기). 점 색은 진짜 상태 — 일함 초록 · 기다림 호박 · 쉼 회색 */
+.pw-t-ptl { width: 100%; height: 28px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px; font-size: 12px; text-align: left; color: var(--pw-term-ptl-ink); border-bottom: 1px solid var(--pw-term-ptl-line); background: var(--pw-term-ptl-bg); white-space: nowrap; overflow: hidden; transition: color 0.15s, background-color 0.15s; }
+.pw-t-ptl span { overflow: hidden; text-overflow: ellipsis; }
+.pw-t-ptl:focus-visible { outline: 2px solid var(--pw-ring); outline-offset: -2px; }
+.pw-t-ptl i { width: 7px; height: 7px; border-radius: 50%; background: var(--pw-term-dot-rest); flex: none; }
+.pw-t-pane[data-st='working'] .pw-t-ptl i { background: var(--pw-term-dot-ok); }
+.pw-t-pane[data-st='awaiting'] .pw-t-ptl i { background: var(--pw-term-dot-warn); }
+.pw-t-pane:hover .pw-t-ptl { color: var(--pw-term-focus-ink); }
+.pw-t-pane[data-sel] .pw-t-ptl { color: var(--pw-term-focus-ink); background: var(--pw-term-focus-bg); box-shadow: inset 0 -2px 0 var(--pw-sel); }
+/* 본문 — 아래에 붙어 쌓이고 넘치는 위쪽은 잘린다(잘린 줄은 위 가장자리에서 흐려진다) */
+.pw-t-pb { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; padding: 8px 12px; font-size: 13px; line-height: 19px; mask-image: linear-gradient(to bottom, transparent, black 28px); }
 .pw-t-ln { white-space: pre; min-height: 19px; overflow: hidden; text-overflow: ellipsis; flex: none; }
-.pw-t-hd { background: var(--pw-term-focus-bg); }
+/* 승인을 기다리는 동안 진짜 줄 아래에 붙는 한 줄 — '기다리는 중…' 안내는 그동안 숨긴다 */
+.pw-t-wait { padding: 0 12px 8px; font-size: 13px; line-height: 19px; }
+.pw-t-pane[data-st='awaiting'] .pw-t-pb { padding-bottom: 0; }
+.pw-t-pane[data-st='awaiting'] .pw-t-pb > [data-empty] { display: none; }
 .pw-t-b { font-weight: 700; }
 .pw-t-ok { color: var(--pw-term-ok); }
 .pw-t-er { color: var(--pw-term-er); }
 .pw-t-am { color: var(--pw-term-am); }
 .pw-t-bl { color: var(--pw-term-bl); }
 .pw-t-dim { color: var(--pw-term-dim); }
-.pw-t-vi { color: var(--pw-term-vi); }
-.pw-t-cy { color: var(--pw-term-cy); }
-.pw-t-gn { color: var(--pw-term-gn); }
-.pw-t-add { color: var(--pw-term-gn); background: var(--pw-term-add-bg); }
-.pw-t-del { color: var(--pw-term-er); background: var(--pw-term-del-bg); }
-.pw-t-cur { display: inline-block; width: 8px; height: 15px; background: var(--pw-term-cursor); vertical-align: -3px; animation: pw-t-blink 1s steps(1) infinite; }
-@keyframes pw-t-blink { 50% { opacity: 0; } }
-.pw-stage[data-calm] .pw-t-cur { animation: none; }
-@media (prefers-reduced-motion: reduce) { .pw-t-cur { animation: none; } }
+.pw-t-add { color: var(--pw-term-add); }
+.pw-t-del { color: var(--pw-term-er); }
+.pw-t-ln:has(> .pw-t-add) { background: var(--pw-term-add-bg); }
+.pw-t-ln:has(> .pw-t-del) { background: var(--pw-term-del-bg); }
+/* 상태 줄 — [두레] · 창 이름들(고른 에이전트는 밝게) · 나가기 · 시계 */
 .pw-t-bar { height: 30px; flex: none; display: flex; align-items: center; font-size: 12.5px; background: var(--pw-term-bar-bg); border-top: 1px solid var(--pw-term-gap); }
-.pw-t-ses { background: var(--pw-term-ses-bg); color: var(--pw-term-ses-ink); font-weight: 700; padding: 0 12px; height: 100%; display: flex; align-items: center; }
-.pw-t-wins { display: flex; height: 100%; }
-.pw-t-win { padding: 0 10px; color: var(--pw-term-ptl-ink); height: 100%; display: flex; align-items: center; }
+.pw-t-ses { background: var(--pw-term-ses-bg); color: var(--pw-term-ses-ink); font-weight: 700; padding: 0 12px; height: 100%; display: flex; align-items: center; flex: none; }
+.pw-t-wins { display: flex; height: 100%; min-width: 0; overflow: hidden; }
+.pw-t-win { padding: 0 10px; color: var(--pw-term-ptl-ink); height: 100%; display: flex; align-items: center; white-space: nowrap; }
 .pw-t-win[data-on] { color: var(--pw-term-focus-ink); background: var(--pw-term-win-on); }
-.pw-t-rt { margin-left: auto; padding: 0 14px; color: var(--pw-term-ptl-ink); }
-.pw-t-rt b { color: var(--pw-term-focus-ink); font-weight: 500; }
+.pw-t-more { color: var(--pw-term-dim); }
+.pw-t-rt { margin-left: auto; flex: none; display: flex; align-items: center; gap: 14px; height: 100%; padding: 0 14px 0 12px; color: var(--pw-term-ptl-ink); }
+.pw-t-out { display: inline-flex; align-items: center; gap: 7px; height: 22px; padding: 0 6px 0 9px; font: 12px var(--mono); color: var(--pw-term-focus-ink); border: 1px solid var(--pw-term-gap); border-radius: var(--radius-xs); transition: background-color 0.15s; }
+.pw-t-out:hover { background: var(--pw-term-win-on); }
+.pw-t-out kbd { font: 10.5px var(--mono); color: var(--pw-term-dim); }
+.pw-t-now { color: var(--pw-term-focus-ink); font-weight: 500; }

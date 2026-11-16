@@ -1,29 +1,13 @@
-// 터미널 창 하나 — 제목줄은 React, 본문은 DOM 에 직접 줄을 붙인다(수백 줄을 React 상태로 다시 그리지 않는다).
+// 터미널 창 하나 — 제목줄·승인 기다림 줄은 React, 본문 줄은 DOM 에 직접 붙인다(사건마다 React 상태를 바꾸지 않는다).
 // 글자는 모두 textContent 로만 넣는다.
-import type { ReactNode, Ref } from 'react'
-import type { Line, Part } from './panes'
+import { useLayoutEffect, useRef, type MouseEvent } from 'react'
+import type { AgentState, PowerAgent } from '../events'
+import type { Line, Part } from './lines'
 
 /** 창 하나가 쥐는 줄 수 — 넘치면 위에서부터 지운다 */
 export const MAX_LINES = 60
-
-export function Pane({ title, focus, warn, bodyRef, children, top }: {
-  title: string
-  focus: boolean
-  warn?: boolean
-  bodyRef?: Ref<HTMLDivElement>
-  children?: ReactNode
-  top?: boolean
-}) {
-  return (
-    <div className="pw-t-pane" data-focus={focus || undefined}>
-      <div className="pw-t-ptl">
-        <i data-warn={warn || undefined} />
-        <span>{title}</span>
-      </div>
-      {children ?? <div className={top ? 'pw-t-pb pw-t-top' : 'pw-t-pb'} ref={bodyRef} />}
-    </div>
-  )
-}
+/** 아직 줄이 없는 창의 안내 */
+const EMPTY_TEXT = '기다리는 중…'
 
 const span = (p: Part): HTMLSpanElement => {
   const s = document.createElement('span')
@@ -33,36 +17,122 @@ const span = (p: Part): HTMLSpanElement => {
   return s
 }
 
-/** 줄 하나를 DOM 으로 — 부분마다 span, 색은 class */
+/** 줄 하나를 DOM 으로 — 조각마다 span, 색은 class */
 export function lineEl(l: Line): HTMLDivElement {
   const d = document.createElement('div')
-  d.className = l.hd ? 'pw-t-ln pw-t-hd' : 'pw-t-ln'
-  if (l.key) d.dataset.key = l.key
+  d.className = 'pw-t-ln'
   for (const p of l.parts) d.appendChild(span(p))
   return d
 }
 
-const findKey = (body: HTMLElement, key: string): HTMLElement | undefined => {
-  for (let el = body.lastElementChild as HTMLElement | null; el; el = el.previousElementSibling as HTMLElement | null) if (el.dataset.key === key) return el
-  return undefined
+const emptyEl = (): HTMLDivElement => {
+  const d = document.createElement('div')
+  d.className = 'pw-t-ln pw-t-dim'
+  d.dataset.empty = ''
+  d.textContent = EMPTY_TEXT
+  return d
 }
 
-/** 줄들을 아래에 붙이고 MAX_LINES 를 넘는 앞쪽을 지운다. key 줄은 제자리를 바꾸고, end 줄은 그 key 의 줄을 지운다 */
-export function appendLines(body: HTMLElement, lines: Line[], max = MAX_LINES): void {
-  for (const l of lines) {
-    const old = l.key ? findKey(body, l.key) : undefined
-    if (l.end) {
-      old?.remove()
-      continue
-    }
-    const el = lineEl(l)
-    if (old) old.replaceWith(el)
-    else body.appendChild(el)
+/**
+ * 창 본문 줄 — 에이전트마다 마지막 max 줄을 쥐고(창이 없는 에이전트도: 창에 올라오면 그대로 보인다),
+ * 붙은 창 본문에는 한 프레임에 한 번 몰아 붙인다. 창이 안 보이는 동안엔 프레임이 돌지 않는다(먹이도 그동안 온 사건은 버린다)
+ */
+export function createPaneLines(max = MAX_LINES) {
+  const kept = new Map<string, Line[]>()
+  const bodies = new Map<string, HTMLElement>()
+  const queued = new Map<string, Line[]>()
+  let frame = 0
+  const trim = (ls: Line[]) => {
+    if (ls.length > max) ls.splice(0, ls.length - max)
   }
-  while (body.childElementCount > max) body.firstElementChild!.remove()
+  const draw = () => {
+    frame = 0
+    for (const [id, ls] of queued) {
+      const body = bodies.get(id)
+      if (!body) continue
+      if (body.firstElementChild instanceof HTMLElement && 'empty' in body.firstElementChild.dataset) body.firstElementChild.remove()
+      const frag = document.createDocumentFragment()
+      for (const l of ls) frag.appendChild(lineEl(l))
+      body.appendChild(frag)
+      while (body.childElementCount > max) body.firstElementChild!.remove()
+    }
+    queued.clear()
+  }
+  return {
+    /** 켤 때 깔 줄 */
+    seed(id: string, ls: Line[]) {
+      const k = [...ls]
+      trim(k)
+      kept.set(id, k)
+    },
+    push(id: string, ls: Line[]) {
+      if (!ls.length) return
+      const k = kept.get(id) ?? []
+      k.push(...ls)
+      trim(k)
+      kept.set(id, k)
+      if (!bodies.has(id)) return
+      const q = queued.get(id) ?? []
+      q.push(...ls)
+      trim(q)
+      queued.set(id, q)
+      frame ||= requestAnimationFrame(draw)
+    },
+    /** 창이 붙으면 쥔 줄을 그대로 그린다(없으면 안내 한 줄) */
+    attach(id: string, body: HTMLElement) {
+      bodies.set(id, body)
+      queued.delete(id)
+      const k = kept.get(id)
+      body.replaceChildren(...(k?.length ? k.map(lineEl) : [emptyEl()]))
+    },
+    detach(id: string, body: HTMLElement) {
+      if (bodies.get(id) !== body) return
+      bodies.delete(id)
+      queued.delete(id)
+    },
+    /** 걸린 프레임을 거둔다(쥔 줄은 남는다 — 다시 붙으면 그대로) */
+    stop() {
+      cancelAnimationFrame(frame)
+      frame = 0
+      queued.clear()
+    },
+  }
 }
+export type PaneLines = ReturnType<typeof createPaneLines>
 
-/** 본문 전체를 새 줄로 바꾼다(위 고정 블록·시스템 창) */
-export function setLines(body: HTMLElement, lines: Line[]): void {
-  body.replaceChildren(...lines.map(lineEl))
+/**
+ * 창 — 누르면(본문 어디든, 제목 단추는 키보드로도) 그 에이전트를 고른다. 점 색은 진짜 상태,
+ * 승인을 기다리는 동안엔 진짜 줄 아래에 `승인을 기다리는 중…` 을 붙여 둔다(줄을 갈아 끼우지 않는다)
+ */
+export function Pane({ agent, state, selected, lines, onPick }: {
+  agent: PowerAgent
+  state: AgentState
+  selected: boolean
+  lines: PaneLines
+  onPick: (id: string) => void
+}) {
+  const body = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = body.current!
+    lines.attach(agent.id, el)
+    return () => lines.detach(agent.id, el)
+  }, [lines, agent.id])
+  // 제목 단추의 누르기도 이 창으로 올라와 한 번만 고른다. 창의 글을 끌어 고르던 누르기면(경로 복사 등) 고르지 않는다 —
+  // 고르면 커서가 입력창으로 가서 고른 글이 풀린다
+  const click = (e: MouseEvent<HTMLElement>) => {
+    const s = window.getSelection()
+    const fromTitle = e.target instanceof Element && !!e.target.closest('.pw-t-ptl')
+    if (!fromTitle && s && !s.isCollapsed && body.current?.contains(s.anchorNode)) return
+    onPick(agent.id)
+  }
+  return (
+    <section className="pw-t-pane" data-agent={agent.id} data-st={state} data-sel={selected || undefined} onClick={click}>
+      <button type="button" className="pw-t-ptl" aria-pressed={selected}>
+        <i aria-hidden="true" />
+        <span>{agent.role ? `${agent.name} — ${agent.role}` : agent.name}</span>
+      </button>
+      <div className="pw-t-pb" ref={body} />
+      {state === 'awaiting' && <div className="pw-t-ln pw-t-am pw-t-wait">승인을 기다리는 중…</div>}
+    </section>
+  )
 }

@@ -82,7 +82,7 @@ function Overlay({ terminal }: { terminal: boolean }) {
   useEffect(() => () => clearTimeout(hintTimer.current), [])
 
   // 안내가 뜨고 져도 아래 화면은 다시 그리지 않는다(같은 요소)
-  const screen = useMemo(() => (terminal ? <TerminalWall /> : <ControlRoom onExit={exit} />), [terminal, exit])
+  const screen = useMemo(() => (terminal ? <TerminalWall onExit={exit} /> : <ControlRoom onExit={exit} />), [terminal, exit])
   return (
     <div ref={ref} className="pw" role="region" aria-label="파워 모드" tabIndex={-1}>
       <div className="pw-stage" data-calm={reducedMotion() || undefined}>
