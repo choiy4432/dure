@@ -34,6 +34,7 @@ async function mount(agents: object[]) {
     snapshot: async () => ({ claudeMissing: false, rooms, agents, messages: [], requests: [], autoChainLimit: 5, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null }),
     history: async () => [],
     setPowerMode: async () => {},
+    setSelected: async () => {},
     on: (k: string, fn: (p: any) => void) => { (handlers[k] ??= []).push(fn); return () => {} },
   }
   const { getStore } = await import('../../src/renderer/state/store')
@@ -42,7 +43,7 @@ async function mount(agents: object[]) {
   await act(async () => { await store.init() })
   if (rooms.length) act(() => { store.selectRoom('r1') })
   await act(async () => { await store.setPower(true) })
-  render(<ControlRoom />)
+  render(<ControlRoom onExit={() => {}} />)
 }
 const wait = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
 const cards = () => document.querySelectorAll('.pw-card')
@@ -96,6 +97,18 @@ describe('관제실', () => {
     expect(within(card('a')).getByText('npm test')).toBeInTheDocument()
     expect(rows()[0]).toHaveTextContent('npm test')
     expect(rows()[1]).toHaveTextContent('src/one.ts')
+  })
+
+  it('도구_대상이_긴_경로면_카드·기록은_끝_두_조각만_보이고_전체는_title(명령은_그대로)', async () => {
+    await mount([agent('a', { name: '알파' })])
+    await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'C:\\work\\shop\\src\\order\\refund.ts' }) })
+    await wait(250)
+    expect(tg('a')).toBe('…\\order\\refund.ts')
+    expect(card('a').querySelector('.pw-tool')).toHaveAttribute('title', 'C:\\work\\shop\\src\\order\\refund.ts')
+    expect(rows()[0]).toHaveTextContent('…\\order\\refund.ts')
+    await emit('history', { agentId: 'a', item: toolItem('Bash', { command: 'npm test -- src/a/b/c.ts' }) })
+    await wait(250)
+    expect(tg('a')).toBe('npm test -- src/a/b/c.ts')
   })
 
   it('켠_뒤에_방에_들어온_에이전트의_사건은_보이지_않는다(날_id_가_새지_않게)', async () => {
@@ -246,6 +259,63 @@ describe('관제실', () => {
   it('머리_줄의_작업_중_숫자는_진짜로_일하는_에이전트_수', async () => {
     await mount([agent('a', { name: '알파', status: 'working' }), agent('b', { name: '베타' }), agent('c', { name: '감마', status: 'awaiting' })])
     expect(document.querySelector('.pw-agents .pw-label')).toHaveTextContent('작업 중 1')
+  })
+
+  it('카드는_단추_누르면_그_에이전트를_고르고_고른_카드만_aria_pressed', async () => {
+    await mount([agent('a', { name: '알파' }), agent('b', { name: '베타' })])
+    const { getStore } = await import('../../src/renderer/state/store')
+    const spy = vi.spyOn(getStore(), 'selectAgent')
+    expect(card('a').tagName).toBe('BUTTON')
+    expect(card('a')).toHaveAttribute('aria-pressed', 'false')
+    act(() => { card('b').click() })
+    expect(spy).toHaveBeenCalledWith('b', { focusInput: true })
+    expect(getStore().getState().selectedAgentId).toBe('b')
+    expect(card('b')).toHaveAttribute('aria-pressed', 'true')
+    expect(card('a')).toHaveAttribute('aria-pressed', 'false')
+    // 관계도 노드도 같은 고르기 — 고른 표시가 노드에도
+    expect(document.querySelector('[data-node="b"]')).toHaveAttribute('aria-pressed', 'true')
+    act(() => { (document.querySelector('[data-node="a"]') as HTMLElement).click() })
+    expect(spy).toHaveBeenLastCalledWith('a', { focusInput: true })
+    expect(card('a')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('상태가_바뀌면_카드_5장을_다시_고른다_기다림_일함_나머지_무리_안에선_방_순서', async () => {
+    await mount(Array.from({ length: 7 }, (_, i) => agent(`x${i}`)))
+    const shown = () => [...cards()].map(c => c.getAttribute('data-agent'))
+    expect(shown()).toEqual(['x0', 'x1', 'x2', 'x3', 'x4'])
+    await setStatus('x6', 'awaiting')
+    expect(shown()).toEqual(['x6', 'x0', 'x1', 'x2', 'x3'])
+    await setStatus('x5', 'working')
+    expect(shown()).toEqual(['x6', 'x5', 'x0', 'x1', 'x2'])
+    await setStatus('x6', 'idle')
+    expect(shown()).toEqual(['x5', 'x0', 'x1', 'x2', 'x3'])
+    expect(screen.getByText('외 2명')).toBeInTheDocument()
+  })
+
+  it('고른_에이전트는_늘_다섯_장_안에', async () => {
+    await mount(Array.from({ length: 7 }, (_, i) => agent(`x${i}`)))
+    const { getStore } = await import('../../src/renderer/state/store')
+    act(() => { getStore().selectAgent('x6') })
+    expect([...cards()].map(c => c.getAttribute('data-agent'))).toEqual(['x0', 'x1', 'x2', 'x3', 'x6'])
+    expect(card('x6')).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('진짜_맥락_사용량이_있으면_카드에_그_값_없으면_안_그린다', async () => {
+    await mount([agent('a', { name: '알파', lastContext: { percent: 42, total: 84000, max: 200000, autoCompactAt: null, at: 1 } }), agent('b', { name: '베타' })])
+    expect(card('a')).toHaveTextContent('42%')
+    expect(card('b').querySelector('.pw-ring')).toBeNull()
+    expect(card('b')).not.toHaveTextContent('%')
+  })
+
+  it('배치_A_왼쪽_카드_가운데_관계도_오른쪽_옆_칸(아무도_안_골랐으면_기록)_위_띠에_나가기와_시계', async () => {
+    await mount([agent('a', { name: '알파' })])
+    const main = document.querySelector('.pw-main')!
+    expect([...main.children].map(c => c.className.split(' ')[0])).toEqual(['pw-agents', 'pw-map', 'pw-side'])
+    expect(screen.getByRole('tab', { name: '기록' })).toHaveAttribute('aria-selected', 'true')
+    const top = document.querySelector('.pw-top')!
+    const exit = within(top as HTMLElement).getByRole('button', { name: '나가기' })
+    expect(exit.compareDocumentPosition(top.querySelector('.pw-now')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(document.querySelector('[data-power-map] .pw-label')).toHaveTextContent('노드를 누르면 그 에이전트와 대화')
   })
 
   it('숫자_띠와_위_띠가_같은_진짜_서브에이전트_수를_보인다', async () => {

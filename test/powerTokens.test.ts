@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 
-// 파워 모드 덮개는 테마와 상관없이 늘 어둡다 — .pw 가 다시 선언한 토큰이 tokens.css 의 다크 값과 같아야 하고,
-// 그 밖의 pw- 규칙에는 색 값을 직접 쓰지 않는다.
+// 파워 모드 덮개는 테마와 상관없이 늘 어둡다 — .pw 가 tokens.css 다크 블록의 토큰을 빠짐없이 같은 값으로 다시 선언해야 하고
+// (덮개 안 대화 패널이 쓰는 토큰이 하나라도 빠지면 밝은 값이 새어 든다), 그 밖의 pw- 규칙에는 색 값을 직접 쓰지 않는다.
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '')
 const tokens = strip(fs.readFileSync(path.resolve('src/renderer/styles/tokens.css'), 'utf8'))
 const power = strip(fs.readFileSync(path.resolve('src/renderer/power/power.css'), 'utf8'))
@@ -16,6 +16,14 @@ describe('덮개 토큰', () => {
     const redeclared = [...varsOf(pwBlocks.join('\n'))].filter(([k]) => !k.startsWith('--pw-'))
     expect(redeclared.length).toBeGreaterThan(10)
     for (const [k, v] of redeclared) expect({ k, v: dark.get(k) }).toEqual({ k, v })
+  })
+
+  it('pw_가_tokens.css_다크_블록의_토큰을_전부_다시_선언한다', () => {
+    const pw = varsOf(pwBlocks.join('\n'))
+    expect(dark.size).toBeGreaterThan(50)
+    const missing = [...dark.keys()].filter(k => !pw.has(k))
+    expect(missing).toEqual([])
+    expect(pwBlocks.join('\n')).toMatch(/color-scheme:\s*dark/)
   })
 
   it('pw_규칙에_색_값을_직접_쓰지_않는다(.pw_블록의_이름_붙은_변수만)', () => {

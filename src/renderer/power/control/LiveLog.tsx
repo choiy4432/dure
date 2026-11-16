@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { batched, type PowerAgent, type ScreenEvent } from '../events'
+import { batched, tailPath, type PowerAgent, type ScreenEvent } from '../events'
 
 const MAX_ROWS = 26
 
@@ -11,7 +11,7 @@ export const clockText = (ms: number): string => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-/** 실시간 기록 — 진짜 도구 사용과 넘김만(새 것이 맨 위) */
+/** 실시간 기록 — 진짜 도구 사용과 넘김만(새 것이 맨 위, 26줄까지). 옆 칸(SidePanel)의 기록 탭 안에 놓인다 */
 export function LiveLog({ agents, rate, subscribe }: { agents: PowerAgent[]; rate: number; subscribe: (fn: (ev: ScreenEvent) => void) => () => void }) {
   const [rows, setRows] = useState<Row[]>([])
   const seq = useRef(0)
@@ -25,7 +25,7 @@ export function LiveLog({ agents, rate, subscribe }: { agents: PowerAgent[]; rat
         for (const ev of evs) {
           if (ev.kind === 'tool') {
             const who = byId.current.get(ev.agentId)
-            add.unshift({ id: ++seq.current, time: clockText(ev.at), name: who?.name ?? ev.agentId, color: who?.color ?? '', tp: ev.tool, tg: ev.target })
+            add.unshift({ id: ++seq.current, time: clockText(ev.at), name: who?.name ?? ev.agentId, color: who?.color ?? '', tp: ev.tool, tg: tailPath(ev.target) })
           } else if (ev.kind === 'handoff') {
             const who = byId.current.get(ev.from)
             const to = byId.current.get(ev.to)?.name ?? ev.to
@@ -38,7 +38,7 @@ export function LiveLog({ agents, rate, subscribe }: { agents: PowerAgent[]; rat
   )
 
   return (
-    <section className="pw-log" aria-label="실시간 기록">
+    <div className="pw-log">
       <div className="pw-label">
         실시간 기록
         <span>
@@ -46,6 +46,7 @@ export function LiveLog({ agents, rate, subscribe }: { agents: PowerAgent[]; rat
         </span>
       </div>
       <div className="pw-logrows">
+        {rows.length === 0 && <p className="pw-log-empty">켠 뒤 들어온 일이 아직 없어요</p>}
         {rows.map(r => (
           <div key={r.id} className="pw-lr" data-row>
             <time>{r.time}</time>
@@ -55,6 +56,6 @@ export function LiveLog({ agents, rate, subscribe }: { agents: PowerAgent[]; rat
           </div>
         ))}
       </div>
-    </section>
+    </div>
   )
 }

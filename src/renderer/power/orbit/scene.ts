@@ -175,15 +175,15 @@ function ticks(x: CanvasRenderingContext2D, w: World): void {
   }
 }
 
-/** 핵 — 빛(동기화 땐 터지는 빛과 충격파), 빛기둥, 이중 나선, 자이로 고리 셋 */
+/** 핵 — 빛(밝기·크기는 w.energy = 최근 진짜 도구 사용, 쉬면 낮게. 동기화 땐 터지는 빛과 충격파), 빛기둥, 이중 나선, 자이로 고리 셋 */
 function core(x: CanvasRenderingContext2D, w: World): void {
   const t = w.t
   const c = w.pos.get(w.core.id)!
   const fk = (t - w.flare) / LIFE.flare
   const fl = (fk >= 0 && fk < 1 ? 1 - fk : 0) * (w.calm ? FLARE_CALM : 1)
-  const cr = 130 + w.energy * 70 + fl * 130
+  const cr = 110 + w.energy * 90 + fl * 130
   const gr = x.createRadialGradient(c.x, c.y, 6, c.x, c.y, cr)
-  gr.addColorStop(0, shade(RGB.glow, S * (0.5 + w.energy * 0.5 + fl)))
+  gr.addColorStop(0, shade(RGB.glow, S * (0.3 + w.energy * 0.7 + fl)))
   gr.addColorStop(1, shade(RGB.glowEdge, 0))
   x.fillStyle = gr
   x.beginPath()

@@ -17,7 +17,7 @@ import {
   rgbOf,
   shade,
 } from './palette'
-import { LIFE, colorOf, flowCount, orbitTurn, satPoint, trunc, type World } from './world'
+import { LIFE, colorOf, inFlight, orbitTurn, satPoint, stateCounts, trunc, type World } from './world'
 
 /**
  * 번짐 — 흐림 반지름 · 알파(동기화 중엔 boost.bloom 만큼 더).
@@ -75,13 +75,16 @@ function tickLabels(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.textAlign = 'start'
 }
 
+/** 위성 이름표 — 위성 바로 아래 가운데(진짜 설명, 없으면 '서브 N') */
 function satLabels(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.font = `11px ${w.fonts.mono}`
+  ctx.textAlign = 'center'
   for (const s of w.sats) {
     satPoint(w, s, P)
     ctx.fillStyle = shade(RGB.label, 0.35 + near(P, w.RA) * 0.6)
-    ctx.fillText(trunc(s.name, SAT_LABEL_MAX), P.x + 8, P.y + 4)
+    ctx.fillText(trunc(s.name, SAT_LABEL_MAX), P.x, P.y + 16)
   }
+  ctx.textAlign = 'start'
 }
 
 /** 잎 — 도구를 쓴 노드에서 '도구 파일' 이름표가 뻗어 나간다 */
@@ -199,7 +202,7 @@ function bubbles(ctx: CanvasRenderingContext2D, w: World): void {
   }
 }
 
-/** 계기판 — 귀퉁이 틀 · 왼쪽 위 값(진짜 셈과 화면 상태만) · 오른쪽 위 궤도 값 · 아래 활동 파형 · 훑는 선 */
+/** 계기판 — 귀퉁이 틀 · 왼쪽 위 값(진짜 상태·진짜 넘김과 화면 상태만) · 오른쪽 위 궤도 값 · 아래 활동 파형(진짜 도구·넘김을 따른다) · 훑는 선 */
 function hud(ctx: CanvasRenderingContext2D, w: World): void {
   const { W, H, t } = w
   const b = 16
@@ -220,8 +223,11 @@ function hud(ctx: CanvasRenderingContext2D, w: World): void {
   }
 
   ctx.font = `11px ${w.fonts.mono}`
+  const c = stateCounts(w)
   const rows: [string, string][] = [
-    ['오가는 데이터', String(flowCount(w))],
+    ['일하는 중', `${c.working}/${c.total}`],
+    ['기다림', String(c.waiting)],
+    ['오가는 넘김', String(inFlight(w))],
     ['카메라', `${deg(w.cam.e)}° · ${deg(w.cam.yaw)}°`],
   ]
   rows.forEach(([k, v], i) => {

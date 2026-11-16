@@ -1,8 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import '@testing-library/jest-dom/vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import { render, screen, act, fireEvent, cleanup } from '@testing-library/react'
 
-// 파워 모드 덮개 — 켜져 있을 때만 그림 · Esc 길게 누르기로 나가기 · 다른 입력은 삼키고 힌트만
+// 파워 모드 덮개 — 일하는 화면: 입력을 막지 않는다(삼키기·초점 붙잡기·inert·커서 숨김 없음).
+// 나가기는 위 띠의 [나가기] 단추 · Esc 길게(글 입력 중이 아니고 떠 있는 창이 없을 때만). 층은 대화상자·찾기·메뉴·토스트 아래
 
 let setPowerMode: ReturnType<typeof vi.fn>
 
@@ -31,19 +34,158 @@ async function mount(on = true) {
 
 const key = (type: 'keydown' | 'keyup', k: string, init: KeyboardEventInit = {}) => (type === 'keydown' ? fireEvent.keyDown : fireEvent.keyUp)(window, { key: k, ...init })
 const wait = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+const overlay = () => screen.getByRole('region', { name: '파워 모드' })
+/** 덮개 밖(body 아래)에 붙이는 요소 — 시험이 끝나면 지운다 */
+const outside = <K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}) => {
+  const el = document.createElement(tag)
+  el.dataset.t = '1'
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v)
+  document.body.appendChild(el)
+  return el
+}
 
-describe('PowerLayer', () => {
+describe('PowerLayer — 덮개', () => {
   it('off — power.on 이 false 면 아무것도 안 그린다', async () => {
     await mount(false)
-    expect(screen.queryByRole('application')).toBeNull()
+    expect(screen.queryByRole('region', { name: '파워 모드' })).toBeNull()
+    expect(document.querySelector('.pw')).toBeNull()
   })
 
-  it('shell — role application + 이름 + 초점 + 자리표 화면', async () => {
+  it('이름 붙은 영역(application 아님) · 켤 때 초점이 덮개로 한 번 · 관제실 화면', async () => {
     const { view } = await mount()
-    const app = screen.getByRole('application', { name: '파워 모드' })
-    expect(document.activeElement).toBe(app)
-    expect(document.body.contains(app)).toBe(true)
+    const el = overlay()
+    expect(screen.queryByRole('application')).toBeNull()
+    expect(document.activeElement).toBe(el)
     expect(view.baseElement.querySelector('[data-power-screen="control"]')).not.toBeNull()
+  })
+
+  it('켜져 있어도 바깥 body 자식에 inert 가 없다', async () => {
+    const a = outside('div')
+    await mount()
+    const late = outside('div')
+    await act(async () => { await Promise.resolve() })
+    for (const el of Array.from(document.body.children)) expect(el).not.toHaveAttribute('inert')
+    expect(a).not.toHaveAttribute('inert')
+    expect(late).not.toHaveAttribute('inert')
+  })
+
+  it('덮개 밖 요소로 초점이 가도 덮개로 되돌리지 않는다(초점을 붙잡지 않는다)', async () => {
+    await mount()
+    const b = outside('button')
+    b.focus()
+    expect(document.activeElement).toBe(b)
+  })
+
+  const EVENTS: Array<[string, (el: Element) => unknown]> = [
+    ['keydown', el => fireEvent.keyDown(el, { key: 'a' })],
+    ['keyup', el => fireEvent.keyUp(el, { key: 'a' })],
+    ['pointerdown', el => fireEvent.pointerDown(el)],
+    ['click', el => fireEvent.click(el)],
+    ['wheel', el => fireEvent.wheel(el)],
+    ['contextmenu', el => fireEvent.contextMenu(el)],
+  ]
+  it.each(EVENTS)('켜져 있어도 %s 가 덮개 밖 document·window 리스너에 닿고 기본 동작도 그대로', async (type, fire) => {
+    await mount()
+    const onDoc = vi.fn()
+    const onWin = vi.fn()
+    document.addEventListener(type, onDoc)
+    window.addEventListener(type, onWin)
+    const notPrevented = fire(overlay())
+    document.removeEventListener(type, onDoc)
+    window.removeEventListener(type, onWin)
+    expect(onDoc).toHaveBeenCalled()
+    expect(onWin).toHaveBeenCalled()
+    expect(notPrevented).toBe(true)
+  })
+
+  it('Ctrl+K 로 찾기가 열린다 — 진짜 useSearchShortcut', async () => {
+    const { useSearchShortcut } = await import('../../src/renderer/shell/SearchPalette')
+    const onOpen = vi.fn()
+    function Probe() {
+      useSearchShortcut(true, onOpen)
+      return null
+    }
+    render(<Probe />)
+    await mount()
+    fireEvent.keyDown(overlay(), { key: 'k', ctrlKey: true })
+    expect(onOpen).toHaveBeenCalledTimes(1)
+  })
+
+  it('다른 키·클릭에 안내 글이 뜨지 않고 3000ms 가만히 있어도 커서를 숨기지 않는다', async () => {
+    await mount()
+    key('keydown', 'a')
+    fireEvent.click(overlay())
+    expect(screen.queryByText('Esc 를 길게 누르면 나가요')).toBeNull()
+    await wait(3000)
+    expect(overlay()).not.toHaveAttribute('data-idle')
+  })
+
+  it('[나가기] 단추를 누르면 setPower(false)', async () => {
+    const { spy } = await mount()
+    fireEvent.click(screen.getByRole('button', { name: '나가기' }))
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith(false)
+  })
+
+  it('초점이 body 일 때 Esc 1500ms 면 setPower(false) 한 번 · 누르는 동안 나가는 중…', async () => {
+    const { spy } = await mount()
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    expect(document.activeElement).toBe(document.body)
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    await wait(600)
+    expect(screen.getByText('나가는 중…')).toBeInTheDocument()
+    await wait(900)
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith(false)
+  })
+
+  it('Esc 는 삼키지 않는다 — 덮개 밖 리스너에 닿고 기본 동작도 그대로', async () => {
+    await mount()
+    const onDoc = vi.fn()
+    document.addEventListener('keydown', onDoc)
+    const notPrevented = fireEvent.keyDown(overlay(), { key: 'Escape' })
+    document.removeEventListener('keydown', onDoc)
+    expect(onDoc).toHaveBeenCalled()
+    expect(notPrevented).toBe(true)
+  })
+
+  it('textarea 에 초점을 두고 Esc 1500ms → 안 꺼진다', async () => {
+    const { spy } = await mount()
+    const ta = outside('textarea')
+    ta.focus()
+    fireEvent.keyDown(ta, { key: 'Escape' })
+    await wait(2000)
+    expect(spy).not.toHaveBeenCalled()
+    expect(screen.queryByText('나가는 중…')).toBeNull()
+  })
+
+  it('덮개 밖에 role="dialog" 가 열려 있으면 Esc 1500ms → 안 꺼진다 · 닫히면 다시 듣는다', async () => {
+    const { spy } = await mount()
+    const dlg = outside('div', { role: 'dialog' })
+    key('keydown', 'Escape')
+    await wait(2000)
+    key('keyup', 'Escape')
+    expect(spy).not.toHaveBeenCalled()
+    dlg.remove()
+    key('keydown', 'Escape')
+    await wait(1500)
+    expect(spy).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['menu', 'listbox'])('role="%s" 가 떠 있어도 Esc 길게는 듣지 않는다', async role => {
+    const { spy } = await mount()
+    outside('div', { role })
+    key('keydown', 'Escape')
+    await wait(2000)
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('나가는 중(inert)인 창은 떠 있는 것으로 치지 않는다', async () => {
+    const { spy } = await mount()
+    outside('div', { role: 'dialog', inert: '' })
+    key('keydown', 'Escape')
+    await wait(1500)
+    expect(spy).toHaveBeenCalledTimes(1)
   })
 
   it('Esc 1499ms 누르고 떼면 안 나간다', async () => {
@@ -53,16 +195,6 @@ describe('PowerLayer', () => {
     key('keyup', 'Escape')
     await wait(2000)
     expect(spy).not.toHaveBeenCalled()
-  })
-
-  it('Esc 1500ms 면 setPower(false) 한 번 · 누르는 동안 나가는 중…', async () => {
-    const { spy } = await mount()
-    key('keydown', 'Escape')
-    await wait(600)
-    expect(screen.getByText('나가는 중…')).toBeInTheDocument()
-    await wait(900)
-    expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy).toHaveBeenCalledWith(false)
   })
 
   it('1400ms 에 떼고 다시 누르면 또 1500ms 가 필요하다', async () => {
@@ -87,148 +219,14 @@ describe('PowerLayer', () => {
     expect(screen.queryByText('나가는 중…')).toBeNull()
   })
 
-  it('다른 키·클릭 → 힌트가 보였다가 2000ms 뒤 사라진다', async () => {
-    await mount()
-    expect(screen.queryByText('Esc 를 길게 누르면 나가요')).toBeNull()
-    key('keydown', 'a')
-    expect(screen.getByText('Esc 를 길게 누르면 나가요')).toBeInTheDocument()
-    await wait(2000)
-    expect(screen.queryByText('Esc 를 길게 누르면 나가요')).toBeNull()
-    fireEvent.click(screen.getByRole('application'))
-    expect(screen.getByText('Esc 를 길게 누르면 나가요')).toBeInTheDocument()
-  })
-
-  it('Ctrl+K 로 찾기 창이 안 열린다 — 진짜 useSearchShortcut', async () => {
-    const { useSearchShortcut } = await import('../../src/renderer/shell/SearchPalette')
-    const onOpen = vi.fn()
-    function Probe() {
-      useSearchShortcut(true, onOpen)
-      return null
-    }
-    render(<Probe />)
-    await mount()
-    fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true })
-    expect(onOpen).not.toHaveBeenCalled()
-  })
-
-  it('꺼져 있으면 Ctrl+K 를 삼키지 않는다', async () => {
-    const { useSearchShortcut } = await import('../../src/renderer/shell/SearchPalette')
-    const onOpen = vi.fn()
-    function Probe() {
-      useSearchShortcut(true, onOpen)
-      return null
-    }
-    render(<Probe />)
-    await mount(false)
-    fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true })
-    expect(onOpen).toHaveBeenCalledTimes(1)
-  })
-
-  it('3000ms 가만히 있으면 커서가 숨고 움직이면 돌아온다', async () => {
-    await mount()
-    const app = screen.getByRole('application')
-    expect(app).not.toHaveAttribute('data-idle')
-    await wait(3000)
-    expect(app).toHaveAttribute('data-idle')
-    fireEvent.pointerMove(app)
-    expect(app).not.toHaveAttribute('data-idle')
-  })
-
-  const EVENTS: Array<[string, (el: Element) => unknown]> = [
-    ['keydown', el => fireEvent.keyDown(el, { key: 'a' })],
-    ['keyup', el => fireEvent.keyUp(el, { key: 'a' })],
-    ['pointerdown', el => fireEvent.pointerDown(el)],
-    ['pointerup', el => fireEvent.pointerUp(el)],
-    ['click', el => fireEvent.click(el)],
-    ['wheel', el => fireEvent.wheel(el)],
-    ['contextmenu', el => fireEvent.contextMenu(el)],
-  ]
-  describe.each(EVENTS)('삼키기 — %s', (type, fire) => {
-    const probe = () => {
-      const onDoc = vi.fn()
-      const onWin = vi.fn()
-      document.addEventListener(type, onDoc)
-      window.addEventListener(type, onWin)
-      return { onDoc, onWin, off: () => { document.removeEventListener(type, onDoc); window.removeEventListener(type, onWin) } }
-    }
-    it('켜져 있으면 덮개 밖 document·window 리스너에 안 닿는다', async () => {
-      await mount()
-      const p = probe()
-      fire(document.body)
-      p.off()
-      expect(p.onDoc).not.toHaveBeenCalled()
-      expect(p.onWin).not.toHaveBeenCalled()
-    })
-    it('꺼져 있으면 닿는다', async () => {
-      await mount(false)
-      const p = probe()
-      fire(document.body)
-      p.off()
-      expect(p.onDoc).toHaveBeenCalled()
-      expect(p.onWin).toHaveBeenCalled()
-    })
-  })
-
-  it('Esc keydown 도 밖으로 새지 않고 기본 동작이 막힌다', async () => {
-    await mount()
-    const onDoc = vi.fn()
-    document.addEventListener('keydown', onDoc)
-    const notPrevented = fireEvent.keyDown(document.body, { key: 'Escape' })
-    document.removeEventListener('keydown', onDoc)
-    expect(onDoc).not.toHaveBeenCalled()
-    expect(notPrevented).toBe(false)
-  })
-
-  it.each(['a', 'Tab', 'Enter', ' '])('키 %j 의 기본 동작이 막힌다', async k => {
-    await mount()
-    expect(fireEvent.keyDown(document.body, { key: k })).toBe(false)
-  })
-
-  it('클릭·휠·우클릭 기본 동작도 막힌다', async () => {
-    await mount()
-    expect(fireEvent.click(document.body)).toBe(false)
-    expect(fireEvent.wheel(document.body)).toBe(false)
-    expect(fireEvent.contextMenu(document.body)).toBe(false)
-  })
-
-  it('덮개 밖 요소에 초점이 가면 덮개로 되돌린다', async () => {
-    await mount()
-    const b = document.createElement('button')
-    b.dataset.t = '1'
-    document.body.appendChild(b)
-    b.focus()
-    expect(document.activeElement).toBe(screen.getByRole('application'))
-  })
-
-  it('켜진 동안 body 의 다른 자식은 inert · 꺼지면 원래대로 (원래 inert 였던 것은 그대로)', async () => {
-    const a = document.createElement('div')
-    const pre = document.createElement('div')
-    a.dataset.t = pre.dataset.t = '1'
-    pre.setAttribute('inert', '')
-    document.body.append(a, pre)
-    const { store } = await mount()
-    const app = screen.getByRole('application')
-    expect(a).toHaveAttribute('inert')
-    expect(app).not.toHaveAttribute('inert')
-    const late = document.createElement('div')
-    late.dataset.t = '1'
-    document.body.appendChild(late)
-    await act(async () => { await Promise.resolve() })
-    expect(late).toHaveAttribute('inert')
-    await act(async () => { await store.setPower(false) })
-    expect(a).not.toHaveAttribute('inert')
-    expect(late).not.toHaveAttribute('inert')
-    expect(pre).toHaveAttribute('inert')
-  })
-
   it('나가기가 실패하면 2000ms 동안 안내가 뜬다', async () => {
     const { store } = await mount()
     vi.spyOn(store, 'setPower').mockRejectedValue(new Error('x'))
-    key('keydown', 'Escape')
-    await wait(1500)
-    expect(screen.getByText('나가지 못했어요 — 다시 Esc 를 길게 눌러 주세요')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '나가기' }))
+    await wait(0)
+    expect(screen.getByText('나가지 못했어요 — 다시 눌러 주세요')).toBeInTheDocument()
     await wait(2000)
-    expect(screen.queryByText('나가지 못했어요 — 다시 Esc 를 길게 눌러 주세요')).toBeNull()
+    expect(screen.queryByText('나가지 못했어요 — 다시 눌러 주세요')).toBeNull()
   })
 
   it('Esc 를 누르는 동안 아래 화면은 다시 그려지지 않는다', async () => {
@@ -251,5 +249,26 @@ describe('PowerLayer', () => {
     mm(false)
     const again = await mount()
     expect(again.view.baseElement.querySelector('.pw-stage')).not.toHaveAttribute('data-calm')
+  })
+})
+
+describe('덮개 층', () => {
+  const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '')
+  const base = strip(fs.readFileSync(path.resolve('src/renderer/styles/base.css'), 'utf8'))
+  const power = strip(fs.readFileSync(path.resolve('src/renderer/power/power.css'), 'utf8'))
+  /** 선택자 규칙 블록의 z-index — 여러 블록이면 처음 것 */
+  const zOf = (css: string, sel: string): number => {
+    const re = new RegExp(`(?:^|\\n|\\})\\s*${sel.replace(/\./g, '\\.')}\\s*\\{([^}]*)\\}`, 'g')
+    for (const m of css.matchAll(re)) {
+      const z = /z-index:\s*(\d+)/.exec(m[1])
+      if (z) return Number(z[1])
+    }
+    throw new Error(`${sel} 의 z-index 를 못 찾았다`)
+  }
+
+  it('덮개는 앱 틀(위 띠·상태 띠) 위, 떠 있는 것(대화상자·찾기·그림 보기·투어·토스트·메뉴·명령 목록) 아래', () => {
+    const pw = zOf(power, '.pw')
+    for (const s of ['.top', '.sbar']) expect({ s, above: pw > zOf(base, s) }).toEqual({ s, above: true })
+    for (const s of ['.dlg-bd', '.pal-bd', '.iv-bd', '.tour', '.ut', '.pop', '.slash']) expect({ s, below: pw < zOf(base, s) }).toEqual({ s, below: true })
   })
 })

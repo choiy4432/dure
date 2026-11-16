@@ -38,6 +38,8 @@ export function App() {
   })
   const announced = useAttention()
   const fork = useDure(s => s.forkDraft)
+  /** 파워 모드 덮개가 앱 틀을 다 가린다 — 고른 에이전트의 대화 패널은 덮개 안 하나만 그린다(두 벌이면 입력창 커서·스크롤·기록 불러오기 효과가 두 번 돈다) */
+  const powerOn = useDure(s => s.power.on)
   const [dialog, setDialog] = useState<Dialog>(null)
   /** 설정 창이 열리는 탭 — 톱니는 늘 일반, 위 띠 휴대폰 알약은 휴대폰 */
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
@@ -95,7 +97,7 @@ export function App() {
             {v.agentCount === 0 ? <Empty kind="agent" onAction={() => setDialog('agent')} /> : <RelationMap onAddAgent={() => setDialog('agent')} />}
           </main>
         }
-        right={<AgentPanel />}
+        right={powerOn ? null : <AgentPanel />}
       />
     )
   }
@@ -103,16 +105,20 @@ export function App() {
   return (
     <LucideProvider size={16} strokeWidth={1.75}>
       <div className="app">
-        <TopBar
-          hasRoom={!blocked && v.roomId !== null}
-          settingsDisabled={blocked}
-          onSettings={() => openSettings('general')}
-          onPhone={() => openSettings('phone')}
-          onSearch={canSearch ? toggleSearch : undefined}
-          searchOpen={searching && canSearch}
-        />
-        {body}
-        <StatusBar />
+        {/* 덮개에 가린 틀(위 띠·본문·상태 띠)은 켜진 동안 inert — Tab·화면 낭독기가 안 보이는 단추로 가지 않고, 닫히는 창이 초점을 그 밑으로 돌려주지 않는다.
+            찾기·대화상자·토스트·투어·알림 낭독은 이 밖이라 그대로 덮개 위에서 쓴다. display: contents 라 배치는 그대로 */}
+        <div style={{ display: 'contents' }} inert={powerOn || undefined}>
+          <TopBar
+            hasRoom={!blocked && v.roomId !== null}
+            settingsDisabled={blocked}
+            onSettings={() => openSettings('general')}
+            onPhone={() => openSettings('phone')}
+            onSearch={canSearch ? toggleSearch : undefined}
+            searchOpen={searching && canSearch}
+          />
+          {body}
+          <StatusBar />
+        </div>
         <Announcer {...announced} />
         <PowerLayer />
         <UpdateToast />

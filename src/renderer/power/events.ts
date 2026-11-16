@@ -4,6 +4,9 @@ export type PowerAgent = { id: string; name: string; role: string; color: string
 /** 화면에 보일 에이전트 상태 — 승인·질문 기다림 / 차례 도는 중 / 그 밖(쉬는 중·잠듦·오류) */
 export type AgentState = 'working' | 'awaiting' | 'resting'
 
+/** 상태 글 — 카드와 관계도 노드가 같이 쓴다 */
+export const STATE_TEXT: Record<AgentState, string> = { working: '작업 중', awaiting: '승인 기다림', resting: '쉬는 중' }
+
 /** 고친 줄 하나 — 통합 diff 의 줄 머리 그대로 */
 export type DiffLine = { sign: '+' | '-' | ' '; text: string }
 
@@ -22,6 +25,18 @@ export const oneLine = (s: string, max: number): string => {
   const t = s.replace(/\s*[\r\n]+\s*/g, ' ')
   if (max <= 0) return ''
   return t.length <= max ? t : t.slice(0, max - 1) + '…'
+}
+
+/**
+ * 대상 글이 경로면 끝 두 조각만(`C:\work\shop\src\order\refund.ts` → `…\order\refund.ts`) — 좁은 칸에서 잘려도 파일 이름은 보이게.
+ * 빈칸이 있으면(명령·검색어) 경로가 아니라 그대로
+ */
+export function tailPath(s: string): string {
+  if (/\s/.test(s)) return s
+  const parts = s.split(/[\\/]/)
+  if (parts.length <= 3) return s
+  const sep = s.includes('\\') ? '\\' : '/'
+  return `…${sep}${parts.slice(-2).join(sep)}`
 }
 
 /** 씨앗을 받는 작은 난수기(mulberry32). 0 이상 1 미만 — 장식(별·은하) 자리에만 쓴다. */

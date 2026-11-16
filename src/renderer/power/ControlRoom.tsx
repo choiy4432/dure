@@ -1,19 +1,25 @@
-// 관제실 — 위 띠 · 카드 · 관계도 칸 · 기록 · 숫자 띠. 사건은 usePowerFeed 가 먹이는 진짜 사건뿐, 숫자는 켠 순간 0에서.
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
+// 관제실(시안 A) — 위 띠 · 왼쪽 카드 · 가운데 관계도 · 오른쪽 옆 칸(고른 에이전트의 대화 | 실시간 기록) · 숫자 띠.
+// 사건은 usePowerFeed 가 먹이는 진짜 사건뿐, 숫자는 켠 순간 0에서. 고르기는 앱과 같은 스토어 고르기(selectAgent).
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { BrandMark } from '../shell/BrandMark'
+import { getStore, useDure } from '../state/store'
 import { AgentCards } from './control/AgentCards'
 import { clockText, LiveLog } from './control/LiveLog'
 import { StatsStrip } from './control/StatsStrip'
 import { OrbitMap } from './orbit/OrbitMap'
 import { batched } from './events'
+import { SidePanel } from './SidePanel'
 import { createStats } from './stats'
 import { usePowerFeed } from './usePowerFeed'
 
 const upText = (s: number) => `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 
-export function ControlRoom() {
+export function ControlRoom({ onExit }: { onExit: () => void }) {
   const { view, subscribe } = usePowerFeed()
   const agents = view.agents
+  const selected = useDure(s => s.selectedAgentId)
+  // 카드·노드를 누르면 앱의 카드처럼 그 에이전트를 고르고 입력창에 커서 — 옆 칸이 대화로 바뀐다
+  const pick = useCallback((id: string) => getStore().selectAgent(id, { focusInput: true }), [])
   const stats = useRef<ReturnType<typeof createStats> | undefined>(undefined)
   stats.current ??= createStats()
   // 사건은 모아서 stats 에 쌓고, 스냅샷은 그려질 때 한 번만 뜬다(같은 때 온 사건은 한 번에 그려진다)
@@ -21,7 +27,6 @@ export function ControlRoom() {
   const snap = useMemo(() => stats.current!.snapshot(), [version]) // eslint-disable-line react-hooks/exhaustive-deps
   const mountedAt = useRef(Date.now())
   const [wallMs, setWallMs] = useState(() => Date.now())
-  const flowRef = useRef<HTMLElement>(null)
 
   useEffect(
     () =>
@@ -58,25 +63,26 @@ export function ControlRoom() {
         </div>
         <div className="pw-clock">
           가동 <b>{upText(elapsed)}</b>
+          <button type="button" className="pw-out" title="Esc 를 길게 눌러도 나가요" onClick={onExit}>
+            나가기<kbd aria-hidden="true">Esc</kbd>
+          </button>
           <span className="pw-now">{clockText(wallMs)}</span>
         </div>
       </header>
       <div className="pw-main">
-        <AgentCards agents={agents} state={view.state} subscribe={subscribe} />
-        <section data-power-map className="pw-map">
+        <AgentCards agents={agents} state={view.state} subscribe={subscribe} selected={selected} onPick={pick} />
+        <section data-power-map className="pw-map" aria-label="관계도">
           <div className="pw-label">
             관계도 · 실시간 넘김
-            <span>
-              켠 뒤 <b>{snap.handoffs}</b>건 · 지금 오가는 데이터 <b ref={flowRef}>0</b>개
-            </span>
+            {agents.length > 0 && <span>노드를 누르면 그 에이전트와 대화</span>}
           </div>
           {agents.length ? (
-            <OrbitMap agents={agents} state={view.state} subagents={view.subagents} subscribe={subscribe} flowRef={flowRef} />
+            <OrbitMap agents={agents} state={view.state} subagents={view.subagents} subscribe={subscribe} selected={selected} onPick={pick} />
           ) : (
             <p className="pw-empty">이 방엔 에이전트가 없어요</p>
           )}
         </section>
-        <LiveLog agents={agents} rate={snap.toolsPerMin} subscribe={subscribe} />
+        <SidePanel log={<LiveLog agents={agents} rate={snap.toolsPerMin} subscribe={subscribe} />} />
       </div>
       <StatsStrip s={snap} subagents={subagents} />
     </div>

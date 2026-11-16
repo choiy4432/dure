@@ -1,7 +1,7 @@
 // 관계도 장면 상태 — 카메라·궤도·점·효과 목록을 만들고, 노드·위성·혜성의 자리를 구한다(시안 orbit3 의 init · place · cometPath).
 // DOM·캔버스 없음. 한 프레임 진행은 step.ts, 그리기는 scene.ts(잔상 층) · overlay.ts(또렷한 층)가 이 상태를 읽기만 한다.
 // 시간은 모두 장면 시계 w.t(초).
-import type { ScreenEvent } from '../events'
+import type { AgentState, ScreenEvent } from '../events'
 import { CAM_D, CENTER_DROP, TILT, near, projectTo, type Cam, type Proj } from './camera'
 import { CORE_Y, FLOOR_Y, layoutOrbits, orbitRA, worldTo, type Orbit } from './layout'
 import { FALLBACK_AGENT, FALLBACK_FONTS } from './palette'
@@ -45,6 +45,8 @@ export type World = {
   fonts: { mono: string; ui: string }
   core: Who
   who: Map<string, Who>
+  /** 에이전트의 진짜 상태(스토어) — 계기판의 일하는 중·기다림 */
+  states: Record<string, AgentState>
   orbits: Orbit[]
   orbitById: Map<string, Orbit>
   wpos: Map<string, Vec3>
@@ -63,10 +65,13 @@ export type World = {
   leaves: Leaf[]
   queue: { at: number; ev: ScreenEvent }[]
   wave: number[]
+  /** 활동(파형) — 진짜 도구·넘김에 오르고 쉬면 바닥(ACT_FLOOR)으로 */
   act: number
+  /** 핵 밝기 — 진짜 도구 사용마다 오르고 쉬면 낮은 바탕(ENERGY.rest)으로 */
   energy: number
   flare: number
-  sync: { t0: number; next: number }
+  /** 마지막 동기화 시작 시각 — 진짜 차례 끝(done)에서만, SYNC.gap 초에 한 번까지 */
+  sync: { t0: number }
   syncing: boolean
   toast: { t0: number; text: string } | null
   boost: Boost
@@ -76,8 +81,12 @@ export type World = {
 
 /** 궤도 한 바퀴 70초 */
 const OMEGA = (Math.PI * 2) / 70
-/** 전체 동기화 — sec 동안. 시간으로 터지지 않는다(sync.next 가 Infinity) — 진짜 차례 끝에 터뜨리는 일은 다음 판(Task 2)이 잇는다 */
-export const SYNC = { sec: 2.0 }
+/** 전체 동기화 — sec 동안. 시간으로는 터지지 않고 진짜 차례 끝(done)에서만, 연달아 오면 gap 초에 한 번까지 */
+export const SYNC = { sec: 2.0, gap: 6 }
+/** 핵 밝기 — 쉴 때 바탕 · 도구 한 번에 오르는 양 · 바탕으로 돌아가는 빠르기(초당) */
+export const ENERGY = { rest: 0.15, tool: 0.08, decay: 0.25 } as const
+/** 활동 파형의 바닥 — 일이 없으면 거의 평평하다 */
+export const ACT_FLOOR = 0.05
 const MAX_SATS = 8
 /** 점 개수 상한(시안 값) */
 export const COUNTS = { galaxy: 1300, disc: 240, stars: 90 } as const
@@ -112,6 +121,7 @@ export function createWorld(o: {
   calm: boolean
   rand?: () => number
   satellites?: SubLabel[]
+  states?: Record<string, AgentState>
   fonts?: { mono: string; ui: string }
 }): World {
   const rand = o.rand ?? Math.random
@@ -134,6 +144,7 @@ export function createWorld(o: {
     fonts: o.fonts ?? FALLBACK_FONTS,
     core: who.get(core) ?? { id: core, name: '', color: FALLBACK_AGENT },
     who,
+    states: o.states ?? {},
     orbits,
     orbitById: new Map(orbits.map(x => [x.id, x])),
     wpos: new Map(o.agents.map(a => [a.id, [0, CORE_Y, 0] as Vec3])),
@@ -151,11 +162,11 @@ export function createWorld(o: {
     bubbles: [],
     leaves: [],
     queue: [],
-    wave: new Array<number>(WAVE_N).fill(0.1),
-    act: 0.3,
-    energy: 0.62,
+    wave: new Array<number>(WAVE_N).fill(ACT_FLOOR),
+    act: ACT_FLOOR,
+    energy: ENERGY.rest,
     flare: -1e9,
-    sync: { t0: -1e9, next: Infinity },
+    sync: { t0: -1e9 },
     syncing: false,
     toast: null,
     boost: NO_BOOST,
@@ -226,12 +237,29 @@ function makeDisk(rand: () => number): World['disk'] {
   return d
 }
 
+/** 에이전트 상태 다시 — 스토어의 진짜 상태(바뀔 때마다) */
+export function setStates(w: World, states: Record<string, AgentState>): void {
+  w.states = states
+}
+
+/** 계기판 값 — 일하는 중 · 기다리는 에이전트 수(이 방 에이전트만) */
+export function stateCounts(w: World): { working: number; waiting: number; total: number } {
+  let working = 0
+  let waiting = 0
+  for (const id of w.who.keys()) {
+    const s = w.states[id]
+    if (s === 'working') working++
+    else if (s === 'awaiting') waiting++
+  }
+  return { working, waiting, total: w.who.size }
+}
+
 /** 궤도 시계가 지금까지 돈 각 */
 export const orbitTurn = (w: World): number => w.tt * OMEGA
 export const colorOf = (w: World, id: string): string => w.who.get(id)?.color ?? w.core.color
-/** 지금 오가는 데이터 — 날아가는 진짜 넘김(글을 실은 혜성)과 진짜 도구 사용의 조각. 넘김을 따라가는 작은 혜성(장식)은 세지 않는다 */
-export function flowCount(w: World): number {
-  let n = w.shards.length
+/** 지금 오가는 넘김 — 날아가는 진짜 넘김(글을 실은 혜성)만. 넘김을 따라가는 작은 혜성·동기화 폭죽(장식)과 도구 조각은 세지 않는다 */
+export function inFlight(w: World): number {
+  let n = 0
   for (const c of w.comets) if (c.text !== null) n++
   return n
 }

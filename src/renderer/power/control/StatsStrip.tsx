@@ -39,7 +39,8 @@ export function StatsStrip({ s, subagents }: { s: StatsSnapshot; subagents: numb
         <span className="k">초당 도구 호출 · 지난 1분</span>
         <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" role="img" aria-label="초당 도구 호출 막대 그래프">
           {s.perSec.map((v, i) => {
-            const h = Math.max(4, (v / max) * (H - 8))
+            // 0 인 초는 바닥 선만(2) — 일이 없는데 막대가 선 것처럼 보이지 않게
+            const h = v > 0 ? Math.max(6, (v / max) * (H - 8)) : 2
             return <rect key={i} x={i * bw + 2} y={H - h} width={bw - 5} height={h} rx={3} data-last={i === s.perSec.length - 1 || undefined} />
           })}
         </svg>

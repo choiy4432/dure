@@ -1,14 +1,14 @@
 // 관계도 한 프레임 — 들어온 진짜 사건 꺼내기 · 전체 동기화 · 카메라 · 혜성·조각·불꽃 진행(시안 orbit3.frame 앞부분 · comet · handoff · tool · hot).
-// 혜성은 진짜 넘김에서만, 조각·잎은 진짜 도구 사용에서만 나온다(떠도는 혜성·시간으로 터지는 동기화는 없다).
+// 혜성은 진짜 넘김에서만, 조각·잎·핵 밝기는 진짜 도구 사용에서만, 동기화는 진짜 차례 끝(done)에서만 나온다(떠도는 혜성·시간으로 터지는 동기화는 없다).
 // 프레임 사이를 MAX_DT 로 잘라 장면 시계에 쌓으니 창이 숨었다 돌아와도 튀지 않는다. DOM·캔버스 없음.
 import type { ScreenEvent } from '../events'
 import { SHAKE_PX, TILT, ZOOM, type Proj } from './camera'
-import { LIFE, NO_BOOST, SYNC, baseName, colorOf, cometPoint, place, trunc, type Boost, type Comet, type World } from './world'
+import { ACT_FLOOR, ENERGY, LIFE, NO_BOOST, SYNC, baseName, colorOf, cometPoint, place, trunc, type Boost, type Comet, type World } from './world'
 
 const YAW_SPEED = 0.05
 const MAX_DT = 0.05
-/** 동기화 알림 — 무엇이 끝났는지는 다음 판(Task 2)이 진짜 차례 끝으로 채운다 */
-const SYNC_TOAST = '전체 동기화'
+/** 동기화 알림 — 차례를 끝낸 에이전트 이름 */
+const doneText = (name: string) => `${name} 끝남`
 const MAX_LEAVES = 16
 const MAX_COMETS = 80
 const MAX_QUEUE = 200
@@ -28,15 +28,15 @@ export function syncBoost(calm: boolean, k: number): Boost {
   return { b, orbit: b * 5, yaw: b * 1.7, tilt: b * TILT.syncDip, zoom: b * ZOOM.sync, shake: b * SHAKE_PX, galaxy: b * 8, fade: b * 0.09, bloom: b * 0.3, streak: b > 0.05 }
 }
 
-/** 화면 사건을 받는다 — 도구·넘김만, 모르는 에이전트는 버리고 조금씩 흩어서 꺼낸다 */
+/** 화면 사건을 받는다 — 도구·넘김·차례 끝만, 모르는 에이전트는 버린다. 도구·넘김은 조금씩 흩어서, 차례 끝은 다음 프레임에 꺼낸다 */
 export function intake(w: World, ev: ScreenEvent): void {
-  if (ev.kind === 'tool') {
+  if (ev.kind === 'tool' || ev.kind === 'done') {
     if (!w.who.has(ev.agentId)) return
   } else if (ev.kind === 'handoff') {
     if (!w.who.has(ev.from) || !w.who.has(ev.to) || ev.from === ev.to) return
   } else return
   if (w.queue.length >= MAX_QUEUE) w.queue.shift()
-  w.queue.push({ at: w.t + w.rand() * SPREAD, ev })
+  w.queue.push({ at: ev.kind === 'done' ? w.t : w.t + w.rand() * SPREAD, ev })
 }
 
 function comet(w: World, from: string, to: string, o: { small?: boolean; delay?: number; T?: number; text?: string } = {}): void {
@@ -49,6 +49,7 @@ function applyTool(w: World, id: string, tool: string, target: string): void {
   w.leaves.push({ id, ang: w.rand() * Math.PI * 2, t0: w.t, label: trunc(`${tool} ${baseName(target)}`.trim(), LEAF_MAX), color })
   if (w.leaves.length > MAX_LEAVES) w.leaves.shift()
   w.act = Math.min(1, w.act + 0.14)
+  w.energy = Math.min(1, w.energy + ENERGY.tool) // 핵 밝기는 최근 진짜 도구 사용 빈도를 따른다
   // 핵이 쓴 도구는 잎만 — 조각은 궤도에서 핵으로 빨려 든다
   if (id !== w.core.id) w.shards.push({ id, t0: w.t, T: 1.4 + w.rand() * 0.6, color })
 }
@@ -78,11 +79,16 @@ function arrive(w: World, c: Comet): void {
   }
 }
 
-function beginSync(w: World): void {
+/** 에이전트가 진짜로 한 차례를 끝냈다 — 동기화 연출(지난 동기화에서 SYNC.gap 초가 안 지났으면 아무것도 안 한다) */
+function finished(w: World, id: string): void {
+  if (w.t - w.sync.t0 < SYNC.gap) return
+  beginSync(w, doneText(w.who.get(id)?.name ?? ''))
+}
+
+function beginSync(w: World, text: string): void {
   const R = (a: number, b: number) => a + w.rand() * (b - a)
   w.sync.t0 = w.t
-  w.sync.next = Infinity // 한 번뿐 — 시간으로 다시 터지지 않는다
-  w.toast = { t0: w.t, text: SYNC_TOAST }
+  w.toast = { t0: w.t, text }
   w.flare = w.t
   // 차분 모드는 알림과 은은한 빛만 — 출력 폭발·카드 번쩍·폭죽 혜성 없이
   if (w.calm) return
@@ -112,10 +118,10 @@ export function stepWorld(w: World, now: number): void {
     if (at > t) return true
     if (ev.kind === 'tool') applyTool(w, ev.agentId, ev.tool, ev.target)
     else if (ev.kind === 'handoff') applyHandoff(w, ev.from, ev.to, ev.text)
+    else if (ev.kind === 'done') finished(w, ev.agentId)
     return false
   })
 
-  if (t >= w.sync.next) beginSync(w)
   const k = (t - w.sync.t0) / SYNC.sec
   w.syncing = k >= 0 && k < 1
   const B = (w.boost = syncBoost(w.calm, k))
@@ -128,8 +134,8 @@ export function stepWorld(w: World, now: number): void {
   w.cam.cx = w.cx0 + Math.sin(t * 61) * B.shake
   w.cam.cy = w.cy0 + Math.cos(t * 53) * B.shake
   w.galSpin += dt * (1 + B.galaxy)
-  w.energy += (0.58 - w.energy) * dt * 0.25
-  w.act = Math.max(0.12, w.act * Math.pow(0.35, dt))
+  w.energy += (ENERGY.rest - w.energy) * Math.min(1, dt * ENERGY.decay)
+  w.act = Math.max(ACT_FLOOR, w.act * Math.pow(0.35, dt))
   if (dt > 0) {
     w.wave.push(w.act * (0.35 + 0.65 * w.rand()))
     w.wave.shift()
@@ -154,11 +160,7 @@ export function stepWorld(w: World, now: number): void {
   })
   for (const c of arrived) arrive(w, c)
 
-  prune(w.shards, s => {
-    if (t - s.t0 < s.T) return true
-    w.energy = Math.min(1, w.energy + 0.05) // 조각이 핵에 닿으면 출력이 오른다
-    return false
-  })
+  prune(w.shards, s => t - s.t0 < s.T)
   prune(w.sparks, s => {
     if (t - s.t0 >= LIFE.spark) return false
     s.x += s.vx * dt

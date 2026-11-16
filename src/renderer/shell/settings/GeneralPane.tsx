@@ -79,7 +79,7 @@ export function GeneralPane() {
       <Section title="파워 모드">
         <SwitchRow
           name="파워 모드"
-          desc="켜 둔 동안엔 화면이 꺼지거나 잠기지 않아요. Esc 를 길게 누르면 나가요."
+          desc="켜 둔 동안엔 화면이 꺼지지 않아요. 위 띠의 [나가기]나 Esc 를 길게 눌러 나가요."
           checked={powerOn}
           busy={apply.busy('power')}
           error={apply.error('power')}
