@@ -1116,18 +1116,23 @@ describe('store 끝남 · 새 결과', () => {
     expect(s.getState().fresh).toEqual({ b: 8 })
   })
 
-  it('파워 모드가 켜져 있으면 초점이 있어도 고른 에이전트의 result 는 fresh — 끄면 초점을 되찾은 것처럼 지운다', async () => {
+  it('파워 모드가 켜져 있어도 초점 규칙은 평소와 같다 — 초점 있는 고른 에이전트의 result 는 fresh 아님, 끄기는 fresh 를 건드리지 않는다', async () => {
     const { api, emit } = fake()
     ;(api as any).setPowerMode = vi.fn(async () => {})
-    const s = createStore(api, { hasFocus: () => true })
+    let focused = true
+    const s = createStore(api, { hasFocus: () => focused })
     await s.init()
     s.selectAgent('a')
     await s.setPower(true)
     send(emit, 'a', result(7))
     send(emit, 'b', result(8))
-    expect(s.getState().fresh).toEqual({ a: 7, b: 8 })
-    await s.setPower(false)
     expect(s.getState().fresh).toEqual({ b: 8 })
+    focused = false
+    send(emit, 'a', result(9))
+    expect(s.getState().fresh).toEqual({ a: 9, b: 8 })
+    focused = true
+    await s.setPower(false)
+    expect(s.getState().fresh).toEqual({ a: 9, b: 8 })
   })
 
   it('고른 에이전트 + 초점 있음 → fresh 없음', async () => {
@@ -1593,20 +1598,20 @@ describe('파워 모드', () => {
     return { ...f, s }
   }
 
-  it('setPower_true_는_방을_굳히고_api_를_부른다', async () => {
+  it('setPower_true_는_방과_그_방_에이전트를_굳히고_api_를_부른다', async () => {
     const { api, s } = await power()
     s.selectRoom('r2')
     await s.setPower(true)
-    expect(s.getState().power).toEqual({ on: true, roomId: 'r2' })
+    expect(s.getState().power).toEqual({ on: true, roomId: 'r2', agentIds: ['c'] })
     expect((api as any).setPowerMode).toHaveBeenCalledWith(true)
     await s.setPower(false)
-    expect(s.getState().power).toEqual({ on: false, roomId: null })
+    expect(s.getState().power).toEqual({ on: false, roomId: null, agentIds: [] })
   })
 
   it('api_가_던지면_on_false_로_돌아간다', async () => {
     const { s } = await power({}, async () => { throw new Error('안 됨') })
     await expect(s.setPower(true)).rejects.toThrow('안 됨')
-    expect(s.getState().power).toEqual({ on: false, roomId: null })
+    expect(s.getState().power).toEqual({ on: false, roomId: null, agentIds: [] })
   })
 
   it('tool_use_가_듣는_이에게_간다(고르지 않은 에이전트 것도)', async () => {
@@ -1617,7 +1622,7 @@ describe('파워 모드', () => {
     expect(s.getState().selectedAgentId).toBeNull()
     emit('history', { agentId: 'b', item: tool('Read', { file_path: 'src/a.ts' }) })
     emit('history', { agentId: 'b', item: tool('Bash', { count: 3 }) })
-    expect(got).toMatchObject([{ kind: 'tool', agentId: 'b', tool: 'Read', target: 'src/a.ts', real: true }, { tool: 'Bash', target: '' }])
+    expect(got).toMatchObject([{ kind: 'tool', agentId: 'b', tool: 'Read', target: 'src/a.ts' }, { tool: 'Bash', target: '' }])
   })
 
   it('다른_방_에이전트는_안_간다', async () => {
@@ -1657,7 +1662,7 @@ describe('파워 모드', () => {
     emit('message', relay('n1', 'pending', { text: '넘겨요', updatedAt: 2 }))
     emit('message', relay('n1', 'delivered', { updatedAt: 3 }))
     emit('message', relay('n1', 'read', { updatedAt: 4 }))
-    expect(got).toMatchObject([{ kind: 'handoff', from: 'a', to: 'b', text: '넘겨요', real: true }])
+    expect(got).toMatchObject([{ kind: 'handoff', from: 'a', to: 'b', text: '넘겨요' }])
   })
 
   it('듣는_이가_있어도_history_상태는_파워_없을_때와_같다', async () => {
@@ -1697,7 +1702,7 @@ describe('파워 모드', () => {
     s.selectRoom('r2')
     expect(s.getState().power.roomId).toBe('r1')
     await s.setPower(true)
-    expect(s.getState().power.roomId).toBe('r1')
+    expect(s.getState().power).toEqual({ on: true, roomId: 'r1', agentIds: ['a', 'b'] })
     expect((api as any).setPowerMode).toHaveBeenCalledTimes(1)
     emit('message', relay('n1', 'read', { updatedAt: 9 }))
     expect(got).toHaveLength(1)

@@ -1,7 +1,7 @@
 // 터미널 창 하나 — 제목줄은 React, 본문은 DOM 에 직접 줄을 붙인다(수백 줄을 React 상태로 다시 그리지 않는다).
 // 글자는 모두 textContent 로만 넣는다.
 import type { ReactNode, Ref } from 'react'
-import { highlight, lineNo, type Line, type Part } from './panes'
+import type { Line, Part } from './panes'
 
 /** 창 하나가 쥐는 줄 수 — 넘치면 위에서부터 지운다 */
 export const MAX_LINES = 60
@@ -65,15 +65,4 @@ export function appendLines(body: HTMLElement, lines: Line[], max = MAX_LINES): 
 /** 본문 전체를 새 줄로 바꾼다(위 고정 블록·시스템 창) */
 export function setLines(body: HTMLElement, lines: Line[]): void {
   body.replaceChildren(...lines.map(lineEl))
-}
-
-/** 치는 중인 줄 — 쳐진 만큼 + 블록 커서. 다 치면 낱말 색을 입힌다 */
-export function typeInto(el: HTMLElement, n: number, text: string, finished: boolean): void {
-  const parts: Part[] = finished ? highlight(text) : [{ t: text }]
-  el.replaceChildren(span(lineNo(n)), ...parts.map(span))
-  if (!finished) {
-    const cur = document.createElement('span')
-    cur.className = 'pw-t-cur'
-    el.appendChild(cur)
-  }
 }

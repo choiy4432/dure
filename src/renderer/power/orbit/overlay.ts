@@ -1,13 +1,10 @@
-// 또렷한 층 — 매 프레임 지우고 다시 그린다(시안 orbit3.frame 끝부분 · hud 와 공통 drawLeaves · drawComets · drawRipples · drawFloats · drawBubbles).
-// 번짐(잔상 층을 흐리게 한 번 더 얹기) · 눈금 숫자 · 위성 이름 · 잎 · 혜성 · 물결 · 토큰 · 말풍선 · 계기판 · 동기화 알림.
+// 또렷한 층 — 매 프레임 지우고 다시 그린다(시안 orbit3.frame 끝부분 · hud 와 공통 drawLeaves · drawComets · drawRipples · drawBubbles).
+// 번짐(잔상 층을 흐리게 한 번 더 얹기) · 눈금 숫자 · 위성 이름 · 잎 · 혜성 · 물결 · 말풍선 · 계기판 · 동기화 알림.
 // 상태는 읽기만 한다.
 import { near, projectTo, type Proj } from './camera'
 import {
   BUBBLE_BG,
   BUBBLE_TEXT,
-  HUD_BAR_HOT,
-  HUD_BAR_OFF,
-  HUD_BAR_ON,
   HUD_FRAME,
   HUD_KEY,
   HUD_VALUE,
@@ -20,7 +17,7 @@ import {
   rgbOf,
   shade,
 } from './palette'
-import { LIFE, colorOf, orbitTurn, satPoint, trunc, type World } from './world'
+import { LIFE, colorOf, flowCount, orbitTurn, satPoint, trunc, type World } from './world'
 
 /**
  * 번짐 — 흐림 반지름 · 알파(동기화 중엔 boost.bloom 만큼 더).
@@ -30,6 +27,8 @@ import { LIFE, colorOf, orbitTurn, satPoint, trunc, type World } from './world'
 export const BLOOM = { blur: 7, alpha: 0.55, atRes: 2 } as const
 /** 오른쪽 위 궤도 값은 이만큼까지(넘치면 '외 N') — 더 길면 잎 이름표와 겹친다 */
 const HUD_ORBIT_ROWS = 6
+/** 위성 이름표 글자 수 상한 — 진짜 설명은 길 수 있다 */
+const SAT_LABEL_MAX = 16
 const TAU = Math.PI * 2
 const P: Proj = { x: 0, y: 0, f: 0, d: 0 }
 
@@ -48,7 +47,6 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, w: World, trail: Canv
   leaves(ctx, w)
   comets(ctx, w)
   ripples(ctx, w)
-  floats(ctx, w)
   // 동기화 중엔 말풍선을 숨긴다 — 뒤쪽 카드와 겹쳐 읽히지 않는다
   if (!w.syncing) bubbles(ctx, w)
   hud(ctx, w)
@@ -82,7 +80,7 @@ function satLabels(ctx: CanvasRenderingContext2D, w: World): void {
   for (const s of w.sats) {
     satPoint(w, s, P)
     ctx.fillStyle = shade(RGB.label, 0.35 + near(P, w.RA) * 0.6)
-    ctx.fillText(s.name, P.x + 8, P.y + 4)
+    ctx.fillText(trunc(s.name, SAT_LABEL_MAX), P.x + 8, P.y + 4)
   }
 }
 
@@ -170,19 +168,6 @@ function ripples(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.restore()
 }
 
-/** '+N.Nk 토큰' — 받는 노드 위로 떠오르며 사라진다 */
-function floats(ctx: CanvasRenderingContext2D, w: World): void {
-  ctx.font = `600 12px ${w.fonts.mono}`
-  ctx.textAlign = 'center'
-  for (const f of w.floats) {
-    const k = (w.t - f.t0) / LIFE.float
-    const p = w.pos.get(f.id)!
-    ctx.fillStyle = hexA(f.color, 1 - k)
-    ctx.fillText(f.text, p.x + f.dx, p.y - 40 - k * 36)
-  }
-  ctx.textAlign = 'start'
-}
-
 /** 말풍선 '보낸 이 → 글' — 받는 노드 오른쪽 위(칸을 넘으면 왼쪽) */
 function bubbles(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.font = `12.5px ${w.fonts.ui}`
@@ -214,7 +199,7 @@ function bubbles(ctx: CanvasRenderingContext2D, w: World): void {
   }
 }
 
-/** 계기판 — 귀퉁이 틀 · 왼쪽 위 값 · 오른쪽 위 궤도 값 · 아래 활동 파형 · 훑는 선 */
+/** 계기판 — 귀퉁이 틀 · 왼쪽 위 값(진짜 셈과 화면 상태만) · 오른쪽 위 궤도 값 · 아래 활동 파형 · 훑는 선 */
 function hud(ctx: CanvasRenderingContext2D, w: World): void {
   const { W, H, t } = w
   const b = 16
@@ -236,9 +221,7 @@ function hud(ctx: CanvasRenderingContext2D, w: World): void {
 
   ctx.font = `11px ${w.fonts.mono}`
   const rows: [string, string][] = [
-    ['궤도 동기화', (99 + Math.sin(t * 0.7) * 0.6).toFixed(1) + '%'],
-    ['핵 출력', Math.round(w.energy * 100) + '%'],
-    ['오가는 데이터', String(w.comets.length + w.shards.length)],
+    ['오가는 데이터', String(flowCount(w))],
     ['카메라', `${deg(w.cam.e)}° · ${deg(w.cam.yaw)}°`],
   ]
   rows.forEach(([k, v], i) => {
@@ -247,10 +230,6 @@ function hud(ctx: CanvasRenderingContext2D, w: World): void {
     ctx.fillStyle = HUD_VALUE
     ctx.fillText(v, 108, 24 + i * 16)
   })
-  for (let i = 0; i < 20; i++) {
-    ctx.fillStyle = i / 20 < w.energy ? (i >= 17 ? HUD_BAR_HOT : HUD_BAR_ON) : HUD_BAR_OFF
-    ctx.fillRect(16 + i * 7, 24 + 4 * 16 - 7, 5, 8)
-  }
 
   ctx.textAlign = 'right'
   const turn = orbitTurn(w)

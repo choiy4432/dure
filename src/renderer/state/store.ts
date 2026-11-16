@@ -6,7 +6,7 @@ import type { PhoneState } from '../../shared/phoneTypes'
 import { displayStatus, effectiveSetup, type EdgeMode, type Phase } from './selectors'
 import { markFresh } from '../map/freshNodes'
 import { onPhone } from '../lib/phone'
-import { handoffEvent, toolEvents } from '../power/tap'
+import { handoffEvent, historyEvents } from '../power/tap'
 import type { ScreenEvent } from '../power/events'
 import { nextStep, tourAt, type TourState } from '../tour/tourSteps'
 
@@ -101,8 +101,8 @@ export type UiState = Snapshot & {
   roomMenuRequest: number
   /** 지난 대화에서 새 에이전트로 이어 가는 창의 초안 — 없으면 창이 닫혀 있다 */
   forkDraft: ForkDraft | null
-  /** 파워 모드 — 켜짐과 켤 때 굳힌 방(꺼지면 null) */
-  power: { on: boolean; roomId: RoomId | null }
+  /** 파워 모드 — 켜짐과 켤 때 굳힌 방·그 방의 에이전트(꺼지면 null · 빈 목록). 켠 뒤 들어온 에이전트는 목록에 없다 */
+  power: { on: boolean; roomId: RoomId | null; agentIds: AgentId[] }
   /** 안내 투어 — 없으면 null. 처음 켠 새 사용자에겐 저절로 '환영'(tourSteps · TourLayer 가 넘긴다) */
   tour: TourState
 }
@@ -175,7 +175,7 @@ export interface Store {
   setEdgeMode(mode: EdgeMode): void
   /** 파워 모드를 켜고 끈다 — 켤 때 지금 방을 굳힌다. main 이 거절하면 되돌리고 던진다 */
   setPower(on: boolean): Promise<void>
-  /** 굳힌 방 에이전트의 진짜 도구 사용·메시지 넘김을 듣는다(스토어 상태는 안 바뀐다). 끄는 함수를 돌려준다 */
+  /** 켤 때 굳힌 에이전트의 진짜 사건(도구·결과·답 글·넘김·차례 끝)을 듣는다(스토어 상태는 안 바뀐다). 끄는 함수를 돌려준다 */
   onPowerEvent(fn: (ev: ScreenEvent) => void): () => void
   /**
    * 그 에이전트의 방으로 바꾸고(다르면) 고르고, 관계도에 그 카드를 보이게 해 달라고 한다(mapFocus) — 기록도 불러온다. 모르는 id 면 아무것도 안 한다.
@@ -233,6 +233,9 @@ const withoutThinking = without<UiState['thinking'][AgentId]>
 function withPhase(phase: UiState['phase'], id: AgentId, to: Phase): UiState['phase'] {
   return phase[id] === to ? phase : { ...phase, [id]: to }
 }
+
+/** 파워 모드가 꺼진 모양 */
+const POWER_OFF: UiState['power'] = { on: false, roomId: null, agentIds: [] }
 
 /** 벽시계가 흐른 시간보다 이만큼 넘게 어긋나면 PC 시계를 바꾼 것 — 시간 동기화의 작은 보정은 그대로 둔다 */
 const CLOCK_JUMP_MS = 2000
@@ -305,7 +308,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     app: { info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false, phone: null },
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, hasOlder: {}, inputFocus: null, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
-    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, hitFocus: null, readCurrent: null, mapFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null, power: { on: false, roomId: null },
+    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, hitFocus: null, readCurrent: null, mapFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null, power: POWER_OFF,
     tour: null,
   }
   const listeners = new Set<() => void>()
@@ -379,16 +382,19 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
   const powerFailed = (e: unknown) => console.error('두레: 파워 모드 화면 사건을 처리하지 못했어요', e instanceof Error ? e.name : typeof e)
   const tapPower = (ev: Ev, at: number) => {
     try {
-      if (!state.power.on) return
+      const p = state.power
+      if (!p.on) return
+      // 굳힌 방에 지금도 있는, 켤 때부터 있던 에이전트만 — 켠 뒤 들어온 에이전트는 카드·이름이 없다
+      const pinned = (id: string) => p.agentIds.includes(id) && state.agents.some(a => a.id === id && a.roomId === p.roomId)
       let out: ScreenEvent[] = []
       if (ev.name === 'message') {
         const m = ev.payload
         if (powerSeen.has(m.id)) return
         powerSeen.add(m.id)
-        if (powerListeners.size && m.roomId === state.power.roomId) out = [handoffEvent(m, at)]
+        if (powerListeners.size && m.roomId === p.roomId && pinned(m.from) && pinned(m.to)) out = [handoffEvent(m, at)]
       } else if (ev.name === 'history') {
-        const a = state.agents.find(x => x.id === ev.payload.agentId)
-        if (powerListeners.size && a && a.roomId === state.power.roomId) out = toolEvents(a.id, ev.payload.item, at)
+        const id = ev.payload.agentId
+        if (powerListeners.size && pinned(id)) out = historyEvents(id, ev.payload.item, at)
       }
       for (const e of out)
         for (const fn of [...powerListeners]) {
@@ -550,8 +556,8 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
           // 보낸 줄은 Claude 에게 쓴 순간 기록된다(working 알림과 어느 쪽이 먼저 와도 된다) — 요청이 나갈 때까지 준비. 같은 때에 생각도 끝난다
           phase: item.kind === 'user' ? withPhase(state.phase, agentId, 'preparing') : thoughtEnds ? without(state.phase, agentId) : state.phase,
           lastText,
-          // 못 본 결과 — 고르지 않았거나 창에 초점이 없다(파워 모드 덮개가 떠 있어도 못 본다). 새 대화는 앞 결과를 지운다
-          fresh: item.kind === 'result' && (state.selectedAgentId !== agentId || state.power.on || !hasFocus()) ? { ...state.fresh, [agentId]: item.t }
+          // 못 본 결과 — 고르지 않았거나 창에 초점이 없다. 새 대화는 앞 결과를 지운다
+          fresh: item.kind === 'result' && (state.selectedAgentId !== agentId || !hasFocus()) ? { ...state.fresh, [agentId]: item.t }
             : boundary ? without(state.fresh, agentId)
             : state.fresh,
         }
@@ -1109,10 +1115,9 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       const call = ++powerCall
       const before = state.power
       if (on) for (const m of state.messages) powerSeen.add(m.id)
-      // 끄면 고른 에이전트의 대화가 다시 보인다 — 초점을 되찾을 때처럼 '끝남 · 새 결과' 를 지운다(켜 둔 동안엔 못 본 것으로 남겼다)
-      const sel = state.selectedAgentId
-      const fresh = !on && sel && sel in state.fresh && hasFocus() ? without(state.fresh, sel) : state.fresh
-      set({ ...state, power: on ? { on: true, roomId: state.roomId } : { on: false, roomId: null }, fresh })
+      const roomId = state.roomId
+      const power = on ? { on: true, roomId, agentIds: roomId ? state.agents.filter(a => a.roomId === roomId).map(a => a.id) : [] } : POWER_OFF
+      set({ ...state, power })
       try {
         await api.setPowerMode(on)
         if (!on && call === powerCall) powerSeen.clear()

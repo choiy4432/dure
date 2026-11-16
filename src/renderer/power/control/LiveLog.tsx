@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { PowerAgent, ScreenEvent } from '../events'
+import { batched, type PowerAgent, type ScreenEvent } from '../events'
 
 const MAX_ROWS = 26
 
@@ -11,6 +11,7 @@ export const clockText = (ms: number): string => {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
+/** 실시간 기록 — 진짜 도구 사용과 넘김만(새 것이 맨 위) */
 export function LiveLog({ agents, rate, subscribe }: { agents: PowerAgent[]; rate: number; subscribe: (fn: (ev: ScreenEvent) => void) => () => void }) {
   const [rows, setRows] = useState<Row[]>([])
   const seq = useRef(0)
@@ -19,14 +20,19 @@ export function LiveLog({ agents, rate, subscribe }: { agents: PowerAgent[]; rat
 
   useEffect(
     () =>
-      subscribe(ev => {
-        const who = byId.current.get(ev.kind === 'tool' ? ev.agentId : ev.from)
-        const to = ev.kind === 'handoff' ? (byId.current.get(ev.to)?.name ?? ev.to) : ''
-        const row: Row =
-          ev.kind === 'tool'
-            ? { id: ++seq.current, time: clockText(ev.at), name: who?.name ?? ev.agentId, color: who?.color ?? '', tp: ev.tool, tg: ev.target }
-            : { id: ++seq.current, time: clockText(ev.at), name: who?.name ?? ev.from, color: who?.color ?? '', tp: '넘김', tg: `→ ${to} · ${ev.text}` }
-        setRows(prev => [row, ...prev].slice(0, MAX_ROWS))
+      batched(subscribe, evs => {
+        const add: Row[] = []
+        for (const ev of evs) {
+          if (ev.kind === 'tool') {
+            const who = byId.current.get(ev.agentId)
+            add.unshift({ id: ++seq.current, time: clockText(ev.at), name: who?.name ?? ev.agentId, color: who?.color ?? '', tp: ev.tool, tg: ev.target })
+          } else if (ev.kind === 'handoff') {
+            const who = byId.current.get(ev.from)
+            const to = byId.current.get(ev.to)?.name ?? ev.to
+            add.unshift({ id: ++seq.current, time: clockText(ev.at), name: who?.name ?? ev.from, color: who?.color ?? '', tp: '넘김', tg: `→ ${to} · ${ev.text}` })
+          }
+        }
+        if (add.length) setRows(prev => [...add, ...prev].slice(0, MAX_ROWS))
       }),
     [subscribe],
   )

@@ -3,12 +3,12 @@
 // 프레임마다 setState 하지 않는다 — 카드 자리는 style 을 바로 고치고, 카드 글은 사건이 올 때만 바뀐다.
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { reducedMotion } from '../../lib/motion'
-import type { PowerAgent, ScreenEvent } from '../events'
+import { batched, type AgentState, type PowerAgent, type ScreenEvent } from '../events'
 import { drawOverlay } from './overlay'
 import { FALLBACK_FONTS } from './palette'
 import { drawScene } from './scene'
 import { intake, stepWorld } from './step'
-import { createWorld, resizeWorld, satelliteNames, setSatellites, toolLine, type World } from './world'
+import { createWorld, flowCount, resizeWorld, setSatellites, toolLine, type SubLabel, type World } from './world'
 
 /** 파워 모드 판 너비 — 판의 화면 배율을 여기서 잰다 */
 const BOARD_W = 1600
@@ -19,15 +19,15 @@ const CROWD_AT = 8
 
 type Props = {
   agents: PowerAgent[]
-  awaiting: Set<string>
-  /** 진짜 서브에이전트 수 — 0 이면 지어낸 위성 넷 */
-  subagents: number
+  state: Record<string, AgentState>
+  /** 지금 도는 진짜 서브에이전트 — 없으면 위성도 없다 */
+  subagents: SubLabel[]
   subscribe: (fn: (ev: ScreenEvent) => void) => () => void
   /** '지금 오가는 데이터 N개' 숫자 칸 — 바뀔 때만 고친다 */
   flowRef?: RefObject<HTMLElement | null>
 }
 
-export function OrbitMap({ agents, awaiting, subagents, subscribe, flowRef }: Props) {
+export function OrbitMap({ agents, state, subagents, subscribe, flowRef }: Props) {
   const boxRef = useRef<HTMLDivElement>(null)
   const trailRef = useRef<HTMLCanvasElement>(null)
   const crispRef = useRef<HTMLCanvasElement>(null)
@@ -37,19 +37,20 @@ export function OrbitMap({ agents, awaiting, subagents, subscribe, flowRef }: Pr
   subRef.current = subagents
   const [lines, setLines] = useState<Record<string, string>>({})
 
-  // 카드 상태 줄 — 그 에이전트의 최근 도구(한 틱의 사건은 한 번에 그려진다)
+  // 카드 상태 줄 — 그 에이전트의 마지막 진짜 도구(모아서 한 번에 그린다)
   useEffect(
     () =>
-      subscribe(ev => {
-        if (ev.kind !== 'tool') return
-        setLines(prev => ({ ...prev, [ev.agentId]: toolLine(ev.tool, ev.target) }))
+      batched(subscribe, evs => {
+        const next: Record<string, string> = {}
+        for (const ev of evs) if (ev.kind === 'tool') next[ev.agentId] = toolLine(ev.tool, ev.target)
+        if (Object.keys(next).length) setLines(prev => ({ ...prev, ...next }))
       }),
     [subscribe],
   )
 
   useEffect(() => {
     const w = worldRef.current
-    if (w) setSatellites(w, satelliteNames(subagents))
+    if (w) setSatellites(w, subagents)
   }, [subagents])
 
   useEffect(() => {
@@ -68,7 +69,7 @@ export function OrbitMap({ agents, awaiting, subagents, subscribe, flowRef }: Pr
       W: box.offsetWidth,
       H: box.offsetHeight,
       calm,
-      satellites: satelliteNames(subRef.current),
+      satellites: subRef.current,
       fonts: { mono: css.getPropertyValue('--mono').trim() || FALLBACK_FONTS.mono, ui: css.getPropertyValue('--font').trim() || FALLBACK_FONTS.ui },
     })
     worldRef.current = w
@@ -133,8 +134,9 @@ export function OrbitMap({ agents, awaiting, subagents, subscribe, flowRef }: Pr
         w.hits.length = 0
       }
       const fl = flowRef?.current
-      if (fl && w.comets.length !== flow) {
-        flow = w.comets.length
+      const n = flowCount(w)
+      if (fl && n !== flow) {
+        flow = n
         fl.textContent = String(flow)
       }
       raf = requestAnimationFrame(frame)
@@ -163,7 +165,7 @@ export function OrbitMap({ agents, awaiting, subagents, subscribe, flowRef }: Pr
       <canvas ref={crispRef} aria-hidden="true" />
       <div className="pw-mapov" data-crowd={agents.length >= CROWD_AT || undefined}>
         {agents.map((a, i) => {
-          const wait = awaiting.has(a.id)
+          const wait = state[a.id] === 'awaiting'
           return (
             <div
               key={a.id}
@@ -180,7 +182,7 @@ export function OrbitMap({ agents, awaiting, subagents, subscribe, flowRef }: Pr
               <span className="pw-av">{a.name.slice(0, 1)}</span>
               <span className="pw-mn-tx">
                 <b>{a.name}</b>
-                <i>{wait ? '승인 기다림' : (lines[a.id] ?? '준비 중')}</i>
+                <i>{wait ? '승인 기다림' : (lines[a.id] ?? '—')}</i>
               </span>
             </div>
           )

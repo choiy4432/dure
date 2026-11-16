@@ -16,10 +16,11 @@ export type Comet = { from: string; to: string; t0: number; T: number; color: st
 export type Shard = { id: string; t0: number; T: number; color: string }
 export type Spark = { x: number; y: number; z: number; vx: number; vy: number; vz: number; t0: number; color: string }
 export type Ripple = { id: string; t0: number; color: string }
-export type Float = { id: string; t0: number; color: string; text: string; dx: number }
 export type Bubble = { id: string; t0: number; from: string; text: string }
 export type Leaf = { id: string; ang: number; t0: number; label: string; color: string }
 export type Sat = { name: string; parent: string; a: number; w: number }
+/** 지금 도는 진짜 서브에이전트 — 맡긴 에이전트와 이름 */
+export type SubLabel = { agentId: string; label: string }
 export type Moon = { w: number; ph: number; r: number; tilt: number }
 export type Star = { x: number; y: number; s: number; tw: number }
 export type Gyro = { ax: number; az: number; sp: number; r: number }
@@ -58,7 +59,6 @@ export type World = {
   shards: Shard[]
   sparks: Spark[]
   ripples: Ripple[]
-  floats: Float[]
   bubbles: Bubble[]
   leaves: Leaf[]
   queue: { at: number; ev: ScreenEvent }[]
@@ -72,14 +72,12 @@ export type World = {
   boost: Boost
   /** 카드를 번쩍일 에이전트 — OrbitMap 이 프레임마다 비운다 */
   hits: string[]
-  nextAmb: number
 }
 
 /** 궤도 한 바퀴 70초 */
 const OMEGA = (Math.PI * 2) / 70
-/** 전체 동기화 — sec 동안, every 초마다(첫 번은 first 초 뒤) */
-export const SYNC = { sec: 2.0, every: [17, 24] as [number, number], first: [8, 11] as [number, number] }
-const FAKE_SATS = ['탐색 1', '탐색 2', '점검', '조사']
+/** 전체 동기화 — sec 동안. 시간으로 터지지 않는다(sync.next 가 Infinity) — 진짜 차례 끝에 터뜨리는 일은 다음 판(Task 2)이 잇는다 */
+export const SYNC = { sec: 2.0 }
 const MAX_SATS = 8
 /** 점 개수 상한(시안 값) */
 export const COUNTS = { galaxy: 1300, disc: 240, stars: 90 } as const
@@ -89,7 +87,7 @@ const GYROS: Gyro[] = [
   { ax: -0.95, az: 1.25, sp: 1.7, r: 120 },
 ]
 /** 효과 수명(초) */
-export const LIFE = { ripple: 1, float: 1.5, bubble: 2.9, leaf: 2.6, spark: 0.9, toast: 2.6, flare: 1.1 } as const
+export const LIFE = { ripple: 1, bubble: 2.9, leaf: 2.6, spark: 0.9, toast: 2.6, flare: 1.1 } as const
 const WAVE_N = 96
 /** 서브에이전트 위성 궤도(RA 배수) · 높이 */
 export const SAT_R = 0.56
@@ -100,12 +98,6 @@ export const trunc = (s: string, n: number): string => (s.length > n ? s.slice(0
 export const baseName = (p: string): string => p.split(/[\\/]/).pop() ?? p
 /** 카드 상태 줄 '도구 · 파일' */
 export const toolLine = (tool: string, target: string): string => (target ? `${tool} · ${baseName(target)}` : tool)
-
-/** 서브에이전트 수 → 위성 이름. 0 이면 지어낸 넷(시안) */
-export function satelliteNames(n: number): string[] {
-  if (n <= 0) return [...FAKE_SATS]
-  return Array.from({ length: Math.min(n, MAX_SATS) }, (_, i) => `서브 ${i + 1}`)
-}
 
 /** 동기화가 아무것도 얹지 않을 때 */
 export const NO_BOOST: Boost = { b: 0, orbit: 0, yaw: 0, tilt: 0, zoom: 0, shake: 0, galaxy: 0, fade: 0, bloom: 0, streak: false }
@@ -119,7 +111,7 @@ export function createWorld(o: {
   H: number
   calm: boolean
   rand?: () => number
-  satellites?: string[]
+  satellites?: SubLabel[]
   fonts?: { mono: string; ui: string }
 }): World {
   const rand = o.rand ?? Math.random
@@ -156,7 +148,6 @@ export function createWorld(o: {
     shards: [],
     sparks: [],
     ripples: [],
-    floats: [],
     bubbles: [],
     leaves: [],
     queue: [],
@@ -164,18 +155,17 @@ export function createWorld(o: {
     act: 0.3,
     energy: 0.62,
     flare: -1e9,
-    sync: { t0: -1e9, next: R(...SYNC.first) },
+    sync: { t0: -1e9, next: Infinity },
     syncing: false,
     toast: null,
     boost: NO_BOOST,
     hits: [],
-    nextAmb: 0,
   }
   const moon = (r0: number, r1: number): Moon => ({ w: R(1.6, 2.6) * (rand() < 0.5 ? -1 : 1), ph: R(0, Math.PI * 2), r: R(r0, r1), tilt: R(-0.6, 0.6) })
   // 혼자면 핵 둘레를 달이 돈다(원반·자이로 밖으로)
   if (orbits.length === 0) w.moons.set(w.core.id, [moon(130, 150), moon(130, 150)])
   for (const x of orbits) w.moons.set(x.id, Array.from({ length: rand() < 0.5 ? 1 : 2 }, () => moon(54, 68)))
-  setSatellites(w, o.satellites ?? FAKE_SATS)
+  setSatellites(w, o.satellites ?? [])
   resizeWorld(w, o.W, o.H)
   return w
 }
@@ -196,13 +186,12 @@ export function resizeWorld(w: World, W: number, H: number): void {
   place(w)
 }
 
-/** 위성 다시 — 궤도 에이전트에게 돌아가며 붙고, 아무도 안 돌면 핵에 */
-export function setSatellites(w: World, names: string[]): void {
-  const list = names.slice(0, MAX_SATS)
-  if (list.length === w.sats.length && list.every((n, i) => w.sats[i].name === n)) return
-  w.sats = list.map((name, i) => ({
-    name,
-    parent: w.orbits.length ? w.orbits[i % w.orbits.length].id : w.core.id,
+/** 위성 다시 — 진짜로 도는 서브에이전트만(없으면 위성도 없다). 부모는 맡긴 에이전트(모르는 id 면 핵) */
+export function setSatellites(w: World, subs: SubLabel[]): void {
+  const list = subs.slice(0, MAX_SATS).map(s => ({ name: s.label, parent: w.who.has(s.agentId) ? s.agentId : w.core.id }))
+  if (list.length === w.sats.length && list.every((s, i) => w.sats[i].name === s.name && w.sats[i].parent === s.parent)) return
+  w.sats = list.map((s, i) => ({
+    ...s,
     a: (i * Math.PI * 2) / list.length + 0.9,
     w: 0.22 + w.rand() * 0.12,
   }))
@@ -240,6 +229,12 @@ function makeDisk(rand: () => number): World['disk'] {
 /** 궤도 시계가 지금까지 돈 각 */
 export const orbitTurn = (w: World): number => w.tt * OMEGA
 export const colorOf = (w: World, id: string): string => w.who.get(id)?.color ?? w.core.color
+/** 지금 오가는 데이터 — 날아가는 진짜 넘김(글을 실은 혜성)과 진짜 도구 사용의 조각. 넘김을 따라가는 작은 혜성(장식)은 세지 않는다 */
+export function flowCount(w: World): number {
+  let n = w.shards.length
+  for (const c of w.comets) if (c.text !== null) n++
+  return n
+}
 
 /** 노드 자리 — 핵은 가운데, 궤도 에이전트는 제 궤도 위(시안 place) */
 export function place(w: World): void {

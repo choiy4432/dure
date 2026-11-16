@@ -129,30 +129,38 @@ describe('useAttention', () => {
     expect(document.title).toBe('두레 — 여름 캠페인')
   })
 
-  describe('파워 모드 — 켜져 있으면 창에 초점이 있어도 자리를 비운 것처럼 알린다', () => {
+  describe('파워 모드 — 켜져 있어도 초점 규칙이 평소와 같다(일하는 화면이다)', () => {
     const powerOn = async (store: { setPower(on: boolean): Promise<void> }) => {
       ;(window as any).dure.setPowerMode = vi.fn(async () => {})
       await act(async () => { await store.setPower(true) })
     }
 
-    it('새 승인 → 깜박임 · 알림', async () => {
+    it('초점 있음 + 새 승인 → 알림·깜박임 없음', async () => {
       const { notify, store } = await setup({ focus: true })
+      await powerOn(store)
+      await emit('request', req('q1'))
+      expect(dure.flashWindow).not.toHaveBeenCalled()
+      expect(notify).not.toHaveBeenCalled()
+    })
+
+    it('초점 없음 + 새 승인 → 깜박임 · 알림', async () => {
+      const { notify, store } = await setup({ focus: false })
       await powerOn(store)
       await emit('request', req('q1'))
       expect(dure.flashWindow).toHaveBeenCalledTimes(1)
       expect(notify).toHaveBeenCalledWith('디자인이 파일을 고치려 해요', expect.objectContaining({ tag: 'dure-a' }))
     })
 
-    it('새 서버 문제 → 깜박임 · 알림', async () => {
+    it('초점 있음 + 새 서버 문제 → 깜박임·알림 없음', async () => {
       snapshot.rooms = [{ id: 'r1', name: '서버 실험', createdAt: 1, remote: { host: 'dev' } }]
       const { notify, store } = await setup({ focus: true })
       await powerOn(store)
       await emit('status', { agentId: 'a', status: 'idle', errorText: null, remoteIssue: { kind: 'disconnected', detail: null } })
-      expect(dure.flashWindow).toHaveBeenCalledTimes(1)
-      expect(notify).toHaveBeenCalledWith('디자인', expect.objectContaining({ tag: 'dure-a' }))
+      expect(dure.flashWindow).not.toHaveBeenCalled()
+      expect(notify).not.toHaveBeenCalled()
     })
 
-    it('고른 에이전트가 일을 끝냄 + finished 켬 → 끝남 알림', async () => {
+    it('초점 있음 + 고른 에이전트가 일을 끝냄 + finished 켬 → 끝남 알림 없음', async () => {
       snapshot.notify = { asks: true, finished: true }
       const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true)
       try {
@@ -161,19 +169,10 @@ describe('useAttention', () => {
         await powerOn(store)
         await emit('history', { agentId: 'a', item: { t: 5, kind: 'assistant', blocks: [{ type: 'text', text: '다 했어요' }] } })
         await emit('history', { agentId: 'a', item: { t: 6, kind: 'result', ok: true, subtype: 'success' } })
-        expect(notify).toHaveBeenCalledWith('디자인이 일을 끝냈어요', expect.objectContaining({ body: '다 했어요', tag: 'dure-a' }))
+        expect(notify).not.toHaveBeenCalled()
       } finally {
         focus.mockRestore()
       }
-    })
-
-    it('끄면 다시 초점대로 — 새 승인에 알림 없음', async () => {
-      const { notify, store } = await setup({ focus: true })
-      await powerOn(store)
-      await act(async () => { await store.setPower(false) })
-      await emit('request', req('q1'))
-      expect(dure.flashWindow).not.toHaveBeenCalled()
-      expect(notify).not.toHaveBeenCalled()
     })
   })
 

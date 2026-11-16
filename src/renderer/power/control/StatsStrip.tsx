@@ -4,7 +4,8 @@ const nf = (n: number) => n.toLocaleString('en-US')
 const W = 1040
 const H = 132
 
-export function StatsStrip({ s, subagents, tokensPerMin }: { s: StatsSnapshot; subagents: number; tokensPerMin: number }) {
+/** 숫자 띠 — 켠 뒤의 진짜 셈뿐(처리한 토큰은 정직한 값이 없어 싣지 않는다) */
+export function StatsStrip({ s, subagents }: { s: StatsSnapshot; subagents: number }) {
   const max = Math.max(6, ...s.perSec)
   const bw = W / 60
   return (
@@ -33,11 +34,6 @@ export function StatsStrip({ s, subagents, tokensPerMin }: { s: StatsSnapshot; s
         <span className="k">서브에이전트</span>
         <span className="v">{subagents}</span>
         <span className="d">지금 도는 중</span>
-      </div>
-      <div className="pw-tile">
-        <span className="k">처리한 토큰</span>
-        <span className="v" data-stat="tokens">{(s.tokens / 1e6).toFixed(2)}M</span>
-        <span className="d">+{tokensPerMin}k /분</span>
       </div>
       <div className="pw-tile pw-spark">
         <span className="k">초당 도구 호출 · 지난 1분</span>

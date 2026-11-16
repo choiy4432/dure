@@ -1,59 +1,76 @@
 import { describe, expect, it } from 'vitest'
 import { roomView } from '../../src/renderer/power/roomView'
-import { AGENT_COLORS, FAKE_ROOM } from '../../src/renderer/power/fakeWorld'
 
-const ag = (id: string, roomId: string, over: object = {}) => ({ id, roomId, name: id, role: `${id}역`, status: 'idle', subagentsRunning: [], ...over })
+const ag = (id: string, roomId: string, over: object = {}) => ({ id, roomId, name: `${id}이름`, role: `${id}역`, status: 'idle', subagentsRunning: [], ...over })
 const st = (over: object = {}): any => ({
   rooms: [{ id: 'r1', name: '첫 방' }],
   agents: [ag('a', 'r1'), ag('b', 'r1'), ag('c', 'r2')],
   requests: [],
-  power: { on: true, roomId: 'r1' },
+  history: {},
+  power: { on: true, roomId: 'r1', agentIds: ['a', 'b'] },
   ...over,
 })
 
 describe('roomView', () => {
-  it('방이_없으면_가짜_다섯', () => {
-    const v = roomView(st({ power: { on: false, roomId: null } }))
-    expect(v.roomName).toBe(FAKE_ROOM)
-    expect(v.agents).toHaveLength(5)
-    expect(v.agents.every(a => !a.real)).toBe(true)
+  it('방이_없으면_agents_빈_배열_roomName_null', () => {
+    expect(roomView(st({ power: { on: false, roomId: null, agentIds: [] } }))).toEqual({ roomName: null, agents: [], state: {}, subagents: [] })
+    // 굳힌 방이 지워졌다
+    expect(roomView(st({ rooms: [] }))).toEqual({ roomName: null, agents: [], state: {}, subagents: [] })
   })
 
-  it('에이전트_0명이면_가짜_다섯', () => {
-    const v = roomView(st({ rooms: [{ id: 'r3', name: '빈 방' }], power: { on: true, roomId: 'r3' } }))
-    expect(v.agents).toHaveLength(5)
-    expect(v.roomName).toBe(FAKE_ROOM)
+  it('에이전트가_0명인_방은_방_이름과_빈_목록', () => {
+    const v = roomView(st({ rooms: [{ id: 'r3', name: '빈 방' }], power: { on: true, roomId: 'r3', agentIds: [] } }))
+    expect(v.roomName).toBe('빈 방')
+    expect(v.agents).toEqual([])
   })
 
-  it('진짜_에이전트는_real_true_이고_색이_돌려_배정', () => {
-    const many = Array.from({ length: 7 }, (_, i) => ag(`x${i}`, 'r1'))
-    const v = roomView(st({ agents: many }))
+  it('가짜가_없다', () => {
+    const v = roomView(st())
     expect(v.roomName).toBe('첫 방')
-    expect(v.agents.every(a => a.real)).toBe(true)
-    expect(v.agents[5].color).toBe(AGENT_COLORS[0])
-    expect(v.agents[6].color).toBe(AGENT_COLORS[1])
+    expect(v.agents.map(a => [a.id, a.name, a.role])).toEqual([['a', 'a이름', 'a역'], ['b', 'b이름', 'b역']])
+    expect(v.agents[0]).not.toHaveProperty('real')
+    expect(v.subagents).toEqual([])
   })
 
-  it('승인·질문 기다림과 서브에이전트 수', () => {
+  it('켠_뒤에_들어온_에이전트는_없고_지워진_에이전트는_빠지고_색은_그대로', () => {
+    const before = roomView(st({ agents: [ag('a', 'r1'), ag('b', 'r1'), ag('d', 'r1')], power: { on: true, roomId: 'r1', agentIds: ['a', 'b', 'd'] } }))
+    const after = roomView(st({ agents: [ag('a', 'r1'), ag('d', 'r1'), ag('new', 'r1')], power: { on: true, roomId: 'r1', agentIds: ['a', 'b', 'd'] } }))
+    expect(after.agents.map(a => a.id)).toEqual(['a', 'd'])
+    expect(after.agents[1].color).toBe(before.agents[2].color)
+    expect(Object.keys(after.state)).toEqual(['a', 'd'])
+  })
+
+  it('state_가_스토어_상태를_따른다', () => {
     const v = roomView(st({
-      agents: [ag('a', 'r1', { status: 'awaiting', subagentsRunning: ['s1', 's2'] }), ag('b', 'r1'), ag('c', 'r1', { subagentsRunning: ['s3'] })],
+      agents: [
+        ag('a', 'r1', { status: 'working' }),
+        ag('b', 'r1', { status: 'working' }), // 승인 요청이 있으면 기다림이 먼저
+        ag('e', 'r1', { status: 'awaiting' }),
+        ag('f', 'r1', { status: 'idle', asleep: true }),
+        ag('g', 'r1', { status: 'error' }),
+        ag('h', 'r1', { status: 'stopped' }),
+      ],
       requests: [{ id: 'q', agentId: 'b' }],
+      power: { on: true, roomId: 'r1', agentIds: ['a', 'b', 'e', 'f', 'g', 'h'] },
     }))
-    expect([...v.awaiting].sort()).toEqual(['a', 'b'])
-    expect(v.subagents).toBe(3)
+    expect(v.state).toEqual({ a: 'working', b: 'awaiting', e: 'awaiting', f: 'resting', g: 'resting', h: 'resting' })
   })
 
-  it('working_은_진짜로_일하는_에이전트만(승인_기다림은_빼고)_가짜_방은_비었다', () => {
+  it('서브에이전트는_도는_진짜만_이름은_진짜_설명_없으면_서브_N', () => {
     const v = roomView(st({
-      agents: [ag('a', 'r1', { status: 'working' }), ag('b', 'r1', { status: 'working' }), ag('c', 'r1'), ag('d', 'r2', { status: 'working' })],
-      requests: [{ id: 'q', agentId: 'b' }],
+      agents: [ag('a', 'r1', { subagentsRunning: ['t1', 't2'] }), ag('b', 'r1', { subagentsRunning: ['t3'] }), ag('c', 'r2', { subagentsRunning: ['t9'] })],
+      history: {
+        a: [
+          { t: 1, kind: 'assistant', blocks: [{ type: 'tool_use', id: 't1', name: 'Agent', input: { description: '입력의 설명', prompt: 'x' } }] },
+          { t: 2, kind: 'subagent-start', toolUseId: 't1', taskId: 'k1', description: '결제 흐름 조사', subagentType: null, parentTaskId: null },
+          { t: 3, kind: 'assistant', blocks: [{ type: 'tool_use', id: 't2', name: 'Agent', input: { description: '테스트 빈틈 찾기' } }] },
+        ],
+      },
     }))
-    expect([...v.working]).toEqual(['a'])
-    expect(roomView(st({ power: { on: false, roomId: null } })).working.size).toBe(0)
-  })
-
-  it('굳힌_방의_에이전트가_지워져도_던지지_않는다', () => {
-    expect(() => roomView(st({ agents: [], rooms: [] }))).not.toThrow()
-    expect(roomView(st({ agents: [], rooms: [] })).agents).toHaveLength(5)
+    expect(v.subagents).toEqual([
+      { agentId: 'a', label: '결제 흐름 조사' },
+      { agentId: 'a', label: '테스트 빈틈 찾기' },
+      { agentId: 'b', label: '서브 3' },
+    ])
   })
 })
