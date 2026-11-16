@@ -175,6 +175,8 @@ export function TourLayer({
     // 준비 화면·불러오기 실패 동안은 겹 전체를 숨긴다(투어는 스토어에 그대로)
     ready: s.loadError === null && effectiveSetup(s.app.setup, s.claudeMissing, s.app.setupLoadFailed).phase === 'ready',
     fork: s.forkDraft !== null,
+    // 파워 모드 덮개가 짚을 관계도를 가린다 — 그동안 승인 한 번은 띄우지 않는다(덮개를 끄면 그때 뜬다)
+    power: s.power.on,
   }))
 
   // 진행 — 상태나 열린 창이 바뀔 때마다 직접 해 보기가 끝났는지 · 짚던 것이 사라졌는지 본다. 고를 에이전트가 있으면 고른다
@@ -187,9 +189,10 @@ export function TourLayer({
     if (r.select) store.selectAgent(r.select)
   }, [v.tour, v.rooms, v.agents, v.roomId, v.selected, v.history, dialog])
 
-  // 승인 한 번 — [확인했어요]를 누르면 저장을 기다리지 않고 바로 닫는다(저장이 실패해도 이번 실행엔 다시 안 뜬다)
+  // 승인 한 번 — [확인했어요]를 누르면 저장을 기다리지 않고 바로 닫는다(저장이 실패해도 이번 실행엔 다시 안 뜬다).
+  // 파워 모드 동안은 띄우지 않는다 — 막이 덮개를 덮고 숨은 관계도 카드를 짚은 채 [확인했어요]로 본 것이 돼 버린다
   const [tipDone, setTipDone] = useState(false)
-  const tip = v.prefs && !v.prefs.approvalTipSeen && !tipDone ? tipRequest(v.requests, v.agents, v.roomId, v.selected) : null
+  const tip = v.prefs && !v.prefs.approvalTipSeen && !tipDone && !v.power ? tipRequest(v.requests, v.agents, v.roomId, v.selected) : null
   // 설정 안 단계의 [확인했어요] — 그 단계의 카드만 닫는다(투어는 설정 창을 닫을 때 끝으로)
   const [hiddenTour, setHiddenTour] = useState<UiState['tour']>(null)
   const step = v.tour ? stepFor(v.tour.step, v.tour.replay) : null

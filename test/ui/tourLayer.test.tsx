@@ -520,6 +520,24 @@ describe('TourLayer — 승인 한 번', () => {
     expect(store.getState().mapFocus).toEqual({ agentId: 'a', n: 1 })
   })
 
+  it('파워 모드가 켜진 동안엔 뜨지 않는다(덮개 위에 막이 깔리지 않고 본 것으로 치지 않는다) — 끄면 그때 뜬다', async () => {
+    withAgent()
+    prefs = { ...prefs, approvalTipSeen: false }
+    node('a', { left: 300, top: 260, width: 256, height: 136 })
+    ;(window as any).dure.setPowerMode = vi.fn(async () => {})
+    const { store } = await mount()
+    await act(async () => { await store.setPower(true) })
+    expect(store.getState().power.on).toBe(true)
+    snapshot.requests = [ask('a')]
+    await act(async () => { await store.refresh() })
+    expect(store.getState().requests).toHaveLength(1)
+    expect(screen.queryByRole('dialog', { name: '승인이 필요해요' })).toBeNull()
+    expect(veils()).toHaveLength(0)
+    expect(setPrefs).not.toHaveBeenCalledWith({ approvalTipSeen: true })
+    await act(async () => { await store.setPower(false) })
+    expect(screen.getByRole('dialog', { name: '승인이 필요해요' })).toBeTruthy()
+  })
+
   it('이미 봤거나 · 묻는 게 승인이 아니거나 · 대화상자가 열려 있으면 뜨지 않는다', async () => {
     withAgent()
     prefs = { ...prefs, approvalTipSeen: true }
