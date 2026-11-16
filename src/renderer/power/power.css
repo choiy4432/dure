@@ -46,3 +46,104 @@
   font: 500 14px var(--font);
   pointer-events: none;
 }
+
+/* ---- 관제실 — 덮개는 테마와 상관없이 늘 어둡다: tokens.css 다크 값을 덮개 안에만 씌운다 ---- */
+.pw {
+  --bg: #111827;
+  --canvas: #0B1120;
+  --text: #E5E9F0;
+  --text-2: #CBD5E1;
+  --text-3: #A3B1C6;
+  --muted: #8392A8;
+  --border: #243044;
+  --border-soft: #1A2436;
+  --dot: #1F2A3D;
+  --primary: #2563EB;
+  --brand: #3B82F6;
+  --ok: #10B981;
+  --ok-bg: rgba(16, 185, 129, 0.14);
+  --ok-text: #6EE7B7;
+  --warn: #F59E0B;
+  --warn-text: #FCD34D;
+  --danger-text: #FCA5A5;
+  --primary-text: #93C5FD;
+  color-scheme: dark;
+}
+.pw-inner {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  color: var(--text);
+  font-family: var(--font);
+  background: var(--canvas) radial-gradient(var(--dot) 1px, transparent 1px) 0 0 / 24px 24px;
+}
+.pw-top {
+  height: 52px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.pw-brand { display: flex; align-items: center; gap: 12px; font-size: 16px; }
+.pw-mark { width: 22px; height: 22px; display: inline-flex; color: var(--brand); }
+.pw-mark svg { width: 100%; height: 100%; }
+.pw-sep { width: 1px; height: 18px; background: var(--border); }
+.pw-mode { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ok-text); background: var(--ok-bg); padding: 4px 11px; border-radius: 999px; }
+.pw-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); animation: pw-pulse 1.6s ease-in-out infinite; }
+@keyframes pw-pulse { 50% { opacity: 0.35; } }
+.pw-room { font-size: 14px; color: var(--text-3); }
+.pw-room b { color: var(--text); font-weight: 600; }
+.pw-clock { display: flex; align-items: baseline; gap: 8px; font: 14px var(--mono); color: var(--muted); }
+.pw-clock b { color: var(--text-2); font-weight: 500; }
+.pw-now { font-size: 22px; color: var(--text); margin-left: 16px; font-weight: 600; }
+.pw-main { flex: 1; display: grid; grid-template-columns: 360px 1fr 380px; gap: 16px; min-height: 0; }
+.pw-label { font-size: 12.5px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; margin: 0 2px 10px; flex: none; }
+.pw-label b { color: var(--ok-text); font-weight: 600; font-family: var(--mono); }
+.pw-agents { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.pw-card { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 9px; transition: border-color 0.3s; }
+.pw-card[data-warn] { border-color: rgba(245, 158, 11, 0.65); }
+.pw-r1 { display: flex; align-items: center; gap: 10px; font-size: 15px; }
+.pw-av { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 13px; font-weight: 700; color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); flex: none; }
+.pw-role { font-size: 12px; color: var(--muted); }
+.pw-st { margin-left: auto; font-size: 12px; padding: 2px 9px; border-radius: 999px; color: var(--ok-text); background: var(--ok-bg); }
+.pw-st[data-st='warn'] { color: var(--warn-text); background: rgba(245, 158, 11, 0.12); }
+.pw-tool { display: flex; gap: 8px; font: 13px var(--mono); min-height: 18px; white-space: nowrap; }
+.pw-tn { color: var(--primary-text); flex: none; }
+.pw-tg { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; }
+.pw-r3 { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+.pw-bar { flex: 1; height: 4px; background: #1E293B; border-radius: 4px; overflow: hidden; }
+.pw-bar i { display: block; height: 100%; background: var(--c); transition: width 0.6s; }
+.pw-ring { width: 18px; height: 18px; transform: rotate(-90deg); flex: none; }
+.pw-rb { fill: none; stroke: #1E293B; stroke-width: 3; }
+.pw-rf { fill: none; stroke: var(--brand); stroke-width: 3; transition: stroke-dashoffset 0.6s; }
+.pw-pct { font-family: var(--mono); min-width: 30px; }
+.pw-more { font-size: 12.5px; color: var(--muted); padding: 0 4px; }
+.pw-map { background: rgba(9, 14, 26, 0.85); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.pw-mapbox { position: relative; flex: 1; min-height: 0; }
+.pw-log { background: rgba(17, 24, 39, 0.55); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.pw-logrows { display: flex; flex-direction: column; overflow: hidden; flex: 1; min-height: 0; }
+.pw-lr { display: grid; grid-template-columns: 66px 48px 80px 1fr; gap: 6px; font-size: 13px; line-height: 25px; border-bottom: 1px solid var(--border-soft); animation: pw-rowin 0.5s ease-out; white-space: nowrap; flex: none; }
+.pw-lr time { font: 12px var(--mono); color: var(--muted); }
+.pw-lr b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.pw-lr .pw-tp { font-family: var(--mono); color: var(--primary-text); }
+.pw-lr .pw-tg { font-family: var(--mono); color: var(--text-2); }
+@keyframes pw-rowin { from { opacity: 0; background: rgba(59, 130, 246, 0.2); } to { background: transparent; } }
+.pw-stage[data-calm] .pw-lr, .pw-stage[data-calm] .pw-dot { animation: none; }
+.pw-stats { height: 120px; flex: none; display: grid; grid-template-columns: repeat(6, 1fr) 1.9fr; gap: 12px; }
+.pw-tile { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; justify-content: space-between; min-width: 0; }
+.pw-tile .k { font-size: 12px; color: var(--muted); }
+.pw-tile .v { font: 600 27px var(--mono); color: var(--text); letter-spacing: -0.01em; white-space: nowrap; }
+.pw-tile .v .p { color: var(--ok-text); }
+.pw-tile .d { font: 12px var(--mono); color: var(--ok-text); }
+.pw-tile .d.r { color: var(--danger-text); }
+.pw-spark svg { width: 100%; height: 66px; display: block; }
+.pw-spark rect { fill: rgba(59, 130, 246, 0.45); }
+.pw-spark rect[data-last] { fill: #60A5FA; }

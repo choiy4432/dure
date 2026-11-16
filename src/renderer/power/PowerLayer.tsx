@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { createPortal } from 'react-dom'
 import { getStore, useDure } from '../state/store'
 import { reducedMotion } from '../lib/motion'
+import { ControlRoom } from './ControlRoom'
 import { useHoldEscape } from './useHoldEscape'
 import './power.css'
 
@@ -19,7 +20,7 @@ export function PowerLayer() {
   if (!on) return null
   return createPortal(
     <Overlay>
-      <PowerStage>{terminal ? <div data-power-screen="terminal" /> : <div data-power-screen="control" />}</PowerStage>
+      <PowerStage>{terminal ? <div data-power-screen="terminal" /> : <ControlRoom />}</PowerStage>
     </Overlay>,
     document.body,
   )

@@ -1,0 +1,84 @@
+import { useEffect, useState } from 'react'
+import type { PowerAgent, ScreenEvent } from '../events'
+
+const MAX_CARDS = 5
+const RING_R = 8
+const RING_C = 2 * Math.PI * RING_R
+
+type CardState = { tool: string; target: string; done: number; total: number; ctx: number; n: number }
+
+const initial = (i: number): CardState => ({ tool: '', target: '준비 중', done: 3 + ((i * 5) % 7), total: 10 + ((i * 7) % 7), ctx: 20 + ((i * 13) % 50), n: 0 })
+
+/** 할 일·문맥 수는 장식 — 그 에이전트의 도구 호출이 쌓일수록 천천히 오른다 */
+function advance(c: CardState, tool: string, target: string): CardState {
+  const n = c.n + 1
+  let { done, total, ctx } = c
+  if (n % 6 === 0) done++
+  if (done > total) {
+    done = 1
+    total = 10 + (n % 7)
+  }
+  if (n % 4 === 0) ctx = ctx >= 95 ? 20 : ctx + 1
+  return { tool, target, done, total, ctx, n }
+}
+
+export function AgentCards({ agents, awaiting, subscribe }: { agents: PowerAgent[]; awaiting: Set<string>; subscribe: (fn: (ev: ScreenEvent) => void) => () => void }) {
+  const shown = agents.slice(0, MAX_CARDS)
+  const [cards, setCards] = useState<Record<string, CardState>>(() => Object.fromEntries(shown.map((a, i) => [a.id, initial(i)])))
+
+  // 한 틱의 사건은 한 번에 그려진다(React 가 같은 틱의 상태 갱신을 묶는다)
+  useEffect(
+    () =>
+      subscribe(ev => {
+        if (ev.kind !== 'tool') return
+        setCards(prev => (prev[ev.agentId] ? { ...prev, [ev.agentId]: advance(prev[ev.agentId], ev.tool, ev.target) } : prev))
+      }),
+    [subscribe],
+  )
+
+  const busy = agents.filter(a => !awaiting.has(a.id)).length
+  return (
+    <section className="pw-agents" aria-label="에이전트">
+      <div className="pw-label">
+        에이전트 {agents.length}
+        <span>
+          작업 중 <b>{busy}</b>
+        </span>
+      </div>
+      {shown.map(a => {
+        const c = cards[a.id]
+        const wait = awaiting.has(a.id)
+        return (
+          <div key={a.id} className="pw-card" data-agent={a.id} data-warn={wait || undefined} style={{ ['--c' as string]: a.color }}>
+            <div className="pw-r1">
+              <span className="pw-av">{a.name.slice(0, 1)}</span>
+              <b>{a.name}</b>
+              <span className="pw-role">{a.role}</span>
+              <span className="pw-st" data-st={wait ? 'warn' : 'ok'}>
+                {wait ? '승인 기다림' : '작업 중'}
+              </span>
+            </div>
+            <div className="pw-tool">
+              <span className="pw-tn">{c.tool}</span>
+              <span className="pw-tg">{c.target}</span>
+            </div>
+            <div className="pw-r3">
+              <div className="pw-bar">
+                <i style={{ width: `${(c.done / c.total) * 100}%` }} />
+              </div>
+              <span>
+                할 일 {c.done}/{c.total}
+              </span>
+              <svg className="pw-ring" viewBox="0 0 20 20" aria-hidden="true">
+                <circle cx="10" cy="10" r={RING_R} className="pw-rb" />
+                <circle cx="10" cy="10" r={RING_R} className="pw-rf" strokeDasharray={RING_C} strokeDashoffset={RING_C * (1 - c.ctx / 100)} />
+              </svg>
+              <span className="pw-pct">{c.ctx}%</span>
+            </div>
+          </div>
+        )
+      })}
+      {agents.length > MAX_CARDS && <div className="pw-more">외 {agents.length - MAX_CARDS}명</div>}
+    </section>
+  )
+}
