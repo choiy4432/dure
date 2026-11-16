@@ -99,6 +99,8 @@ const GYROS: Gyro[] = [
 export const LIFE = { ripple: 1, bubble: 2.9, leaf: 2.6, spark: 0.9, toast: 2.6, flare: 1.1 } as const
 const WAVE_N = 96
 /** 서브에이전트 위성 궤도(RA 배수) · 높이 */
+/** 궤도 노드 카드의 가장 어두운 밝기(먼 쪽) — 카드 글 대비 4.5:1 을 지키는 바닥(place) */
+const NODE_DIM = 0.8
 export const SAT_R = 0.56
 export const SAT_Y = 8
 
@@ -286,7 +288,9 @@ export function place(w: World): void {
     p.y = P.y
     p.s = (0.76 + z * 0.3) * P.f
     p.z = z
-    p.o = 0.48 + z * 0.52
+    // 밝기(카드 전체의 brightness) — 먼 쪽도 0.8 까지만: 카드 글(이름·마지막 도구·승인 기다림)은 진짜 내용이라
+    // 가장 밝은 번짐 위에서도 4.5:1 을 지킨다(0.48 까지 내리면 도구 줄이 2:1). 깊이는 크기·겹침 순서가 더 맡는다
+    p.o = NODE_DIM + z * (1 - NODE_DIM)
   }
 }
 

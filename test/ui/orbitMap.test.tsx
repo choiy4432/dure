@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import '@testing-library/jest-dom/vitest'
 import { render, act, cleanup } from '@testing-library/react'
+import fs from 'node:fs'
+import path from 'node:path'
 import { OrbitMap } from '../../src/renderer/power/orbit/OrbitMap'
 import { intake, stepWorld, syncBoost } from '../../src/renderer/power/orbit/step'
 import { createWorld, inFlight, resizeWorld, setStates, type World } from '../../src/renderer/power/orbit/world'
@@ -540,6 +542,25 @@ describe('관계도 장면', () => {
     expect(alphas.length).toBeGreaterThan(200)
     expect(Math.min(...alphas)).toBeGreaterThanOrEqual(0.6)
     expect(Math.max(...alphas) - Math.min(...alphas)).toBeGreaterThan(0.1) // 깊이감(앞쪽이 더 또렷)은 남는다
+  })
+
+  it('먼_쪽_노드_카드도_읽힌다_—_깊이_밝기는_0.8_아래로_내려가지_않고_도구_줄은_text-3(가장_밝은_번짐_위에서도_4.5:1)', () => {
+    const w = world(false)
+    let now = 0
+    let lo = 1
+    let hi = 0
+    for (let i = 0; i < 200; i++) {
+      now = run(w, 0.25, now)
+      for (const [id, p] of w.pos) {
+        if (id === w.core.id) continue
+        lo = Math.min(lo, p.o)
+        hi = Math.max(hi, p.o)
+      }
+    }
+    expect(lo).toBeGreaterThanOrEqual(0.8)
+    expect(hi - lo).toBeGreaterThan(0.1) // 깊이감(앞쪽이 더 밝다)은 남는다
+    const css = fs.readFileSync(path.resolve('src/renderer/power/power.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(/\n\.pw-mn-tx i \{[^}]*color: var\(--text-3\)/.test(css)).toBe(true)
   })
 
   it('오래_멈췄다_와도_시간이_튀지_않는다', () => {
