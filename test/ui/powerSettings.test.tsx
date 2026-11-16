@@ -24,9 +24,15 @@ beforeEach(() => {
     setupState: async () => ({ phase: 'ready' }), history: async () => [], on: () => () => {},
   }
 })
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  for (const key of ['Escape', 'Enter']) fireEvent.keyUp(window, { key }) // 나가며 건 자동 반복 삼키기를 푼다
+  vi.useRealTimers()
+})
 
 const settle = () => act(async () => { await new Promise(r => setTimeout(r, 0)) })
+/** 가짜 시계를 ms 만큼 — vi.useFakeTimers() 를 켠 시험에서만 */
+const wait = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
 
 async function open() {
   const { getStore } = await import('../../src/renderer/state/store')
@@ -44,8 +50,17 @@ describe('설정 — 파워 모드 구역', () => {
     const group = within(dlg).getByRole('radiogroup', { name: '화면' })
     expect(within(group).getByRole('radio', { name: '관제실' })).toHaveAttribute('aria-checked', 'true')
     expect(within(group).getByRole('radio', { name: '터미널 벽' })).toHaveAttribute('aria-checked', 'false')
-    expect(within(dlg).getByText('켜 둔 동안엔 화면이 꺼지지 않아요. 위 띠의 [나가기]나 Esc 를 길게 눌러 나가요.')).toBeInTheDocument()
+    // 두 화면에 다 맞는 말 — 터미널 벽의 [나가기] 는 위 띠가 아니라 아래 상태 줄에 있다
+    expect(within(dlg).getByText('켜 둔 동안엔 화면이 꺼지지 않아요. [나가기] 단추나 Esc 를 길게 눌러 나가요.')).toBeInTheDocument()
+    expect(within(dlg).queryByText(/위 띠/)).toBeNull()
     expect(within(dlg).queryByText(/잠기지 않아요/)).toBeNull()
+  })
+
+  it.each([['관제실', false], ['터미널 벽', true]] as const)('%s 의 [나가기] 풍선 도움말은 설정 안내와 같은 말(Esc 를 길게 눌러)', async (_, terminal) => {
+    const store = await withAgent({ terminal })
+    await act(async () => { await store.setPower(true) })
+    const exit = within(screen.getByRole('region', { name: '파워 모드' })).getByRole('button', { name: '나가기' })
+    expect(exit).toHaveAttribute('title', 'Esc 를 길게 눌러도 나가요')
   })
 
   it('스위치를 누르면 setPower(true) 와 설정 닫기', async () => {
@@ -246,11 +261,6 @@ describe('파워 모드 — 앱 아래층', () => {
 
 describe('파워 모드 — 화면에서 고르기는 입력창에 커서를 주지 않는다(고른 뒤 Esc 길게가 그 에이전트를 멈추지 않게)', () => {
   beforeEach(() => { vi.useFakeTimers() })
-  afterEach(() => {
-    fireEvent.keyUp(window, { key: 'Escape' }) // 나가며 건 자동 반복 삼키기를 푼다
-    vi.useRealTimers()
-  })
-  const wait = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
   /** 진짜 누르기처럼 — 누른 것에 초점이 가고 click */
   const press = (el: Element | null) => act(() => { (el as HTMLElement).focus(); fireEvent.click(el as HTMLElement) })
 
@@ -295,5 +305,45 @@ describe('파워 모드 — 화면에서 고르기는 입력창에 커서를 주
     await wait(1500)
     expect(setPowerMode).not.toHaveBeenCalledWith(false)
     expect(screen.getByRole('region', { name: '파워 모드' })).toBeInTheDocument()
+  })
+})
+
+describe('파워 모드 — [나가기] 를 누른 그 키', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+
+  it('[나가기] 에서 Enter 를 누르고 있어 나가도 — 자동 반복 Enter 가 다시 붙은 앱 입력창의 쓰던 글을 보내지 않는다', async () => {
+    const sendUser = vi.fn(async () => {})
+    ;(window as any).dure.sendUser = sendUser
+    /** 브라우저처럼 — 단추는 Enter keydown 을 아무도 막지 않았으면 그 자리에서 click */
+    const enter = (el: Element, init: KeyboardEventInit = {}) => {
+      if (fireEvent.keyDown(el, { key: 'Enter', ...init }) && el instanceof HTMLButtonElement) fireEvent.click(el)
+    }
+    const store = await withAgent()
+    fireEvent.change(composers()[0], { target: { value: '아직 보내지 않은 글' } })
+    await act(async () => { await store.setPower(true) })
+    // 찾기 창으로 고른 것처럼 — 나간 뒤 다시 붙은 앱 입력창이 커서를 가져간다
+    act(() => { store.selectAgent('a', { focusInput: true }) })
+    const exit = within(screen.getByRole('region', { name: '파워 모드' })).getByRole('button', { name: '나가기' })
+    act(() => { exit.focus() })
+    act(() => { enter(exit) })
+    await wait(0)
+    expect(setPowerMode).toHaveBeenLastCalledWith(false)
+    expect(screen.queryByRole('region', { name: '파워 모드' })).toBeNull()
+    const box = screen.getByRole('textbox', { name: '알파에게 보낼 메시지' })
+    expect(document.activeElement).toBe(box)
+    expect(box).toHaveValue('아직 보내지 않은 글')
+    // 아직 누르고 있다 — 운영체제의 자동 반복
+    act(() => {
+      enter(document.activeElement!, { repeat: true })
+      enter(document.activeElement!, { repeat: true })
+    })
+    await wait(0)
+    expect(sendUser).not.toHaveBeenCalled()
+    expect(box).toHaveValue('아직 보내지 않은 글')
+    // 손을 뗀 뒤 새로 누른 Enter 는 평소대로 보낸다
+    fireEvent.keyUp(box, { key: 'Enter' })
+    act(() => { enter(box) })
+    await wait(0)
+    expect(sendUser).toHaveBeenCalledTimes(1)
   })
 })

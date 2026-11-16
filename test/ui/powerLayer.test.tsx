@@ -5,7 +5,7 @@ import path from 'node:path'
 import { render, screen, act, fireEvent, cleanup } from '@testing-library/react'
 
 // 파워 모드 덮개 — 일하는 화면: 입력을 막지 않는다(삼키기·초점 붙잡기·inert·커서 숨김 없음).
-// 나가기는 위 띠의 [나가기] 단추 · Esc 길게(글 입력 중이 아니고 떠 있는 창이 없을 때만). 층은 대화상자·찾기·메뉴·토스트 아래
+// 나가기는 [나가기] 단추(관제실 위 띠 · 터미널 벽 상태 줄) · Esc 길게(글 입력 중이 아니고 떠 있는 창이 없을 때만). 층은 대화상자·찾기·메뉴·토스트 아래
 
 let setPowerMode: ReturnType<typeof vi.fn>
 
@@ -17,6 +17,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   cleanup()
+  for (const key of ['Escape', 'Enter', ' ']) fireEvent.keyUp(window, { key }) // 나가며 건 자동 반복 삼키기를 푼다
   document.body.querySelectorAll('[data-t]').forEach(n => n.remove())
   vi.doUnmock('../../src/renderer/power/ControlRoom')
   vi.useRealTimers()
@@ -133,11 +134,49 @@ describe('PowerLayer — 덮개', () => {
     expect(screen.getByRole('button', { name: '나가기' })).toBeInTheDocument()
   })
 
-  it('[나가기] 단추를 누르면 setPower(false)', async () => {
+  it('[나가기] 단추를 누르면 setPower(false) — 마우스로 누르면 아무 키도 삼키지 않는다', async () => {
     const { spy } = await mount()
     fireEvent.click(screen.getByRole('button', { name: '나가기' }))
     expect(spy).toHaveBeenCalledTimes(1)
     expect(spy).toHaveBeenCalledWith(false)
+    const onDoc = vi.fn()
+    document.addEventListener('keydown', onDoc)
+    try {
+      for (const k of ['Enter', ' ', 'Escape']) fireEvent.keyDown(document.body, { key: k, repeat: true })
+      expect(onDoc).toHaveBeenCalledTimes(3)
+    } finally {
+      document.removeEventListener('keydown', onDoc)
+    }
+  })
+
+  it.each([['Enter', 'Enter'], ['Space', ' ']])('[나가기] 에서 %s 를 누르면 그 자리에서 한 번 나가고 — 떼기 전의 그 키 자동 반복은 어디에도 닿지 않는다', async (_, k) => {
+    const { spy } = await mount()
+    const btn = screen.getByRole('button', { name: '나가기' })
+    btn.focus()
+    expect(fireEvent.keyDown(btn, { key: k })).toBe(false) // 단추의 기본 누르기(click)는 막는다 — 두 번 나가지 않게
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy).toHaveBeenCalledWith(false)
+    const onDoc = vi.fn()
+    document.addEventListener('keydown', onDoc)
+    try {
+      expect(fireEvent.keyDown(document.body, { key: k, repeat: true })).toBe(false)
+      expect(onDoc).not.toHaveBeenCalled()
+      fireEvent.keyDown(document.body, { key: 'Escape', repeat: true }) // 다른 키는 그대로
+      expect(onDoc).toHaveBeenCalledTimes(1)
+      key('keyup', k)
+      fireEvent.keyDown(document.body, { key: k, repeat: true }) // 뗀 뒤로는 삼키지 않는다
+      expect(onDoc).toHaveBeenCalledTimes(2)
+    } finally {
+      document.removeEventListener('keydown', onDoc)
+    }
+  })
+
+  it('[나가기] 에서 다른 곳부터 누르고 있던 Enter 의 자동 반복은 나가지 않는다(새로 누른 것만)', async () => {
+    const { spy } = await mount()
+    const btn = screen.getByRole('button', { name: '나가기' })
+    btn.focus()
+    expect(fireEvent.keyDown(btn, { key: 'Enter', repeat: true })).toBe(false) // 단추의 기본 누르기도 막는다(삼키기 없이 나가지 않게)
+    expect(spy).not.toHaveBeenCalled()
   })
 
   it('초점이 body 일 때 Esc 1500ms 면 setPower(false) 한 번 · 누르는 동안 나가는 중…', async () => {
@@ -346,6 +385,13 @@ describe('덮개 층', () => {
     }
     throw new Error(`${sel} 의 z-index 를 못 찾았다`)
   }
+
+  it('덮개는 창 끌기 자리가 아니다 — 아래 앱 위 띠(끌기 자리)를 덮어도 위 띠 단추 누르기가 창 끌기가 되지 않게(투어 카드처럼)', () => {
+    const blocks = (css: string, sel: string) =>
+      [...css.matchAll(new RegExp(`(?:^|\\n|\\})\\s*${sel.replace(/\./g, '\\.')}\\s*\\{([^}]*)\\}`, 'g'))].map(m => m[1]).join(';')
+    expect(blocks(base, '.top')).toMatch(/-webkit-app-region:\s*drag/) // 덮는 쪽이 끌기 자리다
+    expect(blocks(power, '.pw')).toMatch(/-webkit-app-region:\s*no-drag/)
+  })
 
   it('덮개는 앱 틀(위 띠·상태 띠) 위, 떠 있는 것(대화상자·찾기·그림 보기·투어·토스트·메뉴·명령 목록) 아래', () => {
     const pw = zOf(power, '.pw')
