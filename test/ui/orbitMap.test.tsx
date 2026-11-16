@@ -516,9 +516,9 @@ describe('관계도 장면', () => {
     expect(world(false).sats).toEqual([])
     const w = createWorld({
       agents: who(), W: 748, H: 580, calm: false, rand: mulberry32(3),
-      satellites: [{ agentId: 'impl', label: '결제 흐름 조사' }, { agentId: 'lead', label: '서브 2' }, { agentId: 'gone', label: '모르는 부모' }],
+      satellites: [{ agentId: 'impl', label: '결제 흐름 조사' }, { agentId: 'lead', label: '서브에이전트' }, { agentId: 'gone', label: '모르는 부모' }],
     })
-    expect(w.sats.map(s => [s.name, s.parent])).toEqual([['결제 흐름 조사', 'impl'], ['서브 2', 'lead'], ['모르는 부모', 'lead']])
+    expect(w.sats.map(s => [s.name, s.parent])).toEqual([['결제 흐름 조사', 'impl'], ['서브에이전트', 'lead'], ['모르는 부모', 'lead']])
     run(w, 0.2)
     drawOverlay(fakeCtx(calls), w, null, 2)
     expect(texts()).toContain('결제 흐름 조사')

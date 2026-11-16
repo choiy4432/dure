@@ -78,7 +78,7 @@ describe('roomView', () => {
     expect(v.state).toEqual({ a: 'working', b: 'awaiting', e: 'awaiting', f: 'resting', g: 'resting', h: 'resting' })
   })
 
-  it('서브에이전트는_도는_진짜만_이름은_진짜_설명_없으면_서브_N', () => {
+  it('서브에이전트는_도는_진짜만_이름은_진짜_설명_없으면_서브에이전트', () => {
     const v = roomView(st({
       agents: [ag('a', 'r1', { subagentsRunning: ['t1', 't2'] }), ag('b', 'r1', { subagentsRunning: ['t3'] }), ag('c', 'r2', { subagentsRunning: ['t9'] })],
       history: {
@@ -92,7 +92,16 @@ describe('roomView', () => {
     expect(v.subagents).toEqual([
       { agentId: 'a', label: '결제 흐름 조사' },
       { agentId: 'a', label: '테스트 빈틈 찾기' },
-      { agentId: 'b', label: '서브 3' },
+      { agentId: 'b', label: '서브에이전트' },
     ])
+  })
+
+  it('설명_없는_서브에이전트의_이름은_앞의_것이_끝나도_바뀌지_않는다(번호로_다시_매기지_않는다)', () => {
+    const agents = (running: string[]) => [ag('a', 'r1', { subagentsRunning: running }), ag('b', 'r1', { subagentsRunning: ['t3'] })]
+    const before = roomView(st({ agents: agents(['t1', 't2']) }))
+    const after = roomView(st({ agents: agents(['t2']) })) // t1 이 끝났다
+    expect(before.subagents.at(-1)).toEqual({ agentId: 'b', label: '서브에이전트' })
+    expect(after.subagents.at(-1)).toEqual(before.subagents.at(-1))
+    expect(after.subagents.map(s => s.label)).toEqual(['서브에이전트', '서브에이전트'])
   })
 })

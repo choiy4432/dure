@@ -37,7 +37,7 @@ function api(agents: object[], o: { history?: Record<string, unknown[]>; termina
   return rooms.length > 0
 }
 
-async function mount(agents: object[], o: { history?: Record<string, unknown[]>; select?: string; onExit?: () => void } = {}) {
+async function mount(agents: object[], o: { history?: Record<string, unknown[]>; select?: string; preload?: string[]; onExit?: () => void } = {}) {
   vi.resetModules()
   const hasRoom = api(agents, o)
   const { getStore } = await import('../../src/renderer/state/store')
@@ -45,6 +45,9 @@ async function mount(agents: object[], o: { history?: Record<string, unknown[]>;
   const store = getStore()
   await act(async () => { await store.init() })
   if (hasRoom) act(() => { store.selectRoom('r1') })
+  // 기록만 불러 두고 고르기는 푼다(옆 칸은 기록 — 대화 패널이 그 기록을 그리지 않는다)
+  for (const id of o.preload ?? []) await act(async () => { store.selectAgent(id) })
+  if (o.preload) act(() => { store.selectAgent(null) })
   if (o.select) await act(async () => { store.selectAgent(o.select!) })
   await act(async () => { await store.setPower(true) })
   historyCalls.length = 0 // 여기부터는 이 화면이 부르는 것만
@@ -205,6 +208,35 @@ describe('터미널 벽', () => {
     expect(lines('a')).toHaveLength(41)
     await wait(2000)
     expect(historyCalls).not.toContain('b')
+  })
+
+  it('켤_때_깔_기록에_이상한_줄이_있으면_그_창만_비고_벽은_뜬다_—_남기는_건_고정_문구와_오류_종류뿐', async () => {
+    const hist = {
+      a: [
+        { t: 1, kind: 'assistant', blocks: [{ type: 'tool_use', id: 'u', name: 'Read', input: { file_path: 'C:\\비밀\\고객명단.ts' } }] },
+        // 이상한 줄 — 결과 글이 없고 patch 줄이 배열이 아니다
+        { t: 2, kind: 'tool-result', toolUseId: 'u', isError: false, viaApproval: false, patch: [{ oldStart: 1, newStart: 1, lines: null }] },
+      ],
+      b: [{ t: 3, kind: 'assistant', blocks: [{ type: 'text', text: '베타의 답' }] }],
+    }
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await mount([agent('a', { name: '알파' }), agent('b', { name: '베타' })], { history: hist, preload: ['a', 'b'] })
+      expect(panes()).toHaveLength(2)
+      expect(lines('a')).toEqual(['기다리는 중…'])
+      expect(lines('b')).toEqual(['베타의 답'])
+      // 그 창도 뒤에 오는 진짜 사건은 평소대로
+      await emit('history', { agentId: 'a', item: toolItem('Grep', { pattern: 'fresh' }) })
+      await frame()
+      expect(lines('a')).toEqual(['● Grep(fresh)'])
+      const { PREFILL_FAILED } = await import('../../src/renderer/power/TerminalWall')
+      expect(err.mock.calls).toEqual([[PREFILL_FAILED, 'TypeError']])
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      err.mockRestore()
+      warn.mockRestore()
+    }
   })
 
   it('창_클릭_→_selectAgent', async () => {

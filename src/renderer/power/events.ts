@@ -20,11 +20,31 @@ export type ScreenEvent =
   /** 차례 끝 */
   | { kind: 'done'; agentId: string; at: number }
 
-/** 줄바꿈을 칸으로 바꾸고, max 를 넘으면 '…' 로 끝나게 max 글자로 자른다. */
+/**
+ * 줄바꿈이 든 빈칸 뭉치를 칸 하나로(정규식 `\s*[\r\n]+\s*` 를 모두 ' ' 로 바꾼 것과 같은 결과) — 한 번 훑고 끝난다.
+ * 그 정규식은 줄바꿈 없는 긴 빈칸 뭉치에서 되짚기로 제곱 시간이 든다(빈칸 5만 개에 1초 넘게)
+ */
+function collapseBreaks(s: string): string {
+  const parts = s.split(/[\r\n]+/)
+  if (parts.length === 1) return s
+  const out = [parts[0].trimEnd()]
+  for (let i = 1; i < parts.length - 1; i++) {
+    const p = parts[i].trim()
+    if (p) out.push(p) // 빈칸뿐인 줄은 앞뒤 뭉치와 하나
+  }
+  out.push(parts[parts.length - 1].trimStart())
+  return out.join(' ')
+}
+
+/**
+ * 줄바꿈을 칸으로 바꾸고, max 를 넘으면 '…' 로 끝나게 max 글자로 자른다.
+ * 입력 길이에 상한이 없어(듣기는 스토어의 사건 길에서 돈다) 앞 max×4 글자만 본다 — 잘라 냈으면 늘 '…' 로 끝난다
+ */
 export const oneLine = (s: string, max: number): string => {
-  const t = s.replace(/\s*[\r\n]+\s*/g, ' ')
   if (max <= 0) return ''
-  return t.length <= max ? t : t.slice(0, max - 1) + '…'
+  const cut = s.length > max * 4
+  const t = collapseBreaks(cut ? s.slice(0, max * 4) : s)
+  return !cut && t.length <= max ? t : t.slice(0, max - 1) + '…'
 }
 
 /**

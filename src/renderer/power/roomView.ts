@@ -12,9 +12,12 @@ export type PowerView = {
   roomName: string | null
   agents: PowerAgent[]
   state: Record<AgentId, AgentState>
-  /** 지금 도는 진짜 서브에이전트 — 이름은 맡긴 일의 설명(모르면 '서브 N') */
+  /** 지금 도는 진짜 서브에이전트 — 이름은 맡긴 일의 설명(모르면 '서브에이전트') */
   subagents: { agentId: AgentId; label: string }[]
 }
+
+/** 설명을 모르는 서브에이전트의 이름 */
+const SUB_FALLBACK = '서브에이전트'
 
 const EMPTY: PowerView = { roomName: null, agents: [], state: {}, subagents: [] }
 
@@ -58,7 +61,8 @@ export function roomView(s: UiState): PowerView {
     state[a.id] = stateOf(displayStatus(a, s.requests))
     for (const t of a.subagentsRunning) {
       const label = subagentLabel(s.history[a.id], t)
-      subagents.push({ agentId: a.id, label: label ? oneLine(label, TEXT_MAX) : `서브 ${subagents.length + 1}` })
+      // 설명을 모르면 그냥 '서브에이전트' — 차례 번호를 붙이면 앞의 것이 끝날 때 남은 위성 이름이 밀린다
+      subagents.push({ agentId: a.id, label: label ? oneLine(label, TEXT_MAX) : SUB_FALLBACK })
     }
   })
   return { roomName: room.name, agents, state, subagents }

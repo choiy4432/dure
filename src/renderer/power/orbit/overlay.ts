@@ -75,7 +75,7 @@ function tickLabels(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.textAlign = 'start'
 }
 
-/** 위성 이름표 — 위성 바로 아래 가운데(진짜 설명, 없으면 '서브 N') */
+/** 위성 이름표 — 위성 바로 아래 가운데(진짜 설명, 없으면 '서브에이전트') */
 function satLabels(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.font = `11px ${w.fonts.mono}`
   ctx.textAlign = 'center'

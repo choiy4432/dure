@@ -22,6 +22,45 @@ describe('oneLine', () => {
     expect(oneLine('abcdef', 3).length).toBe(3)
   })
 
+  it('긴_빈칸_뭉치도_곧바로_끝나고_max_를_넘지_않는다(입력_길이에_상한이_없어도)', () => {
+    const inputs = [
+      ' '.repeat(50_000) + '\n' + 'text',
+      ' '.repeat(50_000) + 'text', // 줄바꿈이 없는 빈칸 뭉치 — 되짚기 정규식이 제곱으로 느려지던 꼴
+      '\t 　'.repeat(20_000) + '\r\n' + 'x'.repeat(50_000),
+    ]
+    for (const s of inputs) {
+      const t0 = performance.now()
+      const out = oneLine(s, TEXT_MAX)
+      expect(performance.now() - t0).toBeLessThan(50)
+      expect(out.length).toBeLessThanOrEqual(TEXT_MAX)
+    }
+  })
+
+  it('줄바꿈이_든_빈칸_뭉치_하나는_칸_하나로_—_줄바꿈_없는_빈칸은_그대로', () => {
+    expect(oneLine('a  \n  b', 80)).toBe('a b')
+    expect(oneLine('a\n \t\n b', 80)).toBe('a b')
+    expect(oneLine('a\r\n\r\nb', 80)).toBe('a b')
+    expect(oneLine('  a  b  ', 80)).toBe('  a  b  ')
+    expect(oneLine('\na', 80)).toBe(' a')
+    expect(oneLine('a\n', 80)).toBe('a ')
+    expect(oneLine('　\n　', 80)).toBe(' ')
+  })
+
+  it('짧은_글에선_예전_정규식과_같은_결과(무작위_비교)', () => {
+    const old = (s: string) => s.replace(/\s*[\r\n]+\s*/g, ' ')
+    const ABC = [' ', '\t', '\n', '\r', 'a', 'b', '　']
+    let seed = 7
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31)
+    for (let n = 0; n < 2000; n++) {
+      const s = Array.from({ length: Math.floor(rnd() * 24) }, () => ABC[Math.floor(rnd() * ABC.length)]).join('')
+      expect({ s, out: oneLine(s, 200) }).toEqual({ s, out: old(s) })
+    }
+  })
+
+  it('앞을_잘라_내고_보니_짧아졌으면_그래도_…로_잘렸음을_보인다', () => {
+    expect(oneLine('a' + '\n'.repeat(1000) + 'b', 80)).toBe('a …')
+  })
+
   it('긴_진짜_도구_대상은_듣기를_지나면_80자이고_…로_끝난다', () => {
     const [ev] = historyEvents('a', tool('Read', { file_path: `C:\\work\\${'긴폴더\\'.repeat(100)}끝.ts` }), 1)
     if (ev.kind !== 'tool') throw new Error('tool 이 아니다')

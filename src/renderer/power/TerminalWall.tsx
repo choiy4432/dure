@@ -12,6 +12,9 @@ import { createPaneLines, Pane, type PaneLines } from './terminal/Pane'
 import { historyLines, linesOf, panesOf, pickPanes } from './terminal/lines'
 import { usePowerFeed } from './usePowerFeed'
 
+/** 켤 때 기록을 못 깐 창 — 콘솔에 남기는 고정 문구 */
+export const PREFILL_FAILED = '두레: 터미널 벽에 켤 때의 기록을 깔지 못했어요'
+
 const pad2 = (n: number) => String(n).padStart(2, '0')
 const clock = () => {
   const d = new Date()
@@ -65,14 +68,22 @@ export function TerminalWall({ onExit, onSettings }: { onExit: () => void; onSet
   for (const a of view.agents) names.current.set(a.id, a.name)
   const nameOf = useCallback((id: string) => names.current.get(id) ?? '?', [])
 
-  // 켜는 순간 스토어에 불러와 있는 기록만 깐다(이 화면은 기록을 불러오지 않는다)
+  // 켜는 순간 스토어에 불러와 있는 기록만 깐다(이 화면은 기록을 불러오지 않는다).
+  // 그리는 중에 돈다 — 기록에 바꿀 수 없는 줄이 있으면 그 창만 비워 두고 넘어간다(앱이 통째로 넘어지지 않게).
+  // 남기는 건 스토어의 듣기처럼 고정 문구와 오류 종류뿐(기록 글·오류 글에 대화·파일 이름이 들 수 있다)
   const lines = useRef<PaneLines | undefined>(undefined)
   if (!lines.current) {
     const pl = createPaneLines()
     const history = getStore().getState().history
     for (const a of view.agents) {
       const items = history[a.id]
-      if (items?.length) pl.seed(a.id, historyLines(a.id, items, nameOf))
+      if (!items?.length) continue
+      try {
+        pl.seed(a.id, historyLines(a.id, items, nameOf))
+      } catch (e) {
+        // 빈 창(기다리는 중…) — 뒤에 오는 진짜 사건은 평소대로 붙는다
+        console.error(PREFILL_FAILED, e instanceof Error ? e.name : typeof e)
+      }
     }
     lines.current = pl
   }
