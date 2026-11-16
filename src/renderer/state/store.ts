@@ -6,6 +6,8 @@ import type { PhoneState } from '../../shared/phoneTypes'
 import { displayStatus, effectiveSetup, type EdgeMode, type Phase } from './selectors'
 import { markFresh } from '../map/freshNodes'
 import { onPhone } from '../lib/phone'
+import { handoffEvent, toolEvents } from '../power/tap'
+import type { ScreenEvent } from '../power/events'
 import { nextStep, tourAt, type TourState } from '../tour/tourSteps'
 
 /** 엔진 없이 도는 앱 쪽 상태 — 준비 화면·업데이트 토스트·설정·투어가 읽는다 */
@@ -99,6 +101,8 @@ export type UiState = Snapshot & {
   roomMenuRequest: number
   /** 지난 대화에서 새 에이전트로 이어 가는 창의 초안 — 없으면 창이 닫혀 있다 */
   forkDraft: ForkDraft | null
+  /** 파워 모드 — 켜짐과 켤 때 굳힌 방(꺼지면 null) */
+  power: { on: boolean; roomId: RoomId | null }
   /** 안내 투어 — 없으면 null. 처음 켠 새 사용자에겐 저절로 '환영'(tourSteps · TourLayer 가 넘긴다) */
   tour: TourState
 }
@@ -169,6 +173,10 @@ export interface Store {
   recentAgents(): AgentId[]
   /** 관계도 선 보기를 바꾸고 이 PC 에 기억한다 */
   setEdgeMode(mode: EdgeMode): void
+  /** 파워 모드를 켜고 끈다 — 켤 때 지금 방을 굳힌다. main 이 거절하면 되돌리고 던진다 */
+  setPower(on: boolean): Promise<void>
+  /** 굳힌 방 에이전트의 진짜 도구 사용·메시지 넘김을 듣는다(스토어 상태는 안 바뀐다). 끄는 함수를 돌려준다 */
+  onPowerEvent(fn: (ev: ScreenEvent) => void): () => void
   /**
    * 그 에이전트의 방으로 바꾸고(다르면) 고르고, 관계도에 그 카드를 보이게 해 달라고 한다(mapFocus) — 기록도 불러온다. 모르는 id 면 아무것도 안 한다.
    * focusInput 이면 그 입력창에 커서(inputFocus — 찾기 창에서 고름)
@@ -297,7 +305,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     app: { info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false, phone: null },
     claudeMissing: false, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 0, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: SLEEP_DEFAULT_MIN, usage: null,
     roomId: null, selectedAgentId: null, history: {}, historyStatus: {}, hasOlder: {}, inputFocus: null, streaming: {}, thinking: {}, phase: {}, lastText: {}, lastDelivered: {},
-    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, hitFocus: null, readCurrent: null, mapFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null,
+    statusSince: {}, loadError: null, panelTab: {}, subagentFocus: null, messageFocus: null, hitFocus: null, readCurrent: null, mapFocus: null, edgeMode: readEdgeMode(), placeNear: {}, fresh: {}, roomMenuRequest: 0, forkDraft: null, power: { on: false, roomId: null },
     tour: null,
   }
   const listeners = new Set<() => void>()
@@ -362,7 +370,26 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     state = { ...state, ...snap, roomId, selectedAgentId, statusSince, loadError: null }
   }
 
+  // 파워 모드 듣기 — 스토어가 버리기 전의 'history'·'message' 사건을 본다(상태는 안 건드린다)
+  const powerListeners = new Set<(ev: ScreenEvent) => void>()
+  const powerSeen = new Set<string>() // 켤 때 이미 있던 + 켠 뒤 본 메시지 id
+  const tapPower = (ev: Ev, at: number) => {
+    if (!state.power.on) return
+    let out: ScreenEvent[] = []
+    if (ev.name === 'message') {
+      const m = ev.payload
+      if (powerSeen.has(m.id)) return
+      powerSeen.add(m.id)
+      if (m.roomId === state.power.roomId) out = [handoffEvent(m, at)]
+    } else if (ev.name === 'history') {
+      const a = state.agents.find(x => x.id === ev.payload.agentId)
+      if (a && a.roomId === state.power.roomId) out = toolEvents(a.id, ev.payload.item, at)
+    }
+    for (const e of out) for (const fn of [...powerListeners]) fn(e)
+  }
+
   const applyEvent = (ev: Ev, at: number) => {
+    tapPower(ev, at)
     switch (ev.name) {
       case 'status': {
         const p = ev.payload
@@ -1061,6 +1088,23 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     },
     recentAgents() {
       return recent.filter(id => state.agents.some(a => a.id === id))
+    },
+    async setPower(on) {
+      const before = state.power
+      powerSeen.clear()
+      if (on) for (const m of state.messages) powerSeen.add(m.id)
+      set({ ...state, power: on ? { on: true, roomId: state.roomId } : { on: false, roomId: null } })
+      try {
+        await api.setPowerMode(on)
+      } catch (e) {
+        powerSeen.clear()
+        set({ ...state, power: before })
+        throw e
+      }
+    },
+    onPowerEvent(fn) {
+      powerListeners.add(fn)
+      return () => { powerListeners.delete(fn) }
     },
     setEdgeMode(mode) {
       if (state.edgeMode === mode) return

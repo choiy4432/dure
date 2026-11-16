@@ -1568,3 +1568,89 @@ describe('store 투어', () => {
     expect(s.getState().tour).toBeNull()
   })
 })
+
+describe('파워 모드', () => {
+  const tool = (name: string, input: unknown, parent?: string): HistoryItem => ({ t: 5, kind: 'assistant', blocks: [{ type: 'tool_use', id: 'u', name, input }], ...(parent ? { parent } : {}) })
+  const power = async (opts: Parameters<typeof fake>[0] = {}, setPowerMode?: () => Promise<void>) => {
+    const f = fake(opts)
+    ;(f.api as any).setPowerMode = vi.fn(setPowerMode ?? (async () => {}))
+    const s = createStore(f.api)
+    await s.init()
+    return { ...f, s }
+  }
+
+  it('setPower_true_는_방을_굳히고_api_를_부른다', async () => {
+    const { api, s } = await power()
+    s.selectRoom('r2')
+    await s.setPower(true)
+    expect(s.getState().power).toEqual({ on: true, roomId: 'r2' })
+    expect((api as any).setPowerMode).toHaveBeenCalledWith(true)
+    await s.setPower(false)
+    expect(s.getState().power).toEqual({ on: false, roomId: null })
+  })
+
+  it('api_가_던지면_on_false_로_돌아간다', async () => {
+    const { s } = await power({}, async () => { throw new Error('안 됨') })
+    await expect(s.setPower(true)).rejects.toThrow('안 됨')
+    expect(s.getState().power).toEqual({ on: false, roomId: null })
+  })
+
+  it('tool_use_가_듣는_이에게_간다(고르지 않은 에이전트 것도)', async () => {
+    const { s, emit } = await power()
+    const got: any[] = []
+    s.onPowerEvent(e => got.push(e))
+    await s.setPower(true)
+    expect(s.getState().selectedAgentId).toBeNull()
+    emit('history', { agentId: 'b', item: tool('Read', { file_path: 'src/a.ts' }) })
+    emit('history', { agentId: 'b', item: tool('Bash', { count: 3 }) })
+    expect(got).toMatchObject([{ kind: 'tool', agentId: 'b', tool: 'Read', target: 'src/a.ts', real: true }, { tool: 'Bash', target: '' }])
+  })
+
+  it('다른_방_에이전트는_안_간다', async () => {
+    const { s, emit } = await power()
+    const got: any[] = []
+    s.onPowerEvent(e => got.push(e))
+    await s.setPower(true)
+    emit('history', { agentId: 'c', item: tool('Read', { path: 'x' }) })
+    emit('message', relay('m9', 'pending', { roomId: 'r2' }))
+    expect(got).toEqual([])
+  })
+
+  it('parent_있는_줄은_안_간다', async () => {
+    const { s, emit } = await power()
+    const got: any[] = []
+    s.onPowerEvent(e => got.push(e))
+    await s.setPower(true)
+    emit('history', { agentId: 'a', item: tool('Read', { path: 'x' }, 'p1') })
+    expect(got).toEqual([])
+  })
+
+  it('켜기_전_메시지_100개는_안_쏜다', async () => {
+    const old = Array.from({ length: 100 }, (_, i) => relay(`o${i}`, 'delivered'))
+    const { s, emit } = await power({ snapshot: async () => snap({ messages: old }) })
+    const got: any[] = []
+    s.onPowerEvent(e => got.push(e))
+    await s.setPower(true)
+    emit('message', relay('o3', 'read', { updatedAt: 9 }))
+    expect(got).toEqual([])
+  })
+
+  it('켠_뒤_새_id_는_한_번만', async () => {
+    const { s, emit } = await power()
+    const got: any[] = []
+    s.onPowerEvent(e => got.push(e))
+    await s.setPower(true)
+    emit('message', relay('n1', 'pending', { text: '넘겨요', updatedAt: 2 }))
+    emit('message', relay('n1', 'delivered', { updatedAt: 3 }))
+    emit('message', relay('n1', 'read', { updatedAt: 4 }))
+    expect(got).toMatchObject([{ kind: 'handoff', from: 'a', to: 'b', text: '넘겨요', real: true }])
+  })
+
+  it('듣는_이가_없으면_history_상태는_그대로', async () => {
+    const { s, emit } = await power()
+    await s.setPower(true)
+    emit('history', { agentId: 'b', item: tool('Read', { path: 'x' }) })
+    expect(s.getState().history.b).toBeUndefined()
+    expect(s.getState().lastText).toEqual({})
+  })
+})
