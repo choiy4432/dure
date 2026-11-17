@@ -4,7 +4,8 @@
 import { near, projectTo, type Proj } from './camera'
 import { CORE_Y, FLOOR_Y } from './layout'
 import { GALAXY_RGB, RGB, SHARD_CORE, WHITE, hexA, rgbOf, shade } from './palette'
-import { LIFE, colorOf, orbitPoint, orbitTurn, satPoint, type World } from './world'
+import { beforeSwap, jumpK, outK } from './transition'
+import { LIFE, colorOf, fxAlpha, fxOf, orbitPoint, orbitTurn, satPoint, type World } from './world'
 
 /** 잔상 층 세기(시안 S) */
 const S = 0.24
@@ -12,6 +13,8 @@ const S = 0.24
 const FADE = 0.2
 /** 차분 모드의 동기화 빛 세기 */
 const FLARE_CALM = 0.35
+/** 방을 옮기며 카드가 빨려 드는 동안 핵이 밝아지는 최대 몫 */
+const PULL_GLOW = 0.45
 const TAU = Math.PI * 2
 const DASH_LINK = [4, 9]
 const DASH_SAT = [2, 5]
@@ -90,7 +93,17 @@ function floor(x: CanvasRenderingContext2D, w: World): void {
   }
   const pk = (w.t % 2.4) / 2.4
   ring(x, w, RA * 2.1 * pk, FLOOR_Y, 90, RGB.pulse, 0, 0.5 * (1 - pk), 1.6)
+  // 방을 옮기는 도약 — 맥박이 연달아 퍼진다(세기만큼 진하게)
+  const j = jumpK(w.tr)
+  if (j > 0)
+    for (let i = 0; i < JUMP_PULSES; i++) {
+      const q = (w.t / JUMP_PULSE_SEC + i / JUMP_PULSES) % 1
+      ring(x, w, RA * 2.1 * q, FLOOR_Y, 48, RGB.pulse, 0, 0.7 * (1 - q) * j, 1.8)
+    }
 }
+/** 도약 때 바닥 맥박 — 겹쳐 퍼지는 고리 수 · 한 고리가 끝까지 퍼지는 시간(초) */
+const JUMP_PULSES = 3
+const JUMP_PULSE_SEC = 0.42
 
 /** 은하 — 세 팔 소용돌이. 동기화 땐 빨리 돌고 진해져 줄무늬가 된다 */
 function galaxy(x: CanvasRenderingContext2D, w: World): void {
@@ -118,12 +131,15 @@ function disc(x: CanvasRenderingContext2D, w: World): void {
   }
 }
 
-/** 에이전트마다 제 궤도(기울기가 다르다) + 지나온 길 + 핵으로 가는 점선 + 바닥으로 내린 선 */
+/** 에이전트마다 제 궤도(기울기가 다르다) + 지나온 길 + 핵으로 가는 점선 + 바닥으로 내린 선. 방을 옮기는 동안 궤도는 노드와 함께 줄고 늘며 흐려진다 */
 function orbits(x: CanvasRenderingContext2D, w: World): void {
   const N = 96
   const turn = orbitTurn(w)
   const c = w.pos.get(w.core.id)!
   for (const o of w.orbits) {
+    const p = w.pos.get(o.id)!
+    const a = p.a
+    if (a <= 0) continue
     const rgb = rgbOf(colorOf(w, o.id))
     let v = orbitPoint(w, o, turn)
     projectTo(Q, w.cam, v[0], v[1], v[2])
@@ -133,14 +149,13 @@ function orbits(x: CanvasRenderingContext2D, w: World): void {
       const back = 1 - i / N
       const tail = back < 0.2 ? 1 - back / 0.2 : 0
       const nr = near(P, w.RA)
-      x.strokeStyle = shade(rgb, S * (0.18 + 0.5 * nr) + tail * 0.5 * (0.4 + 0.6 * nr))
+      x.strokeStyle = shade(rgb, (S * (0.18 + 0.5 * nr) + tail * 0.5 * (0.4 + 0.6 * nr)) * a)
       x.lineWidth = 1 + tail * 2.2
       line(x, Q.x, Q.y, P.x, P.y)
       Q.x = P.x
       Q.y = P.y
     }
-    const p = w.pos.get(o.id)!
-    x.strokeStyle = shade(rgb, S * (0.3 + p.z * 0.7))
+    x.strokeStyle = shade(rgb, S * (0.3 + p.z * 0.7) * a)
     x.lineWidth = 1
     x.setLineDash(DASH_LINK)
     x.lineDashOffset = -w.t * 40
@@ -148,9 +163,9 @@ function orbits(x: CanvasRenderingContext2D, w: World): void {
     x.setLineDash(NO_DASH)
     const wp = w.wpos.get(o.id)!
     projectTo(P, w.cam, wp[0], FLOOR_Y, wp[2])
-    x.strokeStyle = shade(rgb, S * 0.9)
+    x.strokeStyle = shade(rgb, S * 0.9 * a)
     line(x, p.x, p.y, P.x, P.y)
-    x.fillStyle = shade(rgb, 0.5)
+    x.fillStyle = shade(rgb, 0.5 * a)
     x.beginPath()
     x.ellipse(P.x, P.y, 7 * P.f, 7 * P.f * Math.sin(w.cam.e), 0, 0, TAU)
     x.fill()
@@ -175,15 +190,21 @@ function ticks(x: CanvasRenderingContext2D, w: World): void {
   }
 }
 
-/** 핵 — 빛(밝기·크기는 w.energy = 최근 진짜 도구 사용, 쉬면 낮게. 동기화 땐 터지는 빛과 충격파), 빛기둥, 이중 나선, 자이로 고리 셋 */
+/**
+ * 핵 — 빛(밝기·크기는 w.energy = 최근 진짜 도구 사용, 쉬면 낮게. 동기화 땐 터지는 빛과 충격파), 빛기둥, 이중 나선, 자이로 고리 셋.
+ * 방을 옮기며 카드가 빨려 드는 동안은 점점 밝아지고, 새 방으로 바꿔 끼우는 순간 번쩍인다(flare). 에이전트가 없으면(빈 방) 핵도 없다
+ */
 function core(x: CanvasRenderingContext2D, w: World): void {
   const t = w.t
-  const c = w.pos.get(w.core.id)!
+  const c = w.pos.get(w.core.id)
+  if (!c) return
   const fk = (t - w.flare) / LIFE.flare
   const fl = (fk >= 0 && fk < 1 ? 1 - fk : 0) * (w.calm ? FLARE_CALM : 1)
-  const cr = 110 + w.energy * 90 + fl * 130
+  // 잔상 층에 쌓이는 빛이라 조금만 더해도 크게 밝아진다(도약 중엔 덜 지워져 더) — 하얗게 날아가지 않을 만큼만
+  const pull = beforeSwap(w.tr) && !w.calm ? outK(w.tr) * PULL_GLOW : 0
+  const cr = 110 + w.energy * 90 + fl * 130 + pull * 60
   const gr = x.createRadialGradient(c.x, c.y, 6, c.x, c.y, cr)
-  gr.addColorStop(0, shade(RGB.glow, S * (0.3 + w.energy * 0.7 + fl)))
+  gr.addColorStop(0, shade(RGB.glow, S * (0.3 + w.energy * 0.7 + fl + pull)))
   gr.addColorStop(1, shade(RGB.glowEdge, 0))
   x.fillStyle = gr
   x.beginPath()
@@ -248,12 +269,16 @@ function core(x: CanvasRenderingContext2D, w: World): void {
 /** 달 — 에이전트 둘레를 빠르게(혼자면 핵 둘레) */
 function moons(x: CanvasRenderingContext2D, w: World): void {
   for (const [id, list] of w.moons) {
+    const fx = fxOf(w, id)
+    if (fx <= 0) continue // 방을 옮기는 중 — 부모와 함께 빨려 들었거나 부모가 아직 자리 잡지 않았다
     const wp = w.wpos.get(id)!
     const z = w.pos.get(id)!.z
-    x.fillStyle = hexA(colorOf(w, id), 0.5 + z * 0.5)
+    const s = w.fly.get(id)?.s ?? 1
+    x.fillStyle = hexA(colorOf(w, id), (0.5 + z * 0.5) * fx)
     for (const m of list) {
       const an = m.ph + w.t * m.w
-      projectTo(P, w.cam, wp[0] + Math.cos(an) * m.r, wp[1] + Math.sin(an) * m.r * m.tilt, wp[2] + Math.sin(an) * m.r)
+      const r = m.r * s
+      projectTo(P, w.cam, wp[0] + Math.cos(an) * r, wp[1] + Math.sin(an) * r * m.tilt, wp[2] + Math.sin(an) * r)
       x.beginPath()
       x.arc(P.x, P.y, 2.4 * P.f, 0, TAU)
       x.fill()
@@ -265,15 +290,17 @@ function moons(x: CanvasRenderingContext2D, w: World): void {
 function satellites(x: CanvasRenderingContext2D, w: World): void {
   x.lineWidth = 1
   for (const s of w.sats) {
+    const fx = fxOf(w, s.parent)
+    if (fx <= 0) continue
     satPoint(w, s, P)
     const q = w.pos.get(s.parent)!
     const col = colorOf(w, s.parent)
-    x.strokeStyle = hexA(col, S * 0.9)
+    x.strokeStyle = hexA(col, S * 0.9 * fx)
     x.setLineDash(DASH_SAT)
     x.lineDashOffset = -w.t * 30
     line(x, P.x, P.y, q.x, q.y)
     x.setLineDash(NO_DASH)
-    x.fillStyle = hexA(col, 0.95)
+    x.fillStyle = hexA(col, 0.95 * fx)
     x.beginPath()
     x.arc(P.x, P.y, 3.2 * P.f, 0, TAU)
     x.fill()
@@ -283,6 +310,7 @@ function satellites(x: CanvasRenderingContext2D, w: World): void {
 /** 데이터 조각 — 도구를 쓴 에이전트에서 궤도를 따라 감기며 핵으로 빨려 든다 */
 function shards(x: CanvasRenderingContext2D, w: World): void {
   const turn = orbitTurn(w)
+  const fa = fxAlpha(w)
   for (const s of w.shards) {
     const o = w.orbitById.get(s.id)
     if (!o) continue
@@ -291,21 +319,22 @@ function shards(x: CanvasRenderingContext2D, w: World): void {
     const v = orbitPoint(w, o, turn + e * 2.6)
     const sc = 1 - e
     projectTo(P, w.cam, v[0] * sc, v[1] * sc + CORE_Y * e + Math.sin(Math.PI * e) * 30, v[2] * sc)
-    x.fillStyle = hexA(s.color, 0.95)
+    x.fillStyle = hexA(s.color, 0.95 * fa)
     x.beginPath()
     x.arc(P.x, P.y, 1.9, 0, TAU)
     x.fill()
-    x.fillStyle = SHARD_CORE
+    x.fillStyle = fa < 1 ? hexA(WHITE, 0.8 * fa) : SHARD_CORE
     x.fillRect(P.x - 0.6, P.y - 0.6, 1.2, 1.2)
   }
 }
 
 /** 불꽃 — 넘김을 받은 자리에서 튀어 바닥으로 떨어진다 */
 function sparks(x: CanvasRenderingContext2D, w: World): void {
+  const fa = fxAlpha(w)
   for (const s of w.sparks) {
     const k = (w.t - s.t0) / LIFE.spark
     projectTo(P, w.cam, s.x, Math.max(FLOOR_Y, s.y), s.z)
-    x.fillStyle = hexA(s.color, 1 - k)
+    x.fillStyle = hexA(s.color, (1 - k) * fa)
     x.fillRect(P.x - 0.9, P.y - 0.9, 1.8, 1.8)
   }
 }

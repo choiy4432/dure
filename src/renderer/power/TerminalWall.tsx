@@ -1,21 +1,32 @@
 // 터미널 벽 — 왼쪽 창 격자(창 하나 = 에이전트 한 명, 최대 6) · 오른쪽 옆 칸(관제실과 같은 대화 | 기록) · 아래 상태 줄([두레] · 방 단추 · 창 이름).
 // 창에 흐르는 줄은 전부 진짜 사건에서(그 방을 처음 볼 때는 스토어에 이미 불러와 있는 기록에서). 지어낸 창·줄·숫자는 없다.
 // 창 줄·기록·숫자는 방마다 따로(roomMemory) — 방을 옮기면 그 방 창으로 바뀌고, 돌아오면 남겨 둔 줄이 그대로 보인다.
+// 방을 옮길 때 창 격자는 두 걸음: 옛 창이 위에서 아래로 지워지듯 꺼지고(0.35초) 새 방 창 격자가 켜진다(0.35초, 제목 줄 먼저).
+// 움직임 줄이기면 새 창이 바로 0.2초 흐려졌다 나타난다. 클래스는 걸음이 바뀔 때만 바꾼다(줄마다 JS 없음 — power.css).
 // 줄은 DOM 에 바로 붙인다(사건마다 React 상태를 바꾸지 않는다) — 글자는 textContent 로만.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { reducedMotion } from '../lib/motion'
 import { getStore, useDure } from '../state/store'
 import { LiveLog } from './control/LiveLog'
-import { batched, type PowerAgent, type ScreenEvent } from './events'
+import { batched, type AgentState, type PowerAgent, type ScreenEvent } from './events'
 import { PowerControls } from './PowerControls'
 import { RoomSwitch } from './RoomSwitch'
 import { useRoomMemory, type RoomMemory } from './roomMemory'
 import { SidePanel } from './SidePanel'
 import { createPaneLines, MAX_LINES, Pane, type PaneLines } from './terminal/Pane'
 import { historyLines, linesOf, panesOf, pickPanes } from './terminal/lines'
-import { usePowerFeed, useRoomChange } from './usePowerFeed'
+import { usePowerFeed, useRoomChange, useSwapFade } from './usePowerFeed'
 
 /** 처음 보는 방의 창에 기록을 못 깔았다 — 콘솔에 남기는 고정 문구 */
 export const PREFILL_FAILED = '두레: 터미널 벽에 켤 때의 기록을 깔지 못했어요'
+
+/** 창 격자 전환(ms) — 옛 창 꺼짐 · 새 창 켜짐 · 움직임 줄이기면 켜짐(흐려짐)만. power.css 의 .pw-t-off · .pw-t-on 과 같은 길이 */
+export const WALL_MS = { off: 350, on: 350, calm: 200 } as const
+
+/** 창 격자의 지금 걸음 — shown: 보이는 격자의 방(room.n) · phase: 꺼지는 중 | 켜지는 중 | 평소('') */
+type Wall = { shown: number; phase: '' | 'off' | 'on' }
+/** 보이는 격자가 그리는 것 — 옛 방 격자가 꺼지는 동안은 그 방의 마지막 모습 그대로 */
+type Grid = { panes: PowerAgent[]; total: number; state: Record<string, AgentState>; pl: PaneLines }
 
 const pad2 = (n: number) => String(n).padStart(2, '0')
 const clock = () => {
@@ -60,9 +71,16 @@ function WallLog({ agents, subscribe, memory }: { agents: PowerAgent[]; subscrib
 
 export function TerminalWall({ onExit, onSettings }: { onExit: () => void; onSettings?: () => void }) {
   const { view, subscribe } = usePowerFeed()
-  // 전환 신호 — 방이 바뀐 그 그리기에서 안다. 창 줄 상자와 창 격자를 새 방 것으로 다시 짓는다(전환 연출은 이 자리 — Task 2)
+  // 전환 신호 — 방이 바뀐 그 그리기에서 안다. 창 줄 상자는 바로 새 방 것으로 짓고, 창 격자는 옛 창을 지운 뒤 켠다
   const room = useRoomChange(view.roomId)
   const memory = useRoomMemory(view.roomId)
+  const root = useRef<HTMLDivElement>(null)
+  useSwapFade(room.n, root, '.pw-side')
+  // 움직임 줄이기 — 덮개 판의 data-calm(또는 OS 설정)을 붙을 때 한 번 읽는다
+  const calm = useRef(reducedMotion())
+  useLayoutEffect(() => {
+    calm.current = !!root.current?.closest('[data-calm]') || reducedMotion()
+  }, [])
   const selected = useDure(s => s.selectedAgentId)
   // 창을 누르면 관제실의 카드처럼 그 에이전트를 고르고 옆 칸을 대화로 — 입력창에 커서는 주지 않는다(Esc 길게가 되게, ControlRoom 과 같다)
   const [picks, setPicks] = useState(0)
@@ -110,19 +128,42 @@ export function TerminalWall({ onExit, onSettings }: { onExit: () => void; onSet
   )
   useEffect(() => () => pl.stop(), [pl])
 
-  const n = shown.length
+  // 창 격자 전환 — 방이 바뀐 그 그리기에서 걸음을 정한다. 꺼지는 중에 또 바뀌면 꺼짐은 이어 가고(끝나면 마지막 방이 켜진다),
+  // 켜지는 중에 바뀌면 지금 보이는 격자부터 다시 끈다. 움직임 줄이기면 끄지 않고 새 격자를 바로 켠다(흐려짐만)
+  const [wall, setWall] = useState<Wall>({ shown: room.n, phase: '' })
+  const [seen, setSeen] = useState(room.n)
+  if (seen !== room.n) {
+    setSeen(room.n)
+    if (calm.current) setWall({ shown: room.n, phase: 'on' })
+    else if (wall.phase !== 'off') setWall({ shown: wall.shown, phase: 'off' })
+  }
+  const roomN = useRef(room.n)
+  roomN.current = room.n
+  useEffect(() => {
+    if (!wall.phase) return
+    const ms = wall.phase === 'off' ? WALL_MS.off : calm.current ? WALL_MS.calm : WALL_MS.on
+    const id = setTimeout(() => setWall(w => (w.phase === 'off' ? { shown: roomN.current, phase: 'on' } : { ...w, phase: '' })), ms)
+    return () => clearTimeout(id)
+  }, [wall.phase, wall.shown])
+  // 보이는 격자 — 지금 방 것이면 지금 값, 옛 방 격자가 꺼지는 동안은 그 방의 마지막 모습(창·상태·줄 상자) 그대로(두 방 창이 섞이지 않게)
+  const grid = useRef<Grid>({ panes: shown, total: view.agents.length, state: view.state, pl })
+  if (wall.shown === room.n) grid.current = { panes: shown, total: view.agents.length, state: view.state, pl }
+  const g = grid.current
+
+  const n = g.panes.length
+  const cls = `pw-t-grid${n ? '' : ' pw-t-none'}${wall.phase ? ` pw-t-${wall.phase}` : ''}`
   return (
-    <div className="pw-t-wall" data-power-screen="terminal">
+    <div ref={root} className="pw-t-wall" data-power-screen="terminal">
       <div className="pw-t-main">
-        {/* 창 격자는 방이 바뀔 때마다(room.n) 새로 — 새 방의 창이 그 방 줄 상자에 붙는다 */}
+        {/* 창 격자는 보이는 방이 바뀔 때마다(wall.shown) 새로 — 새 방의 창이 그 방 줄 상자에 붙는다 */}
         {n ? (
-          <div key={room.n} className="pw-t-grid" data-n={n}>
-            {shown.map(a => (
-              <Pane key={a.id} agent={a} state={view.state[a.id] ?? 'resting'} selected={selected === a.id} lines={pl} onPick={pick} />
+          <div key={wall.shown} className={cls} data-n={n}>
+            {g.panes.map(a => (
+              <Pane key={a.id} agent={a} state={g.state[a.id] ?? 'resting'} selected={selected === a.id} lines={g.pl} onPick={pick} />
             ))}
           </div>
         ) : (
-          <div key={room.n} className="pw-t-grid pw-t-none">
+          <div key={wall.shown} className={cls}>
             <p className="pw-t-empty">이 방엔 에이전트가 없어요</p>
           </div>
         )}
@@ -131,13 +172,14 @@ export function TerminalWall({ onExit, onSettings }: { onExit: () => void; onSet
       <div className="pw-t-bar">
         <span className="pw-t-ses">[두레]</span>
         <RoomSwitch up />
+        {/* 창 이름은 보이는 격자의 창과 함께 바뀐다 */}
         <span className="pw-t-wins">
-          {shown.map((a, i) => (
+          {g.panes.map((a, i) => (
             <span key={a.id} className="pw-t-win" data-on={selected === a.id || undefined}>
               {`${i}:${a.name}${selected === a.id ? '*' : ''}`}
             </span>
           ))}
-          {view.agents.length > n && <span className="pw-t-win pw-t-more">외 {view.agents.length - n}명</span>}
+          {g.total > n && <span className="pw-t-win pw-t-more">외 {g.total - n}명</span>}
         </span>
         <span className="pw-t-rt">
           <PowerControls onSettings={onSettings} onExit={onExit} />

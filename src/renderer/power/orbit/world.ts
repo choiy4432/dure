@@ -1,15 +1,25 @@
 // 관계도 장면 상태 — 카메라·궤도·점·효과 목록을 만들고, 노드·위성·혜성의 자리를 구한다(시안 orbit3 의 init · place · cometPath).
 // DOM·캔버스 없음. 한 프레임 진행은 step.ts, 그리기는 scene.ts(잔상 층) · overlay.ts(또렷한 층)가 이 상태를 읽기만 한다.
+// 방을 옮길 때의 전환(transition.ts)은 노드마다 궤도 반지름·각·크기·불투명도 배수(fly)로 자리 잡기에 얹힌다.
 // 시간은 모두 장면 시계 w.t(초).
+import { easeOut5 } from '../../lib/motion'
 import type { AgentState, ScreenEvent } from '../events'
 import { CAM_D, CENTER_DROP, TILT, near, projectTo, type Cam, type Proj } from './camera'
 import { CORE_Y, FLOOR_Y, layoutOrbits, orbitRA, worldTo, type Orbit } from './layout'
 import { FALLBACK_AGENT, FALLBACK_FONTS } from './palette'
+import { IDLE, beforeSwap, inK, landK, outK, type Transition } from './transition'
 
 export type Who = { id: string; name: string; color: string }
 export type Vec3 = [number, number, number]
-/** 화면 위 노드 자리 — s 카드 배율 · z 앞쪽 정도(0~1) · o 밝기 */
-export type NodePos = { x: number; y: number; s: number; z: number; o: number }
+/** 화면 위 노드 자리 — s 카드 배율 · z 앞쪽 정도(0~1) · o 밝기 · a 불투명도(방을 옮길 때만 1 아래) */
+export type NodePos = { x: number; y: number; s: number; z: number; o: number; a: number }
+/**
+ * 방을 옮길 때 노드 하나에 얹는 배수 — r 궤도 반지름 · da 더 도는 각 · s 카드 크기 · a 카드 불투명도 · fx 딸린 것(달·위성·잎·물결·말풍선)의 불투명도.
+ * r0·da0·s0·a0 은 빨려 들기를 시작한 순간의 값(펼치던 중에 또 옮기면 그 자리에서 이어 빨려 든다). 평소엔 1 · 0 · 1 · 1 · 1
+ */
+export type Fly = { r: number; da: number; s: number; a: number; fx: number; r0: number; da0: number; s0: number; a0: number }
+/** 바꿔 끼울 새 방 — 전환이 그 자리에 이르면 이 노드·위성·상태로. tag 는 화면이 그 방을 아는 번호(RoomChange.n) */
+export type NextRoom = { agents: Who[]; satellites: SubLabel[]; states: Record<string, AgentState>; tag: number }
 export type Pt = { x: number; y: number }
 
 export type Comet = { from: string; to: string; t0: number; T: number; color: string; small: boolean; trail: Pt[]; text: string | null }
@@ -77,6 +87,16 @@ export type World = {
   boost: Boost
   /** 카드를 번쩍일 에이전트 — OrbitMap 이 프레임마다 비운다 */
   hits: string[]
+  /** 방 옮기기 전환(transition.ts) — 쉬는 중이면 IDLE */
+  tr: Transition
+  /** 지금 노드가 그리는 방의 번호(RoomChange.n) — 바꿔 끼우면 새 방 것 */
+  tag: number
+  /** 바꿔 끼울 새 방(전환 중, 바꿔 끼우기 전에만) */
+  next: NextRoom | null
+  /** 전환 중에 온 사건 — 버리지 않고 전환이 끝난 뒤에 그린다(queue 와 같은 상한) */
+  held: ScreenEvent[]
+  /** 노드마다 전환 배수 — 자리 잡기(place)가 진행도에서 구한다 */
+  fly: Map<string, Fly>
 }
 
 /** 궤도 한 바퀴 70초 */
@@ -97,6 +117,8 @@ const GYROS: Gyro[] = [
 ]
 /** 효과 수명(초) */
 export const LIFE = { ripple: 1, bubble: 2.9, leaf: 2.6, spark: 0.9, toast: 2.6, flare: 1.1 } as const
+/** 알림이 다 나타나기까지(수명의 몫) — 그 앞은 흐려졌다 나타난다 */
+export const TOAST_IN = 0.1
 const WAVE_N = 96
 /** 서브에이전트 위성 궤도(RA 배수) · 높이 */
 /** 궤도 노드 카드의 가장 어두운 밝기(먼 쪽) — 카드 글 대비 4.5:1 을 지키는 바닥(place) */
@@ -125,11 +147,10 @@ export function createWorld(o: {
   satellites?: SubLabel[]
   states?: Record<string, AgentState>
   fonts?: { mono: string; ui: string }
+  /** 이 노드들이 그리는 방의 번호(RoomChange.n) */
+  tag?: number
 }): World {
   const rand = o.rand ?? Math.random
-  const R = (a: number, b: number) => a + rand() * (b - a)
-  const { core, orbits } = layoutOrbits(o.agents.map(a => a.id))
-  const who = new Map(o.agents.map(a => [a.id, a]))
   const w: World = {
     W: 0,
     H: 0,
@@ -144,13 +165,13 @@ export function createWorld(o: {
     calm: o.calm,
     rand,
     fonts: o.fonts ?? FALLBACK_FONTS,
-    core: who.get(core) ?? { id: core, name: '', color: FALLBACK_AGENT },
-    who,
+    core: { id: '', name: '', color: FALLBACK_AGENT },
+    who: new Map(),
     states: o.states ?? {},
-    orbits,
-    orbitById: new Map(orbits.map(x => [x.id, x])),
-    wpos: new Map(o.agents.map(a => [a.id, [0, CORE_Y, 0] as Vec3])),
-    pos: new Map(o.agents.map(a => [a.id, { x: 0, y: 0, s: 1, z: 0.5, o: 1 }])),
+    orbits: [],
+    orbitById: new Map(),
+    wpos: new Map(),
+    pos: new Map(),
     sats: [],
     moons: new Map(),
     stars: [],
@@ -173,14 +194,42 @@ export function createWorld(o: {
     toast: null,
     boost: NO_BOOST,
     hits: [],
+    tr: IDLE,
+    tag: o.tag ?? 0,
+    next: null,
+    held: [],
+    fly: new Map(),
   }
-  const moon = (r0: number, r1: number): Moon => ({ w: R(1.6, 2.6) * (rand() < 0.5 ? -1 : 1), ph: R(0, Math.PI * 2), r: R(r0, r1), tilt: R(-0.6, 0.6) })
-  // 혼자면 핵 둘레를 달이 돈다(원반·자이로 밖으로)
-  if (orbits.length === 0) w.moons.set(w.core.id, [moon(130, 150), moon(130, 150)])
-  for (const x of orbits) w.moons.set(x.id, Array.from({ length: rand() < 0.5 ? 1 : 2 }, () => moon(54, 68)))
+  setNodes(w, o.agents)
   setSatellites(w, o.satellites ?? [])
   resizeWorld(w, o.W, o.H)
   return w
+}
+
+const restFly = (): Fly => ({ r: 1, da: 0, s: 1, a: 1, fx: 1, r0: 1, da0: 0, s0: 1, a0: 1 })
+
+/**
+ * 노드를 이 에이전트들로 — 첫째가 핵, 나머지가 돈다(0명이면 노드 없음). 처음 지을 때와 방을 옮겨 바꿔 끼울 때 · 같은 방에서 목록이 줄 때.
+ * 옛 노드에 딸린 효과(혜성·조각·불꽃·물결·말풍선·잎·아직 안 꺼낸 사건)는 버린다 — 없는 노드를 가리키지 않게. 위성은 setSatellites 로 다시
+ */
+export function setNodes(w: World, agents: Who[]): void {
+  const R = (a: number, b: number) => a + w.rand() * (b - a)
+  const { core, orbits } = layoutOrbits(agents.map(a => a.id))
+  w.who = new Map(agents.map(a => [a.id, a]))
+  w.core = w.who.get(core) ?? { id: core, name: '', color: FALLBACK_AGENT }
+  w.orbits = orbits
+  w.orbitById = new Map(orbits.map(x => [x.id, x]))
+  w.wpos = new Map(agents.map(a => [a.id, [0, CORE_Y, 0] as Vec3]))
+  w.pos = new Map(agents.map(a => [a.id, { x: 0, y: 0, s: 1, z: 0.5, o: 1, a: 1 }]))
+  w.fly = new Map(agents.map(a => [a.id, restFly()]))
+  w.moons = new Map()
+  const moon = (r0: number, r1: number): Moon => ({ w: R(1.6, 2.6) * (w.rand() < 0.5 ? -1 : 1), ph: R(0, Math.PI * 2), r: R(r0, r1), tilt: R(-0.6, 0.6) })
+  // 혼자면 핵 둘레를 달이 돈다(원반·자이로 밖으로)
+  if (agents.length && orbits.length === 0) w.moons.set(w.core.id, [moon(130, 150), moon(130, 150)])
+  for (const x of orbits) w.moons.set(x.id, Array.from({ length: w.rand() < 0.5 ? 1 : 2 }, () => moon(54, 68)))
+  w.sats = []
+  for (const xs of [w.comets, w.shards, w.sparks, w.ripples, w.bubbles, w.leaves, w.queue, w.hits] as unknown[][]) xs.length = 0
+  place(w)
 }
 
 /** 칸 크기가 바뀌면 — 궤도 반지름·가운데·별·은하를 다시 */
@@ -201,7 +250,7 @@ export function resizeWorld(w: World, W: number, H: number): void {
 
 /** 위성 다시 — 진짜로 도는 서브에이전트만(없으면 위성도 없다). 부모는 맡긴 에이전트(모르는 id 면 핵) */
 export function setSatellites(w: World, subs: SubLabel[]): void {
-  const list = subs.slice(0, MAX_SATS).map(s => ({ name: s.label, parent: w.who.has(s.agentId) ? s.agentId : w.core.id }))
+  const list = w.who.size ? subs.slice(0, MAX_SATS).map(s => ({ name: s.label, parent: w.who.has(s.agentId) ? s.agentId : w.core.id })) : []
   if (list.length === w.sats.length && list.every((s, i) => w.sats[i].name === s.name && w.sats[i].parent === s.parent)) return
   w.sats = list.map((s, i) => ({
     ...s,
@@ -266,38 +315,111 @@ export function inFlight(w: World): number {
   return n
 }
 
-/** 노드 자리 — 핵은 가운데, 궤도 에이전트는 제 궤도 위(시안 place) */
+const clamp01 = (v: number) => (v <= 0 ? 0 : v >= 1 ? 1 : v)
+/** 빨려 들기 곡선 — 처음엔 제 궤도 근처를 돌다 핵에 가까울수록 빨리(끌려 드는 느낌) */
+export const suck = (k: number): number => k * k
+/** 펼치기 곡선 — 빨리 나와 제 자리에서 길게 멈춘다(앱의 관계도 맞춤 이동과 같은 곡선) */
+const unfold = easeOut5
+/** 펼칠 때 카드가 다 보이는 진행(이 앞에선 흐리다) · 딸린 것(달·위성)이 나오기 시작하는 진행 — 부모가 자리 잡은 뒤에 */
+const SHOW_BY = 0.25
+const FX_FROM = 0.7
+
+/**
+ * 노드마다 전환 배수를 진행도에서 — 빨려 들기: 반지름·크기·불투명도 × (1 − suck(outK)), 각 + outK·π(나선).
+ * 펼치기: 핵부터 차례로 늦게 출발해(landK) 반지름·크기 × unfold, 각 − (1 − k)·π, 딸린 것은 자리 잡을 무렵부터.
+ * 움직임 줄이기면 나선·반지름·크기는 그대로 불투명도만(제자리에서 흐려졌다 나타난다)
+ */
+function flyAll(w: World): void {
+  const tr = w.tr
+  if (tr.phase === 'idle') {
+    for (const f of w.fly.values()) {
+      f.r = 1
+      f.da = 0
+      f.s = 1
+      f.a = 1
+      f.fx = 1
+    }
+    return
+  }
+  if (beforeSwap(tr)) {
+    const k = outK(tr)
+    const e = w.calm ? k : suck(k)
+    for (const f of w.fly.values()) {
+      f.r = w.calm ? f.r0 : f.r0 * (1 - e)
+      f.da = w.calm ? f.da0 : f.da0 + k * Math.PI
+      f.s = w.calm ? f.s0 : f.s0 * (1 - e)
+      f.a = f.a0 * (1 - e)
+      f.fx = f.a
+    }
+    return
+  }
+  const k = inK(tr)
+  const n = w.fly.size
+  let i = 0
+  for (const f of w.fly.values()) {
+    const ki = w.calm ? k : landK(k, i++, n)
+    const e = w.calm ? 1 : unfold(ki)
+    f.r = e
+    f.da = w.calm ? 0 : -(1 - ki) * Math.PI
+    f.s = e
+    f.a = w.calm ? ki : clamp01(ki / SHOW_BY)
+    f.fx = w.calm ? ki : clamp01((ki - FX_FROM) / (1 - FX_FROM))
+  }
+}
+
+/** 옛 방 효과(혜성·조각·불꽃)의 불투명도 — 빨려 들며 함께 사라진다 */
+export const fxAlpha = (w: World): number => (beforeSwap(w.tr) ? 1 - outK(w.tr) : 1)
+/** 노드에 딸린 것(달·위성·잎·물결·말풍선)의 불투명도 */
+export const fxOf = (w: World, id: string): number => w.fly.get(id)?.fx ?? 1
+
+/** 궤도 위 점을 out 에 — 방을 옮기는 중이면 그 노드의 배수만큼 핵 쪽으로(반지름 × r · 각 + da · 높이는 핵 높이로 다가간다) */
+function flyTo(w: World, out: Vec3, o: Orbit, turn: number): Vec3 {
+  const f = w.fly.get(o.id)
+  if (!f || (f.r === 1 && f.da === 0)) return worldTo(out, o, w.RA, turn)
+  worldTo(out, o, w.RA * f.r, turn + f.da)
+  out[1] += (1 - f.r) * CORE_Y
+  return out
+}
+
+/** 노드 자리 — 핵은 가운데, 궤도 에이전트는 제 궤도 위(시안 place). 방을 옮기는 중이면 전환 배수를 얹는다 */
 export function place(w: World): void {
   if (!w.W || !w.H) return // 칸 크기 0 — 반지름이 0 이라 나눗셈이 NaN 이 된다
+  flyAll(w)
   const c = w.pos.get(w.core.id)
   if (c) {
+    const f = w.fly.get(w.core.id)!
     projectTo(P, w.cam, 0, CORE_Y, 0)
     c.x = P.x
     c.y = P.y
-    c.s = 1.1 * P.f
+    c.s = 1.1 * P.f * f.s
     c.z = 0.5
     c.o = 1
+    c.a = f.a
   }
   const turn = orbitTurn(w)
   for (const o of w.orbits) {
-    const wp = worldTo(w.wpos.get(o.id)!, o, w.RA, turn)
+    const wp = flyTo(w, w.wpos.get(o.id)!, o, turn)
     projectTo(P, w.cam, wp[0], wp[1], wp[2])
     const z = near(P, w.RA)
     const p = w.pos.get(o.id)!
+    const f = w.fly.get(o.id)!
     p.x = P.x
     p.y = P.y
-    p.s = (0.76 + z * 0.3) * P.f
+    p.s = (0.76 + z * 0.3) * P.f * f.s
     p.z = z
     // 밝기(카드 전체의 brightness) — 먼 쪽도 0.8 까지만: 카드 글(이름·마지막 도구·승인 기다림)은 진짜 내용이라
     // 가장 밝은 번짐 위에서도 4.5:1 을 지킨다(0.48 까지 내리면 도구 줄이 2:1). 깊이는 크기·겹침 순서가 더 맡는다
     p.o = NODE_DIM + z * (1 - NODE_DIM)
+    p.a = f.a
   }
 }
 
-/** 위성 하나의 화면 자리 — 핵 둘레 RA·0.56 를 돈다 */
+/** 위성 하나의 화면 자리 — 핵 둘레 RA·0.56 를 돈다(빨려 드는 동안은 그 반지름도 핵으로) */
 export function satPoint(w: World, s: Sat, out: Proj): Proj {
   const a = s.a + w.tt * s.w * 2.2
-  return projectTo(out, w.cam, Math.cos(a) * w.RA * SAT_R, SAT_Y, Math.sin(a) * w.RA * SAT_R)
+  const k = w.calm || !beforeSwap(w.tr) ? 1 : 1 - suck(outK(w.tr))
+  const r = w.RA * SAT_R * k
+  return projectTo(out, w.cam, Math.cos(a) * r, SAT_Y + (1 - k) * (CORE_Y - SAT_Y), Math.sin(a) * r)
 }
 
 /** 혜성이 e(0~1) 만큼 간 화면 자리 — 두 노드 사이를 위로 솟는 3D 호(시안 cometPath) */
@@ -308,7 +430,7 @@ export function cometPoint(w: World, from: string, to: string, e: number, out: P
   return projectTo(out, w.cam, a[0] + (b[0] - a[0]) * e, a[1] + (b[1] - a[1]) * e + Math.sin(Math.PI * e) * (46 + dist * 0.32), a[2] + (b[2] - a[2]) * e)
 }
 
-/** 궤도 위 점(지나온 길 그리기용) — V 를 돌려쓴다 */
+/** 궤도 위 점(지나온 길 · 조각 그리기용) — V 를 돌려쓴다. 방을 옮기는 중이면 그 궤도도 노드와 함께 줄고 는다 */
 export function orbitPoint(w: World, o: Orbit, turn: number): Vec3 {
-  return worldTo(V, o, w.RA, turn)
+  return flyTo(w, V, o, turn)
 }

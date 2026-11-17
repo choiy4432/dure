@@ -4,6 +4,7 @@ import { render, screen, act, cleanup, within } from '@testing-library/react'
 import fs from 'node:fs'
 import path from 'node:path'
 import { clockText } from '../../src/renderer/power/control/LiveLog'
+import { allowMotion } from './motion'
 
 // 관제실 — 카드 · 기록 · 승인 기다림 · 숫자 띠. 진짜 사건만, 숫자는 0부터
 
@@ -418,11 +419,11 @@ describe('관제실', () => {
   })
 })
 
-/** 방 둘 — r1(진짜 방): 알파·베타, r2(둘째 방): 감마. layer 면 덮개(PowerLayer)째로 — 방별 화면 상태가 덮개 수명 동안 남는다 */
-async function mountTwo(o: { layer?: boolean } = {}) {
+/** 방 둘 — r1(진짜 방): 알파·베타, r2(둘째 방): 감마. layer 면 덮개(PowerLayer)째로 — 방별 화면 상태가 덮개 수명 동안 남는다. empty 면 빈 방 r3 도 */
+async function mountTwo(o: { layer?: boolean; empty?: boolean } = {}) {
   vi.resetModules()
   handlers = {}
-  const rooms = [{ id: 'r1', name: '진짜 방', createdAt: 2 }, { id: 'r2', name: '둘째 방', createdAt: 1 }]
+  const rooms = [{ id: 'r1', name: '진짜 방', createdAt: 2 }, { id: 'r2', name: '둘째 방', createdAt: 1 }, ...(o.empty ? [{ id: 'r3', name: '빈 방', createdAt: 0 }] : [])]
   const agents = [agent('a', { name: '알파' }), agent('b', { name: '베타' }), agent('c', { name: '감마', roomId: 'r2' })]
   ;(window as any).dure = {
     snapshot: async () => ({ claudeMissing: false, rooms, agents, messages: [], requests: [], autoChainLimit: 5, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null }),
@@ -486,6 +487,53 @@ describe('관제실 — 방별 숫자·기록(덮개가 떠 있는 동안)', () 
     expect(rows()[0]).toHaveTextContent('more')
     act(() => { store.selectRoom('r2') })
     expect(rows().map(r => r.textContent)).toEqual([expect.stringContaining('b-room.ts')])
+  })
+
+  it('옮기면_왼쪽_카드·옆_칸·숫자_띠는_바로_새_방_값_—_짧은_흐려짐(0.2s)만', async () => {
+    const store = await mountTwo({ layer: true })
+    for (let i = 0; i < 3; i++) await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: `a${i}.ts` }) })
+    await wait(250)
+    const fading = () => ['.pw-agents', '.pw-side', '.pw-stats'].map(s => document.querySelector(s)!.classList.contains('pw-swap'))
+    expect(fading()).toEqual([false, false, false])
+    act(() => { store.selectRoom('r2') })
+    // 기다림 없이 그 그리기에서 새 방 값 — 관계도 전환을 기다리지 않는다
+    expect([...cards()].map(c => c.getAttribute('data-agent'))).toEqual(['c'])
+    expect(stat('tools')).toBe('0')
+    expect(rows()).toHaveLength(0)
+    expect(screen.getByText('켠 뒤 들어온 일이 아직 없어요')).toBeInTheDocument()
+    expect(fading()).toEqual([true, true, true])
+    const css = fs.readFileSync(path.resolve('src/renderer/power/power.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(css).toMatch(/\.pw-swap\s*\{[^}]*animation:\s*pw-swap 0\.2s/)
+    expect(css).toMatch(/@keyframes pw-swap\s*\{[^}]*opacity/)
+  })
+
+  it('빈_방으로_옮기면_관계도는_빨려_들고_도약한_뒤에_빈_방_글_—_빈_방에서_오면_관계도가_다시(핵에서_펼친다)', async () => {
+    allowMotion()
+    // 그릴 수 있는 캔버스(아무것도 안 하는 가짜) — 관계도가 전환을 rAF(가짜 시계)로 돈다
+    HTMLCanvasElement.prototype.getContext = (() =>
+      new Proxy({}, { get: (_t, k) => (k === 'measureText' ? () => ({ width: 10 }) : k === 'createRadialGradient' || k === 'createLinearGradient' ? () => ({ addColorStop() {} }) : () => {}), set: () => true })) as unknown as typeof HTMLCanvasElement.prototype.getContext
+    try {
+      const store = await mountTwo({ layer: true, empty: true })
+      const map = () => document.querySelector('[data-power-map]')!
+      const nodes = () => [...map().querySelectorAll('[data-node]')].map(n => n.getAttribute('data-node'))
+      await wait(100)
+      act(() => { store.selectRoom('r3') })
+      // 왼쪽 카드는 바로 비고(새 방 값), 관계도는 옛 카드를 빨아들이는 중
+      expect(cards()).toHaveLength(0)
+      expect(nodes()).toEqual(['a', 'b'])
+      await wait(700)
+      expect(map().querySelector('.pw-mapbox')).not.toBeNull()
+      expect(map()).not.toHaveTextContent('이 방엔 에이전트가 없어요')
+      await wait(400)
+      expect(map().querySelector('.pw-mapbox')).toBeNull()
+      expect(map()).toHaveTextContent('이 방엔 에이전트가 없어요')
+      act(() => { store.selectRoom('r2') })
+      expect(map().querySelector('.pw-mapbox')).not.toBeNull()
+      await wait(100)
+      expect(nodes()).toEqual(['c'])
+    } finally {
+      HTMLCanvasElement.prototype.getContext = (() => null) as unknown as typeof HTMLCanvasElement.prototype.getContext
+    }
   })
 
   it('파워_모드를_껐다_켜면_전부_0', async () => {

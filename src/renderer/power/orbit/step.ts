@@ -1,9 +1,31 @@
-// 관계도 한 프레임 — 들어온 진짜 사건 꺼내기 · 전체 동기화 · 카메라 · 혜성·조각·불꽃 진행(시안 orbit3.frame 앞부분 · comet · handoff · tool · hot).
+// 관계도 한 프레임 — 들어온 진짜 사건 꺼내기 · 전체 동기화 · 방 옮기기 전환 · 카메라 · 혜성·조각·불꽃 진행(시안 orbit3.frame 앞부분 · comet · handoff · tool · hot).
 // 혜성은 진짜 넘김에서만, 조각·잎·핵 밝기는 진짜 도구 사용에서만, 동기화는 진짜 차례 끝(done)에서만 나온다(떠도는 혜성·시간으로 터지는 동기화는 없다).
+// 동기화('끝남')와 방 옮기기의 도약은 세기 값 하나(boost.b = 둘 중 큰 쪽)로 같은 연출(급회전·당기기·흔들림·은하 줄무늬)을 쓴다.
 // 프레임 사이를 MAX_DT 로 잘라 장면 시계에 쌓으니 창이 숨었다 돌아와도 튀지 않는다. DOM·캔버스 없음.
-import type { ScreenEvent } from '../events'
+import type { AgentState, ScreenEvent } from '../events'
 import { SHAKE_PX, TILT, ZOOM, type Proj } from './camera'
-import { ACT_FLOOR, ENERGY, LIFE, NO_BOOST, SYNC, baseName, colorOf, cometPoint, place, trunc, type Boost, type Comet, type World } from './world'
+import { TR, beforeSwap, jumpK, startTransition, stepTransition } from './transition'
+import {
+  ACT_FLOOR,
+  ENERGY,
+  LIFE,
+  NO_BOOST,
+  SYNC,
+  TOAST_IN,
+  baseName,
+  colorOf,
+  cometPoint,
+  place,
+  setNodes,
+  setSatellites,
+  setStates,
+  trunc,
+  type Boost,
+  type Comet,
+  type SubLabel,
+  type Who,
+  type World,
+} from './world'
 
 const YAW_SPEED = 0.05
 const MAX_DT = 0.05
@@ -21,20 +43,34 @@ const P: Proj = { x: 0, y: 0, f: 0, d: 0 }
 /** 이번 프레임에 닿은 넘김 — 프레임마다 새로 만들지 않는다 */
 const arrived: Comet[] = []
 
-/** 동기화 진행 k(0~1, 밖이면 아무것도 없음) → 얹는 값. 차분 모드면 흔들림·급회전·당기기·은하 줄무늬 없이 */
-export function syncBoost(calm: boolean, k: number): Boost {
-  const b = k >= 0 && k < 1 ? Math.sin(Math.PI * k) : 0
-  if (calm || b === 0) return { ...NO_BOOST, b }
+/** 세기 b(0~1) → 장면에 얹는 값 — 동기화와 도약이 함께 쓴다. 차분 모드면 흔들림·급회전·당기기·은하 줄무늬 없이 */
+export function boostOf(calm: boolean, b: number): Boost {
+  if (calm || b <= 0) return { ...NO_BOOST, b: Math.max(0, b) }
   return { b, orbit: b * 5, yaw: b * 1.7, tilt: b * TILT.syncDip, zoom: b * ZOOM.sync, shake: b * SHAKE_PX, galaxy: b * 8, fade: b * 0.09, bloom: b * 0.3, streak: b > 0.05 }
 }
 
-/** 화면 사건을 받는다 — 도구·넘김·차례 끝만, 모르는 에이전트는 버린다. 도구·넘김은 조금씩 흩어서, 차례 끝은 다음 프레임에 꺼낸다 */
+/** 동기화 진행 k(0~1, 밖이면 0) → 세기 — 종 모양 */
+const syncK = (k: number): number => (k >= 0 && k < 1 ? Math.sin(Math.PI * k) : 0)
+
+/** 동기화 진행 k(0~1, 밖이면 아무것도 없음) → 얹는 값 */
+export function syncBoost(calm: boolean, k: number): Boost {
+  return boostOf(calm, syncK(k))
+}
+
+/**
+ * 화면 사건을 받는다 — 도구·넘김·차례 끝만, 모르는 에이전트는 버린다. 도구·넘김은 조금씩 흩어서, 차례 끝은 다음 프레임에 꺼낸다.
+ * 방을 옮기는 중이면 새 방 사건을 버리지 않고 쥐었다가 전환이 끝난 뒤에 받는다(카드가 자리 잡은 뒤에 그려지게 · '끝남' 연출도 그 뒤로)
+ */
 export function intake(w: World, ev: ScreenEvent): void {
-  if (ev.kind === 'tool' || ev.kind === 'done') {
-    if (!w.who.has(ev.agentId)) return
-  } else if (ev.kind === 'handoff') {
+  if (ev.kind !== 'tool' && ev.kind !== 'done' && ev.kind !== 'handoff') return
+  if (w.tr.phase !== 'idle') {
+    if (w.held.length >= MAX_QUEUE) w.held.shift()
+    w.held.push(ev)
+    return
+  }
+  if (ev.kind === 'handoff') {
     if (!w.who.has(ev.from) || !w.who.has(ev.to) || ev.from === ev.to) return
-  } else return
+  } else if (!w.who.has(ev.agentId)) return
   if (w.queue.length >= MAX_QUEUE) w.queue.shift()
   w.queue.push({ at: ev.kind === 'done' ? w.t : w.t + w.rand() * SPREAD, ev })
 }
@@ -99,6 +135,61 @@ function beginSync(w: World, text: string): void {
     for (let i = 0; i < 14; i++) comet(w, w.core.id, w.orbits[Math.floor(w.rand() * w.orbits.length)].id, { small: true, delay: i * 0.055, T: R(0.6, 0.9) })
 }
 
+/** 방 옮기기 알림 — '끝남' 알림과 같은 자리·꼴 */
+const roomText = (name: string) => `${name} 방으로`
+
+/**
+ * 방이 바뀌었다 — 지금 화면의 노드를 핵으로 빨아들이고(있으면) 도약한 뒤 새 방 노드를 펼친다(transition.ts).
+ * 바꿔 끼우기 전에 또 바뀌면 진행은 그대로 갈 방만, 펼치는 중이면 지금 카드 자리에서 다시 빨려 든다.
+ * 아직 안 꺼낸 옛 방 사건은 버리고, 그 뒤로 오는 사건은 전환이 끝날 때까지 쥔다(intake). 알림 `<이름> 방으로` 는 도약이 시작될 때
+ */
+export function changeRoom(w: World, o: { agents: Who[]; satellites: SubLabel[]; states: Record<string, AgentState>; tag: number; toRoom: string | null; name: string | null }): void {
+  const fresh = !beforeSwap(w.tr)
+  // 갈 방이 바뀌었으면 그 전에 갈 방이던 곳의 사건은 버린다 — 이제 그 방을 듣지 않는다(같은 방의 목록만 줄었으면 그대로)
+  if (w.next?.tag !== o.tag) w.held.length = 0
+  w.tr = startTransition(w.tr, { toRoom: o.toRoom, toName: o.name ?? '', hasOut: w.who.size > 0, hasIn: o.agents.length > 0, calm: w.calm })
+  w.next = { agents: o.agents, satellites: o.satellites, states: o.states, tag: o.tag }
+  if (w.tr.phase === 'idle') {
+    swapIn(w) // 화면에 카드도 없고 갈 방도 비었다 — 바로 바꾼다
+    return
+  }
+  if (fresh) {
+    w.queue.length = 0
+    // 빨려 들기는 지금 카드 자리에서(펼치던 중이었으면 그 반지름·각·크기에서) 시작한다
+    for (const f of w.fly.values()) {
+      f.r0 = f.r
+      f.da0 = f.da
+      f.s0 = f.s
+      f.a0 = f.a
+    }
+  }
+  if (o.name === null) return
+  // 이미 떠 있으면(도약 중에 또 옮겼다) 글만 바꾼다 — 다시 흐려졌다 나타나지 않게 지금 밝기에서 이어 간다(다 보였으면 수명을 처음부터)
+  const s = w.toast
+  const k = s ? (w.t - s.t0) / LIFE.toast : -1
+  const wait = w.tr.phase === 'out' && !w.calm ? Math.max(0, TR.out - w.tr.t) : 0
+  w.toast = { t0: k >= 0 && k < 1 ? w.t - LIFE.toast * Math.min(k, TOAST_IN) : w.t + wait, text: roomText(o.name) }
+}
+
+/** 새 방 노드로 바꿔 끼운다 — 핵이 번쩍이고 그 자리에서 새 카드가 나온다 */
+function swapIn(w: World): void {
+  const n = w.next
+  w.next = null
+  if (!n) return // 빈 방에서 온 전환 — 노드는 이미 그 방 것
+  setNodes(w, n.agents)
+  setSatellites(w, n.satellites)
+  setStates(w, n.states)
+  w.tag = n.tag
+  if (n.agents.length) w.flare = w.t
+}
+
+/** 전환이 끝났다 — 쥐고 있던 사건을 이제 받는다(바꿔 끼운 방의 에이전트 것만 남는다) */
+function release(w: World): void {
+  const held = w.held
+  w.held = []
+  for (const ev of held) intake(w, ev)
+}
+
 /** 배열에서 keep 이 거짓인 것을 제자리에서 뺀다(프레임마다 새 배열을 만들지 않는다) */
 function prune<T>(xs: T[], keep: (x: T) => boolean): void {
   let j = 0
@@ -113,6 +204,12 @@ export function stepWorld(w: World, now: number): void {
   w.t += dt
   const t = w.t
 
+  // 방 옮기기 — 바꿔 끼울 때가 되면 새 방 노드로, 끝나면 쥐고 있던 사건을 받는다
+  const tr = stepTransition(w.tr, dt, w.calm)
+  w.tr = tr.tr
+  if (tr.swap) swapIn(w)
+  if (tr.done) release(w)
+
   // 때가 된 사건을 꺼낸다(적용은 queue 를 건드리지 않아 제자리에서 걸러도 된다)
   prune(w.queue, ({ at, ev }) => {
     if (at > t) return true
@@ -124,9 +221,10 @@ export function stepWorld(w: World, now: number): void {
 
   const k = (t - w.sync.t0) / SYNC.sec
   w.syncing = k >= 0 && k < 1
-  const B = (w.boost = syncBoost(w.calm, k))
+  // 세기 하나 — 동기화('끝남')와 도약 중 센 쪽
+  const B = (w.boost = boostOf(w.calm, Math.max(syncK(k), jumpK(w.tr))))
 
-  // 카메라 — 천천히 돌고, 기울기·당기기가 숨 쉬듯. 동기화면 급회전·흔들림
+  // 카메라 — 천천히 돌고, 기울기·당기기가 숨 쉬듯. 동기화·도약이면 급회전·흔들림
   w.tt += dt * (1 + B.orbit)
   w.cam.yaw += dt * (YAW_SPEED + B.yaw)
   w.cam.e = TILT.base + TILT.swing * Math.sin(t * 0.13) - B.tilt

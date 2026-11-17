@@ -4,11 +4,15 @@ import { render, act, cleanup } from '@testing-library/react'
 import fs from 'node:fs'
 import path from 'node:path'
 import { OrbitMap } from '../../src/renderer/power/orbit/OrbitMap'
-import { intake, stepWorld, syncBoost } from '../../src/renderer/power/orbit/step'
+import { boostOf, changeRoom, intake, stepWorld, syncBoost } from '../../src/renderer/power/orbit/step'
 import { createWorld, inFlight, resizeWorld, setStates, type World } from '../../src/renderer/power/orbit/world'
 import { drawOverlay } from '../../src/renderer/power/orbit/overlay'
 import { drawScene } from '../../src/renderer/power/orbit/scene'
+import { jumpK } from '../../src/renderer/power/orbit/transition'
+import { SHAKE_PX } from '../../src/renderer/power/orbit/camera'
 import { mulberry32, type PowerAgent, type ScreenEvent } from '../../src/renderer/power/events'
+import type { RoomChange } from '../../src/renderer/power/usePowerFeed'
+import { allowMotion } from './motion'
 
 // 관계도(궤도++) — 캔버스 2장 · 노드 카드 · rAF · 동기화 규칙. jsdom 엔 캔버스가 없어 그리는 쪽은 기록하는 가짜 컨텍스트로 본다
 // 혜성·조각·잎·위성은 진짜 사건과 진짜 서브에이전트에서만 — 떠도는 혜성·토큰 글·지어낸 위성·시간으로 터지는 동기화는 없다
@@ -589,5 +593,313 @@ describe('관계도 장면', () => {
     // 지어낸 계기판 값은 없다
     expect(texts()).not.toContain('궤도 동기화')
     expect(texts()).not.toContain('핵 출력')
+  })
+})
+
+/** 둘째 방 세 명 · 셋째 방 두 명(다섯 명 방과 id 가 겹치지 않는다) */
+const three = (): PowerAgent[] => [['pay', '결제'], ['ship', '배송'], ['ops', '운영']].map(([id, name]) => ({ id, name, role: '역할', color: '#34D399' }))
+const two = (): PowerAgent[] => [['k1', '하나'], ['k2', '둘']].map(([id, name]) => ({ id, name, role: '역할', color: '#FBBF24' }))
+const whoOf = (a: PowerAgent[]) => a.map(x => ({ id: x.id, name: x.name, color: x.color }))
+const roomOf = (n: number, prev: string | null, next: string | null): RoomChange => ({ n, prev, next })
+const go = (w: World, agents: PowerAgent[], name: string | null = '결제', tag = 1) =>
+  changeRoom(w, { agents: whoOf(agents), satellites: [], states: {}, tag, toRoom: `room-${tag}`, name })
+/** 궤도 노드의 세계 반지름 — 제 궤도 반지름에 대한 배수(1 = 제 궤도 위, 0 = 핵) */
+const radiusK = (w: World) => w.orbits.map(o => Math.hypot(w.wpos.get(o.id)![0], w.wpos.get(o.id)![2]) / (o.r * w.RA))
+const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length
+const idsIn = (c: HTMLElement) => [...c.querySelectorAll('[data-node]')].map(e => e.getAttribute('data-node')).join(',')
+const scaleOf = (el: Element) => Number(/scale\(([-\d.e]+)\)/.exec((el as HTMLElement).style.transform)![1])
+
+describe('관계도 — 방을 옮길 때 전환(빨려 들기 · 도약 · 펼쳐지기)', () => {
+  it('방이_바뀌면_전환이_시작되고_옛_카드는_나선을_그리며_핵으로_—_0.55s_에_모두_핵_자리(scale_0)', () => {
+    const w = world(false)
+    let now = run(w, 0.5)
+    expect(mean(radiusK(w))).toBeCloseTo(1, 5)
+    const ang0 = w.orbits.map(o => Math.atan2(w.wpos.get(o.id)![2], w.wpos.get(o.id)![0]))
+    const turn0 = w.tt
+    go(w, three())
+    expect(w.tr.phase).toBe('out')
+    now = run(w, 0.2, now)
+    const r1 = mean(radiusK(w))
+    now = run(w, 0.2, now)
+    const r2 = mean(radiusK(w))
+    expect(r1).toBeLessThan(1)
+    expect(r2).toBeLessThan(r1)
+    // 나선 — 평소 궤도 회전보다 더 돈다(각에 outK·π 가 더해진다)
+    const plain = ((w.tt - turn0) * 2 * Math.PI) / 70
+    w.orbits.forEach((o, i) => {
+      const a = Math.atan2(w.wpos.get(o.id)![2], w.wpos.get(o.id)![0]) - ang0[i]
+      expect(((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)).toBeGreaterThan(plain + 1)
+    })
+    now = run(w, 0.15, now) // 0.55초
+    const core = w.pos.get('lead')!
+    for (const [id, p] of w.pos) {
+      expect(p.s).toBeLessThan(0.01)
+      expect(p.a).toBeLessThan(0.01)
+      if (id !== 'lead') expect(Math.hypot(p.x - core.x, p.y - core.y)).toBeLessThan(1.5)
+    }
+    // 아직 옛 방 노드 — 바꿔 끼우기는 0.9초
+    expect([...w.who.keys()]).toEqual(['lead', 'impl', 'test', 'rev', 'doc'])
+    run(w, 0.4, now)
+    expect([...w.who.keys()]).toEqual(['pay', 'ship', 'ops'])
+  })
+
+  it('펼칠_때_새_카드는_핵에서_작게_시작해_제_궤도로_—_핵부터_차례로(늦게_출발)', () => {
+    const w = world(false)
+    let now = run(w, 0.5)
+    go(w, five().map(a => ({ ...a, id: `n-${a.id}` })))
+    now = run(w, 0.91, now)
+    expect(w.tr.phase).toBe('in')
+    const p = (id: string) => w.pos.get(id)!
+    // 바꿔 끼운 직후 — 모두 핵 자리에서 scale 0 근처
+    for (const q of w.pos.values()) expect(q.s).toBeLessThan(0.2)
+    now = run(w, 0.15, now)
+    // 핵이 먼저, 뒤 카드일수록 덜 나왔다
+    expect(p('n-lead').s).toBeGreaterThan(p('n-impl').s)
+    const r = radiusK(w)
+    for (let i = 1; i < r.length; i++) expect(r[i]).toBeLessThan(r[i - 1])
+    now = run(w, 0.5, now)
+    expect(w.tr.phase).toBe('idle')
+    expect(mean(radiusK(w))).toBeCloseTo(1, 5)
+    for (const q of w.pos.values()) expect(q.a).toBe(1)
+    expect(p('n-lead').s).toBeGreaterThan(0.9)
+  })
+
+  it('도약은_끝남_연출과_같은_세기_하나로_—_급회전·당기기·흔들림·줄무늬(동기화와_겹치면_더_센_쪽)', () => {
+    const w = world(false)
+    let now = run(w, 0.5)
+    go(w, three())
+    let peak = 0
+    for (let i = 0; i < 60; i++) {
+      stepWorld(w, (now += 1000 / 60))
+      const j = jumpK(w.tr)
+      expect(w.boost).toEqual(boostOf(false, j))
+      peak = Math.max(peak, j)
+      if (j > 0.5) {
+        expect(w.boost.streak).toBe(true)
+        expect(w.boost.shake).toBeCloseTo(SHAKE_PX * j)
+      }
+    }
+    expect(peak).toBeGreaterThan(0.95)
+    // 동기화 세기와 함께면 — 둘 중 큰 쪽(두 연출이 세기 값 하나를 쓴다)
+    const v = world(false)
+    now = run(v, 0.5)
+    intake(v, done('rev'))
+    now = run(v, 0.05, now)
+    go(v, three())
+    for (let i = 0; i < 40; i++) {
+      stepWorld(v, (now += 1000 / 60))
+      const k = (v.t - v.sync.t0) / 2
+      expect(v.boost.b).toBeCloseTo(Math.max(k >= 0 && k < 1 ? Math.sin(Math.PI * k) : 0, jumpK(v.tr)), 6)
+    }
+  })
+
+  it('알림_글은_<새_방_이름>_방으로_—_도약이_시작될_때(끝남_알림과_같은_자리)', () => {
+    const w = world(false)
+    let now = run(w, 0.5)
+    go(w, three(), '결제 서비스')
+    now = run(w, 0.3, now)
+    drawOverlay(fakeCtx(calls), w, null, 2)
+    expect(texts()).not.toContain('결제 서비스 방으로')
+    run(w, 0.4, now)
+    calls.length = 0
+    drawOverlay(fakeCtx(calls), w, null, 2)
+    expect(texts()).toContain('결제 서비스 방으로')
+    // 방이 없으면(이름 없음) 알림도 없다
+    const v = world(false)
+    run(v, 0.2)
+    go(v, [], null)
+    expect(v.toast).toBeNull()
+  })
+
+  it('전환_중_온_사건은_끝난_뒤_첫_프레임들에_그려진다(조각_수)_—_차례_끝(done)의_동기화도_끝난_뒤로', () => {
+    const w = world(false)
+    let now = run(w, 0.5)
+    go(w, three())
+    now = run(w, 0.3, now)
+    intake(w, tool('ship', 'Read', 'a.ts'))
+    intake(w, tool('ops', 'Edit', 'b.ts'))
+    intake(w, done('pay'))
+    let during = 0
+    let steps = 0
+    const phase = () => w.tr.phase
+    while (phase() !== 'idle' && steps++ < 200) {
+      stepWorld(w, (now += 1000 / 60))
+      if (phase() === 'idle') break // 끝난 걸음 — 여기부터 그린다
+      during = Math.max(during, w.shards.length, w.leaves.length)
+      expect(w.syncing).toBe(false)
+    }
+    expect(during).toBe(0)
+    let after = 0
+    for (let i = 0; i < 18; i++) {
+      stepWorld(w, (now += 1000 / 60))
+      after = Math.max(after, w.shards.length)
+    }
+    expect(after).toBe(2)
+    expect(w.syncing).toBe(true)
+    expect(w.toast?.text).toBe('결제 끝남')
+  })
+
+  it('움직임_줄이기면_나선·급회전·흔들림_없이_옛_카드는_제자리에서_0.3s_흐려지고_새_카드는_제자리에서_0.3s_나타난다_—_알림은_뜬다', () => {
+    const w = world(true)
+    let now = run(w, 0.5)
+    go(w, three())
+    let shift = 0
+    let rMin = 1
+    const yaw0 = w.cam.yaw
+    for (let i = 0; i < 17; i++) {
+      stepWorld(w, (now += 1000 / 60))
+      shift = Math.max(shift, Math.abs(w.cam.cx - w.cx0), Math.abs(w.cam.cy - w.cy0))
+      expect(w.boost).toEqual(boostOf(true, 0))
+      rMin = Math.min(rMin, ...radiusK(w))
+    }
+    expect(shift).toBe(0)
+    expect(w.cam.yaw - yaw0).toBeCloseTo(17 * (1 / 60) * 0.05, 5)
+    expect(rMin).toBeCloseTo(1, 5)
+    expect([...w.who.keys()]).toEqual(['lead', 'impl', 'test', 'rev', 'doc'])
+    // 0.3초 — 옛 카드는 흐려져 사라지고 새 방으로 바뀐다(새 카드는 제 궤도 · 제 크기에서 나타난다)
+    now = run(w, 0.05, now)
+    expect([...w.who.keys()]).toEqual(['pay', 'ship', 'ops'])
+    expect(mean(radiusK(w))).toBeCloseTo(1, 5)
+    for (const p of w.pos.values()) {
+      expect(p.a).toBeLessThan(0.3)
+      expect(p.s).toBeGreaterThan(0.5)
+    }
+    now = run(w, 0.3, now)
+    expect(w.tr.phase).toBe('idle')
+    for (const p of w.pos.values()) expect(p.a).toBe(1)
+    expect(w.toast?.text).toBe('결제 방으로')
+  })
+})
+
+describe('관계도 화면 — 방을 옮길 때', () => {
+  /** 60fps 로 n 프레임 — 프레임 앞마다 cb */
+  const frames60 = (n: number, from: number, cb?: (i: number) => void) => {
+    let now = from
+    for (let i = 0; i < n; i++) {
+      cb?.(i)
+      runFrame((now += 1000 / 60))
+    }
+    return now
+  }
+
+  it('swap_전엔_옛_방_카드만_뒤엔_새_방_카드만_DOM_에_있다_—_0.7s_에_또_바꿔도_섞이지_않는다', () => {
+    allowMotion()
+    const f = feed()
+    const map = (n: number, agents: PowerAgent[], name: string) => (
+      <OrbitMap room={roomOf(n, null, `r${n}`)} roomName={name} agents={agents} state={{}} subagents={[]} subscribe={f.subscribe} />
+    )
+    const { container, rerender } = render(map(0, five(), '주문'))
+    let now = frames60(3, 0)
+    const A = 'lead,impl,test,rev,doc'
+    const B = 'pay,ship,ops'
+    const C = 'k1,k2'
+    expect(idsIn(container)).toBe(A)
+    rerender(map(1, three(), '결제'))
+    expect(idsIn(container)).toBe(A) // 바꿔 끼우기 전 — 옛 방 카드가 빨려 든다
+    const seen: string[] = []
+    now = frames60(150, now, i => {
+      if (i === 42) rerender(map(2, two(), '배송')) // 0.7초 — 도약 중에 또 옮긴다
+      seen.push(idsIn(container))
+    })
+    seen.push(idsIn(container))
+    expect(seen.every(s => s === A || s === C)).toBe(true)
+    expect(seen).not.toContain(B)
+    const first = seen.indexOf(C)
+    expect(first).toBeGreaterThan(50) // 0.9초 언저리
+    expect(first).toBeLessThan(58)
+    expect(seen.slice(first).every(s => s === C)).toBe(true)
+    // 끝나면 새 카드는 제 크기 · 다 보인다(scale 0 이나 반쯤 흐린 채 남지 않는다)
+    for (const el of container.querySelectorAll('[data-node]')) {
+      expect(scaleOf(el)).toBeGreaterThan(0.6)
+      expect((el as HTMLElement).style.opacity).toBe('')
+    }
+  })
+
+  it('옛_카드는_0.55s_에_모두_핵_자리에서_scale_0·투명', () => {
+    allowMotion()
+    const f = feed()
+    const { container, rerender } = render(<OrbitMap room={roomOf(0, 'r1', 'r1')} agents={five()} state={{}} subagents={[]} subscribe={f.subscribe} />)
+    let now = frames60(3, 0)
+    rerender(<OrbitMap room={roomOf(1, 'r1', 'r2')} roomName="결제" agents={three()} state={{}} subagents={[]} subscribe={f.subscribe} />)
+    now = frames60(33, now)
+    const nodes = [...container.querySelectorAll('[data-node]')] as HTMLElement[]
+    expect(nodes.map(n => n.dataset.node)).toEqual(['lead', 'impl', 'test', 'rev', 'doc'])
+    for (const el of nodes) {
+      expect(scaleOf(el)).toBeLessThan(0.01)
+      expect(Number(el.style.opacity)).toBeLessThan(0.01)
+    }
+  })
+
+  it('전환_중_노드_카드는_누를_수_없고(disabled)_끝나면_다시_눌린다', () => {
+    allowMotion()
+    const f = feed()
+    const onPick = vi.fn()
+    const map = (n: number, agents: PowerAgent[]) => (
+      <OrbitMap room={roomOf(n, null, `r${n}`)} roomName="결제" agents={agents} state={{}} subagents={[]} subscribe={f.subscribe} onPick={onPick} />
+    )
+    const { container, rerender } = render(map(0, five()))
+    let now = frames60(3, 0)
+    const nodes = () => [...container.querySelectorAll('[data-node]')] as HTMLButtonElement[]
+    expect(nodes().every(n => !n.disabled)).toBe(true)
+    rerender(map(1, three()))
+    now = frames60(10, now)
+    expect(nodes().every(n => n.disabled)).toBe(true)
+    act(() => { nodes()[1].click() })
+    now = frames60(50, now) // 1.0초 — 새 카드가 펼쳐지는 중
+    expect(nodes().map(n => n.dataset.node)).toEqual(['pay', 'ship', 'ops'])
+    expect(nodes().every(n => n.disabled)).toBe(true)
+    act(() => { nodes()[0].click() })
+    expect(onPick).not.toHaveBeenCalled()
+    frames60(40, now)
+    expect(nodes().every(n => !n.disabled)).toBe(true)
+    act(() => { nodes()[1].click() })
+    expect(onPick).toHaveBeenCalledWith('ship')
+  })
+
+  it('빈_방으로_옮기면_빨려_들고_도약한_뒤_카드가_다_빠지고_onEmpty_한_번', () => {
+    allowMotion()
+    const f = feed()
+    const onEmpty = vi.fn()
+    const { container, rerender } = render(<OrbitMap room={roomOf(0, 'r1', 'r1')} agents={five()} state={{}} subagents={[]} subscribe={f.subscribe} onEmpty={onEmpty} />)
+    let now = frames60(3, 0)
+    rerender(<OrbitMap room={roomOf(1, 'r1', 'e')} roomName="빈 방" agents={[]} state={{}} subagents={[]} subscribe={f.subscribe} onEmpty={onEmpty} />)
+    now = frames60(50, now) // 0.83초
+    expect(container.querySelectorAll('[data-node]')).toHaveLength(5)
+    expect(onEmpty).not.toHaveBeenCalled()
+    frames60(20, now)
+    expect(container.querySelectorAll('[data-node]')).toHaveLength(0)
+    expect(onEmpty).toHaveBeenCalledTimes(1)
+  })
+
+  it('빈_방에서_옮겨_와_처음_그리면_카드가_핵에서_작게_시작해_제_크기로_펼쳐진다', () => {
+    allowMotion()
+    const f = feed()
+    const { container } = render(<OrbitMap room={roomOf(1, 'e', 'r2')} roomName="결제" agents={three()} state={{}} subagents={[]} subscribe={f.subscribe} />)
+    let now = frames60(2, 0)
+    const nodes = () => [...container.querySelectorAll('[data-node]')] as HTMLElement[]
+    expect(nodes().map(n => n.dataset.node)).toEqual(['pay', 'ship', 'ops'])
+    for (const el of nodes()) expect(scaleOf(el)).toBeLessThan(0.25)
+    now = frames60(40, now)
+    for (const el of nodes()) {
+      expect(scaleOf(el)).toBeGreaterThan(0.6)
+      expect(el.style.opacity).toBe('')
+    }
+    // 알림 — 빈 방에서도 뜬다
+    calls.length = 0
+    frames60(1, now)
+    expect(texts()).toContain('결제 방으로')
+  })
+
+  it('캔버스가_없으면_전환_없이_바로_새_방_카드(빈_방이면_바로_onEmpty)', () => {
+    HTMLCanvasElement.prototype.getContext = (() => null) as unknown as typeof HTMLCanvasElement.prototype.getContext
+    allowMotion()
+    const f = feed()
+    const onEmpty = vi.fn()
+    const { container, rerender } = render(<OrbitMap room={roomOf(0, 'r1', 'r1')} agents={five()} state={{}} subagents={[]} subscribe={f.subscribe} onEmpty={onEmpty} />)
+    rerender(<OrbitMap room={roomOf(1, 'r1', 'r2')} agents={three()} state={{}} subagents={[]} subscribe={f.subscribe} onEmpty={onEmpty} />)
+    expect(idsIn(container)).toBe('pay,ship,ops')
+    rerender(<OrbitMap room={roomOf(2, 'r2', 'e')} agents={[]} state={{}} subagents={[]} subscribe={f.subscribe} onEmpty={onEmpty} />)
+    expect(idsIn(container)).toBe('')
+    expect(onEmpty).toHaveBeenCalledTimes(1)
   })
 })

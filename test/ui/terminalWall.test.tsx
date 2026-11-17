@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { render, screen, act, cleanup, within } from '@testing-library/react'
 import fs from 'node:fs'
 import path from 'node:path'
+import { allowMotion } from './motion'
 
 // 터미널 벽 — 창 하나 = 에이전트 한 명(최대 6). 창에 흐르는 줄은 전부 진짜 사건에서, 오른쪽은 관제실과 같은 옆 칸(고른 에이전트의 대화)
 
@@ -414,9 +415,11 @@ describe('터미널 벽', () => {
   })
 })
 
-/** 방 둘 — r1(진짜 방): 알파·베타, r2(둘째 방): 감마. 덮개(PowerLayer)째로 터미널 벽 — 창 줄이 덮개 수명 동안 방별로 남는다 */
-async function mountTwo(o: { history?: Record<string, unknown[]>; preload?: string[] } = {}) {
+/** 방 둘 — r1(진짜 방): 알파·베타, r2(둘째 방): 감마. 덮개(PowerLayer)째로 터미널 벽 — 창 줄이 덮개 수명 동안 방별로 남는다.
+ *  motion — 움직임 줄이기를 끄고(덮개의 data-calm 없음) 그린다 */
+async function mountTwo(o: { history?: Record<string, unknown[]>; preload?: string[]; motion?: boolean } = {}) {
   vi.resetModules()
+  if (o.motion) allowMotion()
   const agents = [agent('a', { name: '알파' }), agent('b', { name: '베타' }), agent('c', { name: '감마', roomId: 'r2' })]
   api(agents, { terminalPref: true, history: o.history })
   const rooms = [{ id: 'r1', name: '진짜 방', createdAt: 2 }, { id: 'r2', name: '둘째 방', createdAt: 1 }]
@@ -483,5 +486,89 @@ describe('터미널 벽 — 방 옮기기', () => {
     await act(async () => { await store.setPower(false) })
     await act(async () => { await store.setPower(true) })
     expect(lines('a')).toEqual(['기다리는 중…'])
+  })
+})
+
+describe('터미널 벽 — 방을 옮길 때 전환', () => {
+  const grid = () => document.querySelector('.pw-t-grid') as HTMLElement
+  const wins = () => [...bar().querySelectorAll('.pw-t-win')].map(e => e.textContent)
+
+  it('옛_창에_꺼짐_클래스_→_0.35s_뒤_새_창_격자와_켜짐_클래스_→_0.7s_뒤_클래스_없음_—_상태_줄_창_이름도_함께', async () => {
+    const store = await mountTwo({ motion: true })
+    expect(document.querySelector('.pw-stage')).not.toHaveAttribute('data-calm')
+    act(() => { store.selectRoom('r2') })
+    // 꺼지는 동안은 옛 방 창 그대로(줄도) — 위에서 아래로 지워진다
+    expect(grid()).toHaveClass('pw-t-off')
+    expect(panes().map(p => p.dataset.agent)).toEqual(['a', 'b'])
+    expect(wins()).toEqual(['0:알파', '1:베타'])
+    await wait(340)
+    expect(grid()).toHaveClass('pw-t-off')
+    await wait(20)
+    expect(grid()).not.toHaveClass('pw-t-off')
+    expect(grid()).toHaveClass('pw-t-on')
+    expect(panes().map(p => p.dataset.agent)).toEqual(['c'])
+    expect(wins()).toEqual(['0:감마'])
+    await wait(340)
+    expect(grid()).toHaveClass('pw-t-on')
+    await wait(20)
+    expect(grid().className).toBe('pw-t-grid')
+  })
+
+  it('그_방에_남겨_둔_줄이_다시_켜진_창에_보인다_—_꺼지는_동안_온_새_방_줄도', async () => {
+    const store = await mountTwo({ motion: true })
+    await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'a-room.ts' }) })
+    await frame()
+    act(() => { store.selectRoom('r2') })
+    await emit('history', { agentId: 'c', item: toolItem('Bash', { command: 'npm test' }) }) // 옛 창이 꺼지는 중에 온 새 방 줄
+    await wait(360)
+    expect(lines('c')).toEqual(['● Bash(npm test)'])
+    await wait(400)
+    act(() => { store.selectRoom('r1') })
+    await wait(360)
+    expect(grid()).toHaveClass('pw-t-on')
+    expect(lines('a')).toEqual(['● Read(a-room.ts)'])
+    expect(lines('b')).toEqual(['기다리는 중…'])
+  })
+
+  it('꺼지는_중에_또_옮기면_꺼짐은_이어지고_마지막에_고른_방이_켜진다(두_방_창이_섞이지_않는다)', async () => {
+    const store = await mountTwo({ motion: true })
+    act(() => { store.selectRoom('r2') })
+    await wait(150)
+    act(() => { store.selectRoom('r1') })
+    expect(grid()).toHaveClass('pw-t-off')
+    expect(panes().map(p => p.dataset.agent)).toEqual(['a', 'b'])
+    await wait(210) // 첫 옮김에서 0.36초 — 꺼짐은 다시 시작하지 않는다
+    expect(grid()).toHaveClass('pw-t-on')
+    expect(panes().map(p => p.dataset.agent)).toEqual(['a', 'b'])
+    // 켜지는 중에 또 옮기면 지금 창부터 다시 꺼진다
+    await wait(100)
+    act(() => { store.selectRoom('r2') })
+    expect(grid()).toHaveClass('pw-t-off')
+    expect(panes().map(p => p.dataset.agent)).toEqual(['a', 'b'])
+    await wait(360)
+    expect(panes().map(p => p.dataset.agent)).toEqual(['c'])
+  })
+
+  it('움직임_줄이기면_바로_새_창이_0.2s_흐려졌다_나타난다', async () => {
+    const store = await mountTwo()
+    expect(document.querySelector('.pw-stage')).toHaveAttribute('data-calm')
+    act(() => { store.selectRoom('r2') })
+    expect(panes().map(p => p.dataset.agent)).toEqual(['c'])
+    expect(grid()).toHaveClass('pw-t-on')
+    expect(grid()).not.toHaveClass('pw-t-off')
+    await wait(190)
+    expect(grid()).toHaveClass('pw-t-on')
+    await wait(20)
+    expect(grid().className).toBe('pw-t-grid')
+  })
+
+  it('전환_CSS_—_꺼짐은_clip-path_지우기(줄마다_JS_없음)·켜짐은_제목_줄_먼저·움직임_줄이기면_흐려짐만', () => {
+    const css = fs.readFileSync(path.resolve('src/renderer/power/power.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(css).toMatch(/\.pw-t-off\s*\{[^}]*animation:[^;]*0\.35s/)
+    expect(css).toMatch(/@keyframes pw-t-off\s*\{[^}]*clip-path/)
+    // 제목 줄이 먼저, 본문은 그 뒤에(지연)
+    expect(css).toMatch(/\.pw-t-on \.pw-t-ptl\s*\{[^}]*animation:/)
+    expect(css).toMatch(/\.pw-t-on \.pw-t-pb[^{]*\{[^}]*animation:[^;]*\d?\.\d+s\s+0?\.\d+s/)
+    expect(css).toMatch(/\.pw-stage\[data-calm\] \.pw-t-on\s*\{[^}]*animation:[^;]*0\.2s/)
   })
 })

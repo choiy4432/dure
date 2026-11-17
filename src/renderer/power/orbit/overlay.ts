@@ -17,7 +17,7 @@ import {
   rgbOf,
   shade,
 } from './palette'
-import { LIFE, colorOf, inFlight, orbitTurn, satPoint, stateCounts, trunc, type World } from './world'
+import { LIFE, TOAST_IN, colorOf, fxAlpha, fxOf, inFlight, orbitTurn, satPoint, stateCounts, trunc, type World } from './world'
 
 /**
  * 번짐 — 흐림 반지름 · 알파(동기화 중엔 boost.bloom 만큼 더).
@@ -84,7 +84,8 @@ function satLabels(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.textAlign = 'center'
   for (const s of w.sats) {
     satPoint(w, s, P)
-    ctx.fillStyle = shade(RGB.label, SAT_LABEL_ALPHA.far + near(P, w.RA) * (SAT_LABEL_ALPHA.near - SAT_LABEL_ALPHA.far))
+    // 방을 옮기는 동안만 부모와 함께 흐려진다(부모가 자리 잡은 뒤에 나타난다)
+    ctx.fillStyle = shade(RGB.label, (SAT_LABEL_ALPHA.far + near(P, w.RA) * (SAT_LABEL_ALPHA.near - SAT_LABEL_ALPHA.far)) * fxOf(w, s.parent))
     ctx.fillText(trunc(s.name, SAT_LABEL_MAX), P.x, P.y + 16)
   }
   ctx.textAlign = 'start'
@@ -97,6 +98,7 @@ function leaves(ctx: CanvasRenderingContext2D, w: World): void {
   for (const l of w.leaves) {
     const k = (w.t - l.t0) / LIFE.leaf
     const p = w.pos.get(l.id)!
+    const v = (1 - k) * fxOf(w, l.id)
     const e = 1 - Math.pow(1 - k, 3)
     const ca = Math.cos(l.ang)
     const sa = Math.sin(l.ang)
@@ -104,16 +106,16 @@ function leaves(ctx: CanvasRenderingContext2D, w: World): void {
     const sy = p.y + sa * 30
     const lx = sx + ca * (24 + e * 74)
     const ly = sy + sa * (18 + e * 52)
-    ctx.strokeStyle = hexA(l.color, (1 - k) * 0.5)
+    ctx.strokeStyle = hexA(l.color, v * 0.5)
     ctx.beginPath()
     ctx.moveTo(sx, sy)
     ctx.lineTo(lx, ly)
     ctx.stroke()
-    ctx.fillStyle = hexA(l.color, 1 - k)
+    ctx.fillStyle = hexA(l.color, v)
     ctx.beginPath()
     ctx.arc(lx, ly, 2.8, 0, TAU)
     ctx.fill()
-    ctx.fillStyle = shade(RGB.label, (1 - k) * 0.9)
+    ctx.fillStyle = shade(RGB.label, v * 0.9)
     if (lx > w.W - 150) {
       ctx.textAlign = 'right'
       ctx.fillText(l.label, lx - 7, ly + 4)
@@ -126,6 +128,7 @@ function leaves(ctx: CanvasRenderingContext2D, w: World): void {
 function comets(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.save()
   ctx.globalCompositeOperation = 'lighter'
+  ctx.globalAlpha = fxAlpha(w) // 방을 옮기며 빨려 드는 동안 함께 사라진다
   for (const c of w.comets) {
     const tr = c.trail
     const n = tr.length
@@ -160,10 +163,11 @@ function ripples(ctx: CanvasRenderingContext2D, w: World): void {
   for (const r of w.ripples) {
     const k = (w.t - r.t0) / LIFE.ripple
     const p = w.pos.get(r.id)!
+    const fx = fxOf(w, r.id)
     for (let j = 0; j < 3; j++) {
       const kk = k - j * 0.16
       if (kk <= 0) continue
-      ctx.strokeStyle = hexA(r.color, (1 - kk) * 0.75)
+      ctx.strokeStyle = hexA(r.color, (1 - kk) * 0.75 * fx)
       ctx.lineWidth = 2 - j * 0.5
       const rx = (70 + kk * 120) * p.s
       ctx.beginPath()
@@ -190,7 +194,9 @@ function bubbles(ctx: CanvasRenderingContext2D, w: World): void {
     let y = p.y - 58 - (k < 0.08 ? (0.08 - k) * 120 : 0)
     if (x + bw > w.W - 6) x = Math.max(6, p.x - 64 - bw)
     y = Math.max(4, Math.min(w.H - 30, y))
-    ctx.globalAlpha = Math.max(0, a)
+    // 방을 옮기며 빨려 들 때 글이 핵 자리에 흐릿하게 남지 않게 다른 것보다 빨리 사라진다
+    const fx = fxOf(w, b.id)
+    ctx.globalAlpha = Math.max(0, a) * fx * fx
     ctx.fillStyle = BUBBLE_BG
     ctx.strokeStyle = hexA(col, 0.8)
     ctx.beginPath()
@@ -282,7 +288,7 @@ function toast(ctx: CanvasRenderingContext2D, w: World): void {
   if (!s) return
   const k = (w.t - s.t0) / LIFE.toast
   if (k < 0 || k >= 1) return
-  const a = k < 0.1 ? k / 0.1 : k > 0.75 ? (1 - k) / 0.25 : 1
+  const a = k < TOAST_IN ? k / TOAST_IN : k > 0.75 ? (1 - k) / 0.25 : 1
   ctx.font = `600 13px ${w.fonts.ui}`
   const tw = ctx.measureText(s.text).width + 36
   const tx = (w.W - tw) / 2

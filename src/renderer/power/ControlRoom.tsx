@@ -1,6 +1,7 @@
 // 관제실(시안 A) — 위 띠 · 왼쪽 카드 · 가운데 관계도 · 오른쪽 옆 칸(고른 에이전트의 대화 | 실시간 기록) · 숫자 띠.
 // 사건은 usePowerFeed 가 먹이는 진짜 사건뿐, 숫자·기록은 방마다 따로(roomMemory — 처음 그 방을 볼 때 0에서). 고르기는 앱과 같은 스토어 고르기(selectAgent).
-// 방은 앱의 방을 따른다 — 위 띠의 방 단추(RoomSwitch)·찾기로 옮기면 그 방의 카드·관계도·숫자·기록으로 바로 바뀐다
+// 방은 앱의 방을 따른다 — 위 띠의 방 단추(RoomSwitch)·찾기로 옮기면 카드·옆 칸·숫자는 그 방 것으로 바로(짧은 흐려짐),
+// 관계도는 옛 카드가 핵으로 빨려 들고 도약한 뒤 새 방 카드가 펼쳐진다(약 1.5초 — OrbitMap)
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { BrandMark } from '../shell/BrandMark'
 import { getStore, useDure } from '../state/store'
@@ -13,15 +14,24 @@ import { PowerControls } from './PowerControls'
 import { RoomSwitch } from './RoomSwitch'
 import { useRoomMemory } from './roomMemory'
 import { SidePanel } from './SidePanel'
-import { usePowerFeed, useRoomChange } from './usePowerFeed'
+import { usePowerFeed, useRoomChange, useSwapFade } from './usePowerFeed'
+
+/** 방을 옮길 때 바로 새 방 값으로 바뀌는 칸 — 왼쪽 카드 · 옆 칸 · 숫자 띠 */
+const SWAP_FADE = '.pw-agents, .pw-side, .pw-stats'
 
 const upText = (s: number) => `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 
 export function ControlRoom({ onExit, onSettings }: { onExit: () => void; onSettings?: () => void }) {
   const { view, subscribe } = usePowerFeed()
   const agents = view.agents
-  // 전환 신호 — 방이 바뀐 그 그리기에서 안다. 관계도는 이것으로 장면을 새 방 에이전트로 다시 짓는다(전환 연출은 이 자리 — Task 2)
+  // 전환 신호 — 방이 바뀐 그 그리기에서 안다. 관계도는 이것으로 전환을 걸고, 바로 바뀌는 칸들은 짧게 흐려졌다 돌아온다
   const room = useRoomChange(view.roomId)
+  const root = useRef<HTMLDivElement>(null)
+  useSwapFade(room.n, root, SWAP_FADE)
+  // 관계도 자리 — 에이전트가 있으면 관계도. 빈 방으로 옮기면 관계도의 전환(빨려 들기 · 도약)이 끝난 뒤에 빈 방 글로 바뀐다
+  const [mapOn, setMapOn] = useState(agents.length > 0)
+  if (agents.length > 0 && !mapOn) setMapOn(true)
+  const mapOff = useCallback(() => setMapOn(false), [])
   // 지금 방의 숫자·기록 — 방을 옮기면 그 방 것, 돌아오면 떠날 때 값에서 이어진다
   const memory = useRoomMemory(view.roomId)
   const live = useRef(memory)
@@ -66,7 +76,7 @@ export function ControlRoom({ onExit, onSettings }: { onExit: () => void; onSett
   const rate = snap.toolsPerMin
   const log = useMemo(() => <LiveLog agents={agents} rate={rate} subscribe={subscribe} memory={memory} />, [agents, rate, subscribe, memory])
   return (
-    <div className="pw-inner" data-power-screen="control">
+    <div ref={root} className="pw-inner" data-power-screen="control">
       <header className="pw-top">
         <div className="pw-brand">
           <span className="pw-mark"><BrandMark /></span>
@@ -91,8 +101,18 @@ export function ControlRoom({ onExit, onSettings }: { onExit: () => void; onSett
             관계도 · 실시간 넘김
             {agents.length > 0 && <span>노드를 누르면 그 에이전트와 대화</span>}
           </div>
-          {agents.length ? (
-            <OrbitMap room={room} agents={agents} state={view.state} subagents={view.subagents} subscribe={subscribe} selected={selected} onPick={pick} />
+          {mapOn ? (
+            <OrbitMap
+              room={room}
+              roomName={view.roomName}
+              agents={agents}
+              state={view.state}
+              subagents={view.subagents}
+              subscribe={subscribe}
+              selected={selected}
+              onPick={pick}
+              onEmpty={mapOff}
+            />
           ) : (
             <p className="pw-empty">이 방엔 에이전트가 없어요</p>
           )}
