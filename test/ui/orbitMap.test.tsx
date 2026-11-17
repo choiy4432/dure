@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { render, act, cleanup } from '@testing-library/react'
 import fs from 'node:fs'
 import path from 'node:path'
-import { MAX_PIXELS, OrbitMap } from '../../src/renderer/power/orbit/OrbitMap'
+import { MAX_PIXELS, OrbitMap, putCard, setCardDisabled } from '../../src/renderer/power/orbit/OrbitMap'
 import { boostOf, changeRoom, intake, stepWorld, syncBoost } from '../../src/renderer/power/orbit/step'
 import { createWorld, inFlight, resizeWorld, setStates, type World } from '../../src/renderer/power/orbit/world'
 import { drawOverlay } from '../../src/renderer/power/orbit/overlay'
@@ -1176,5 +1176,74 @@ describe('관계도 그리기 비용', () => {
     expect(blursOf()).toContain(18)
     expect(blursOf(0.5)).toContain(9)
     expect(blursOf(0.5)).not.toContain(18)
+  })
+
+  /** 요소의 style 속성 쓰기를 센다(그 요소의 style 에만 — 값은 따로 쥔다) */
+  function spyStyle(el: HTMLElement, props: string[], writes: string[]) {
+    const st = el.style as unknown as Record<string, unknown>
+    for (const prop of props) {
+      let v = st[prop]
+      Object.defineProperty(st, prop, {
+        configurable: true,
+        get: () => v,
+        set: (x: unknown) => {
+          writes.push(`${el.dataset.node ?? '?'}.${prop}=${String(x)}`)
+          v = x
+        },
+      })
+    }
+  }
+
+  it('노드_카드_style_은_값이_바뀐_프레임에만_쓴다(같은_시각_프레임은_한_줄도_안_쓴다)', () => {
+    const f = feed()
+    const { container } = render(<OrbitMap agents={five()} state={{}} subagents={[]} subscribe={f.subscribe} />)
+    runFrame(16)
+    runFrame(32)
+    const writes: string[] = []
+    const cards = [...container.querySelectorAll<HTMLElement>('[data-node]')]
+    for (const el of cards) spyStyle(el, ['transform', 'filter', 'zIndex', 'opacity'], writes)
+    // 시각이 같으면 장면이 그대로 — 카드 값도 그대로라 쓰지 않는다
+    runFrame(32)
+    runFrame(32)
+    expect(writes).toEqual([])
+    // 시각이 가면 자리가 바뀐 카드의 transform 만 다시 쓴다(밝기·쌓임·불투명도는 바뀐 것만)
+    runFrame(48)
+    expect(writes.filter(s => /\.transform=/.test(s))).toHaveLength(cards.length)
+    expect(writes.filter(s => /\.opacity=/.test(s))).toEqual([])
+  })
+
+  it('putCard_—_밝기는_소수_둘째_자리로_묶어_바뀔_때만_filter_를_쓰고_transform·z-index·불투명도도_같으면_안_쓴다', () => {
+    const el = document.createElement('button')
+    el.dataset.node = 'c'
+    const writes: string[] = []
+    spyStyle(el, ['transform', 'filter', 'zIndex', 'opacity'], writes)
+    const p = { x: 10, y: 20, s: 0.9, z: 0.42, o: 0.884, a: 1 }
+    putCard(el, p)
+    expect(writes).toEqual(['c.transform=translate(10px, 20px) translate(-50%, -50%) scale(0.9)', 'c.filter=brightness(0.88)', 'c.zIndex=52'])
+    writes.length = 0
+    putCard(el, { ...p })
+    putCard(el, { ...p, o: 0.8836 }) // 둘째 자리까지 같다
+    expect(writes).toEqual([])
+    putCard(el, { ...p, o: 0.8951, x: 11 })
+    expect(writes).toEqual(['c.transform=translate(11px, 20px) translate(-50%, -50%) scale(0.9)', 'c.filter=brightness(0.9)'])
+    writes.length = 0
+    // 방을 옮기며 흐려질 때만 불투명도 — 다 보이면 비운다(평소 그대로)
+    putCard(el, { ...p, o: 0.8951, x: 11, a: 0.5 })
+    putCard(el, { ...p, o: 0.8951, x: 11, a: 1 })
+    putCard(el, { ...p, o: 0.8951, x: 11, a: 1 })
+    expect(writes).toEqual(['c.opacity=0.5', 'c.opacity='])
+  })
+
+  it('setCardDisabled_—_누를_수_있음이_바뀔_때만_disabled_를_쓴다', () => {
+    const el = document.createElement('button')
+    let n = 0
+    const d = Object.getOwnPropertyDescriptor(HTMLButtonElement.prototype, 'disabled')!
+    Object.defineProperty(el, 'disabled', { configurable: true, get: () => d.get!.call(el), set: (v: boolean) => { n++; d.set!.call(el, v) } })
+    setCardDisabled(el, true)
+    setCardDisabled(el, true)
+    expect([el.disabled, n]).toEqual([true, 1])
+    setCardDisabled(el, false)
+    setCardDisabled(el, false)
+    expect([el.disabled, n]).toEqual([false, 2])
   })
 })

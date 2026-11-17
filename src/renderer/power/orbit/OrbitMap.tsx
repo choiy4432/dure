@@ -1,6 +1,6 @@
 // 관계도(궤도++) — 캔버스 2장(잔상 층 + 또렷한 층) 위에 에이전트 노드 카드(DOM 단추 — 누르면 그 에이전트를 고른다).
 // 장면 상태는 world.ts, 그리기는 scene.ts · overlay.ts. 여기는 캔버스·카드·rAF 와 사건·상태 연결만 맡는다.
-// 프레임마다 setState 하지 않는다 — 카드 자리·크기·불투명도는 style 을 바로 고치고, 카드 글은 사건이 올 때만 바뀐다.
+// 프레임마다 setState 하지 않는다 — 카드 자리·크기·불투명도는 style 을 바로 고치고(값이 바뀐 것만 — putCard), 카드 글은 사건이 올 때만 바뀐다.
 // 방이 바뀌면(room.n) 장면을 새로 짓지 않고 전환(transition.ts)을 건다 — 옛 카드가 핵으로 빨려 들고 도약한 뒤, 장면이 새 방 노드로
 // 바꿔 끼우는 그 순간에만 카드 목록을 바꾼다(React 상태 한 번). 두 방의 카드가 함께 그려지는 순간은 없다.
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -40,12 +40,36 @@ type Props = {
 
 const whoOf = (agents: PowerAgent[]): Who[] => agents.map(a => ({ id: a.id, name: a.name, color: a.color }))
 
-/** 카드 하나를 장면 자리에 — 끝까지 펼쳐졌으면 불투명도는 비운다(평소 그대로) */
-function putCard(el: HTMLElement, p: NodePos): void {
-  el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -50%) scale(${p.s})`
-  el.style.filter = `brightness(${p.o})`
-  el.style.zIndex = String(Math.round(p.z * 100) + 10)
-  el.style.opacity = p.a >= 1 ? '' : String(p.a)
+/** 카드에 마지막으로 쓴 값(요소마다 — 새 요소는 새로) */
+type CardLook = { transform: string; filter: string; zIndex: string; opacity: string; disabled: boolean | null }
+const looks = new WeakMap<HTMLElement, CardLook>()
+function lookOf(el: HTMLElement): CardLook {
+  let l = looks.get(el)
+  if (!l) looks.set(el, (l = { transform: '', filter: '', zIndex: '', opacity: '', disabled: null }))
+  return l
+}
+
+/**
+ * 카드 하나를 장면 자리에 — 끝까지 펼쳐졌으면 불투명도는 비운다(평소 그대로).
+ * 값이 바뀐 것만 쓴다 — style 을 쓰면 값이 같아도 스타일을 다시 계산하고, filter 가 바뀌면 카드를 다시 그린다.
+ * 밝기는 소수 둘째 자리로 묶는다(0.005 차이는 눈에 안 보이고, 궤도를 도는 카드의 filter 가 프레임마다 바뀌지 않는다)
+ */
+export function putCard(el: HTMLElement, p: NodePos): void {
+  const l = lookOf(el)
+  const transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -50%) scale(${p.s})`
+  if (transform !== l.transform) el.style.transform = l.transform = transform
+  const filter = `brightness(${Math.round(p.o * 100) / 100})`
+  if (filter !== l.filter) el.style.filter = l.filter = filter
+  const zIndex = String(Math.round(p.z * 100) + 10)
+  if (zIndex !== l.zIndex) el.style.zIndex = l.zIndex = zIndex
+  const opacity = p.a >= 1 ? '' : String(p.a)
+  if (opacity !== l.opacity) el.style.opacity = l.opacity = opacity
+}
+
+/** 카드를 누를 수 있게·없게 — 바뀔 때만 쓴다 */
+export function setCardDisabled(el: HTMLButtonElement, v: boolean): void {
+  const l = lookOf(el)
+  if (l.disabled !== v) el.disabled = l.disabled = v
 }
 
 export function OrbitMap({ room, roomName = null, agents, state, subagents, subscribe, selected = null, onPick, onEmpty }: Props) {
@@ -190,7 +214,7 @@ export function OrbitMap({ room, roomName = null, agents, state, subagents, subs
       const b = w.tr.phase !== 'idle'
       if (b !== busy.current) {
         busy.current = b
-        for (const el of nodes.current.values()) el.disabled = b
+        for (const el of nodes.current.values()) setCardDisabled(el, b)
       }
       // 장면이 새 방 노드로 바꿔 끼웠다 — 카드 목록도 그 방 것으로(전환마다 한 번)
       if (w.tag !== tag) {
@@ -234,7 +258,7 @@ export function OrbitMap({ room, roomName = null, agents, state, subagents, subs
       // 다음 프레임을 기다리지 않는다 — 방이 바뀐 이 순간부터 옛 방 카드는 누를 수 없다(프레임 루프가 끝나면 푼다)
       if (w.tr.phase !== 'idle') {
         busy.current = true
-        for (const el of nodes.current.values()) el.disabled = true
+        for (const el of nodes.current.values()) setCardDisabled(el, true)
       }
       return
     }
@@ -265,7 +289,7 @@ export function OrbitMap({ room, roomName = null, agents, state, subagents, subs
     for (const [id, el] of nodes.current) {
       const p = w.pos.get(id)
       if (p) putCard(el, p)
-      el.disabled = busy.current
+      setCardDisabled(el, busy.current)
     }
   }, [shown])
 
