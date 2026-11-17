@@ -219,4 +219,23 @@ describe('방 단추', () => {
     // 터미널 벽 상태 줄 — 올리거나 펼치면 바탕(--pw-term-win-on)이 밝아져 '방'(--pw-term-ptl-ink)이 4.45:1 로 떨어졌다 → 그때는 밝은 글
     expect(css).toMatch(/\.pw-t-bar button\.pw-rs:hover[^{]*\{[^}]*\bcolor:\s*var\(--pw-term-focus-ink\)/)
   })
+
+  it('관제실_방_단추의_초점_고리는_안쪽으로_—_.pw-room_의_overflow_hidden_이_바깥_고리를_자른다', () => {
+    const css = fs.readFileSync(path.resolve('src/renderer/power/power.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    expect(css).toMatch(/(^|\n|\})\s*button\.pw-rs:focus-visible\s*\{[^}]*outline-offset:\s*-2px/)
+  })
+
+  it('Tab_이면_단추로_초점을_옮기고_메뉴를_닫는다(이어서_브라우저가_단추_다음으로)', async () => {
+    await mount()
+    await openMenu()
+    const ev = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    act(() => { items()[0].dispatchEvent(ev) })
+    expect(ev.defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(roomButton())
+    expect(menu()).toBeNull()
+    await openMenu()
+    act(() => { fireEvent.keyDown(items()[0], { key: 'Tab', shiftKey: true }) })
+    expect(document.activeElement).toBe(roomButton())
+    expect(menu()).toBeNull()
+  })
 })

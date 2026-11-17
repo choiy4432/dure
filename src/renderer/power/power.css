@@ -180,6 +180,8 @@
 /* 음수 margin 으로 내밀지 않는다 — 가운데 칸(.pw-room)이 넘침을 잘라 펼친·올린 바탕의 왼쪽이 잘렸다 */
 button.pw-rs { height: 30px; padding: 0 6px 0 8px; border-radius: var(--radius-ctl); transition: background-color 0.15s; }
 button.pw-rs:hover, button.pw-rs[aria-expanded='true'] { background: var(--hover); }
+/* .pw-room 이 넘치면 자르고 단추 높이와 같다 — 바깥 고리는 잘려 안 보인다(전역 :focus-visible 은 offset 2px) */
+button.pw-rs:focus-visible { outline-offset: -2px; }
 button.pw-rs .i { color: var(--muted); flex: none; }
 /* 방 목록 메뉴 — 앱의 메뉴(.pop · .mi) 그대로, 줄 = 이름(말줄임) · 에이전트 N · [기다림 N] · [체크].
    앱 .pop 의 최대 폭(320px)까지 — 지금 방 줄에 기다림 N·체크가 붙어도 흔한 길이의 이름이 잘리지 않게 */
