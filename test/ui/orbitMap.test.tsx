@@ -711,19 +711,42 @@ describe('관계도 — 방을 옮길 때 전환(빨려 들기 · 도약 · 펼�
     expect(v.toast).toBeNull()
   })
 
-  it('알림의_방_이름은_길면_말줄임_—_방_이름엔_길이_상한이_없어_관계도_칸을_넘지_않게', () => {
+  it('알림은_그릴_때_잰_너비로_맞춘다_—_이름을_말줄임하고_꼬리(방으로·끝남)는_늘_남는다(좁은_칸에서도_칸을_안_넘는다)', () => {
+    // 글자 하나 14px 인 가짜 잣대 — 알약 안쪽 너비 = 칸 − 가장자리 16 − 안쪽 여백 36
+    const toastText = (W: number, setup: (w: World) => void) => {
+      const w = createWorld({ agents: who(), W, H: 470, calm: false, rand: mulberry32(3) })
+      setup(w)
+      const ctx = fakeCtx(calls = [])
+      ;(ctx as unknown as { measureText: (s: string) => { width: number } }).measureText = (s: string) => ({ width: s.length * 14 })
+      drawOverlay(ctx, w, null, 2)
+      const t = calls.filter(c => c.fn === 'fillText').map(c => String(c.args[0])).find(s => /방으로$|끝남$/.test(s))
+      return t
+    }
+    const long = '결제 연동 · 웹훅 서명 검증과 정산 금액 반올림을 한 번에 정리하는 방'
+    const toRoom = (name: string) => (w: World) => { const now = run(w, 0.2); go(w, three(), name); run(w, 0.7, now) }
+    const t = toastText(344, toRoom(long))!
+    expect(t.endsWith(' 방으로')).toBe(true)
+    expect(t).toContain('…')
+    expect(t.length * 14).toBeLessThanOrEqual(344 - 16 - 36)
+    // 넓은 칸이면 더 많이 보이고 · 짧은 이름은 그대로
+    expect(toastText(748, toRoom(long))!.length).toBeGreaterThan(t.length)
+    expect(toastText(344, toRoom('결제 연동'))).toBe('결제 연동 방으로')
+    // 끝남 알림도 같다
+    const doneLong = (w: World) => {
+      const w2 = w
+      w2.who.get('lead')!.name = '아주아주아주아주아주아주아주아주아주 긴 에이전트 이름'
+      intake(w2, done('lead'))
+      run(w2, 0.6)
+    }
+    const d = toastText(344, doneLong)!
+    expect(d.endsWith(' 끝남')).toBe(true)
+    expect(d).toContain('…')
+    expect(d.length * 14).toBeLessThanOrEqual(344 - 16 - 36)
+    // 데이터는 온전한 글(자르기는 그리는 쪽)
     const w = world(false)
     run(w, 0.2)
-    go(w, three(), '결제 연동 · 웹훅 서명 검증과 정산 금액 반올림을 한 번에 정리하는 방')
-    const text = w.toast!.text
-    expect(text.endsWith(' 방으로')).toBe(true)
-    expect(text).toContain('…')
-    expect([...text].length).toBeLessThanOrEqual(28)
-    // 짧은 이름은 그대로
-    const v = world(false)
-    run(v, 0.2)
-    go(v, three(), '결제 연동')
-    expect(v.toast!.text).toBe('결제 연동 방으로')
+    go(w, three(), long)
+    expect(w.toast!.text).toBe(`${long} 방으로`)
   })
 
   it('알림이_계기판_글(왼쪽_위_값·오른쪽_위_궤도)과_겹칠_만큼_넓으면_그_아래로_—_좁은_관계도(1366×768)', () => {
@@ -866,6 +889,22 @@ describe('관계도 화면 — 방을 옮길 때', () => {
       expect(scaleOf(el)).toBeLessThan(0.01)
       expect(Number(el.style.opacity)).toBeLessThan(0.01)
     }
+  })
+
+  it('방이_바뀐_바로_그_순간(그리기_한_걸음_전에도)_옛_방_노드_카드는_이미_누를_수_없다', () => {
+    allowMotion()
+    const f = feed()
+    const onPick = vi.fn()
+    const map = (n: number, agents: PowerAgent[]) => (
+      <OrbitMap room={roomOf(n, null, `r${n}`)} roomName="결제" agents={agents} state={{}} subagents={[]} subscribe={f.subscribe} onPick={onPick} />
+    )
+    const { container, rerender } = render(map(0, five()))
+    frames60(3, 0)
+    const nodes = () => [...container.querySelectorAll('[data-node]')] as HTMLButtonElement[]
+    rerender(map(1, three())) // rAF 를 한 번도 돌리지 않는다
+    expect(nodes().every(n => n.disabled)).toBe(true)
+    act(() => { nodes()[1].click() })
+    expect(onPick).not.toHaveBeenCalled()
   })
 
   it('전환_중_노드_카드는_누를_수_없고(disabled)_끝나면_다시_눌린다', () => {

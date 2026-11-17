@@ -221,6 +221,11 @@ export function OrbitMap({ room, roomName = null, agents, state, subagents, subs
     built.current = agents
     if (scene !== w.tag || w.next) {
       changeRoom(w, { agents: whoOf(agents), satellites: subRef.current, states: stateRef.current, tag: scene, toRoom: room?.next ?? null, name: roomName })
+      // 다음 프레임을 기다리지 않는다 — 방이 바뀐 이 순간부터 옛 방 카드는 누를 수 없다(프레임 루프가 끝나면 푼다)
+      if (w.tr.phase !== 'idle') {
+        busy.current = true
+        for (const el of nodes.current.values()) el.disabled = true
+      }
       return
     }
     setNodes(w, whoOf(agents))

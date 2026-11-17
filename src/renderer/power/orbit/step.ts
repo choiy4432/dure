@@ -29,8 +29,8 @@ import {
 
 const YAW_SPEED = 0.05
 const MAX_DT = 0.05
-/** 동기화 알림 — 차례를 끝낸 에이전트 이름 */
-const doneText = (name: string) => `${name} 끝남`
+/** 알림 — 이름(head) + 꼬리(tail). 이름은 길이 상한이 없는 사용자 글이라 자르기는 그리는 쪽이 잰 너비로(overlay.toast) */
+const toastOf = (t0: number, head: string, tail: string) => ({ t0, text: head + tail, head, tail })
 const MAX_LEAVES = 16
 const MAX_COMETS = 80
 const MAX_QUEUE = 200
@@ -118,13 +118,13 @@ function arrive(w: World, c: Comet): void {
 /** 에이전트가 진짜로 한 차례를 끝냈다 — 동기화 연출(지난 동기화에서 SYNC.gap 초가 안 지났으면 아무것도 안 한다) */
 function finished(w: World, id: string): void {
   if (w.t - w.sync.t0 < SYNC.gap) return
-  beginSync(w, doneText(w.who.get(id)?.name ?? ''))
+  beginSync(w, w.who.get(id)?.name ?? '')
 }
 
-function beginSync(w: World, text: string): void {
+function beginSync(w: World, name: string): void {
   const R = (a: number, b: number) => a + w.rand() * (b - a)
   w.sync.t0 = w.t
-  w.toast = { t0: w.t, text }
+  w.toast = toastOf(w.t, name, ' 끝남')
   w.flare = w.t
   // 차분 모드는 알림과 은은한 빛만 — 출력 폭발·카드 번쩍·폭죽 혜성 없이
   if (w.calm) return
@@ -135,9 +135,6 @@ function beginSync(w: World, text: string): void {
     for (let i = 0; i < 14; i++) comet(w, w.core.id, w.orbits[Math.floor(w.rand() * w.orbits.length)].id, { small: true, delay: i * 0.055, T: R(0.6, 0.9) })
 }
 
-/** 방 옮기기 알림 — '끝남' 알림과 같은 자리·꼴. 방 이름엔 길이 상한이 없어 길면 말줄임(관계도 칸을 넘지 않게) */
-const ROOM_TOAST_MAX = 24
-const roomText = (name: string) => `${trunc(name, ROOM_TOAST_MAX)} 방으로`
 
 /**
  * 방이 바뀌었다 — 지금 화면의 노드를 핵으로 빨아들이고(있으면) 도약한 뒤 새 방 노드를 펼친다(transition.ts).
@@ -169,7 +166,7 @@ export function changeRoom(w: World, o: { agents: Who[]; satellites: SubLabel[];
   const s = w.toast
   const k = s ? (w.t - s.t0) / LIFE.toast : -1
   const wait = w.tr.phase === 'out' && !w.calm ? Math.max(0, TR.out - w.tr.t) : 0
-  w.toast = { t0: k >= 0 && k < 1 ? w.t - LIFE.toast * Math.min(k, TOAST_IN) : w.t + wait, text: roomText(o.name) }
+  w.toast = toastOf(k >= 0 && k < 1 ? w.t - LIFE.toast * Math.min(k, TOAST_IN) : w.t + wait, o.name, ' 방으로')
 }
 
 /** 새 방 노드로 바꿔 끼운다 — 핵이 번쩍이고 그 자리에서 새 카드가 나온다 */

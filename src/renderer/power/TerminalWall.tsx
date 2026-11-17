@@ -2,7 +2,7 @@
 // 창에 흐르는 줄은 전부 진짜 사건에서(그 방을 처음 볼 때는 스토어에 이미 불러와 있는 기록에서). 지어낸 창·줄·숫자는 없다.
 // 창 줄·기록·숫자는 방마다 따로(roomMemory) — 방을 옮기면 그 방 창으로 바뀌고, 돌아오면 남겨 둔 줄이 그대로 보인다.
 // 방을 옮길 때 창 격자는 두 걸음: 옛 창이 위에서 아래로 지워지듯 꺼지고(0.35초) 새 방 창 격자가 켜진다(0.35초, 제목 줄 먼저).
-// 움직임 줄이기면 새 창이 바로 0.2초 흐려졌다 나타난다. 클래스는 걸음이 바뀔 때만 바꾼다(줄마다 JS 없음 — power.css).
+// 지워지는 옛 창은 inert — 초점·Enter 로 옛 방 에이전트를 고르지 못한다. 움직임 줄이기면 새 창이 바로 0.2초 흐려졌다 나타난다. 클래스는 걸음이 바뀔 때만 바꾼다(줄마다 JS 없음 — power.css).
 // 줄은 DOM 에 바로 붙인다(사건마다 React 상태를 바꾸지 않는다) — 글자는 textContent 로만.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { reducedMotion } from '../lib/motion'
@@ -160,7 +160,7 @@ export function TerminalWall({ onExit, onSettings }: { onExit: () => void; onSet
       <div className="pw-t-main">
         {/* 창 격자는 보이는 방이 바뀔 때마다(wall.shown) 새로 — 새 방의 창이 그 방 줄 상자에 붙는다 */}
         {n ? (
-          <div key={wall.shown} className={cls} data-n={n}>
+          <div key={wall.shown} className={cls} data-n={n} inert={wall.phase === 'off' || undefined}>
             {g.panes.map(a => (
               <Pane key={a.id} agent={a} state={g.state[a.id] ?? 'resting'} selected={selected === a.id} lines={g.pl} onPick={pick} />
             ))}

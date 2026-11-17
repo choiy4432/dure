@@ -287,6 +287,24 @@ function hud(ctx: CanvasRenderingContext2D, w: World): void {
 /** 계기판 글이 차지하는 자리(hud 와 같은 값) — 왼쪽 위 값 칸의 오른쪽 끝 · 오른쪽 위 궤도 칸의 왼쪽 끝(오른쪽에서) · 첫 줄 · 줄 간격 */
 const HUD_BOX = { leftEnd: 172, rightStart: 224, top: 24, row: 16 } as const
 
+/** 알약 가장자리 여백(좌우 각각) · 알약 안쪽 여백(좌우 합) */
+const TOAST_EDGE = 8
+const TOAST_PAD = 36
+
+/** 이름(head)을 잰 너비로 말줄임해 꼬리(tail)와 함께 maxW 안에 — 꼬리는 늘 남는다(이름이 다 잘려도 '…' + 꼬리) */
+function fitToast(ctx: CanvasRenderingContext2D, head: string, tail: string, maxW: number): string {
+  if (ctx.measureText(head + tail).width <= maxW) return head + tail
+  const cs = Array.from(head)
+  let lo = 0
+  let hi = cs.length - 1 // 이진 탐색 — 들어가는 가장 긴 앞부분
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1
+    if (ctx.measureText(cs.slice(0, mid).join('') + '…' + tail).width <= maxW) lo = mid
+    else hi = mid - 1
+  }
+  return cs.slice(0, lo).join('') + '…' + tail
+}
+
 /** 알림 — 위 가운데 알약(동기화 '끝남' · 방 옮기기). 좁은 칸에서 계기판 글과 겹칠 만큼 넓으면 겹치는 쪽 글 아래로 내린다 */
 function toast(ctx: CanvasRenderingContext2D, w: World): void {
   const s = w.toast
@@ -295,7 +313,8 @@ function toast(ctx: CanvasRenderingContext2D, w: World): void {
   if (k < 0 || k >= 1) return
   const a = k < TOAST_IN ? k / TOAST_IN : k > 0.75 ? (1 - k) / 0.25 : 1
   ctx.font = `600 13px ${w.fonts.ui}`
-  const tw = ctx.measureText(s.text).width + 36
+  const text = s.head !== undefined && s.tail !== undefined ? fitToast(ctx, s.head, s.tail, w.W - 2 * TOAST_EDGE - TOAST_PAD) : s.text
+  const tw = ctx.measureText(text).width + TOAST_PAD
   const tx = (w.W - tw) / 2
   const rightRows = Math.min(w.orbits.length, HUD_ORBIT_ROWS) + (w.orbits.length > HUD_ORBIT_ROWS ? 1 : 0)
   const rows = Math.max(tx < HUD_BOX.leftEnd ? HUD_ROWS : 0, tx + tw > w.W - HUD_BOX.rightStart ? rightRows : 0)
@@ -309,6 +328,6 @@ function toast(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.fill()
   ctx.stroke()
   ctx.fillStyle = TOAST_TEXT
-  ctx.fillText(s.text, tx + 18, ty + 18.5)
+  ctx.fillText(text, tx + 18, ty + 18.5)
   ctx.globalAlpha = 1
 }

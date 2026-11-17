@@ -514,6 +514,18 @@ describe('터미널 벽 — 방을 옮길 때 전환', () => {
     expect(grid().className).toBe('pw-t-grid')
   })
 
+  it('꺼지는_동안_옛_창_격자는_inert_—_초점·Enter_가_옛_방_에이전트를_고르지_못한다(켜진_뒤엔_아님)', async () => {
+    const store = await mountTwo({ motion: true })
+    const spy = vi.spyOn(store, 'selectAgent')
+    act(() => { store.selectRoom('r2') })
+    expect(grid()).toHaveClass('pw-t-off')
+    expect(grid()).toHaveAttribute('inert')
+    expect(spy).not.toHaveBeenCalled()
+    await wait(360)
+    expect(grid()).toHaveClass('pw-t-on')
+    expect(grid()).not.toHaveAttribute('inert')
+  })
+
   it('그_방에_남겨_둔_줄이_다시_켜진_창에_보인다_—_꺼지는_동안_온_새_방_줄도', async () => {
     const store = await mountTwo({ motion: true })
     await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'a-room.ts' }) })

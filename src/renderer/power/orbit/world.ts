@@ -83,7 +83,8 @@ export type World = {
   /** 마지막 동기화 시작 시각 — 진짜 차례 끝(done)에서만, SYNC.gap 초에 한 번까지 */
   sync: { t0: number }
   syncing: boolean
-  toast: { t0: number; text: string } | null
+  /** 위 가운데 알림 — head·tail 이 있으면 head(사용자 글: 방·에이전트 이름)를 그릴 때 잰 너비로 말줄임하고 tail 은 늘 남긴다 */
+  toast: { t0: number; text: string; head?: string; tail?: string } | null
   boost: Boost
   /** 카드를 번쩍일 에이전트 — OrbitMap 이 프레임마다 비운다 */
   hits: string[]
