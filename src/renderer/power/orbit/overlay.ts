@@ -73,8 +73,11 @@ const P: Proj = { x: 0, y: 0, f: 0, d: 0 }
 const deg = (r: number) => Math.round((((r * 180) / Math.PI) % 360 + 360) % 360)
 const nameOf = (w: World, id: string) => w.who.get(id)?.name ?? ''
 
-/** 번짐 판이 없으면(시험 · 컨텍스트를 못 얻음) 번짐을 건너뛴다 */
-export function drawOverlay(ctx: CanvasRenderingContext2D, w: World, glow: Glow | null, k: number): void {
+/**
+ * 번짐 판이 없으면(시험 · 컨텍스트를 못 얻음) 번짐을 건너뛴다.
+ * sk — 혜성 머리 빛(shadowBlur) 배율. shadowBlur 는 setTransform 을 안 따라 해상도를 픽셀 상한으로 낮추면 화면에서 커진다 — 낮춘 몫(OrbitMap)
+ */
+export function drawOverlay(ctx: CanvasRenderingContext2D, w: World, glow: Glow | null, k: number, sk = 1): void {
   const { W, H } = w
   if (!W || !H) return
   ctx.setTransform(k, 0, 0, k, 0, 0)
@@ -83,7 +86,7 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, w: World, glow: Glow 
   tickLabels(ctx, w)
   satLabels(ctx, w)
   leaves(ctx, w)
-  comets(ctx, w)
+  comets(ctx, w, sk)
   ripples(ctx, w)
   // 동기화 중엔 말풍선을 숨긴다 — 뒤쪽 카드와 겹쳐 읽히지 않는다
   if (!w.syncing) bubbles(ctx, w)
@@ -167,8 +170,8 @@ function leaves(ctx: CanvasRenderingContext2D, w: World): void {
   }
 }
 
-/** 혜성 — 굵어지는 꼬리 + 빛나는 머리 */
-function comets(ctx: CanvasRenderingContext2D, w: World): void {
+/** 혜성 — 굵어지는 꼬리 + 빛나는 머리(빛은 sk 배 — drawOverlay) */
+function comets(ctx: CanvasRenderingContext2D, w: World, sk: number): void {
   ctx.save()
   ctx.globalCompositeOperation = 'lighter'
   ctx.globalAlpha = fxAlpha(w) // 방을 옮기며 빨려 드는 동안 함께 사라진다
@@ -188,7 +191,7 @@ function comets(ctx: CanvasRenderingContext2D, w: World): void {
     }
     const h = tr[n - 1]
     ctx.shadowColor = c.color
-    ctx.shadowBlur = c.small ? 6 : 18
+    ctx.shadowBlur = (c.small ? 6 : 18) * sk
     ctx.fillStyle = c.small ? shade(rgb, 0.8) : WHITE
     ctx.beginPath()
     ctx.arc(h.x, h.y, c.small ? 1.8 : 3.6, 0, TAU)

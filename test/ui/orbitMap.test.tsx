@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { render, act, cleanup } from '@testing-library/react'
 import fs from 'node:fs'
 import path from 'node:path'
-import { OrbitMap } from '../../src/renderer/power/orbit/OrbitMap'
+import { MAX_PIXELS, OrbitMap } from '../../src/renderer/power/orbit/OrbitMap'
 import { boostOf, changeRoom, intake, stepWorld, syncBoost } from '../../src/renderer/power/orbit/step'
 import { createWorld, inFlight, resizeWorld, setStates, type World } from '../../src/renderer/power/orbit/world'
 import { drawOverlay } from '../../src/renderer/power/orbit/overlay'
@@ -222,18 +222,20 @@ describe('관계도 화면', () => {
 
   it('캔버스_해상도는_dpr_최대_2.5_창이_바뀌면_다시_잰다(판을_늘리고_줄이지_않는다)', async () => {
     const f = feed()
+    // 2.5 배여도 픽셀 상한(MAX_PIXELS) 안인 칸 — 상한은 따로 본다(관계도 그리기 비용)
+    stubSize(600, 400)
     const dpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')
     Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 1.25 })
     try {
       const { container } = render(<OrbitMap agents={five()} state={{}} subagents={[]} subscribe={f.subscribe} />)
       const cv = container.querySelector('canvas') as HTMLCanvasElement
-      expect(cv.width).toBe(Math.round(748 * 1.25))
-      expect(cv.height).toBe(Math.round(580 * 1.25))
+      expect(cv.width).toBe(Math.round(600 * 1.25))
+      expect(cv.height).toBe(Math.round(400 * 1.25))
       Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 3 })
       await act(async () => {
         window.dispatchEvent(new Event('resize'))
       })
-      expect(cv.width).toBe(Math.round(748 * 2.5))
+      expect(cv.width).toBe(Math.round(600 * 2.5))
     } finally {
       if (dpr) Object.defineProperty(window, 'devicePixelRatio', dpr)
       else delete (window as unknown as Record<string, unknown>).devicePixelRatio
@@ -1079,14 +1081,14 @@ describe('관계도 그리기 비용', () => {
         expect(canvasesMade()).toBe(n0)
         expect(resizedOff()).toBe(r0)
         // 칸이 바뀌면 같은 판을 다시 잰다(새로 만들지 않는다)
-        stubSize(1000, 700)
+        stubSize(900, 600)
         await act(async () => {
           window.dispatchEvent(new Event('resize'))
         })
         runFrame(200)
         expect(resizedOff()).toBeGreaterThan(r0)
-        expect(trail.width).toBe(2000)
-        expect(half.width).toBe(1000)
+        expect(trail.width).toBe(1800)
+        expect(half.width).toBe(900)
         expect(g.width).toBeLessThanOrEqual(trail.width / 3)
         expect(g.height).toBeLessThanOrEqual(trail.height / 3)
         expect(canvasesMade()).toBe(n0)
@@ -1096,5 +1098,83 @@ describe('관계도 그리기 비용', () => {
       w.restore()
       made.mockRestore()
     }
+  })
+
+  it('캔버스_판은_한_장에_MAX_PIXELS_까지_—_넘으면_해상도를_낮추되_칸의_CSS_크기_아래로는_안_내린다(748×580_dpr_2_는_그대로)', async () => {
+    const f = feed()
+    const backing = async (W: number, H: number, dpr: number) => {
+      stubSize(W, H)
+      let size: [number, number] = [0, 0]
+      await withDpr(dpr, () => {
+        const { container, unmount } = render(<OrbitMap agents={five()} state={{}} subagents={[]} subscribe={f.subscribe} />)
+        const [trail, crisp] = [...container.querySelectorAll('canvas')]
+        expect([crisp.width, crisp.height]).toEqual([trail.width, trail.height])
+        size = [trail.width, trail.height]
+        unmount()
+      })
+      return size
+    }
+    expect(MAX_PIXELS).toBe(2_200_000)
+    // 상한 안 — 그대로(dpr 배)
+    expect(await backing(748, 580, 2)).toEqual([1496, 1160])
+    // 4K 150% 의 관계도 칸(1676×1142) — dpr 1.5 면 430만 픽셀 → 상한에 맞춰 √(220만/칸 넓이) 배
+    const [w4, h4] = await backing(1676, 1142, 1.5)
+    expect(w4 * h4).toBeLessThanOrEqual(MAX_PIXELS)
+    expect(w4 * h4).toBeGreaterThan(MAX_PIXELS * 0.99)
+    expect(w4 / 1676).toBeCloseTo(Math.sqrt(MAX_PIXELS / (1676 * 1142)), 2)
+    // 2400×1300 칸 · dpr 1.5 — 상한에 맞추려면 1 아래(0.84 배)라 1 배(칸의 CSS 크기)에서 멈춘다(글이 흐려지지 않게)
+    expect(await backing(2400, 1300, 1.5)).toEqual([2400, 1300])
+    // 배율이 1 아래(창을 줄여 봄)면 예전대로 dpr 배 — 상한이 해상도를 올리지는 않는다
+    expect(await backing(748, 580, 0.8)).toEqual([Math.round(748 * 0.8), Math.round(580 * 0.8)])
+  })
+
+  it('픽셀_상한으로_해상도를_낮추면_혜성_머리_빛(shadowBlur_—_setTransform_을_안_따른다)도_그만큼_줄여_화면_크기가_그대로', async () => {
+    const recs = recordCanvases()
+    allowMotion()
+    const glowOf = async (W: number, H: number, dpr: number) => {
+      stubSize(W, H)
+      recs.length = 0
+      let blurs: number[] = []
+      await withDpr(dpr, async () => {
+        const f = feed()
+        const { container, unmount } = render(<OrbitMap agents={five()} state={{}} subagents={[]} subscribe={f.subscribe} />)
+        let now = 0
+        for (let i = 0; i < 12; i++) runFrame((now += 1000 / 60))
+        await f.emit(hand('impl', 'test', '넘겨요'))
+        for (let i = 0; i < 40; i++) runFrame((now += 1000 / 60))
+        const crisp = container.querySelectorAll('canvas')[1]
+        blurs = recs.find(r => r.canvas === crisp)!.sets.filter(([k, v]) => k === 'shadowBlur' && v !== 0).map(([, v]) => Number(v))
+        unmount()
+      })
+      return Math.max(...blurs)
+    }
+    // 상한 안 — 그대로 18
+    expect(await glowOf(748, 580, 1.5)).toBe(18)
+    // 1676×1142 · dpr 1.5 → 해상도 1.5 → √(220만/칸 넓이) ≈ 1.07 — 빛도 1.07/1.5 배(장치 픽셀로 같은 크기)
+    const k = Math.sqrt(MAX_PIXELS / (1676 * 1142))
+    expect(await glowOf(1676, 1142, 1.5)).toBeCloseTo((18 * k) / 1.5, 1)
+  })
+
+  it('drawOverlay_의_그림자_배율(sk)은_혜성_머리_빛에만_—_기본은_1', () => {
+    const w = world(false)
+    let now = run(w, 0.2)
+    intake(w, hand('impl', 'test', '넘겨요'))
+    now = run(w, 0.4, now)
+    expect(w.comets.length).toBeGreaterThan(0)
+    const blursOf = (sk?: number) => {
+      const sets: [string, unknown][] = []
+      const ctx = new Proxy(fakeCtx(calls) as unknown as Record<string, unknown>, {
+        set(t, k, v) {
+          sets.push([String(k), v])
+          return Reflect.set(t, k, v)
+        },
+      }) as unknown as CanvasRenderingContext2D
+      if (sk === undefined) drawOverlay(ctx, w, null, 2)
+      else drawOverlay(ctx, w, null, 2, sk)
+      return sets.filter(([k, v]) => k === 'shadowBlur' && v !== 0).map(([, v]) => v)
+    }
+    expect(blursOf()).toContain(18)
+    expect(blursOf(0.5)).toContain(9)
+    expect(blursOf(0.5)).not.toContain(18)
   })
 })

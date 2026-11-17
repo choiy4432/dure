@@ -15,6 +15,8 @@ import { createWorld, resizeWorld, setNodes, setSatellites, setStates, toolLine,
 
 /** 캔버스 해상도 상한(배) */
 const MAX_RES = 2.5
+/** 캔버스 한 장의 픽셀 상한 — 큰 칸 · 높은 배율(4K 150% 등)이면 해상도를 여기에 맞춰 낮춘다(칸의 CSS 크기 아래로는 안 내린다) */
+export const MAX_PIXELS = 2_200_000
 /** 이만큼부터는 궤도 카드를 작은 판으로(핵 카드는 그대로) — 카드가 겹쳐 쌓이지 않게 */
 const CROWD_AT = 8
 
@@ -127,11 +129,16 @@ export function OrbitMap({ room, roomName = null, agents, state, subagents, subs
     // 번짐 판 — 한 번 만들고 판 크기가 바뀔 때만 다시 잰다(프레임마다 만들지 않는다)
     const glow = createGlow(trail)
     let res = 1
-    // 칸의 배치 크기 × 화면 배율 — 판은 창 크기 그대로라(늘리고 줄이지 않는다) 배율은 devicePixelRatio 뿐
+    /** 혜성 머리 빛(shadowBlur — setTransform 을 안 따른다) 배율 — 픽셀 상한으로 해상도를 낮춘 몫만큼 줄여 화면 크기를 그대로 */
+    let sk = 1
+    // 칸의 배치 크기 × 화면 배율 — 판은 창 크기 그대로라(늘리고 줄이지 않는다) 배율은 devicePixelRatio 뿐.
+    // 한 장이 MAX_PIXELS 를 넘으면 해상도를 √(MAX_PIXELS / 칸 넓이) 로 낮춘다 — 1 아래(칸의 CSS 크기보다 작은 판)로는 안 내린다(글이 흐려진다)
     const measure = () => {
-      res = Math.min(MAX_RES, window.devicePixelRatio || 1)
       const W = box.offsetWidth
       const H = box.offsetHeight
+      const base = Math.min(MAX_RES, window.devicePixelRatio || 1)
+      res = Math.min(base, Math.max(1, Math.sqrt(MAX_PIXELS / (W * H))))
+      sk = res / base
       const bw = Math.round(W * res)
       const bh = Math.round(H * res)
       for (const c of [trail, crisp])
@@ -165,7 +172,7 @@ export function OrbitMap({ room, roomName = null, agents, state, subagents, subs
       stepWorld(w, now)
       if (w.W && w.H) {
         drawScene(tx, w, res)
-        drawOverlay(cx, w, glow, res)
+        drawOverlay(cx, w, glow, res, sk)
         placeCards()
       }
       if (w.hits.length) {
