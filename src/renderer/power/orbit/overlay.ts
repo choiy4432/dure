@@ -1,5 +1,5 @@
 // 또렷한 층 — 매 프레임 지우고 다시 그린다(시안 orbit3.frame 끝부분 · hud 와 공통 drawLeaves · drawComets · drawRipples · drawBubbles).
-// 번짐(잔상 층을 흐리게 한 번 더 얹기) · 눈금 숫자 · 위성 이름 · 잎 · 혜성 · 물결 · 말풍선 · 계기판 · 동기화 알림.
+// 번짐(잔상 층을 작은 판에서 흐려 늘려 한 번 더 얹기) · 눈금 숫자 · 위성 이름 · 잎 · 혜성 · 물결 · 말풍선 · 계기판 · 동기화 알림.
 // 상태는 읽기만 한다.
 import { near, projectTo, type Proj } from './camera'
 import {
@@ -23,8 +23,44 @@ import { LIFE, TOAST_IN, colorOf, fxAlpha, fxOf, inFlight, orbitTurn, satPoint, 
  * 번짐 — 흐림 반지름 · 알파(동기화 중엔 boost.bloom 만큼 더).
  * blur 는 시안의 2배 캔버스에서의 장치 픽셀 값이다 — 캔버스 filter 의 흐림은 setTransform 배율을 따르지 않고 장치 픽셀로 먹어서,
  * 해상도 k 에선 7·k/2 로 줄여야 시안과 같은 번짐(화면 기준 3.5px)이 된다.
+ * 흐림은 잔상 층을 가로·세로 1/4 로 줄인 작은 판(Glow)에서 같은 화면 반지름으로 건다 — 다 큰 판에 흐림을 거는 것이 관계도에서 가장 비싼 일이었다.
+ * soft 는 줄였다 늘리며 더해지는 흐림(작은 판 픽셀², 분산)을 덜어 내는 몫 — 다 큰 판 번짐과 화소로 견줘 가장 가까운 값(0 · 0.125 · 0.25 실측).
+ * 이론값(4×4 평균 1/12 + 선형 확대 1/6 ≈ 0.25)까지 덜면 해상도 1 에서 작은 판 반지름이 0.75px 아래로 내려가 흐림이 덜 먹는다.
  */
-export const BLOOM = { blur: 7, alpha: 0.55, atRes: 2 } as const
+export const BLOOM = { blur: 7, alpha: 0.55, atRes: 2, soft: 0.125 } as const
+
+/**
+ * 번짐 판 — 잔상 층(src)을 반(half, 흐림 없음)으로, 다시 반(buf, 흐림)으로 줄인 작은 캔버스 둘. 한 번 만들고 판 크기·해상도가 바뀔 때만 다시 잰다(sizeGlow).
+ * 반씩 두 번 줄이면 선형 표본이 2×2 를 꼭 평균해 4×4 평균이 된다 — 한 번에 1/4 로 줄이면 가는 선·점이 표본 사이에 빠져 번짐이 얼룩지고,
+ * 밉맵(imageSmoothingQuality 'medium')은 판보다 비쌌다(실측)
+ */
+export type Glow = { src: CanvasImageSource; half: HTMLCanvasElement; hx: CanvasRenderingContext2D; buf: HTMLCanvasElement; bx: CanvasRenderingContext2D; k: number }
+
+/** 번짐 판을 만든다 — 컨텍스트를 못 얻으면 null(번짐 없이 그린다) */
+export function createGlow(src: CanvasImageSource): Glow | null {
+  const half = document.createElement('canvas')
+  const buf = document.createElement('canvas')
+  const hx = half.getContext('2d')
+  const bx = buf.getContext('2d')
+  return hx && bx ? { src, half, hx, buf, bx, k: 0 } : null
+}
+
+/** 잔상 층 판(bw×bh, 해상도 k)에 맞춰 번짐 판을 잰다 — 그대로면 아무것도 안 한다(판을 다시 재면 흐림 설정도 지워져 다시 건다) */
+export function sizeGlow(g: Glow, bw: number, bh: number, k: number): void {
+  const hw = Math.max(1, Math.ceil(bw / 2))
+  const hh = Math.max(1, Math.ceil(bh / 2))
+  const sw = Math.max(1, Math.ceil(hw / 2))
+  const sh = Math.max(1, Math.ceil(hh / 2))
+  if (g.buf.width === sw && g.buf.height === sh && g.half.width === hw && g.half.height === hh && g.k === k) return
+  g.half.width = hw
+  g.half.height = hh
+  g.buf.width = sw
+  g.buf.height = sh
+  g.k = k
+  // 화면 기준 3.5px 흐림 = 잔상 층 장치 픽셀로 blur·k/atRes → 작은 판 픽셀로(sw/bw). 줄였다 늘리는 흐림(soft)만큼 덜 건다
+  const s = ((BLOOM.blur * k) / BLOOM.atRes) * (sw / Math.max(1, bw))
+  g.bx.filter = `blur(${Math.sqrt(Math.max(0, s * s - BLOOM.soft)).toFixed(2)}px)`
+}
 /** 오른쪽 위 궤도 값은 이만큼까지(넘치면 '외 N') — 더 길면 잎 이름표와 겹친다 */
 const HUD_ORBIT_ROWS = 6
 /** 왼쪽 위 값 줄 수(일하는 중 · 기다림 · 오가는 넘김 · 카메라) */
@@ -37,13 +73,13 @@ const P: Proj = { x: 0, y: 0, f: 0, d: 0 }
 const deg = (r: number) => Math.round((((r * 180) / Math.PI) % 360 + 360) % 360)
 const nameOf = (w: World, id: string) => w.who.get(id)?.name ?? ''
 
-/** trail 이 없으면(첫 프레임·시험) 번짐을 건너뛴다 */
-export function drawOverlay(ctx: CanvasRenderingContext2D, w: World, trail: CanvasImageSource | null, k: number): void {
+/** 번짐 판이 없으면(시험 · 컨텍스트를 못 얻음) 번짐을 건너뛴다 */
+export function drawOverlay(ctx: CanvasRenderingContext2D, w: World, glow: Glow | null, k: number): void {
   const { W, H } = w
   if (!W || !H) return
   ctx.setTransform(k, 0, 0, k, 0, 0)
   ctx.clearRect(0, 0, W, H)
-  if (trail) bloom(ctx, w, trail, k)
+  if (glow) bloom(ctx, w, glow)
   tickLabels(ctx, w)
   satLabels(ctx, w)
   leaves(ctx, w)
@@ -55,12 +91,17 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, w: World, trail: Canv
   toast(ctx, w)
 }
 
-function bloom(ctx: CanvasRenderingContext2D, w: World, trail: CanvasImageSource, k: number): void {
+/** 잔상 층을 반씩 두 번 줄이며 흐리고(흐림은 sizeGlow 가 buf 에 건 filter), 그 판을 칸 전체로 늘려 얹는다(이미지 부드럽게는 켠 채 — 선형 확대) */
+function bloom(ctx: CanvasRenderingContext2D, w: World, g: Glow): void {
+  const { half, hx, buf, bx } = g
+  hx.clearRect(0, 0, half.width, half.height)
+  hx.drawImage(g.src, 0, 0, half.width, half.height)
+  bx.clearRect(0, 0, buf.width, buf.height)
+  bx.drawImage(half, 0, 0, buf.width, buf.height)
   ctx.save()
   ctx.globalCompositeOperation = 'lighter'
   ctx.globalAlpha = BLOOM.alpha + w.boost.bloom
-  ctx.filter = `blur(${((BLOOM.blur * k) / BLOOM.atRes).toFixed(2)}px)`
-  ctx.drawImage(trail, 0, 0, w.W, w.H)
+  ctx.drawImage(buf, 0, 0, w.W, w.H)
   ctx.restore()
 }
 

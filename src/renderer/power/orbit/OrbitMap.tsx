@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { reducedMotion } from '../../lib/motion'
 import { batched, STATE_TEXT, type AgentState, type PowerAgent, type ScreenEvent } from '../events'
 import type { RoomChange } from '../usePowerFeed'
-import { drawOverlay } from './overlay'
+import { createGlow, drawOverlay, sizeGlow } from './overlay'
 import { FALLBACK_FONTS } from './palette'
 import { drawScene } from './scene'
 import { changeRoom, intake, stepWorld } from './step'
@@ -124,6 +124,8 @@ export function OrbitMap({ room, roomName = null, agents, state, subagents, subs
       changeRoom(w, { agents: whoOf(L.agents), satellites: subRef.current, states: stateRef.current, tag: sceneRef.current, toRoom: L.room?.next ?? null, name: L.roomName })
     }
 
+    // 번짐 판 — 한 번 만들고 판 크기가 바뀔 때만 다시 잰다(프레임마다 만들지 않는다)
+    const glow = createGlow(trail)
     let res = 1
     // 칸의 배치 크기 × 화면 배율 — 판은 창 크기 그대로라(늘리고 줄이지 않는다) 배율은 devicePixelRatio 뿐
     const measure = () => {
@@ -137,6 +139,7 @@ export function OrbitMap({ room, roomName = null, agents, state, subagents, subs
           c.width = bw
           c.height = bh
         }
+      if (glow) sizeGlow(glow, bw, bh, res)
       resizeWorld(w, W, H)
     }
     const placeCards = () => {
@@ -162,7 +165,7 @@ export function OrbitMap({ room, roomName = null, agents, state, subagents, subs
       stepWorld(w, now)
       if (w.W && w.H) {
         drawScene(tx, w, res)
-        drawOverlay(cx, w, trail, res)
+        drawOverlay(cx, w, glow, res)
         placeCards()
       }
       if (w.hits.length) {

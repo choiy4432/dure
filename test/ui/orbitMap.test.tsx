@@ -980,3 +980,121 @@ describe('관계도 화면 — 방을 옮길 때', () => {
     expect(onEmpty).toHaveBeenCalledTimes(1)
   })
 })
+
+/** 캔버스마다 컨텍스트 기록 — 속성 쓰기(sets) · drawImage(인자 + 그때의 globalAlpha · globalCompositeOperation · filter) */
+type CanvasRec = { canvas: HTMLCanvasElement; sets: [string, unknown][]; draws: unknown[][] }
+function recordCanvases(): CanvasRec[] {
+  const recs: CanvasRec[] = []
+  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement) {
+    const rec: CanvasRec = { canvas: this, sets: [], draws: [] }
+    recs.push(rec)
+    const inner = fakeCtx(calls) as unknown as Record<string, unknown>
+    return new Proxy(inner, {
+      get(t, k) {
+        if (k === 'drawImage') return (...a: unknown[]) => rec.draws.push([...a, t.globalAlpha, t.globalCompositeOperation, t.filter])
+        return Reflect.get(t, k)
+      },
+      set(t, k, v) {
+        rec.sets.push([String(k), v])
+        return Reflect.set(t, k, v)
+      },
+    })
+  } as unknown as typeof HTMLCanvasElement.prototype.getContext
+  return recs
+}
+/** devicePixelRatio 를 v 로 두고 fn — 끝나면 되돌린다 */
+async function withDpr(v: number, fn: () => void | Promise<void>) {
+  const d = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')
+  Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: v })
+  try {
+    await fn()
+  } finally {
+    if (d) Object.defineProperty(window, 'devicePixelRatio', d)
+    else delete (window as unknown as Record<string, unknown>).devicePixelRatio
+  }
+}
+/** 캔버스 width 를 쓴 캔버스 목록(판을 다시 잰 횟수) — 끝나면 되돌린다 */
+function spyCanvasWidth(): { resized: HTMLCanvasElement[]; restore: () => void } {
+  const d = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'width')!
+  const resized: HTMLCanvasElement[] = []
+  Object.defineProperty(HTMLCanvasElement.prototype, 'width', {
+    configurable: true,
+    get: d.get,
+    set(this: HTMLCanvasElement, v: number) {
+      resized.push(this)
+      d.set!.call(this, v)
+    },
+  })
+  return { resized, restore: () => Object.defineProperty(HTMLCanvasElement.prototype, 'width', d) }
+}
+
+describe('관계도 그리기 비용', () => {
+  it('번짐은_작은_판에서_—_또렷한_층엔_blur_filter_를_걸지_않고_번짐_판은_잔상_층의_1/3_이하·한_번만_만들고_칸이_바뀔_때만_다시_잰다', async () => {
+    const recs = recordCanvases()
+    const made = vi.spyOn(document, 'createElement')
+    const w = spyCanvasWidth()
+    try {
+      await withDpr(2, async () => {
+        const f = feed()
+        const { container } = render(<OrbitMap agents={five()} state={{}} subagents={[]} subscribe={f.subscribe} />)
+        const [trail, crisp] = [...container.querySelectorAll('canvas')]
+        runFrame(16)
+        runFrame(32)
+        runFrame(48)
+        // DOM 밖 판 둘 — 반으로 줄인 판(half) · 또렷한 층에 얹는 번짐 판(g)
+        const off = recs.filter(r => !r.canvas.isConnected)
+        expect(off).toHaveLength(2)
+        const crispRec = recs.find(r => r.canvas === crisp)!
+        const gRec = off.find(r => crispRec.draws.some(d => d[0] === r.canvas))!
+        const hRec = off.find(r => r !== gRec)!
+        const g = gRec.canvas
+        const half = hRec.canvas
+        expect(trail.width).toBe(748 * 2)
+        expect(g.width).toBeGreaterThan(0)
+        expect(g.width).toBeLessThanOrEqual(trail.width / 3)
+        expect(g.height).toBeLessThanOrEqual(trail.height / 3)
+        // 또렷한 층엔 흐림을 걸지 않는다 — 번짐 판을 칸 전체로 늘려 'lighter' · 알파 0.55 로 얹는다(프레임마다 한 번)
+        expect(crispRec.sets.some(([k, v]) => k === 'filter' && String(v).includes('blur'))).toBe(false)
+        const up = crispRec.draws.filter(d => d[0] === g)
+        expect(up).toHaveLength(3)
+        expect(up[0].slice(1, 5)).toEqual([0, 0, 748, 580])
+        expect(up[0].slice(5, 7)).toEqual([0.55, 'lighter'])
+        expect(crispRec.draws.some(d => d[0] === trail)).toBe(false)
+        // 잔상 층을 반으로(흐림 없이), 그 판을 다시 반으로 줄이며 흐림을 건다
+        expect(half.width).toBe(trail.width / 2)
+        const toHalf = hRec.draws.filter(d => d[0] === trail)
+        expect(toHalf).toHaveLength(3)
+        expect(toHalf[0].slice(1, 5)).toEqual([0, 0, half.width, half.height])
+        expect(String(toHalf[0][7])).not.toMatch(/blur/)
+        const toG = gRec.draws.filter(d => d[0] === half)
+        expect(toG).toHaveLength(3)
+        expect(toG[0].slice(1, 5)).toEqual([0, 0, g.width, g.height])
+        expect(String(toG[0][7])).toMatch(/^blur\([\d.]+px\)$/)
+        // 프레임마다 새로 만들거나 다시 재지 않는다
+        const canvasesMade = () => made.mock.calls.filter(c => c[0] === 'canvas').length
+        const resizedOff = () => w.resized.filter(c => c === g || c === half).length
+        const n0 = canvasesMade()
+        const r0 = resizedOff()
+        for (let i = 0; i < 5; i++) runFrame(64 + i * 16)
+        expect(canvasesMade()).toBe(n0)
+        expect(resizedOff()).toBe(r0)
+        // 칸이 바뀌면 같은 판을 다시 잰다(새로 만들지 않는다)
+        stubSize(1000, 700)
+        await act(async () => {
+          window.dispatchEvent(new Event('resize'))
+        })
+        runFrame(200)
+        expect(resizedOff()).toBeGreaterThan(r0)
+        expect(trail.width).toBe(2000)
+        expect(half.width).toBe(1000)
+        expect(g.width).toBeLessThanOrEqual(trail.width / 3)
+        expect(g.height).toBeLessThanOrEqual(trail.height / 3)
+        expect(canvasesMade()).toBe(n0)
+        expect(recs.filter(r => !r.canvas.isConnected)).toHaveLength(2)
+      })
+    } finally {
+      w.restore()
+      made.mockRestore()
+    }
+  })
+})
