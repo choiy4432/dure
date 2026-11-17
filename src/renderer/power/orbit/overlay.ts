@@ -23,7 +23,7 @@ import { LIFE, TOAST_IN, colorOf, fxAlpha, fxOf, inFlight, orbitTurn, satPoint, 
  * 번짐 — 흐림 반지름 · 알파(동기화 중엔 boost.bloom 만큼 더).
  * blur 는 시안의 2배 캔버스에서의 장치 픽셀 값이다 — 캔버스 filter 의 흐림은 setTransform 배율을 따르지 않고 장치 픽셀로 먹어서,
  * 해상도 k 에선 7·k/2 로 줄여야 시안과 같은 번짐(화면 기준 3.5px)이 된다.
- * 흐림은 잔상 층을 가로·세로 1/4 로 줄인 작은 판(Glow)에서 같은 화면 반지름으로 건다 — 다 큰 판에 흐림을 거는 것이 관계도에서 가장 비싼 일이었다.
+ * 흐림은 잔상 층을 가로·세로 1/4 로 줄인 작은 판(Glow)에서 같은 화면 반지름으로 건다 — 다 큰 판에 흐림을 거는 것은 프레임마다 드는 비싼 일 중 하나였다.
  * soft 는 줄였다 늘리며 더해지는 흐림(작은 판 픽셀², 분산)을 덜어 내는 몫 — 다 큰 판 번짐과 화소로 견줘 가장 가까운 값(0 · 0.125 · 0.25 실측).
  * 이론값(4×4 평균 1/12 + 선형 확대 1/6 ≈ 0.25)까지 덜면 해상도 1 에서 작은 판 반지름이 0.75px 아래로 내려가 흐림이 덜 먹는다.
  */
@@ -32,9 +32,9 @@ export const BLOOM = { blur: 7, alpha: 0.55, atRes: 2, soft: 0.125 } as const
 /**
  * 번짐 판 — 잔상 층(src)을 반(half, 흐림 없음)으로, 다시 반(buf, 흐림)으로 줄인 작은 캔버스 둘. 한 번 만들고 판 크기·해상도가 바뀔 때만 다시 잰다(sizeGlow).
  * 반씩 두 번 줄이면 선형 표본이 2×2 를 꼭 평균해 4×4 평균이 된다 — 한 번에 1/4 로 줄이면 가는 선·점이 표본 사이에 빠져 번짐이 얼룩지고,
- * 밉맵(imageSmoothingQuality 'medium')은 판보다 비쌌다(실측)
+ * 밉맵(imageSmoothingQuality 'medium')은 다 큰 판 흐림보다 비쌌다(실측)
  */
-export type Glow = { src: CanvasImageSource; half: HTMLCanvasElement; hx: CanvasRenderingContext2D; buf: HTMLCanvasElement; bx: CanvasRenderingContext2D; k: number }
+export type Glow = { src: CanvasImageSource; half: HTMLCanvasElement; hx: CanvasRenderingContext2D; buf: HTMLCanvasElement; bx: CanvasRenderingContext2D; k: number; blur: string }
 
 /** 번짐 판을 만든다 — 컨텍스트를 못 얻으면 null(번짐 없이 그린다) */
 export function createGlow(src: CanvasImageSource): Glow | null {
@@ -42,7 +42,7 @@ export function createGlow(src: CanvasImageSource): Glow | null {
   const buf = document.createElement('canvas')
   const hx = half.getContext('2d')
   const bx = buf.getContext('2d')
-  return hx && bx ? { src, half, hx, buf, bx, k: 0 } : null
+  return hx && bx ? { src, half, hx, buf, bx, k: 0, blur: 'none' } : null
 }
 
 /** 잔상 층 판(bw×bh, 해상도 k)에 맞춰 번짐 판을 잰다 — 그대로면 아무것도 안 한다(판을 다시 재면 흐림 설정도 지워져 다시 건다) */
@@ -59,8 +59,10 @@ export function sizeGlow(g: Glow, bw: number, bh: number, k: number): void {
   g.k = k
   // 화면 기준 3.5px 흐림 = 잔상 층 장치 픽셀로 blur·k/atRes → 작은 판 픽셀로(sw/bw). 줄였다 늘리는 흐림(soft)만큼 덜 건다
   const s = ((BLOOM.blur * k) / BLOOM.atRes) * (sw / Math.max(1, bw))
-  g.bx.filter = `blur(${Math.sqrt(Math.max(0, s * s - BLOOM.soft)).toFixed(2)}px)`
+  g.blur = `blur(${Math.sqrt(Math.max(0, s * s - BLOOM.soft)).toFixed(2)}px)`
+  g.bx.filter = g.blur
 }
+
 /** 오른쪽 위 궤도 값은 이만큼까지(넘치면 '외 N') — 더 길면 잎 이름표와 겹친다 */
 const HUD_ORBIT_ROWS = 6
 /** 왼쪽 위 값 줄 수(일하는 중 · 기다림 · 오가는 넘김 · 카메라) */
@@ -100,6 +102,7 @@ function bloom(ctx: CanvasRenderingContext2D, w: World, g: Glow): void {
   hx.clearRect(0, 0, half.width, half.height)
   hx.drawImage(g.src, 0, 0, half.width, half.height)
   bx.clearRect(0, 0, buf.width, buf.height)
+  bx.filter = g.blur // 컨텍스트가 유실·복구되면 상태가 초기화된다 — 프레임마다 다시 건다(같은 값이면 싸다)
   bx.drawImage(half, 0, 0, buf.width, buf.height)
   ctx.save()
   ctx.globalCompositeOperation = 'lighter'

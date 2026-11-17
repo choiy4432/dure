@@ -984,13 +984,13 @@ describe('관계도 화면 — 방을 옮길 때', () => {
 })
 
 /** 캔버스마다 컨텍스트 기록 — 속성 쓰기(sets) · drawImage(인자 + 그때의 globalAlpha · globalCompositeOperation · filter) */
-type CanvasRec = { canvas: HTMLCanvasElement; sets: [string, unknown][]; draws: unknown[][] }
+type CanvasRec = { canvas: HTMLCanvasElement; sets: [string, unknown][]; draws: unknown[][]; ctx: Record<string, unknown> }
 function recordCanvases(): CanvasRec[] {
   const recs: CanvasRec[] = []
   HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement) {
-    const rec: CanvasRec = { canvas: this, sets: [], draws: [] }
-    recs.push(rec)
     const inner = fakeCtx(calls) as unknown as Record<string, unknown>
+    const rec: CanvasRec = { canvas: this, sets: [], draws: [], ctx: inner }
+    recs.push(rec)
     return new Proxy(inner, {
       get(t, k) {
         if (k === 'drawImage') return (...a: unknown[]) => rec.draws.push([...a, t.globalAlpha, t.globalCompositeOperation, t.filter])
@@ -1071,7 +1071,8 @@ describe('관계도 그리기 비용', () => {
         const toG = gRec.draws.filter(d => d[0] === half)
         expect(toG).toHaveLength(3)
         expect(toG[0].slice(1, 5)).toEqual([0, 0, g.width, g.height])
-        expect(String(toG[0][7])).toMatch(/^blur\([\d.]+px\)$/)
+        // 반지름 식 — 화면 기준 3.5px: 작은 판 반지름 = √((7·k/2 · 판비)² − soft). 748×580 에서 dpr 2 → 1.71px
+        expect(toG[0][7]).toBe('blur(1.71px)')
         // 프레임마다 새로 만들거나 다시 재지 않는다
         const canvasesMade = () => made.mock.calls.filter(c => c[0] === 'canvas').length
         const resizedOff = () => w.resized.filter(c => c === g || c === half).length
@@ -1098,6 +1099,38 @@ describe('관계도 그리기 비용', () => {
       w.restore()
       made.mockRestore()
     }
+  })
+
+  it('번짐_흐림_반지름_—_dpr_1_은_0.80px', async () => {
+    const recs = recordCanvases()
+    await withDpr(1, async () => {
+      const f = feed()
+      const { container } = render(<OrbitMap agents={five()} state={{}} subagents={[]} subscribe={f.subscribe} />)
+      const [, crisp] = [...container.querySelectorAll('canvas')]
+      runFrame(16)
+      const off = recs.filter(r => !r.canvas.isConnected)
+      const crispRec = recs.find(r => r.canvas === crisp)!
+      const gRec = off.find(r => crispRec.draws.some(d => d[0] === r.canvas))!
+      expect(gRec.draws[0][7]).toBe('blur(0.80px)')
+    })
+  })
+
+  it('번짐_흐림은_프레임마다_다시_건다_—_컨텍스트가_복구돼_filter_가_none_이_돼도_다음_프레임엔_흐려_그린다', async () => {
+    const recs = recordCanvases()
+    await withDpr(2, async () => {
+      const f = feed()
+      const { container } = render(<OrbitMap agents={five()} state={{}} subagents={[]} subscribe={f.subscribe} />)
+      const [, crisp] = [...container.querySelectorAll('canvas')]
+      runFrame(16)
+      const off = recs.filter(r => !r.canvas.isConnected)
+      const crispRec = recs.find(r => r.canvas === crisp)!
+      const gRec = off.find(r => crispRec.draws.some(d => d[0] === r.canvas))!
+      gRec.ctx.filter = 'none' // 컨텍스트 유실·복구로 상태가 초기화된 모양
+      const n = gRec.draws.length
+      runFrame(32)
+      expect(gRec.draws.length).toBeGreaterThan(n)
+      expect(gRec.draws[n][7]).toBe('blur(1.71px)')
+    })
   })
 
   it('캔버스_판은_한_장에_MAX_PIXELS_까지_—_넘으면_해상도를_낮추되_칸의_CSS_크기_아래로는_안_내린다(748×580_dpr_2_는_그대로)', async () => {
