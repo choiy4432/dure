@@ -4,8 +4,8 @@ import { IDLE, inK, jumpK, landK, outK, startTransition, stepTransition, type Ph
 // 관계도 방 옮기기 전환 — 순수 상태 기계. 빨려 들기(out) → 도약(jump) → 펼쳐지기(in), 약 1.5초. 움직임 줄이기면 흐려졌다 나타나기 0.6초
 
 const DT = 1 / 60
-const go = (o: Partial<{ toRoom: string | null; toName: string; hasOut: boolean; hasIn: boolean; calm: boolean }> = {}) =>
-  ({ toRoom: 'r2', toName: '결제', hasOut: true, hasIn: true, calm: false, ...o })
+const go = (o: Partial<{ toRoom: string | null; toName: string; hasOut: boolean; hasIn: boolean }> = {}) =>
+  ({ toRoom: 'r2', toName: '결제', hasOut: true, hasIn: true, ...o })
 
 type Step = { at: number; tr: Transition; swap: boolean; done: boolean }
 /** 60fps 로 sec 초 — 걸음마다 지난 시간(초)과 결과 */
@@ -129,7 +129,7 @@ describe('관계도 전환 — 상태 기계', () => {
   })
 
   it('calm_이면_jumpK_는_늘_0_이고_전체_0.6s', () => {
-    const s = run(startTransition(IDLE, go({ calm: true })), 1, true)
+    const s = run(startTransition(IDLE, go()), 1, true)
     expect(s.every(x => jumpK(x.tr) === 0)).toBe(true)
     expect(s.some(x => x.tr.phase === 'jump')).toBe(false)
     const swap = s.filter(x => x.swap)
@@ -140,8 +140,8 @@ describe('관계도 전환 — 상태 기계', () => {
     expect(done).toHaveLength(1)
     expect(Math.abs(done[0].at - 0.6)).toBeLessThanOrEqual(DT + 1e-9)
     // 빈 방에서도 0.3초 · 빈 방으로도 0.3초
-    expect(Math.abs(run(startTransition(IDLE, go({ calm: true, hasOut: false })), 1, true).find(x => x.done)!.at - 0.3)).toBeLessThanOrEqual(DT + 1e-9)
-    expect(Math.abs(run(startTransition(IDLE, go({ calm: true, hasIn: false })), 1, true).find(x => x.done)!.at - 0.3)).toBeLessThanOrEqual(DT + 1e-9)
+    expect(Math.abs(run(startTransition(IDLE, go({ hasOut: false })), 1, true).find(x => x.done)!.at - 0.3)).toBeLessThanOrEqual(DT + 1e-9)
+    expect(Math.abs(run(startTransition(IDLE, go({ hasIn: false })), 1, true).find(x => x.done)!.at - 0.3)).toBeLessThanOrEqual(DT + 1e-9)
   })
 
   it('펼칠_때_카드는_핵부터_차례로_늦게_출발해_모두_제때_자리_잡는다', () => {

@@ -83,7 +83,8 @@ export function RoomSwitch({ up = false }: { up?: boolean }) {
       return
     }
     if (e.key === 'Tab') {
-      close()
+      // 단추로 초점을 옮기고 닫는다 — 막지 않으니 브라우저가 단추에서 (Shift+)Tab 방향으로 이어 간다
+      closeToButton()
       return
     }
     moveMenuFocus(e)

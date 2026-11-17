@@ -148,7 +148,7 @@ export function changeRoom(w: World, o: { agents: Who[]; satellites: SubLabel[];
   const fresh = !beforeSwap(w.tr)
   // 갈 방이 바뀌었으면 그 전에 갈 방이던 곳의 사건은 버린다 — 이제 그 방을 듣지 않는다(같은 방의 목록만 줄었으면 그대로)
   if (w.next?.tag !== o.tag) w.held.length = 0
-  w.tr = startTransition(w.tr, { toRoom: o.toRoom, toName: o.name ?? '', hasOut: w.who.size > 0, hasIn: o.agents.length > 0, calm: w.calm })
+  w.tr = startTransition(w.tr, { toRoom: o.toRoom, toName: o.name ?? '', hasOut: w.who.size > 0, hasIn: o.agents.length > 0 })
   w.next = { agents: o.agents, satellites: o.satellites, states: o.states, tag: o.tag }
   if (w.tr.phase === 'idle') {
     swapIn(w) // 화면에 카드도 없고 갈 방도 비었다 — 바로 바꾼다

@@ -26,7 +26,7 @@ export const beforeSwap = (tr: Transition): boolean => tr.phase === 'out' || tr.
  * 방이 바뀌었다 — hasOut: 지금 화면에 카드가 있다(빨아들일 것) · hasIn: 갈 방에 에이전트가 있다(펼칠 것).
  * 바꿔 끼우기 전이면 이어 가고, 아니면(쉬는 중 · 펼치는 중) 지금 카드를 넣는 것부터. 카드가 없으면 펼치기만, 둘 다 없으면 할 일이 없다
  */
-export function startTransition(cur: Transition, o: { toRoom: string | null; toName: string; hasOut: boolean; hasIn: boolean; calm: boolean }): Transition {
+export function startTransition(cur: Transition, o: { toRoom: string | null; toName: string; hasOut: boolean; hasIn: boolean }): Transition {
   const to = { toRoom: o.toRoom, toName: o.toName, hasIn: o.hasIn }
   if (beforeSwap(cur)) return { ...cur, ...to }
   if (o.hasOut) return { phase: 'out', t: 0, ...to, hasOut: true }
