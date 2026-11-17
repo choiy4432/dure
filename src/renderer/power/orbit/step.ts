@@ -135,8 +135,9 @@ function beginSync(w: World, text: string): void {
     for (let i = 0; i < 14; i++) comet(w, w.core.id, w.orbits[Math.floor(w.rand() * w.orbits.length)].id, { small: true, delay: i * 0.055, T: R(0.6, 0.9) })
 }
 
-/** 방 옮기기 알림 — '끝남' 알림과 같은 자리·꼴 */
-const roomText = (name: string) => `${name} 방으로`
+/** 방 옮기기 알림 — '끝남' 알림과 같은 자리·꼴. 방 이름엔 길이 상한이 없어 길면 말줄임(관계도 칸을 넘지 않게) */
+const ROOM_TOAST_MAX = 24
+const roomText = (name: string) => `${trunc(name, ROOM_TOAST_MAX)} 방으로`
 
 /**
  * 방이 바뀌었다 — 지금 화면의 노드를 핵으로 빨아들이고(있으면) 도약한 뒤 새 방 노드를 펼친다(transition.ts).

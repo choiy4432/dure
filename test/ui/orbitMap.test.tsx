@@ -711,6 +711,44 @@ describe('관계도 — 방을 옮길 때 전환(빨려 들기 · 도약 · 펼�
     expect(v.toast).toBeNull()
   })
 
+  it('알림의_방_이름은_길면_말줄임_—_방_이름엔_길이_상한이_없어_관계도_칸을_넘지_않게', () => {
+    const w = world(false)
+    run(w, 0.2)
+    go(w, three(), '결제 연동 · 웹훅 서명 검증과 정산 금액 반올림을 한 번에 정리하는 방')
+    const text = w.toast!.text
+    expect(text.endsWith(' 방으로')).toBe(true)
+    expect(text).toContain('…')
+    expect([...text].length).toBeLessThanOrEqual(28)
+    // 짧은 이름은 그대로
+    const v = world(false)
+    run(v, 0.2)
+    go(v, three(), '결제 연동')
+    expect(v.toast!.text).toBe('결제 연동 방으로')
+  })
+
+  it('알림이_계기판_글(왼쪽_위_값·오른쪽_위_궤도)과_겹칠_만큼_넓으면_그_아래로_—_좁은_관계도(1366×768)', () => {
+    /** 알림 알약(roundRect 높이 28)의 y · 오른쪽 위 궤도 이름의 마지막 줄 y */
+    const toastY = (w: World) => {
+      calls.length = 0
+      drawOverlay(fakeCtx(calls), w, null, 2)
+      return Number(calls.find(c => c.fn === 'roundRect' && c.args[3] === 28)!.args[1])
+    }
+    const lastHudY = () => Math.max(...calls.filter(c => c.fn === 'fillText' && /^θ /.test(String(c.args[0]))).map(c => Number(c.args[2])))
+    const at = (W: number, name: string) => {
+      const w = createWorld({ agents: who(), W, H: 470, calm: false, rand: mulberry32(3) })
+      let now = run(w, 0.3)
+      go(w, three(), name)
+      now = run(w, 0.7, now) // 도약 — 알림이 떠 있다(새 방 노드는 아직)
+      return w
+    }
+    // 넓은 칸 · 짧은 이름 — 늘 자리(위 가운데)
+    expect(toastY(at(748, '결제 연동'))).toBe(14)
+    // 좁은 칸 · 긴 이름 — 계기판 마지막 줄 아래로
+    const narrow = at(586, '결제 연동 · 웹훅 서명 검증과 정산 금액 반올림')
+    const y = toastY(narrow)
+    expect(y).toBeGreaterThan(lastHudY())
+  })
+
   it('전환_중_온_사건은_끝난_뒤_첫_프레임들에_그려진다(조각_수)_—_차례_끝(done)의_동기화도_끝난_뒤로', () => {
     const w = world(false)
     let now = run(w, 0.5)

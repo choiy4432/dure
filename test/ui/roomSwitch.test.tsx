@@ -207,4 +207,16 @@ describe('방 단추', () => {
     expect(store.getState().roomId).toBe('r2')
     expect([...document.querySelectorAll('.pw-t-pane')].map(p => (p as HTMLElement).dataset.agent)).toEqual(['c', 'd'])
   })
+
+  it('지금_방_줄(이름·에이전트_N·기다림_N·체크)이_말줄임_없이_들어갈_만큼_넓고_위_띠의_단추_바탕이_왼쪽에서_잘리지_않는다', () => {
+    const css = fs.readFileSync(path.resolve('src/renderer/power/power.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const block = (sel: string) => [...css.matchAll(new RegExp(`(?:^|\\n|\\})\\s*${sel.replace(/[.-]/g, c => `\\${c}`)}\\s*\\{([^}]*)\\}`, 'g'))].map(x => x[1]).join(';')
+    // 앱의 .pop 최대 폭(320px)까지 — 280px 에선 '주문 서비스 개편 · 에이전트 5 · 기다림 1 ✓' 의 이름이 '주문 서비스 …' 로 잘렸다(하니스 1600×900)
+    expect(block('.pop.pw-rs-pop')).toMatch(/(^|;)\s*width:\s*320px/)
+    // 위 띠 가운데 칸은 넘치면 잘린다 — 단추를 음수 margin 으로 내밀면 펼친·올린 단추 바탕의 왼쪽이 잘려 '방' 이 가장자리에 붙는다
+    expect(block('.pw-room')).toMatch(/overflow:\s*hidden/)
+    expect(block('button.pw-rs')).not.toMatch(/margin-left:\s*-/)
+    // 터미널 벽 상태 줄 — 올리거나 펼치면 바탕(--pw-term-win-on)이 밝아져 '방'(--pw-term-ptl-ink)이 4.45:1 로 떨어졌다 → 그때는 밝은 글
+    expect(css).toMatch(/\.pw-t-bar button\.pw-rs:hover[^{]*\{[^}]*\bcolor:\s*var\(--pw-term-focus-ink\)/)
+  })
 })

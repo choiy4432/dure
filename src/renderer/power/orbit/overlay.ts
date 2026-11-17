@@ -27,6 +27,8 @@ import { LIFE, TOAST_IN, colorOf, fxAlpha, fxOf, inFlight, orbitTurn, satPoint, 
 export const BLOOM = { blur: 7, alpha: 0.55, atRes: 2 } as const
 /** 오른쪽 위 궤도 값은 이만큼까지(넘치면 '외 N') — 더 길면 잎 이름표와 겹친다 */
 const HUD_ORBIT_ROWS = 6
+/** 왼쪽 위 값 줄 수(일하는 중 · 기다림 · 오가는 넘김 · 카메라) */
+const HUD_ROWS = 4
 /** 위성 이름표 글자 수 상한 — 진짜 설명은 길 수 있다 */
 const SAT_LABEL_MAX = 16
 const TAU = Math.PI * 2
@@ -282,7 +284,10 @@ function hud(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.fillRect(0, sy - 22, W, 22)
 }
 
-/** 동기화 알림 — 위 가운데 알약 */
+/** 계기판 글이 차지하는 자리(hud 와 같은 값) — 왼쪽 위 값 칸의 오른쪽 끝 · 오른쪽 위 궤도 칸의 왼쪽 끝(오른쪽에서) · 첫 줄 · 줄 간격 */
+const HUD_BOX = { leftEnd: 172, rightStart: 224, top: 24, row: 16 } as const
+
+/** 알림 — 위 가운데 알약(동기화 '끝남' · 방 옮기기). 좁은 칸에서 계기판 글과 겹칠 만큼 넓으면 겹치는 쪽 글 아래로 내린다 */
 function toast(ctx: CanvasRenderingContext2D, w: World): void {
   const s = w.toast
   if (!s) return
@@ -292,7 +297,9 @@ function toast(ctx: CanvasRenderingContext2D, w: World): void {
   ctx.font = `600 13px ${w.fonts.ui}`
   const tw = ctx.measureText(s.text).width + 36
   const tx = (w.W - tw) / 2
-  const ty = 14
+  const rightRows = Math.min(w.orbits.length, HUD_ORBIT_ROWS) + (w.orbits.length > HUD_ORBIT_ROWS ? 1 : 0)
+  const rows = Math.max(tx < HUD_BOX.leftEnd ? HUD_ROWS : 0, tx + tw > w.W - HUD_BOX.rightStart ? rightRows : 0)
+  const ty = rows ? HUD_BOX.top + (rows - 1) * HUD_BOX.row + 10 : 14
   ctx.globalAlpha = a
   ctx.fillStyle = TOAST_BG
   ctx.strokeStyle = TOAST_LINE

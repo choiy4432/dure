@@ -177,11 +177,13 @@
 /* 방 단추(RoomSwitch) — 방이 하나뿐이면 같은 모양의 글. 두 화면이 같은 부품, 여기는 관제실 위 띠의 생김새(터미널 벽은 상태 줄 규칙이 덮는다) */
 .pw-rs { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: inherit; font: inherit; }
 .pw-rs-n { min-width: 0; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-button.pw-rs { height: 30px; padding: 0 6px 0 8px; margin-left: -8px; border-radius: var(--radius-ctl); transition: background-color 0.15s; }
+/* 음수 margin 으로 내밀지 않는다 — 가운데 칸(.pw-room)이 넘침을 잘라 펼친·올린 바탕의 왼쪽이 잘렸다 */
+button.pw-rs { height: 30px; padding: 0 6px 0 8px; border-radius: var(--radius-ctl); transition: background-color 0.15s; }
 button.pw-rs:hover, button.pw-rs[aria-expanded='true'] { background: var(--hover); }
 button.pw-rs .i { color: var(--muted); flex: none; }
-/* 방 목록 메뉴 — 앱의 메뉴(.pop · .mi) 그대로, 줄 = 이름(말줄임) · 에이전트 N · [기다림 N] · [체크] */
-.pop.pw-rs-pop { width: 280px; max-width: 280px; max-height: min(420px, calc(100vh - 96px)); }
+/* 방 목록 메뉴 — 앱의 메뉴(.pop · .mi) 그대로, 줄 = 이름(말줄임) · 에이전트 N · [기다림 N] · [체크].
+   앱 .pop 의 최대 폭(320px)까지 — 지금 방 줄에 기다림 N·체크가 붙어도 흔한 길이의 이름이 잘리지 않게 */
+.pop.pw-rs-pop { width: 320px; max-width: min(320px, calc(100vw - 32px)); max-height: min(420px, calc(100vh - 96px)); }
 .pw-rs-t { flex: 1; min-width: 0; display: flex; gap: 4px; white-space: nowrap; }
 .pw-rs-rn { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .pw-rs-c { flex: none; color: var(--muted); }
@@ -398,7 +400,8 @@ button.pw-rs .i { color: var(--muted); flex: none; }
 .pw-t-bar .pw-rs b { color: var(--pw-term-focus-ink); font-weight: 500; }
 .pw-t-bar .pw-rs-n { max-width: 200px; }
 .pw-t-bar button.pw-rs { margin-left: 0; border-radius: 0; }
-.pw-t-bar button.pw-rs:hover, .pw-t-bar button.pw-rs[aria-expanded='true'] { background: var(--pw-term-win-on); }
+/* 올리거나 펼치면 바탕이 밝아진다 — '방' 글도 밝게(흐린 글이면 4.45:1). 창 제목·고른 창 이름과 같은 짝 */
+.pw-t-bar button.pw-rs:hover, .pw-t-bar button.pw-rs[aria-expanded='true'] { background: var(--pw-term-win-on); color: var(--pw-term-focus-ink); }
 .pw-t-bar button.pw-rs .i { width: 13px; height: 13px; color: var(--pw-term-dim); }
 .pw-t-bar button.pw-rs:focus-visible { outline: 2px solid var(--pw-ring); outline-offset: -2px; }
 .pw-t-wins { display: flex; height: 100%; min-width: 0; overflow: hidden; }
