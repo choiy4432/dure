@@ -413,3 +413,75 @@ describe('터미널 벽', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 })
+
+/** 방 둘 — r1(진짜 방): 알파·베타, r2(둘째 방): 감마. 덮개(PowerLayer)째로 터미널 벽 — 창 줄이 덮개 수명 동안 방별로 남는다 */
+async function mountTwo(o: { history?: Record<string, unknown[]>; preload?: string[] } = {}) {
+  vi.resetModules()
+  const agents = [agent('a', { name: '알파' }), agent('b', { name: '베타' }), agent('c', { name: '감마', roomId: 'r2' })]
+  api(agents, { terminalPref: true, history: o.history })
+  const rooms = [{ id: 'r1', name: '진짜 방', createdAt: 2 }, { id: 'r2', name: '둘째 방', createdAt: 1 }]
+  const base = (window as any).dure.snapshot
+  ;(window as any).dure.snapshot = async () => ({ ...(await base()), rooms })
+  const { getStore } = await import('../../src/renderer/state/store')
+  const { PowerLayer } = await import('../../src/renderer/power/PowerLayer')
+  const store = getStore()
+  await act(async () => { await store.init() })
+  act(() => { store.selectRoom('r1') })
+  for (const id of o.preload ?? []) await act(async () => { store.selectAgent(id) })
+  if (o.preload) act(() => { store.selectAgent(null) })
+  await act(async () => { await store.setPower(true) })
+  render(<PowerLayer />)
+  return store
+}
+
+describe('터미널 벽 — 방 옮기기', () => {
+  it('옮기면_창·상태_줄_창_이름이_새_방_에이전트로', async () => {
+    const store = await mountTwo()
+    expect(panes().map(p => p.dataset.agent)).toEqual(['a', 'b'])
+    expect(within(bar()).getByText('0:알파')).toBeInTheDocument()
+    act(() => { store.selectRoom('r2') })
+    expect(panes().map(p => p.dataset.agent)).toEqual(['c'])
+    expect(within(bar()).getByText('0:감마')).toBeInTheDocument()
+    expect(within(bar()).queryByText(/알파|베타/)).toBeNull()
+    expect(document.querySelector('.pw-t-grid')).toHaveAttribute('data-n', '1')
+  })
+
+  it('터미널_줄도_방별로_남는다', async () => {
+    const store = await mountTwo()
+    await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'a-room.ts' }) })
+    await frame()
+    expect(lines('a')).toEqual(['● Read(a-room.ts)'])
+    act(() => { store.selectRoom('r2') })
+    expect(lines('c')).toEqual(['기다리는 중…'])
+    // 보지 않는 방(r1)의 사건은 듣지 않는다
+    await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'unseen.ts' }) })
+    await emit('history', { agentId: 'c', item: toolItem('Bash', { command: 'npm test' }) })
+    await frame()
+    expect(lines('c')).toEqual(['● Bash(npm test)'])
+    act(() => { store.selectRoom('r1') })
+    expect(lines('a')).toEqual(['● Read(a-room.ts)'])
+    expect(lines('b')).toEqual(['기다리는 중…'])
+    await emit('history', { agentId: 'a', item: { t: 6, kind: 'assistant', blocks: [{ type: 'text', text: '돌아와서 이어 붙는 줄' }] } })
+    await frame()
+    expect(lines('a')).toEqual(['● Read(a-room.ts)', '돌아와서 이어 붙는 줄'])
+    act(() => { store.selectRoom('r2') })
+    expect(lines('c')).toEqual(['● Bash(npm test)'])
+  })
+
+  it('처음_가_보는_방은_그때_불러와_있는_기록을_깐다', async () => {
+    await mountTwo({ history: { c: [{ t: 2, kind: 'assistant', blocks: [{ type: 'text', text: '감마의 지난 답' }] }] }, preload: ['c'] })
+    const { getStore } = await import('../../src/renderer/state/store')
+    act(() => { getStore().selectRoom('r2') })
+    expect(lines('c')).toEqual(['감마의 지난 답'])
+  })
+
+  it('파워_모드를_껐다_켜면_창_줄도_비어_있다', async () => {
+    const store = await mountTwo()
+    await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'a-room.ts' }) })
+    await frame()
+    expect(lines('a')).toEqual(['● Read(a-room.ts)'])
+    await act(async () => { await store.setPower(false) })
+    await act(async () => { await store.setPower(true) })
+    expect(lines('a')).toEqual(['기다리는 중…'])
+  })
+})

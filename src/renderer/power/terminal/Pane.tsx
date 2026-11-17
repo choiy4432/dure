@@ -35,10 +35,10 @@ const emptyEl = (): HTMLDivElement => {
 
 /**
  * 창 본문 줄 — 에이전트마다 마지막 max 줄을 쥐고(창이 없는 에이전트도: 창에 올라오면 그대로 보인다),
- * 붙은 창 본문에는 한 프레임에 한 번 몰아 붙인다. 창이 안 보이는 동안엔 프레임이 돌지 않는다(먹이도 그동안 온 사건은 버린다)
+ * 붙은 창 본문에는 한 프레임에 한 번 몰아 붙인다. 창이 안 보이는 동안엔 프레임이 돌지 않는다(먹이도 그동안 온 사건은 버린다).
+ * kept — 줄을 쥐는 자리(방별 화면 상태의 터미널 줄을 넘기면 그 방에 남는다)
  */
-export function createPaneLines(max = MAX_LINES) {
-  const kept = new Map<string, Line[]>()
+export function createPaneLines(max = MAX_LINES, kept = new Map<string, Line[]>()) {
   const bodies = new Map<string, HTMLElement>()
   const queued = new Map<string, Line[]>()
   let frame = 0
@@ -59,7 +59,7 @@ export function createPaneLines(max = MAX_LINES) {
     queued.clear()
   }
   return {
-    /** 켤 때 깔 줄 */
+    /** 처음 볼 때 깔 줄 */
     seed(id: string, ls: Line[]) {
       const k = [...ls]
       trim(k)

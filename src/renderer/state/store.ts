@@ -102,7 +102,10 @@ export type UiState = Snapshot & {
   roomMenuRequest: number
   /** 지난 대화에서 새 에이전트로 이어 가는 창의 초안 — 없으면 창이 닫혀 있다 */
   forkDraft: ForkDraft | null
-  /** 파워 모드 — 켜짐과 켤 때 굳힌 방·그 방의 에이전트(꺼지면 null · 빈 목록). 켠 뒤 들어온 에이전트는 목록에 없다 */
+  /**
+   * 파워 모드 — 켜짐과 그 방·그 방의 에이전트(꺼지면 null · 빈 목록). 켜진 동안 방은 앱의 방(roomId)을 따른다 — 켤 때와 방이 바뀐 순간
+   * 그 방의 에이전트로 굳히고(followRoom), 그 뒤 들어온 에이전트는 다음에 그 방으로 옮겨 올 때까지 목록에 없다
+   */
   power: { on: boolean; roomId: RoomId | null; agentIds: AgentId[] }
   /** 안내 투어 — 없으면 null. 처음 켠 새 사용자에겐 저절로 '환영'(tourSteps · TourLayer 가 넘긴다) */
   tour: TourState
@@ -174,9 +177,9 @@ export interface Store {
   recentAgents(): AgentId[]
   /** 관계도 선 보기를 바꾸고 이 PC 에 기억한다 */
   setEdgeMode(mode: EdgeMode): void
-  /** 파워 모드를 켜고 끈다 — 켤 때 지금 방을 굳힌다. main 이 거절하면 되돌리고 던진다 */
+  /** 파워 모드를 켜고 끈다 — 켤 때 지금 방을 굳힌다(켜진 동안 앱의 방이 바뀌면 그 방으로 다시 굳힌다). main 이 거절하면 되돌리고 던진다 */
   setPower(on: boolean): Promise<void>
-  /** 켤 때 굳힌 에이전트의 진짜 사건(도구·결과·답 글·넘김·차례 끝)을 듣는다(스토어 상태는 안 바뀐다). 끄는 함수를 돌려준다 */
+  /** 파워 모드의 방에 굳힌 에이전트의 진짜 사건(도구·결과·답 글·넘김·차례 끝)을 듣는다(스토어 상태는 안 바뀐다). 끄는 함수를 돌려준다 */
   onPowerEvent(fn: (ev: ScreenEvent) => void): () => void
   /**
    * 그 에이전트의 방으로 바꾸고(다르면) 고르고, 관계도에 그 카드를 보이게 해 달라고 한다(mapFocus) — 기록도 불러온다. 모르는 id 면 아무것도 안 한다.
@@ -348,6 +351,7 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
     if (recent.length > RECENT_MAX) recent.length = RECENT_MAX
   }
   const notify = () => {
+    followRoom()
     autoTour()
     noteSelected()
     listeners.forEach(fn => fn())
@@ -376,16 +380,34 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
 
   // 파워 모드 듣기 — 스토어가 버리기 전의 'history'·'message' 사건을 본다(상태는 안 건드린다)
   const powerListeners = new Set<(ev: ScreenEvent) => void>()
-  const powerSeen = new Set<string>() // 켤 때 이미 있던 + 켠 뒤 본 메시지 id
+  const powerSeen = new Set<string>() // 그 방으로 굳힌 순간(켬 · 방 옮김) 있던 + 그 뒤 본 메시지 id
   let powerCall = 0 // setPower 호출 순번 — 늦게 거절된 옛 호출이 새 상태를 덮지 않게
   // 파워 모드는 진짜 일을 건드리지 않는다 — 듣기나 듣는 이가 던져도 스토어는 사건을 적용하고 알린다.
   // 남기는 건 고정 문구와 오류 종류뿐(사건 내용·오류 글에 대화·파일 이름이 들 수 있다)
   const powerFailed = (e: unknown) => console.error('두레: 파워 모드 화면 사건을 처리하지 못했어요', e instanceof Error ? e.name : typeof e)
+  /**
+   * 파워 모드의 방 = 앱의 방(roomId) — 켤 때와 방이 바뀐 순간 그 방의 지금 에이전트로 굳힌다(그 뒤 든 에이전트는 다음에 그 방으로 옮겨 올 때).
+   * 본 메시지 id 는 그 순간 있는 메시지로 다시 채운다 — 옮기기 전부터 있던 그 방 메시지는 넘김으로 쏘지 않는다
+   */
+  const pinPower = (roomId: RoomId | null): UiState['power'] => {
+    powerSeen.clear()
+    for (const m of state.messages) powerSeen.add(m.id)
+    return { on: true, roomId, agentIds: roomId ? state.agents.filter(a => a.roomId === roomId).map(a => a.id) : [] }
+  }
+  /**
+   * 켜진 동안 앱의 방이 바뀌었으면 파워 모드도 그 방으로 — 알리기(notify) 전에 늘 지나므로 방을 바꾸는 모든 길
+   * (selectRoom · 찾기의 focusAgent·openHit · 메시지의 showMessage · 지운 방·스냅샷의 대신 고른 방)이 여기서 따라간다. 꺼져 있으면 아무것도 안 한다
+   */
+  const followRoom = () => {
+    const p = state.power
+    if (!p.on || p.roomId === state.roomId) return
+    state = { ...state, power: pinPower(state.roomId) }
+  }
   const tapPower = (ev: Ev, at: number) => {
     try {
       const p = state.power
       if (!p.on) return
-      // 굳힌 방에 지금도 있는, 켤 때부터 있던 에이전트만 — 켠 뒤 들어온 에이전트는 카드·이름이 없다
+      // 굳힌 방에 지금도 있는, 굳힐 때(켬 · 방 옮김)부터 있던 에이전트만 — 그 뒤 들어온 에이전트는 카드·이름이 없다
       const pinned = (id: string) => pinnedAgent(p, state.agents, id) !== undefined
       let out: ScreenEvent[] = []
       if (ev.name === 'message') {
@@ -1112,13 +1134,10 @@ export function createStore(api: DureApi, opts: { hasFocus?: () => boolean } = {
       return recent.filter(id => state.agents.some(a => a.id === id))
     },
     async setPower(on) {
-      if (state.power.on === on) return // 켜진 동안 굳힌 방·본 id 는 그대로, 꺼진 채 끄기는 할 일 없음
+      if (state.power.on === on) return // 켜진 동안 굳힌 방·본 id 는 그대로(방은 followRoom 이 따라간다), 꺼진 채 끄기는 할 일 없음
       const call = ++powerCall
       const before = state.power
-      if (on) for (const m of state.messages) powerSeen.add(m.id)
-      const roomId = state.roomId
-      const power = on ? { on: true, roomId, agentIds: roomId ? state.agents.filter(a => a.roomId === roomId).map(a => a.id) : [] } : POWER_OFF
-      set({ ...state, power })
+      set({ ...state, power: on ? pinPower(state.roomId) : POWER_OFF })
       try {
         await api.setPowerMode(on)
         if (!on && call === powerCall) powerSeen.clear()

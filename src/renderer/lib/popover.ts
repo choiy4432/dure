@@ -1,15 +1,19 @@
 import { useEffect, type KeyboardEvent, type RefObject } from 'react'
 
-/** 떠 있는 목록 — 열려 있는 동안 wrap(여는 버튼 + 목록) 바깥을 누르면 닫는다 */
-export function useDismiss(open: boolean, wrap: RefObject<HTMLElement | null>, onClose: () => void) {
+/**
+ * 떠 있는 목록 — 열려 있는 동안 wrap(여는 버튼 + 목록) 바깥을 누르면 닫는다.
+ * pop — 목록을 wrap 밖(포털)에 그렸으면 그 목록: 그 안을 누르는 것도 안쪽이다
+ */
+export function useDismiss(open: boolean, wrap: RefObject<HTMLElement | null>, onClose: () => void, pop?: RefObject<HTMLElement | null>) {
   useEffect(() => {
     if (!open) return
     const down = (e: PointerEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) onClose()
+      const t = e.target as Node
+      if (!wrap.current?.contains(t) && !pop?.current?.contains(t)) onClose()
     }
     document.addEventListener('pointerdown', down, true)
     return () => document.removeEventListener('pointerdown', down, true)
-  }, [open, wrap, onClose])
+  }, [open, wrap, onClose, pop])
 }
 
 const ITEM = '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'

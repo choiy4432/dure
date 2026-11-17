@@ -1,4 +1,4 @@
-// 숫자 띠의 셈 — 켠 순간 0에서 시작해 진짜 사건만큼 오른다. 지어낸 시작 값·난수는 없다.
+// 숫자 띠의 셈 — 방마다 하나(roomMemory), 처음 그 방을 볼 때 0에서 시작해 진짜 사건만큼 오른다. 지어낸 시작 값·난수는 없다.
 import type { ScreenEvent } from './events'
 
 /** 초당 막대 수 — 지난 1분 */
@@ -69,3 +69,4 @@ export function createStats() {
     snapshot,
   }
 }
+export type Stats = ReturnType<typeof createStats>

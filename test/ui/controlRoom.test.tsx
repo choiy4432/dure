@@ -388,6 +388,24 @@ describe('관제실', () => {
     expect(decls('.pw-role')['max-width']).toBeTruthy()
   })
 
+  it('옮기면_카드·관계도·위_띠가_새_방_것으로_—_고른_에이전트는_앱_규칙대로_비고_옆_칸은_기록', async () => {
+    const store = await mountTwo()
+    act(() => { store.selectAgent('a') })
+    expect(screen.getByRole('tab', { name: '대화' })).toHaveAttribute('aria-selected', 'true')
+    act(() => { store.selectRoom('r2') })
+    expect([...cards()].map(c => c.getAttribute('data-agent'))).toEqual(['c'])
+    expect([...document.querySelectorAll('[data-node]')].map(n => n.getAttribute('data-node'))).toEqual(['c'])
+    expect(document.querySelector('.pw-room')).toHaveTextContent('방 둘째 방 · 에이전트 1 · 서브에이전트 0')
+    expect(store.getState().selectedAgentId).toBeNull()
+    expect(screen.getByRole('tab', { name: '기록' })).toHaveAttribute('aria-selected', 'true')
+    // 옛 방 에이전트의 사건은 이제 오지 않는다 — 새 방 것만
+    await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'old-room.ts' }) })
+    await emit('history', { agentId: 'c', item: toolItem('Read', { file_path: 'new-room.ts' }) })
+    await wait(250)
+    expect(rows().map(r => r.textContent).join('\n')).not.toContain('old-room.ts')
+    expect(rows()[0]).toHaveTextContent('new-room.ts')
+  })
+
   it('숫자_띠와_위_띠가_같은_진짜_서브에이전트_수를_보인다', async () => {
     await mount([agent('a', { name: '알파' })])
     const tile = () => [...document.querySelectorAll('.pw-tile')].find(t => t.textContent!.includes('서브에이전트'))!.querySelector('.v')!.textContent
@@ -397,5 +415,95 @@ describe('관제실', () => {
     await mount([agent('a', { name: '알파', subagentsRunning: ['t1', 't2'] })])
     expect(document.querySelector('.pw-room')).toHaveTextContent('서브에이전트 2')
     expect(tile()).toBe('2')
+  })
+})
+
+/** 방 둘 — r1(진짜 방): 알파·베타, r2(둘째 방): 감마. layer 면 덮개(PowerLayer)째로 — 방별 화면 상태가 덮개 수명 동안 남는다 */
+async function mountTwo(o: { layer?: boolean } = {}) {
+  vi.resetModules()
+  handlers = {}
+  const rooms = [{ id: 'r1', name: '진짜 방', createdAt: 2 }, { id: 'r2', name: '둘째 방', createdAt: 1 }]
+  const agents = [agent('a', { name: '알파' }), agent('b', { name: '베타' }), agent('c', { name: '감마', roomId: 'r2' })]
+  ;(window as any).dure = {
+    snapshot: async () => ({ claudeMissing: false, rooms, agents, messages: [], requests: [], autoChainLimit: 5, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null }),
+    history: async () => [],
+    setPowerMode: async () => {},
+    setSelected: async () => {},
+    on: (k: string, fn: (p: any) => void) => { (handlers[k] ??= []).push(fn); return () => {} },
+  }
+  const { getStore } = await import('../../src/renderer/state/store')
+  const store = getStore()
+  await act(async () => { await store.init() })
+  act(() => { store.selectRoom('r1') })
+  await act(async () => { await store.setPower(true) })
+  if (o.layer) {
+    const { PowerLayer } = await import('../../src/renderer/power/PowerLayer')
+    render(<PowerLayer />)
+  } else {
+    const { ControlRoom } = await import('../../src/renderer/power/ControlRoom')
+    render(<ControlRoom onExit={() => {}} />)
+  }
+  return store
+}
+const stat = (k: string) => document.querySelector(`[data-stat="${k}"]`)!.textContent
+
+describe('관제실 — 방별 숫자·기록(덮개가 떠 있는 동안)', () => {
+  it('A_에서_도구_사건_12개_→_B_로(숫자_0)_→_A_로(12)', async () => {
+    const store = await mountTwo({ layer: true })
+    for (let i = 0; i < 12; i++) await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: `a${i}.ts` }) })
+    await emit('message', { id: 'h1', roomId: 'r1', from: 'a', to: 'b', text: '넘겨요', createdAt: 1, state: 'pending', updatedAt: 1 })
+    await wait(250)
+    expect([stat('tools'), stat('files'), stat('handoffs')]).toEqual(['12', '12', '1'])
+    act(() => { store.selectRoom('r2') })
+    expect([stat('tools'), stat('files'), stat('handoffs')]).toEqual(['0', '0', '0'])
+    // 보지 않는 방의 사건은 세지 않는다 — B 에 있는 동안 A 에 온 사건은 A 숫자에 들지 않는다
+    await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'unseen.ts' }) })
+    await emit('history', { agentId: 'c', item: toolItem('Bash', { command: 'npm test' }) })
+    await wait(250)
+    expect(stat('tools')).toBe('1')
+    act(() => { store.selectRoom('r1') })
+    expect([stat('tools'), stat('files'), stat('handoffs')]).toEqual(['12', '12', '1'])
+    act(() => { store.selectRoom('r2') })
+    expect(stat('tools')).toBe('1')
+  })
+
+  it('기록_줄도_방별로_남는다', async () => {
+    const store = await mountTwo({ layer: true })
+    await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'a-room.ts' }) })
+    await wait(250)
+    expect(rows().map(r => r.textContent)).toEqual([expect.stringContaining('a-room.ts')])
+    act(() => { store.selectRoom('r2') })
+    expect(rows()).toHaveLength(0)
+    expect(screen.getByText('켠 뒤 들어온 일이 아직 없어요')).toBeInTheDocument()
+    await emit('history', { agentId: 'c', item: toolItem('Read', { file_path: 'b-room.ts' }) })
+    await wait(250)
+    expect(rows().map(r => r.textContent)).toEqual([expect.stringContaining('b-room.ts')])
+    act(() => { store.selectRoom('r1') })
+    expect(rows().map(r => r.textContent)).toEqual([expect.stringContaining('a-room.ts')])
+    await emit('history', { agentId: 'b', item: toolItem('Grep', { pattern: 'more' }) })
+    await wait(250)
+    expect(rows()).toHaveLength(2)
+    expect(rows()[0]).toHaveTextContent('more')
+    act(() => { store.selectRoom('r2') })
+    expect(rows().map(r => r.textContent)).toEqual([expect.stringContaining('b-room.ts')])
+  })
+
+  it('파워_모드를_껐다_켜면_전부_0', async () => {
+    const store = await mountTwo({ layer: true })
+    for (let i = 0; i < 12; i++) await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: `a${i}.ts` }) })
+    await wait(250)
+    act(() => { store.selectRoom('r2') })
+    await emit('history', { agentId: 'c', item: toolItem('Read', { file_path: 'c.ts' }) })
+    await wait(250)
+    act(() => { store.selectRoom('r1') })
+    expect(stat('tools')).toBe('12')
+    await act(async () => { await store.setPower(false) })
+    expect(document.querySelector('[data-power-screen]')).toBeNull()
+    await act(async () => { await store.setPower(true) })
+    expect(stat('tools')).toBe('0')
+    expect(rows()).toHaveLength(0)
+    act(() => { store.selectRoom('r2') })
+    expect(stat('tools')).toBe('0')
+    expect(rows()).toHaveLength(0)
   })
 })

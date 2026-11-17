@@ -92,18 +92,21 @@ describe('설정 — 파워 모드 구역', () => {
   })
 })
 
+/** 에이전트 한 명(스냅샷 꼴) */
+const agentView = (id: string, roomId: string, name: string, status: 'idle' | 'working' = 'idle'): Snapshot['agents'][number] => ({
+  id, roomId, name, role: '역할', folder: '/x', sessionId: '', started: true, auto: false, model: null,
+  alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status,
+  errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null,
+  subagentsRunning: [], pastCount: 0, remoteIssue: null,
+})
+
 /** 방 하나 · 에이전트 알파 — select(기본 참)면 고른 채로, terminal 이면 파워 모드 화면은 터미널 벽 */
 async function withAgent(over: { status?: 'idle' | 'working'; select?: boolean; terminal?: boolean } = {}) {
   const { getStore } = await import('../../src/renderer/state/store')
   const { App } = await import('../../src/renderer/App')
   const snap: Snapshot = {
     claudeMissing: false, rooms: [{ id: 'r1', name: '방', createdAt: 1 }],
-    agents: [{
-      id: 'a', roomId: 'r1', name: '알파', role: '역할', folder: '/x', sessionId: '', started: true, auto: false, model: null,
-      alwaysAllow: [], pos: { x: 0, y: 0 }, color: null, effort: null, effortNow: null, modelNow: null, lastContext: null, bypassOn: false, status: over.status ?? 'idle',
-      errorText: null, bypass: false, bypassBySettings: false, bypassPending: false, heldInput: 0, planMode: false, asleep: false, waking: false, hold: null,
-      subagentsRunning: [], pastCount: 0, remoteIssue: null,
-    }],
+    agents: [agentView('a', 'r1', '알파', over.status)],
     messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
   }
   const dure = (window as any).dure
@@ -308,6 +311,55 @@ describe('파워 모드 — 화면에서 고르기는 입력창에 커서를 주
     await wait(1500)
     expect(setPowerMode).not.toHaveBeenCalledWith(false)
     expect(screen.getByRole('region', { name: '파워 모드' })).toBeInTheDocument()
+  })
+})
+
+describe('파워 모드 — 방을 따른다', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+
+  it('찾기(Ctrl+K)로 다른 방의 에이전트를 고르면 파워 모드 화면이 그 방·그 에이전트 대화로 바뀐다 · 나가면 앱이 그 방', async () => {
+    const { getStore } = await import('../../src/renderer/state/store')
+    const { App } = await import('../../src/renderer/App')
+    const snap: Snapshot = {
+      claudeMissing: false, rooms: [{ id: 'r1', name: '첫 방', createdAt: 2 }, { id: 'r2', name: '둘째 방', createdAt: 1 }],
+      agents: [agentView('a', 'r1', '알파'), agentView('b', 'r2', '베타')],
+      messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
+    }
+    const dure = (window as any).dure
+    dure.snapshot = async () => snap
+    dure.setSelected = async () => {}
+    dure.updateAgent = async (id: string) => snap.agents.find(a => a.id === id)
+    dure.search = async () => ({ hits: [], more: false })
+    const store = getStore()
+    await act(async () => { await store.init() })
+    act(() => { store.selectRoom('r1') })
+    render(<App />)
+    await act(async () => { await store.setPower(true) })
+    const pw = () => screen.getByRole('region', { name: '파워 모드' })
+    expect(pw().querySelector('.pw-room')).toHaveTextContent('방 첫 방 · 에이전트 1')
+    expect(within(pw()).getByRole('tab', { name: '기록' })).toHaveAttribute('aria-selected', 'true')
+    // 덮개 위에서 찾기 — 다른 방의 에이전트를 고른다
+    fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true })
+    await wait(0)
+    const pal = screen.getByRole('dialog', { name: '찾기 · 옮기기' })
+    fireEvent.change(within(pal).getByRole('combobox', { name: '찾기 · 옮기기' }), { target: { value: '베타' } })
+    await wait(200)
+    act(() => { fireEvent.click(within(pal).getByRole('option', { name: /베타/ })) })
+    await wait(400)
+    expect(screen.queryByRole('dialog', { name: '찾기 · 옮기기' })).toBeNull()
+    expect(store.getState().roomId).toBe('r2')
+    expect(store.getState().power).toMatchObject({ on: true, roomId: 'r2', agentIds: ['b'] })
+    expect(pw().querySelector('.pw-room')).toHaveTextContent('방 둘째 방 · 에이전트 1')
+    expect([...pw().querySelectorAll('.pw-card')].map(c => c.getAttribute('data-agent'))).toEqual(['b'])
+    expect(within(pw()).getByRole('tab', { name: '대화' })).toHaveAttribute('aria-selected', 'true')
+    expect(within(pw()).getByRole('textbox', { name: '베타에게 보낼 메시지' })).toBeInTheDocument()
+    // 나가면 앱은 마지막에 보던 그 방
+    await act(async () => { fireEvent.click(within(pw()).getByRole('button', { name: '나가기' })) })
+    await wait(0)
+    expect(screen.queryByRole('region', { name: '파워 모드' })).toBeNull()
+    expect(store.getState().roomId).toBe('r2')
+    expect(document.querySelector('.top .room-name')).toHaveTextContent('둘째 방')
+    expect(screen.getByRole('textbox', { name: '베타에게 보낼 메시지' })).toBeInTheDocument()
   })
 })
 

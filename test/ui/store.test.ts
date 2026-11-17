@@ -1699,9 +1699,9 @@ describe('파워 모드', () => {
     s.onPowerEvent(e => got.push(e))
     await s.setPower(true)
     emit('message', relay('n1', 'pending'))
-    s.selectRoom('r2')
-    expect(s.getState().power.roomId).toBe('r1')
+    const pinned = s.getState().power
     await s.setPower(true)
+    expect(s.getState().power).toBe(pinned)
     expect(s.getState().power).toEqual({ on: true, roomId: 'r1', agentIds: ['a', 'b'] })
     expect((api as any).setPowerMode).toHaveBeenCalledTimes(1)
     emit('message', relay('n1', 'read', { updatedAt: 9 }))
@@ -1772,6 +1772,122 @@ describe('파워 모드', () => {
     const got: any[] = []
     s.onPowerEvent(e => got.push(e))
     emit('message', relay('n1', 'delivered', { updatedAt: 9 }))
+    expect(got).toEqual([])
+  })
+})
+
+describe('파워 모드 — 방을 따른다', () => {
+  const tool = (name: string, input: unknown): HistoryItem => ({ t: 5, kind: 'assistant', blocks: [{ type: 'tool_use', id: 'u', name, input }] })
+  /** 방 둘 — r1: a·b, r2: c·d */
+  const two = (over: Partial<Snapshot> = {}) => snap({ agents: [agent('a'), agent('b'), agent('c', 'r2'), agent('d', 'r2')], ...over })
+  const power = async (snapshot: () => Promise<Snapshot> = async () => two()) => {
+    const f = fake({ snapshot })
+    ;(f.api as any).setPowerMode = vi.fn(async () => {})
+    ;(f.api as any).setSelected = vi.fn(async () => {})
+    const s = createStore(f.api)
+    await s.init()
+    const got: any[] = []
+    s.onPowerEvent(e => got.push(e))
+    return { ...f, s, got }
+  }
+
+  it('켠_채_selectRoom_→_power_roomId_·_agentIds_가_새_방', async () => {
+    let now = two()
+    const { s } = await power(async () => now)
+    await s.setPower(true)
+    expect(s.getState().power).toEqual({ on: true, roomId: 'r1', agentIds: ['a', 'b'] })
+    s.selectRoom('r2')
+    expect(s.getState().roomId).toBe('r2')
+    expect(s.getState().power).toEqual({ on: true, roomId: 'r2', agentIds: ['c', 'd'] })
+    // 옮긴 순간 굳힌다 — 그 뒤 그 방에 든 에이전트는 다음에 그 방으로 옮겨 올 때 보인다
+    now = two({ agents: [...two().agents, agent('e', 'r2')] })
+    await s.refresh()
+    expect(s.getState().power.agentIds).toEqual(['c', 'd'])
+    // 방을 바꾸는 다른 길도 같은 규칙 — 찾기의 에이전트 고르기 · 메시지 탭의 대화에서 보기 · 찾기의 대화 줄
+    s.focusAgent('a')
+    expect(s.getState().power).toEqual({ on: true, roomId: 'r1', agentIds: ['a', 'b'] })
+    s.showMessage('c', 'm1')
+    expect(s.getState().power).toEqual({ on: true, roomId: 'r2', agentIds: ['c', 'd', 'e'] })
+    await s.openHit({ agentId: 'b', roomId: 'r1', conversation: { key: 'old', startedAt: 1 }, t: 1, who: 'claude', snippet: 'x', ranges: [] })
+    expect(s.getState().power).toEqual({ on: true, roomId: 'r1', agentIds: ['a', 'b'] })
+  })
+
+  it('옮기기_전_새_방_메시지_100개는_handoff_로_안_나온다', async () => {
+    // 사건으로 오지 않은(스냅샷으로만 안) r2 메시지 100개 — 켤 때는 없었다
+    const old = Array.from({ length: 100 }, (_, i) => relay(`o${i}`, 'pending', { roomId: 'r2', from: 'c', to: 'd' }))
+    let now = two()
+    const { s, emit, got } = await power(async () => now)
+    await s.setPower(true)
+    now = two({ messages: old })
+    await s.refresh()
+    s.selectRoom('r2')
+    for (const m of old) emit('message', { ...m, state: 'delivered', updatedAt: 9 })
+    expect(got).toEqual([])
+  })
+
+  it('옮긴_뒤_새_id_는_한_번', async () => {
+    const { s, emit, got } = await power()
+    await s.setPower(true)
+    s.selectRoom('r2')
+    emit('message', relay('n1', 'pending', { roomId: 'r2', from: 'c', to: 'd', text: '넘겨요', updatedAt: 2 }))
+    emit('message', relay('n1', 'delivered', { roomId: 'r2', from: 'c', to: 'd', text: '넘겨요', updatedAt: 3 }))
+    emit('message', relay('n1', 'read', { roomId: 'r2', from: 'c', to: 'd', text: '넘겨요', updatedAt: 4 }))
+    expect(got).toMatchObject([{ kind: 'handoff', from: 'c', to: 'd', text: '넘겨요' }])
+    expect(got).toHaveLength(1)
+  })
+
+  it('옛_방_에이전트의_사건은_안_나온다', async () => {
+    const { s, emit, got } = await power()
+    await s.setPower(true)
+    s.selectRoom('r2')
+    emit('history', { agentId: 'a', item: tool('Read', { file_path: 'old-room.ts' }) })
+    emit('message', relay('m1', 'pending', { from: 'a', to: 'b' }))
+    expect(got).toEqual([])
+    emit('history', { agentId: 'c', item: tool('Read', { file_path: 'new-room.ts' }) })
+    expect(got).toMatchObject([{ kind: 'tool', agentId: 'c', target: 'new-room.ts' }])
+  })
+
+  it('지금_방이_지워지면_앱이_고른_방을_따른다', async () => {
+    let now = two()
+    const { s, emit, got } = await power(async () => now)
+    await s.setPower(true)
+    now = two({ rooms: [{ id: 'r2', name: '둘째', createdAt: 1 }], agents: [agent('c', 'r2'), agent('d', 'r2')] })
+    await s.refresh()
+    expect(s.getState().roomId).toBe('r2')
+    expect(s.getState().power).toEqual({ on: true, roomId: 'r2', agentIds: ['c', 'd'] })
+    emit('history', { agentId: 'd', item: tool('Read', { file_path: 'x.ts' }) })
+    expect(got).toMatchObject([{ kind: 'tool', agentId: 'd' }])
+  })
+
+  it('방이_0개면_roomId_null_agents_빈_배열', async () => {
+    let now = two()
+    const { s } = await power(async () => now)
+    await s.setPower(true)
+    now = two({ rooms: [], agents: [] })
+    await s.refresh()
+    expect(s.getState().roomId).toBeNull()
+    expect(s.getState().power).toEqual({ on: true, roomId: null, agentIds: [] })
+    // 다시 방이 생기면 그 방으로
+    now = two()
+    await s.refresh()
+    expect(s.getState().power).toEqual({ on: true, roomId: 'r1', agentIds: ['a', 'b'] })
+  })
+
+  it('꺼져_있으면_selectRoom_이_power_를_건드리지_않는다', async () => {
+    let now = two()
+    const { s, emit, got } = await power(async () => now)
+    const off = s.getState().power
+    const before = s.getState()
+    s.selectRoom('r2')
+    expect(s.getState().power).toBe(off)
+    expect(s.getState()).toEqual({ ...before, roomId: 'r2' })
+    s.focusAgent('a')
+    now = two({ rooms: [{ id: 'r2', name: '둘째', createdAt: 1 }], agents: [agent('c', 'r2')] })
+    await s.refresh()
+    expect(s.getState().roomId).toBe('r2')
+    expect(s.getState().power).toBe(off)
+    emit('history', { agentId: 'c', item: tool('Read', { file_path: 'x.ts' }) })
+    emit('message', relay('m1', 'pending', { roomId: 'r2', from: 'c', to: 'c' }))
     expect(got).toEqual([])
   })
 })

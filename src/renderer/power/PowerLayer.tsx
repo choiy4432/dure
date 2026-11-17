@@ -4,6 +4,7 @@ import { getStore, useDure } from '../state/store'
 import { reducedMotion } from '../lib/motion'
 import { openDialogCount } from '../lib/dialog'
 import { ControlRoom } from './ControlRoom'
+import { createRoomMemories, RoomMemoryContext } from './roomMemory'
 import { TerminalWall } from './TerminalWall'
 import { useHoldEscape } from './useHoldEscape'
 import './power.css'
@@ -24,7 +25,8 @@ const editing = (el: Element | null): boolean =>
 
 /**
  * Esc 길게 누르기를 들어도 될 때 — 글을 쓰는 칸(입력창 포함)에 초점이 없고 떠 있는 창이 하나도 없을 때만.
- * 입력창·대화상자·메뉴가 제 Esc 를 받게 둔다(설계: Esc 가 그것들 대신 파워 모드를 끄면 실패)
+ * 입력창·대화상자·메뉴가 제 Esc 를 받게 둔다(설계: Esc 가 그것들 대신 파워 모드를 끄면 실패). 덮개 안에 뜬 메뉴(방 단추의 방 목록 ·
+ * 옆 칸 대화 패널의 메뉴)도 문서 전체에서 찾으니 같다
  */
 function holdEscapeAllowed(): boolean {
   if (editing(document.activeElement)) return false
@@ -65,9 +67,11 @@ function ExitRing({ onDone }: { onDone: () => void }) {
  * 덮개 — 앱 틀 위, 떠 있는 것(대화상자·찾기·메뉴·토스트·투어) 아래 층(power.css).
  * 입력을 삼키지 않고 초점을 붙잡지 않는다: 켤 때 한 번만 덮개로 초점을 옮겨(Esc 길게가 바로 되게) 그 뒤로는 건드리지 않는다.
  * 판은 창 크기 그대로 흐른다(늘리고 줄이지 않는다) — 안의 대화 패널이 제 크기 글자·화면 좌표(떠 있는 메뉴·스크롤)를 그대로 쓴다.
+ * 방별 화면 상태(숫자·기록·터미널 줄)는 덮개가 떠 있는 동안만 — 끄면 덮개와 함께 버린다. 두 화면(관제실·터미널 벽)이 같은 것을 쓴다.
  */
 function Overlay({ terminal, onSettings }: { terminal: boolean; onSettings?: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
+  const [memories] = useState(createRoomMemories)
   const [hint, setHint] = useState<string | null>(null)
   const hintTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const flash = useCallback((text: string) => {
@@ -92,7 +96,7 @@ function Overlay({ terminal, onSettings }: { terminal: boolean; onSettings?: () 
   return (
     <div ref={ref} className="pw" role="region" aria-label="파워 모드" tabIndex={-1}>
       <div className="pw-stage" data-calm={reducedMotion() || undefined}>
-        {screen}
+        <RoomMemoryContext.Provider value={memories}>{screen}</RoomMemoryContext.Provider>
       </div>
       <ExitRing onDone={exit} />
       {hint && (

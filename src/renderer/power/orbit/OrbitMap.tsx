@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { reducedMotion } from '../../lib/motion'
 import { batched, STATE_TEXT, type AgentState, type PowerAgent, type ScreenEvent } from '../events'
+import type { RoomChange } from '../usePowerFeed'
 import { drawOverlay } from './overlay'
 import { FALLBACK_FONTS } from './palette'
 import { drawScene } from './scene'
@@ -16,6 +17,8 @@ const MAX_RES = 2.5
 const CROWD_AT = 8
 
 type Props = {
+  /** 그리는 방이 바뀐 일(전환 신호 — useRoomChange) — 바뀌면 장면을 새 방 에이전트로 새로 짓는다. 없으면 방이 바뀌지 않는 것 */
+  room?: RoomChange
   agents: PowerAgent[]
   state: Record<string, AgentState>
   /** 지금 도는 진짜 서브에이전트 — 없으면 위성도 없다 */
@@ -27,7 +30,8 @@ type Props = {
   onPick?: (id: string) => void
 }
 
-export function OrbitMap({ agents, state, subagents, subscribe, selected = null, onPick }: Props) {
+export function OrbitMap({ room, agents, state, subagents, subscribe, selected = null, onPick }: Props) {
+  const scene = room?.n ?? 0
   const boxRef = useRef<HTMLDivElement>(null)
   const trailRef = useRef<HTMLCanvasElement>(null)
   const crispRef = useRef<HTMLCanvasElement>(null)
@@ -60,6 +64,8 @@ export function OrbitMap({ agents, state, subagents, subscribe, selected = null,
     if (w) setStates(w, state)
   }, [state])
 
+  // 장면 — 방이 바뀌면(scene = room.n) 새 방 에이전트로 처음부터 새로 짓는다(지금은 바로 바뀐다 — 전환 연출(Task 2)이 이 자리에서 옛 장면을 거둬
+  // 새 장면으로 넘긴다). 같은 방 안에서 목록이 바뀌어도(굳힌 뒤 지워진 에이전트) 새로 짓는다
   useEffect(() => {
     const box = boxRef.current
     const trail = trailRef.current
@@ -152,7 +158,7 @@ export function OrbitMap({ agents, state, subagents, subscribe, selected = null,
       off()
       worldRef.current = null
     }
-  }, [agents, subscribe])
+  }, [scene, agents, subscribe])
 
   return (
     <div ref={boxRef} className="pw-mapbox">

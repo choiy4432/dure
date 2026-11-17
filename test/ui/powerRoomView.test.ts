@@ -29,9 +29,17 @@ describe('pinnedAgent — 켤 때 굳힌 목록 안 + 지금도 그 방', () => 
 
 describe('roomView', () => {
   it('방이_없으면_agents_빈_배열_roomName_null', () => {
-    expect(roomView(st({ power: { on: false, roomId: null, agentIds: [] } }))).toEqual({ roomName: null, agents: [], state: {}, subagents: [] })
+    expect(roomView(st({ power: { on: false, roomId: null, agentIds: [] } }))).toEqual({ roomId: null, roomName: null, agents: [], state: {}, subagents: [] })
     // 굳힌 방이 지워졌다
-    expect(roomView(st({ rooms: [] }))).toEqual({ roomName: null, agents: [], state: {}, subagents: [] })
+    expect(roomView(st({ rooms: [] }))).toEqual({ roomId: null, roomName: null, agents: [], state: {}, subagents: [] })
+  })
+
+  it('roomId_는_파워_모드의_방_—_방을_옮기면_그_방의_굳힌_에이전트', () => {
+    const rooms = [{ id: 'r1', name: '첫 방' }, { id: 'r2', name: '둘째' }]
+    expect(roomView(st({ rooms })).roomId).toBe('r1')
+    const moved = roomView(st({ rooms, power: { on: true, roomId: 'r2', agentIds: ['c'] } }))
+    expect(moved).toMatchObject({ roomId: 'r2', roomName: '둘째' })
+    expect(moved.agents.map(a => a.id)).toEqual(['c'])
   })
 
   it('에이전트가_0명인_방은_방_이름과_빈_목록', () => {
