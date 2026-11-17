@@ -468,6 +468,34 @@ describe('관제실 — 방별 숫자·기록(덮개가 떠 있는 동안)', () 
     expect(stat('tools')).toBe('1')
   })
 
+  it('방을_옮길_때_모아_두던_100ms_사건은_떠나는_방_숫자에_들고_새_방엔_안_든다', async () => {
+    const store = await mountTwo({ layer: true })
+    for (let i = 0; i < 3; i++) await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: `a${i}.ts` }) })
+    // 타이머(100ms)가 돌기 전에 방을 옮긴다
+    act(() => { store.selectRoom('r2') })
+    await wait(250)
+    expect(stat('tools')).toBe('0')
+    act(() => { store.selectRoom('r1') })
+    expect(stat('tools')).toBe('3')
+  })
+
+  it('지운_방의_화면_기억은_방_목록이_바뀔_때_버린다(같은_id_로_다시_생겨도_0부터)', async () => {
+    const store = await mountTwo({ layer: true })
+    act(() => { store.selectRoom('r2') })
+    await emit('history', { agentId: 'c', item: toolItem('Read', { file_path: 'c.ts' }) })
+    await wait(250)
+    expect(stat('tools')).toBe('1')
+    act(() => { store.selectRoom('r1') })
+    const snap = (rooms: object[]) => async () => ({ claudeMissing: false, rooms, agents: [agent('a', { name: '알파' }), agent('b', { name: '베타' })], messages: [], requests: [], autoChainLimit: 5, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null })
+    const r1 = { id: 'r1', name: '진짜 방', createdAt: 2 }
+    ;(window as any).dure.snapshot = snap([r1])
+    await act(async () => { await store.init() })
+    ;(window as any).dure.snapshot = async () => ({ claudeMissing: false, rooms: [r1, { id: 'r2', name: '둘째 방', createdAt: 1 }], agents: [agent('a'), agent('b'), agent('c', { roomId: 'r2' })], messages: [], requests: [], autoChainLimit: 5, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null })
+    await act(async () => { await store.init() })
+    act(() => { store.selectRoom('r2') })
+    expect(stat('tools')).toBe('0')
+  })
+
   it('기록_줄도_방별로_남는다', async () => {
     const store = await mountTwo({ layer: true })
     await emit('history', { agentId: 'a', item: toolItem('Read', { file_path: 'a-room.ts' }) })

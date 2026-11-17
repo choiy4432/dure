@@ -51,14 +51,14 @@ export function ControlRoom({ onExit, onSettings }: { onExit: () => void; onSett
   const [wallMs, setWallMs] = useState(() => Date.now())
 
   // 방이 바뀌면 다시 듣는다 — 모아 두던 옛 방 사건이 새 방 숫자에 들지 않게
-  useEffect(
-    () =>
-      batched(subscribe, evs => {
-        for (const ev of evs) memory.stats.apply(ev)
-        bump()
-      }),
-    [subscribe, memory],
-  )
+  // 끌 때 남은 사건은 옛 방(memory 를 쥔 이 효과의 것) 몫으로 마저 넣는다 — 새 방엔 들지 않는다
+  useEffect(() => {
+    const off = batched(subscribe, evs => {
+      for (const ev of evs) memory.stats.apply(ev)
+      bump()
+    })
+    return () => off(true)
+  }, [subscribe, memory])
 
   useEffect(() => {
     const id = setInterval(() => {

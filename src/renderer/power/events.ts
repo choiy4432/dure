@@ -76,8 +76,12 @@ export const BATCH_MS = 100
 /** 한 번에 모아 두는 사건 상한(넘치면 오래된 것부터 버린다) */
 export const BATCH_MAX = 200
 
-/** 사건을 모아 ms 마다 한 번에 넘긴다 — 같은 때 온 사건은 한 번에 그려진다. 끄는 함수를 돌려준다 */
-export function batched(subscribe: (fn: (ev: ScreenEvent) => void) => () => void, fn: (evs: ScreenEvent[]) => void, ms = BATCH_MS): () => void {
+/**
+ * 사건을 모아 ms 마다 한 번에 넘긴다 — 같은 때 온 사건은 한 번에 그려진다. 끄는 함수를 돌려준다.
+ * 끌 때 flush 를 true 로 주면 아직 안 넘긴 사건을 마지막으로 한 번 넘기고 끈다(안 주면 버린다) —
+ * 방을 옮길 때 옛 방 사건이 (fn 이 쥔) 옛 방 몫으로 들게 한다
+ */
+export function batched(subscribe: (fn: (ev: ScreenEvent) => void) => () => void, fn: (evs: ScreenEvent[]) => void, ms = BATCH_MS): (flush?: boolean) => void {
   let queue: ScreenEvent[] = []
   let timer: ReturnType<typeof setTimeout> | undefined
   const off = subscribe(ev => {
@@ -90,8 +94,14 @@ export function batched(subscribe: (fn: (ev: ScreenEvent) => void) => () => void
       fn(evs)
     }, ms)
   })
-  return () => {
+  return (flush = false) => {
     off()
     clearTimeout(timer)
+    timer = undefined
+    if (flush && queue.length) {
+      const evs = queue
+      queue = []
+      fn(evs)
+    }
   }
 }

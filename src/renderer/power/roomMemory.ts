@@ -29,6 +29,11 @@ export function createRoomMemories() {
       }
       return m
     },
+    /** 아직 있는 방(ids)의 기억만 남긴다 — 지운 방의 기억을 버린다. 방이 없을 때(null)의 몫은 그대로 */
+    retain(ids: Iterable<RoomId>) {
+      const keep = new Set<RoomId | null>(ids)
+      for (const id of [...rooms.keys()]) if (id !== null && !keep.has(id)) rooms.delete(id)
+    },
   }
 }
 export type RoomMemories = ReturnType<typeof createRoomMemories>

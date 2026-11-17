@@ -57,7 +57,10 @@ function WallLog({ agents, subscribe, memory }: { agents: PowerAgent[]; subscrib
     setSeen(memory)
     setRate(memory.stats.snapshot().toolsPerMin)
   }
-  useEffect(() => batched(subscribe, evs => { for (const ev of evs) memory.stats.apply(ev) }), [subscribe, memory])
+  useEffect(() => {
+    const off = batched(subscribe, evs => { for (const ev of evs) memory.stats.apply(ev) })
+    return () => off(true) // 방을 옮길 때 남은 사건은 옛 방 몫으로 마저
+  }, [subscribe, memory])
   useEffect(() => {
     const id = setInterval(() => {
       if (document.visibilityState !== 'visible') return

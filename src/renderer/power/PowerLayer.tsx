@@ -72,6 +72,9 @@ function ExitRing({ onDone }: { onDone: () => void }) {
 function Overlay({ terminal, onSettings }: { terminal: boolean; onSettings?: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   const [memories] = useState(createRoomMemories)
+  // 방 목록이 바뀌면 지운 방의 화면 기억은 버린다
+  const rooms = useDure(s => s.rooms)
+  useEffect(() => memories.retain(rooms.map(r => r.id)), [memories, rooms])
   const [hint, setHint] = useState<string | null>(null)
   const hintTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const flash = useCallback((text: string) => {

@@ -149,4 +149,26 @@ describe('batched', () => {
     off()
     expect(vi.getTimerCount()).toBe(0)
   })
+
+  it('끌_때_flush_면_남은_사건을_한_번에_넘기고_타이머도_치운다(안_주면_버린다)', () => {
+    vi.useFakeTimers()
+    let emit: (ev: ScreenEvent) => void = () => {}
+    const got: ScreenEvent[][] = []
+    const off = batched(fn => ((emit = fn), () => {}), evs => got.push(evs), 100)
+    for (let i = 0; i < 3; i++) emit({ kind: 'done', agentId: `a${i}`, at: i })
+    off(true)
+    expect(got).toHaveLength(1)
+    expect(got[0].map(e => (e as { agentId: string }).agentId)).toEqual(['a0', 'a1', 'a2'])
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(500)
+    expect(got).toHaveLength(1)
+    // 쌓인 게 없으면 flush 해도 부르지 않는다 · flush 없이 끄면 버린다
+    const off2 = batched(fn => ((emit = fn), () => {}), evs => got.push(evs), 100)
+    off2(true)
+    expect(got).toHaveLength(1)
+    const off3 = batched(fn => ((emit = fn), () => {}), evs => got.push(evs), 100)
+    emit({ kind: 'done', agentId: 'z', at: 9 })
+    off3()
+    expect(got).toHaveLength(1)
+  })
 })

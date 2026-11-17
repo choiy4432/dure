@@ -28,9 +28,8 @@ export function LiveLog({ agents, rate, subscribe, memory }: {
   for (const a of agents) byId.current.set(a.id, a)
 
   // 방이 바뀌면 다시 듣는다 — 모아 두던 옛 방 사건은 새 방 줄에 붙지 않는다
-  useEffect(
-    () =>
-      batched(subscribe, evs => {
+  useEffect(() => {
+    const off = batched(subscribe, evs => {
         const add: LogRow[] = []
         for (const ev of evs) {
           if (ev.kind === 'tool') {
@@ -45,9 +44,9 @@ export function LiveLog({ agents, rate, subscribe, memory }: {
         if (!add.length) return
         memory.log = [...add, ...memory.log].slice(0, MAX_ROWS)
         redraw()
-      }),
-    [subscribe, memory],
-  )
+      })
+    return () => off(true) // 방을 옮길 때 남은 사건은 옛 방 줄에 마저(memory 는 그 방 것)
+  }, [subscribe, memory])
 
   const rows = memory.log
   return (
