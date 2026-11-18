@@ -147,7 +147,7 @@ describe('electron-builder.yml — mac', () => {
  */
 describe('.github/workflows/mac-build.yml', () => {
   const text = readFileSync(join(__dirname, '..', '.github', 'workflows', 'mac-build.yml'), 'utf8')
-  type Step = { uses?: string; run?: string; with?: Record<string, unknown> }
+  type Step = { uses?: string; run?: string; if?: unknown; with?: Record<string, unknown> }
   const wf = load(text) as {
     on?: unknown
     permissions?: unknown
@@ -158,8 +158,26 @@ describe('.github/workflows/mac-build.yml', () => {
   const runs = steps.flatMap((s) => (s.run ? [s.run] : []))
 
   it('올바른 YAML — 트리거는 workflow_dispatch 하나뿐(푸시·PR 에 돌지 않는다)', () => {
-    expect(wf.on).toEqual({ workflow_dispatch: null })
+    expect(Object.keys(wf.on as object)).toEqual(['workflow_dispatch'])
     expect(Object.keys(wf.jobs ?? {})).toEqual(['build'])
+  })
+
+  it('손으로 돌릴 때 고르는 칸은 skip_tests 하나 — 참/거짓, 기본 거짓(시험을 돈다), 설명은 한국어', () => {
+    const inputs = (wf.on as { workflow_dispatch?: { inputs?: Record<string, Record<string, unknown>> } }).workflow_dispatch?.inputs ?? {}
+    expect(Object.keys(inputs)).toEqual(['skip_tests'])
+    const skip = inputs.skip_tests!
+    expect(skip.type).toBe('boolean')
+    expect(skip.default).toBe(false)
+    expect(skip.required).not.toBe(true)
+    expect(String(skip.description)).toMatch(/[가-힣]/)
+    expect(Object.keys(skip).sort()).toEqual(['default', 'description', 'type'])
+  })
+
+  it('skip_tests 는 npm test 하나만 건너뛴다 — typecheck 와 나머지 단계엔 조건이 없다', () => {
+    const conditional = steps.filter((s) => s.if !== undefined)
+    expect(conditional.map((s) => s.run)).toEqual(['npm test'])
+    expect(String(conditional[0]!.if).replace(/\s+/g, ' ').trim()).toBe('${{ !inputs.skip_tests }}')
+    expect(steps.find((s) => s.run === 'npm run typecheck')?.if).toBeUndefined()
   })
 
   it('권한은 읽기만 · 비밀 값·토큰을 쓰지 않는다', () => {

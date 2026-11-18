@@ -2,10 +2,16 @@
 # 시험(vitest)을 mac 러너에서 돌린 뒤 서명·공증 없는 ad-hoc 빌드(arm64 · x64 의 dmg · zip)를 Actions 산출물로만 올린다(14일).
 # 🔴 릴리스에 올리지 않는다(--publish never — latest-mac.yml 이 생기면 서명 없는 판에 업데이트 길이 열린다). 비밀 값·토큰을 쓰지 않는다.
 # 받는 법·시험할 것은 레포 맨 위의 MAC-TEST.md
+# skip_tests — 첫 mac 실행처럼 시험이 깨져도 시험자에게 줄 dmg 가 필요할 때만 켠다(typecheck 는 늘 돈다)
 name: mac-build
 
 on:
   workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: '시험(npm test)을 건너뛰고 빌드만 — 시험이 깨져도 시험자에게 줄 dmg 가 필요할 때. typecheck 는 늘 돌아요'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,7 +35,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      - if: ${{ !inputs.skip_tests }}
+        run: npm test
       - run: npm run build
       # 안드로이드 앱(resources/android)은 git 에 없다 — electron-builder 는 없는 extraResources 에 경고만 내지만, 빈 폴더를 확실히 둔다
       - run: mkdir -p resources/android
