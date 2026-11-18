@@ -24,6 +24,56 @@ describe('locateClaude', () => {
     expect(locateClaude({ PATH: 'C_a', USERPROFILE: 'C_u' }, () => false)).toBeNull();
     expect(locateClaude({}, () => true)).toBeNull();
   });
+
+  it("win32_는_지금과_같은_결과 — platform 'win32' 을 줘도 위와 같다(';'·claude.exe·USERPROFILE)", () => {
+    const a = path.join('C_a', 'claude.exe');
+    const b = path.join('C_b', 'claude.exe');
+    const u = path.join('C_u', '.local', 'bin', 'claude.exe');
+    expect(locateClaude({ PATH: 'C_a;;C_b', USERPROFILE: 'C_u' }, (p) => p === a || p === b, 'win32')).toBe(a);
+    expect(locateClaude({ Path: 'C_a' }, (p) => p === a, 'win32')).toBe(a);
+    expect(locateClaude({ PATH: 'C_a', USERPROFILE: 'C_u' }, (p) => p === u, 'win32')).toBe(u);
+    expect(locateClaude({ PATH: 'C_a', USERPROFILE: 'C_u' }, () => false, 'win32')).toBeNull();
+    expect(locateClaude({}, () => true, 'win32')).toBeNull();
+    // mac 후보(HOME·/opt/homebrew)는 보지 않는다
+    const seen: string[] = [];
+    locateClaude({ PATH: 'C_a', HOME: '/Users/a' }, (p) => (seen.push(p), false), 'win32');
+    expect(seen).toEqual([a]);
+  });
+});
+
+describe('locateClaude — darwin', () => {
+  const FIXED = (home: string) => [`${home}/.local/bin/claude`, '/opt/homebrew/bin/claude', '/usr/local/bin/claude', `${home}/.claude/local/claude`];
+
+  it('darwin_PATH_는_콜론으로_나누고_claude_를_찾는다 — 앞쪽 폴더가 우선, 빈 칸·상대 경로는 건너뛴다', () => {
+    const seen: string[] = [];
+    const exists = (p: string) => (seen.push(p), p === '/b/bin/claude' || p === '/c/claude');
+    expect(locateClaude({ PATH: '::bin:./x:/a:/b/bin:/c', HOME: '/Users/a' }, exists, 'darwin')).toBe('/b/bin/claude');
+    expect(seen).toEqual(['/a/claude', '/b/bin/claude']); // claude.exe 도, 역슬래시도 아니다
+  });
+
+  it('darwin_PATH_에_없으면_고정_후보_순서대로(HOME 기준 네 곳)', () => {
+    const seen: string[] = [];
+    expect(locateClaude({ PATH: '/usr/bin:/bin', HOME: '/Users/a' }, (p) => (seen.push(p), false), 'darwin')).toBeNull();
+    expect(seen).toEqual(['/usr/bin/claude', '/bin/claude', ...FIXED('/Users/a')]);
+    // 하나씩 — 앞의 것이 있으면 그것
+    for (const want of FIXED('/Users/a')) {
+      expect(locateClaude({ PATH: '/usr/bin', HOME: '/Users/a' }, (p) => p === want, 'darwin')).toBe(want);
+    }
+    const two = FIXED('/Users/a').slice(1, 3);
+    expect(locateClaude({ PATH: '/usr/bin', HOME: '/Users/a' }, (p) => two.includes(p), 'darwin')).toBe('/opt/homebrew/bin/claude');
+  });
+
+  it('홈 경로 끝의 / 도 한 번만', () => {
+    expect(locateClaude({ HOME: '/Users/a/' }, (p) => p === '/Users/a/.local/bin/claude', 'darwin')).toBe('/Users/a/.local/bin/claude');
+  });
+
+  it('HOME_이_없어도_던지지_않는다 — 홈 기준 후보만 건너뛴다(USERPROFILE 도 보지 않는다)', () => {
+    const seen: string[] = [];
+    expect(locateClaude({ USERPROFILE: 'C_u' }, (p) => (seen.push(p), false), 'darwin')).toBeNull();
+    expect(seen).toEqual(['/opt/homebrew/bin/claude', '/usr/local/bin/claude']);
+    expect(locateClaude({}, (p) => p === '/usr/local/bin/claude', 'darwin')).toBe('/usr/local/bin/claude');
+    expect(locateClaude({ HOME: 'relative' }, (p) => p.startsWith('relative'), 'darwin')).toBeNull();
+  });
 });
 
 const CL = { command: 'claude.exe', argsPrefix: [] as string[] };

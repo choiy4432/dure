@@ -21,6 +21,7 @@ import { updateClaude, type ClaudeUpdateRun } from './claudeUpdate'
 import { createQuitControl } from './quit'
 import { createUpdater, RELEASE_URL, type UpdaterLike } from './updater'
 import { createSetupFlow, type SetupFlow } from './setupFlow'
+import { applyShellPath, importShellPath, shellRunner } from './shellPath'
 import { runStartup } from './startup'
 import { logEngineErrors, registerIpc, type AppHost, type IpcDeps } from './ipc'
 import { createDispatcher } from './dispatch'
@@ -304,6 +305,10 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
 } else if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
+  // mac — Finder 로 켠 앱의 빈약한 PATH 를 로그인 셸의 PATH 로 메운다(shellPath.ts — PATH 하나만, 상한 3초, 실패하면 그대로).
+  // Electron 이 준비되는 동안 미리 띄우고 엔진·준비 흐름을 만들기 전에 기다린다. Windows 는 띄우지도 기다리지도 않는다
+  const shellPath = platform === 'darwin' ? importShellPath({ platform, env: process.env, run: shellRunner() }) : null
+
   // 창이 아직 없으면(숨겨 시작이 엔진을 기다리는 중) 잃지 않게 적어 둔다 — 창을 만들 때 숨기지 않는다
   app.on('second-instance', () => {
     if (mainWindow) focusExisting(mainWindow)
@@ -334,6 +339,8 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
   void app
     .whenReady()
     .then(async () => {
+      // mac 만 — claude 찾기·엔진·설치가 모두 process.env.PATH 를 그때그때 읽는다
+      if (shellPath) applyShellPath(process.env, await shellPath)
       const nextE2eFolder = e2eFolders(env.DURE_E2E_FOLDERS)
       const claude = resolveClaudeCommand(env, () => locateClaude())
       // Test-only: DURE_SLEEP_MINUTE_MS shortens the sleep timer ('1 minute' and the sweep interval) so the E2E sees an agent fall asleep in seconds.
