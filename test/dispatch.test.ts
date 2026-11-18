@@ -483,7 +483,7 @@ describe('phoneDispatcher', () => {
     const inner = vi.fn(async (): Promise<InvokeResult> => ({ ok: true, value: 'inner' }))
     const phone = phoneDispatcher(inner, { inboxDir: path.join(os.tmpdir(), 'dure-no-inbox') })
     // PC 전용 · 모르는 이름 · 프로토타입 이름 · preload 전용 · 글이 아닌 이름 — 거절 글, 안쪽 디스패처는 부르지 않는다
-    for (const m of [...pc, 'nope', 'constructor', '__proto__', 'toString', 'hasOwnProperty', 'on', 'pathForFile', '', 5, null, undefined]) {
+    for (const m of [...pc, 'nope', 'constructor', '__proto__', 'toString', 'hasOwnProperty', 'on', 'pathForFile', 'platform', '', 5, null, undefined]) {
       expect(await phone(m as string, []), String(m)).toEqual({ ok: false, error: PHONE_DENIED })
       expect(phoneAllows(m as string), String(m)).toBe(false)
     }

@@ -299,23 +299,71 @@ describe('App 셸', () => {
 })
 
 describe('운영체제 — html 의 data-platform · 위 띠 왼쪽 여백', () => {
-  afterEach(() => document.documentElement.removeAttribute('data-platform'))
-
-  it('위 띠 왼쪽 여백 80px 가 darwin 에서만(html 에 data-platform) — appInfo 의 platform 을 한 번 단다', async () => {
-    ;(window as any).dure.appInfo = async () => ({ version: '0.1.0', packaged: true, platform: 'darwin' })
-    await renderApp()
-    expect(document.documentElement.dataset.platform).toBe('darwin')
-    cleanup()
+  afterEach(() => {
     document.documentElement.removeAttribute('data-platform')
-    vi.resetModules()
-    ;(window as any).dure.appInfo = async () => ({ version: '0.1.0', packaged: true, platform: 'win32' })
-    await renderApp()
-    expect(document.documentElement.dataset.platform).toBe('win32')
+    vi.doUnmock('react-dom/client')
+    vi.doUnmock('../../src/renderer/lib/animeClock')
+    vi.useRealTimers()
   })
 
-  it('appInfo 를 못 받으면 달지 않는다 — Windows 규칙(.top 그대로)', async () => {
+  it('markPlatform — 아는 운영체제만 단다(win32 은 지금처럼 win32) · 없거나 모르는 값이면 달지 않는다', async () => {
+    const { markPlatform } = await import('../../src/renderer/lib/platformMark')
+    for (const p of ['darwin', 'win32', 'linux']) {
+      const el = document.createElement('div')
+      markPlatform(el, p)
+      expect(el.dataset.platform).toBe(p)
+    }
+    for (const p of [undefined, null, '', 'freebsd', 5, { toString: () => 'darwin' }]) {
+      const el = document.createElement('div')
+      markPlatform(el, p)
+      expect(el.hasAttribute('data-platform'), String(p)).toBe(false)
+    }
+  })
+
+  /** PC 진입점(main.tsx)을 불러 React 를 띄우는 순간(createRoot)의 html 을 본다 — 처음 상태·appInfo 는 끝나지 않는다(기다리지 않는다는 것을 보려고) */
+  async function loadEntry(platform: unknown) {
+    const never = new Promise<never>(() => {})
+    const appInfo = vi.fn(() => never)
+    ;(window as any).dure = { ...(window as any).dure, snapshot: () => never, setupState: () => never, appInfo, platform }
+    if (platform === undefined) delete (window as any).dure.platform
+    document.body.innerHTML = '<div id="root"></div>'
+    const atMount: (string | undefined)[] = []
+    vi.useFakeTimers() // 진입점의 1초 간격 시계를 돌리지 않는다
+    vi.doMock('../../src/renderer/lib/animeClock', () => ({ followClockBack: vi.fn() }))
+    vi.doMock('react-dom/client', () => ({
+      createRoot: () => {
+        atMount.push(document.documentElement.dataset.platform)
+        return { render: vi.fn(), unmount: vi.fn() }
+      },
+    }))
+    await import('../../src/renderer/main')
+    return { atMount }
+  }
+
+  it('진입점이 React 를 띄우기 전에 다리(window.dure.platform)의 값을 단다 — appInfo 를 기다리지 않아 mac 신호등이 두레 표지를 가리는 첫 장면이 없다', async () => {
+    // appInfo 는 끝나지 않는다(스토어가 불러도) — 그래도 React 를 띄우는 순간 이미 달려 있다
+    const { atMount } = await loadEntry('darwin')
+    expect(atMount).toEqual(['darwin'])
+    expect(document.documentElement.dataset.platform).toBe('darwin')
+  })
+
+  it('Windows 는 지금처럼 win32 — 다리에 값이 없으면(옛 preload) 달지 않는다(Windows 규칙 그대로)', async () => {
+    expect((await loadEntry('win32')).atMount).toEqual(['win32'])
+    document.documentElement.removeAttribute('data-platform')
+    vi.resetModules()
+    expect((await loadEntry(undefined)).atMount).toEqual([undefined])
+    expect(document.documentElement.hasAttribute('data-platform')).toBe(false)
+  })
+
+  it('App 은 html 의 data-platform 을 건드리지 않는다 — 다는 곳은 진입점 한 곳', async () => {
+    ;(window as any).dure.appInfo = async () => ({ version: '0.1.0', packaged: true, platform: 'darwin' })
     await renderApp()
     expect(document.documentElement.hasAttribute('data-platform')).toBe(false)
+    document.documentElement.dataset.platform = 'win32'
+    cleanup()
+    vi.resetModules()
+    await renderApp()
+    expect(document.documentElement.dataset.platform).toBe('win32')
   })
 
   it('base.css — 신호등 자리 80px 는 [data-platform=darwin] 에만 · .top 의 Windows 창 단추 자리(env titlebar-area) 규칙은 그대로', () => {

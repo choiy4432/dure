@@ -1,6 +1,7 @@
 import type {
   Agent, AgentDescription, RemoteIssue, RemoteIssueKind, SshHostEntry, AgentId, ConversationSummary, EffortLevel, EngineEventMap, AgentStatus, Hold, NotifyPrefs, Decision, HistoryItem, PendingRequest, PlanUsage, RelayMessage, Room, RoomId, SearchResult, SleepBlock, ThemePref, UserPart,
 } from '../engine/types'
+import type { Platform } from '../engine/platform'
 import type { AppEventMap, AppInfo, AppPrefs, ClaudeUpdateState, SetupState, UpdateState } from './appTypes'
 import type { PhonePairOffer, PhoneSettingsChange, PhoneState, TailscaleState } from './phoneTypes'
 
@@ -200,12 +201,17 @@ export interface DureApi {
    * 디스크 파일이 아닌 File(코드로 만든 것 등)이면 빈 글. 화면은 이 경로를 sendUser 의 file part 로만 넘긴다(읽지 않는다)
    */
   pathForFile(file: File): string
+  /**
+   * 이 PC 의 운영체제 — preload 가 바로 실은 글(process.platform, IPC 아님 · 메서드가 아니다). PC 진입점이 React 를 띄우기 전에 html 의
+   * data-platform 으로 단다(appInfo 를 기다리면 mac 신호등이 첫 장면에서 두레 표지를 가린다). 휴대폰의 window.dure(wsApi)엔 없다
+   */
+  readonly platform?: Platform
 }
 
 export const CHANNEL = { invoke: 'dure:invoke', event: 'dure:event' } as const
 
-/** preload 안에서 처리해 invoke 로 가지 않는 것 — 사건 받기(on)·File 경로(pathForFile) */
-type PreloadOnly = 'on' | 'pathForFile'
+/** preload 안에서 처리해 invoke 로 가지 않는 것 — 사건 받기(on)·File 경로(pathForFile)·운영체제(platform, 글) */
+type PreloadOnly = 'on' | 'pathForFile' | 'platform'
 /** invoke 로 부르는 메서드 이름 전부 — METHODS[number] | APP_METHODS[number] 와 같다(아래 ALL_COVERED 가 지킨다) */
 export type ApiMethod = Exclude<keyof DureApi, PreloadOnly>
 

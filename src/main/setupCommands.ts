@@ -14,7 +14,10 @@ import type { ClaudeCommand } from './claudeCommand'
 
 export type Command = { command: string; args: string[] }
 
-/** 공식 설치 스크립트 — 이 길만 쓴다. mac 은 /bin/bash 절대 경로(curl 은 /usr/bin — Finder 의 빈약한 PATH 에도 있다) */
+/**
+ * 공식 설치 스크립트 — 이 길만 쓴다. mac 은 /bin/bash 절대 경로(curl 은 /usr/bin — Finder 의 빈약한 PATH 에도 있다).
+ * mac 은 pipefail 을 먼저 켠다 — 없으면 파이프의 끝 코드는 뒤쪽 bash 의 것이라 curl 이 못 받아도(빈 입력) 0, 설치 실패가 '찾지 못했어요'로 보인다. 공식 명령은 글자 그대로
+ */
 export function installCommand(p: Platform): Command {
   if (p === 'win32') {
     return {
@@ -25,7 +28,7 @@ export function installCommand(p: Platform): Command {
       ],
     }
   }
-  return { command: '/bin/bash', args: ['-c', 'curl -fsSL https://claude.ai/install.sh | bash'] }
+  return { command: '/bin/bash', args: ['-c', 'set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash'] }
 }
 
 /** Test-only: DURE_SETUP_INSTALL (JSON argv 배열) — 설치 명령을 가짜로 바꾼다. index 가 주는 raw 는 설치본에선 걸러진 사본(appEnv) */

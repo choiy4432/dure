@@ -10,6 +10,10 @@ import { App } from './App'
 import { Splash } from './shell/Splash'
 import { getStore } from './state/store'
 import { followClockBack } from './lib/animeClock'
+import { markPlatform } from './lib/platformMark'
+
+// 운영체제를 html 에 — 무엇이든 그리기 전에(preload 가 다리에 바로 실은 값). appInfo 를 기다리면 mac 신호등이 첫 장면에서 두레 표지를 가린다
+markPlatform(document.documentElement, window.dure?.platform)
 
 // 파일을 입력창 밖에 떨어뜨리면 창이 그 파일로 넘어가 버린다 — 막는다(입력창은 스스로 받는다)
 window.addEventListener('dragover', e => e.preventDefault())

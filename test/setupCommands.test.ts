@@ -22,8 +22,11 @@ describe('installCommand', () => {
     expect(installCommand('win32')).toEqual({ command: 'powershell.exe', args: PS_ARGS })
   })
 
-  it('darwin_설치는_/bin/bash_-c_curl…|_bash — 공식 install.sh, 절대 경로라 PATH 와 무관', () => {
-    expect(installCommand('darwin')).toEqual({ command: '/bin/bash', args: ['-c', 'curl -fsSL https://claude.ai/install.sh | bash'] })
+  it('darwin_설치는_/bin/bash_-c_curl…|_bash — 공식 install.sh, 절대 경로라 PATH 와 무관 · pipefail 이라 받기 실패가 설치 실패로', () => {
+    // pipefail 이 없으면 파이프의 끝 코드는 마지막 bash 의 것 — curl 이 못 받아도(빈 입력) 0 이라 '설치가 끝났는데 claude 를 찾지 못했어요' 가 뜬다
+    expect(installCommand('darwin')).toEqual({ command: '/bin/bash', args: ['-c', 'set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash'] })
+    // 공식 명령 자체는 글자 그대로(준비 화면이 보여 주는 '직접 할 명령'과 같은 줄)
+    expect(installCommand('darwin').args[1]!.endsWith('curl -fsSL https://claude.ai/install.sh | bash')).toBe(true)
   })
 
   it('DURE_SETUP_INSTALL(JSON argv 배열)이 있으면 그것 — 틀리면 던진다(시험용 손잡이 그대로)', () => {

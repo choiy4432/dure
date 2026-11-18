@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -236,7 +236,7 @@ describe('registerIpc', () => {
 
   it('rejects methods outside the whitelist', async () => {
     const { call } = setup()
-    for (const m of ['shutdown', 'on', 'constructor', '__proto__', 'start']) {
+    for (const m of ['shutdown', 'on', 'pathForFile', 'platform', 'constructor', '__proto__', 'start']) {
       expect(await call(m)).toMatchObject({ ok: false })
     }
   })
@@ -732,6 +732,52 @@ describe('registerIpc', () => {
     expect(await callFrom(fromApp, 'addRoom', 'x')).toEqual({ ok: true, value: { id: 'r2' } })
     expect((await callFrom({ senderFrame: { url: `${APP_URL}#/x` } }, 'snapshot')).ok).toBe(true)
     expect((await callFrom({ senderFrame: { url: `${APP_URL}?a=1` } }, 'snapshot')).ok).toBe(true)
+  })
+})
+
+/**
+ * preload — 창 쪽 다리(window.dure). electron 은 가짜로(진짜 contextBridge·ipcRenderer 없이) 불러 무엇을 싣는지만 본다.
+ * 운영체제(platform)는 IPC 가 아니라 다리에 바로 싣는다 — 화면이 React 를 띄우기 전에 html 에 달 수 있게(appInfo 를 기다리면 mac 신호등이 잠깐 두레 표지를 가린다)
+ */
+describe('preload — window.dure', () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', realPlatform)
+    vi.doUnmock('electron')
+    vi.resetModules()
+  })
+
+  async function loadPreload(platform?: string): Promise<Record<string, unknown>> {
+    if (platform) Object.defineProperty(process, 'platform', { ...realPlatform, value: platform })
+    const expose = vi.fn()
+    vi.resetModules()
+    vi.doMock('electron', () => ({
+      contextBridge: { exposeInMainWorld: expose },
+      ipcRenderer: { invoke: vi.fn(), on: vi.fn(), removeListener: vi.fn() },
+      webUtils: { getPathForFile: vi.fn(() => '') },
+    }))
+    await import('../src/preload/index')
+    expect(expose).toHaveBeenCalledTimes(1)
+    expect(expose.mock.calls[0]![0]).toBe('dure')
+    return expose.mock.calls[0]![1] as Record<string, unknown>
+  }
+
+  it('platform 을 글로 바로 싣는다 — 이 PC 의 process.platform 그대로(Windows 면 win32, 지금 html 에 다는 값과 같다)', async () => {
+    const api = await loadPreload()
+    expect(api.platform).toBe(process.platform)
+    expect(typeof api.platform).toBe('string')
+  })
+
+  it('mac 이면 darwin · win32 면 win32 — 함수가 아니다(부르지 않고 읽는다)', async () => {
+    expect((await loadPreload('darwin')).platform).toBe('darwin')
+    expect((await loadPreload('win32')).platform).toBe('win32')
+  })
+
+  it('나머지 다리는 그대로 — 엔진·앱 메서드 전부 · on · pathForFile, 그 밖의 이름은 platform 하나만 늘었다', async () => {
+    const api = await loadPreload()
+    const keys = Object.keys(api).sort()
+    expect(keys).toEqual([...METHODS, ...APP_METHODS, 'on', 'pathForFile', 'platform'].sort())
+    for (const k of keys) if (k !== 'platform') expect(typeof api[k], k).toBe('function')
   })
 })
 

@@ -266,7 +266,7 @@ code {
   -webkit-app-region: drag;
 }
 
-/* mac — 신호등(닫기·최소화·확대)이 위 띠 왼쪽에 있다(main windowOptions 의 trafficLightPosition 16·16) — 그만큼 비운다. html 의 data-platform 은 App 이 단다 */
+/* mac — 신호등(닫기·최소화·확대)이 위 띠 왼쪽에 있다(main windowOptions 의 trafficLightPosition 16·16) — 그만큼 비운다. html 의 data-platform 은 진입점(main.tsx)이 React 를 띄우기 전에 단다(lib/platformMark) */
 [data-platform='darwin'] .top {
   padding-left: 80px;
 }
