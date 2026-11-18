@@ -1,5 +1,11 @@
 // 서버(SSH) 방 문제의 글 — 엔진의 대화 알림 줄과 화면의 안내 띠가 같은 글자를 쓰도록 한 곳에 둔다(설계 4.6 문구 표).
+import type { Platform } from '../engine/platform'
 import type { RemoteIssue } from '../engine/types'
+
+/** 이 PC 에 ssh 가 없다 — Windows 는 내장 OpenSSH(지금 글 그대로), mac 은 /usr/bin/ssh. 아직 모르면 Windows 글 */
+export function noSshText(platform: Platform | null | undefined): string {
+  return platform === 'darwin' ? 'ssh 를 찾지 못했어요' : '윈도우 OpenSSH 를 찾지 못했어요'
+}
 
 /** 문제 한 줄 — login 은 안내 띠 제목(설명은 REMOTE_LOGIN_HELP). 접속 실패는 ssh 오류 첫 줄을 ' — ' 뒤에 */
 export function remoteIssueText(host: string, issue: RemoteIssue): string {

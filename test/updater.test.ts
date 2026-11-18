@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createUpdater, RELEASE_URL, type UpdaterLike } from '../src/main/updater'
+import { createUpdater, RELEASE_URL, RELEASES_URL, releasePageUrl, type UpdaterLike } from '../src/main/updater'
 import { createQuitControl } from '../src/main/quit'
 import type { UpdateState } from '../src/shared/appTypes'
 
@@ -35,6 +35,66 @@ function setup(over: Record<string, unknown> = {}, beforeInstall: () => Promise<
   const up = createUpdater({ updater: u, current: '0.1.0', beforeInstall, emit: (s) => states.push(s) })
   return { u, handlers, states, up }
 }
+
+describe('createUpdater — 운영체제', () => {
+  it('darwin_은_확인을_안_하고_{kind:\'manual\',url} — 서명 없는 mac 판은 받을 수도 설치할 수도 없다', async () => {
+    const { u } = fakeUpdater()
+    const before = { autoDownload: u.autoDownload, autoInstallOnAppQuit: u.autoInstallOnAppQuit }
+    const states: UpdateState[] = []
+    const beforeInstall = vi.fn(async () => {})
+    const up = createUpdater({ updater: u, current: '0.1.0', beforeInstall, emit: (s) => states.push(s), platform: 'darwin' })
+    const manual = { kind: 'manual', url: 'https://github.com/choiy4432/dure/releases' }
+    expect(RELEASES_URL).toBe(manual.url)
+    expect(up.state()).toEqual(manual)
+    expect(await up.check()).toEqual(manual)
+    await up.download()
+    await up.install()
+    expect(up.state()).toEqual(manual)
+    expect(u.checkForUpdates).not.toHaveBeenCalled()
+    expect(u.downloadUpdate).not.toHaveBeenCalled()
+    expect(u.quitAndInstall).not.toHaveBeenCalled()
+    expect(u.on).not.toHaveBeenCalled()
+    expect(beforeInstall).not.toHaveBeenCalled()
+    // electron-updater 설정도 건드리지 않는다(끌 때 설치 같은 것이 켜지지 않게)
+    expect({ autoDownload: u.autoDownload, autoInstallOnAppQuit: u.autoInstallOnAppQuit }).toEqual(before)
+    expect(states).toEqual([])
+  })
+
+  it('darwin — electron-updater 를 만들지도 않는다(함수로 넘기면 부르지 않는다 — autoUpdater getter 가 MacUpdater 를 만든다)', async () => {
+    const load = vi.fn(() => fakeUpdater().u)
+    const up = createUpdater({ updater: load, current: '0.1.0', beforeInstall: async () => {}, emit: () => {}, platform: 'darwin' })
+    await up.check()
+    expect(load).not.toHaveBeenCalled()
+    expect(up.state().kind).toBe('manual')
+  })
+
+  it('darwin 개발 실행(updater 없음)은 dev 그대로', () => {
+    const up = createUpdater({ updater: null, current: '0.1.0', beforeInstall: async () => {}, emit: () => {}, platform: 'darwin' })
+    expect(up.state()).toEqual({ kind: 'dev' })
+  })
+
+  it('win32 그대로 — 함수로 넘겨도 한 번 불러 지금처럼 확인한다 · platform 을 안 넘기면 win32 와 같다', async () => {
+    for (const platform of ['win32', undefined] as const) {
+      const { u } = fakeUpdater()
+      const load = vi.fn(() => u)
+      const states: UpdateState[] = []
+      const up = createUpdater({ updater: load, current: '0.1.0', beforeInstall: async () => {}, emit: (s) => states.push(s), ...(platform ? { platform } : {}) })
+      expect(load).toHaveBeenCalledTimes(1)
+      expect(u.autoDownload).toBe(false)
+      expect(u.autoInstallOnAppQuit).toBe(true)
+      expect((await up.check()).kind).toBe('available')
+      expect(states.map((x) => x.kind)).toEqual(['checking', 'available'])
+    }
+  })
+
+  it('releasePageUrl — 릴리스 페이지 단추가 여는 곳: manual 은 릴리스 목록, 버전이 있으면 그 버전, 그 밖엔 없음', () => {
+    expect(releasePageUrl({ kind: 'manual', url: RELEASES_URL })).toBe(RELEASES_URL)
+    expect(releasePageUrl({ kind: 'available', version: '0.2.0', current: '0.1.0', highlights: [], url: 'x' })).toBe(RELEASE_URL('0.2.0'))
+    expect(releasePageUrl({ kind: 'ready', version: '0.2.0' })).toBe(RELEASE_URL('0.2.0'))
+    expect(releasePageUrl({ kind: 'error', message: 'x', version: null })).toBeNull()
+    for (const kind of ['dev', 'idle', 'checking', 'none'] as const) expect(releasePageUrl({ kind })).toBeNull()
+  })
+})
 
 describe('createUpdater', () => {
   it('dev — updater 없음', async () => {

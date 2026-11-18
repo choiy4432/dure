@@ -6152,7 +6152,8 @@ test('갈래 — 그림은 새 에이전트 칸으로 복사, 복사 못 한 그
 
 // ── 서버(SSH) 방 ──
 const FAKE_SSH = path.resolve('test/fakeSsh.mjs');
-const NO_SSH = '윈도우 OpenSSH 를 찾지 못했어요';
+// 엔진은 platform 을 안 넘기면 process.platform — mac 러너에선 mac 글이다(Windows 글은 그대로)
+const NO_SSH = process.platform === 'darwin' ? 'ssh 를 찾지 못했어요' : '윈도우 OpenSSH 를 찾지 못했어요';
 const REMOTE_ABS = '서버 폴더는 / 로 시작하는 전체 경로로 적어 주세요';
 const VERSION = '2.1.304';
 /**
@@ -6285,6 +6286,15 @@ test('ssh: sshAvailable — 설정한 ssh 실행 파일이 있을 때만 · 없�
   const none = await start({}, false, { dataDir: path.join(dir, 'data3') }); // ssh 손잡이 없음
   expect(none.sshAvailable()).toBe(false);
   expect(() => none.addRoom('서버', { host: 'dev' })).toThrow(NO_SSH);
+});
+
+test('ssh: 운영체제별 없음 글 — win32 는 윈도우 OpenSSH, darwin 은 ssh(/usr/bin/ssh 를 main 이 넘긴다)', async () => {
+  const win = await start({}, false, { dataDir: path.join(dir, 'data-w'), ssh: { command: path.join(dir, 'no', 'ssh.exe') }, platform: 'win32' });
+  expect(() => win.addRoom('서버', { host: 'dev' })).toThrow('윈도우 OpenSSH 를 찾지 못했어요');
+  const mac = await start({}, false, { dataDir: path.join(dir, 'data-m'), ssh: { command: path.join(dir, 'no', 'ssh') }, platform: 'darwin' });
+  expect(() => mac.addRoom('서버', { host: 'dev' })).toThrow('ssh 를 찾지 못했어요');
+  expect(() => mac.addRoom('서버', { host: 'dev' })).not.toThrow(/윈도우|OpenSSH/);
+  await expect(mac.checkRemote('dev')).rejects.toThrow('ssh 를 찾지 못했어요');
 });
 
 test('서버 방 — engine.addRoom 저장 · 에이전트 폴더는 서버 전체 경로(이 PC 에 없어도) · 상대 경로는 거절 · 올바르지 않은 host 거절', async () => {

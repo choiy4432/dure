@@ -483,6 +483,20 @@ describe('SettingsDialog — 두레', () => {
     expect(checkUpdate).not.toHaveBeenCalled()
   })
 
+  it('manual(mac 판) — 이 Mac 판은 자동 업데이트가 없어요 + [릴리스 페이지] → openReleasePage · 확인·받기 단추 없음', async () => {
+    updateNow = { kind: 'manual', url: 'https://github.com/choiy4432/dure/releases' }
+    const openReleasePage = vi.fn(async () => {})
+    ;(window as any).dure.openReleasePage = openReleasePage
+    await renderApp()
+    const dlg = open()
+    expect(within(dlg).getByText('이 Mac 판은 자동 업데이트가 없어요')).toBeTruthy()
+    expect(within(dlg).queryByRole('button', { name: '업데이트 확인' })).toBeNull()
+    expect(within(dlg).queryByRole('button', { name: '업데이트' })).toBeNull()
+    await act(async () => { fireEvent.click(within(dlg).getByRole('button', { name: '릴리스 페이지' })) })
+    expect(openReleasePage).toHaveBeenCalledTimes(1)
+    expect(checkUpdate).not.toHaveBeenCalled()
+  })
+
   it('dev — 확인 단추 없이 개발 실행 안내', async () => {
     updateNow = { kind: 'dev' }
     await renderApp()

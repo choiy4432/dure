@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import QRCode from 'qrcode'
+import type { Platform } from '../../engine/platform'
 import { ANDROID_PACKAGE, ANDROID_TEST_PACKAGE } from '../../shared/androidApp'
 import { EVENT_NAMES } from '../../shared/ipcContract'
 import {
@@ -49,6 +50,17 @@ const E = {
 } as const
 
 export type IdleState = 'active' | 'idle' | 'locked' | 'unknown'
+
+/** mac 판에서 휴대폰 연결 일을 부르면 — 화면은 휴대폰 탭에 '이 Mac 판에선 아직 못 써요' 를 보이고 부르지 않는다 */
+export const PHONE_UNSUPPORTED = '이 Mac 판에선 아직 휴대폰 연결을 못 써요'
+
+/**
+ * 휴대폰 연결을 만든다 — mac 판은 아직 만들지 않는다(null): Tailscale CLI 자리·휴대폰의 폴더 검사·로그인 항목이 Windows 꼴이다(나중).
+ * 만들지 않으면 서버·tailscale 찾기·serve 정리·절전 막기·로그인 항목을 하나도 부르지 않는다(make 를 부르지 않는다)
+ */
+export function phoneControllerFor(p: Platform, make: () => PhoneController): PhoneController | null {
+  return p === 'darwin' ? null : make()
+}
 
 export interface PhoneControllerOptions {
   /** <userData> — phone.json·phone-inbox 가 여기 */

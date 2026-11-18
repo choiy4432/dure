@@ -1,5 +1,6 @@
 import { Search, Settings } from 'lucide-react'
-import { SEARCH } from '../lib/words'
+import { SEARCH, searchKeys } from '../lib/words'
+import { useDure } from '../state/store'
 import { RoomSwitcher } from './RoomSwitcher'
 import { TodoButton } from './TodoButton'
 import { BrandMark } from './BrandMark'
@@ -22,10 +23,11 @@ interface Props {
 /**
  * 위 띠 48px = 창 제목 표시줄 — 두레 마크(판 없는 D, 읽는 이름 '두레') · 세로선 · 방 버튼(방 목록) · 할 일 · 여백 · 찾기 · 옮기기 칸(Ctrl K) ·
  * 휴대폰 알약(켜져 있을 때만) · 설정.
- * 오른쪽 끝은 Windows 단추 자리(main titleBarOverlay).
+ * 오른쪽 끝은 Windows 단추 자리(main titleBarOverlay). mac 은 왼쪽 끝이 신호등 자리(base.css [data-platform='darwin'] .top), 찾기 표시는 ⌘K.
  * 빈 곳을 끌면 창이 옮겨지고 두 번 누르면 최대화(base.css .top 의 -webkit-app-region). 사용량은 아래 상태 띠, 에이전트 추가는 관계도로.
  */
 export function TopBar({ hasRoom, settingsDisabled, onSettings, onPhone, onSearch, searchOpen = false }: Props) {
+  const keys = searchKeys(useDure(s => s.app.info?.platform))
   return (
     <header className="top">
       <BrandMark />
@@ -46,12 +48,12 @@ export function TopBar({ hasRoom, settingsDisabled, onSettings, onPhone, onSearc
           aria-label={SEARCH.title}
           aria-haspopup="dialog"
           aria-expanded={searchOpen}
-          aria-keyshortcuts="Control+K"
+          aria-keyshortcuts={keys.aria}
           onClick={onSearch}
         >
           <Search className="i" aria-hidden="true" />
           <span className="top-find-t">{SEARCH.title}</span>
-          <kbd className="kbd" aria-hidden="true">{SEARCH.key}</kbd>
+          <kbd className="kbd" aria-hidden="true">{keys.key}</kbd>
         </button>
       )}
       {onPhone && <PhonePill onOpen={onPhone} />}

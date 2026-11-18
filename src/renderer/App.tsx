@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { LucideProvider } from 'lucide-react'
 import { getStore, useDure } from './state/store'
 import { effectiveSetup } from './state/selectors'
@@ -37,6 +37,11 @@ export function App() {
     }
   })
   const announced = useAttention()
+  // 운영체제를 html 에 한 번 단다 — CSS 가 mac 신호등 자리(위 띠 왼쪽 80px)를 비운다(base.css [data-platform='darwin']). 모르면 달지 않는다(Windows 규칙 그대로)
+  const platform = useDure(s => s.app.info?.platform)
+  useEffect(() => {
+    if (platform) document.documentElement.dataset.platform = platform
+  }, [platform])
   const fork = useDure(s => s.forkDraft)
   /** 파워 모드 덮개가 앱 틀을 다 가린다 — 고른 에이전트의 대화 패널은 덮개 안 하나만 그린다(두 벌이면 입력창 커서·스크롤·기록 불러오기 효과가 두 번 돈다) */
   const powerOn = useDure(s => s.power.on)

@@ -1,7 +1,16 @@
+import type { Platform } from '../engine/platform'
 import type { UpdateState } from '../shared/appTypes'
 import { releaseHighlights, type ReleaseNotes } from './releaseNotes'
 
-export const RELEASE_URL = (v: string): string => `https://github.com/choiy4432/dure/releases/tag/v${v}`
+/** 릴리스 목록 — mac 판(자동 업데이트 없음)의 [릴리스 페이지] */
+export const RELEASES_URL = 'https://github.com/choiy4432/dure/releases'
+export const RELEASE_URL = (v: string): string => `${RELEASES_URL}/tag/v${v}`
+
+/** 릴리스 페이지 단추가 여는 곳 — mac 판은 릴리스 목록, 버전을 알면 그 버전, 그 밖엔 없음(열지 않는다) */
+export function releasePageUrl(s: UpdateState): string | null {
+  if (s.kind === 'manual') return s.url
+  return 'version' in s && s.version ? RELEASE_URL(s.version) : null
+}
 
 /** electron-updater `autoUpdater` 에서 쓰는 것만 */
 export interface UpdaterLike {
@@ -25,17 +34,25 @@ export interface Updater {
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 const INSTALL_FAILED = '업데이트를 설치하지 못했어요'
 
+/** 바뀌지 않는 상태 하나 — 확인·받기·설치는 아무것도 안 한다 */
+const fixed = (s: UpdateState): Updater => ({ state: () => s, check: async () => s, download: async () => {}, install: async () => {} })
+
+/**
+ * updater — 설치본은 electron-updater(또는 그것을 만드는 함수 — 부를 때까지 만들지 않는다), 개발 실행은 null('dev').
+ * platform darwin(mac 판)은 확인하지 않는다: 서명·공증이 없어 Squirrel.Mac 이 받아도 설치를 못 하고, 릴리스에 latest-mac.yml 도 없다.
+ * 그때는 electron-updater 를 만들지도(함수를 부르지도) 설정을 건드리지도 않고 { kind: 'manual', url: 릴리스 목록 } 하나로 둔다.
+ * platform 을 안 넘기면 지금(Windows) 길 그대로
+ */
 export function createUpdater(o: {
-  updater: UpdaterLike | null
+  updater: UpdaterLike | (() => UpdaterLike) | null
   current: string
   beforeInstall: () => Promise<void>
   emit: (s: UpdateState) => void
+  platform?: Platform
 }): Updater {
-  const u = o.updater
-  if (!u) {
-    const dev: UpdateState = { kind: 'dev' }
-    return { state: () => dev, check: async () => dev, download: async () => {}, install: async () => {} }
-  }
+  if (!o.updater) return fixed({ kind: 'dev' })
+  if (o.platform === 'darwin') return fixed({ kind: 'manual', url: RELEASES_URL })
+  const u = typeof o.updater === 'function' ? o.updater() : o.updater
   u.autoDownload = false
   u.autoInstallOnAppQuit = true
 

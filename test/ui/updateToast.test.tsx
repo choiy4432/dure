@@ -31,6 +31,15 @@ async function mount() {
   return { ...render(<UpdateToast />), store: getStore() }
 }
 
+describe('UpdateToast — mac 판', () => {
+  it('manual(자동 업데이트 없는 mac 판)엔 토스트가 없다', async () => {
+    update = { kind: 'manual', url: 'https://github.com/choiy4432/dure/releases' }
+    const { container } = await mount()
+    expect(container.innerHTML).toBe('')
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+})
+
 describe('UpdateToast', () => {
   it('available: 제목·버전·바뀐 점 3줄, 업데이트 → downloadUpdate, 모두 보기 → openReleasePage', async () => {
     update = AVAILABLE

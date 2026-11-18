@@ -1,6 +1,6 @@
 import { getStore, useDure } from '../../state/store'
 import { workingCount } from '../../state/selectors'
-import { SEARCH, SETTINGS_UPDATE as W, updateErrorWhy } from '../../lib/words'
+import { SEARCH, searchKeys, SETTINGS_UPDATE as W, updateErrorWhy } from '../../lib/words'
 import { Row, Section, SwitchRow, useApply } from './parts'
 
 /** 업데이트 단추는 따로 바로 — 못 해도 결과 줄(사건)이 말해 준다 */
@@ -23,6 +23,7 @@ export function AboutPane({ onReplayTour }: { onReplayTour: () => void }) {
       <span role="status" className="sx-st">
         <span className={update.kind === 'error' ? 'upd-t bad' : 'upd-t'}>
           {update.kind === 'dev' && W.dev}
+          {update.kind === 'manual' && W.manual}
           {update.kind === 'checking' && W.checking}
           {update.kind === 'none' && W.none}
           {update.kind === 'available' && W.available(update.version)}
@@ -42,7 +43,13 @@ export function AboutPane({ onReplayTour }: { onReplayTour: () => void }) {
         <Row name={info ? W.version(info.version) : '두레'} desc={status}>
           {({ describedBy }) => (
           <div className="sx-btns">
-            {update.kind !== 'dev' && (
+            {/* mac 판 — 확인·받기 없이 릴리스 목록을 기본 브라우저로(main 의 openReleasePage) */}
+            {update.kind === 'manual' && (
+              <button type="button" className="btn sec sm" aria-describedby={describedBy} onClick={act(() => window.dure.openReleasePage())}>
+                {W.releasePage}
+              </button>
+            )}
+            {update.kind !== 'dev' && update.kind !== 'manual' && (
               // 다 받아 둔 뒤(ready)엔 확인할 게 없다 — 다시 확인해도 준비 상태를 바꾸지 않는다(updater)
               <button
                 type="button"
@@ -89,7 +96,7 @@ export function AboutPane({ onReplayTour }: { onReplayTour: () => void }) {
         </Row>
         <Row name="단축키">
           <span className="sx-keys">
-            <kbd className="kbd">{SEARCH.shortcut}</kbd> {SEARCH.title}
+            <kbd className="kbd">{searchKeys(info?.platform).shortcut}</kbd> {SEARCH.title}
           </span>
         </Row>
       </Section>

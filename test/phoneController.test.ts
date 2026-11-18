@@ -7,7 +7,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import WebSocket from 'ws'
 import type { Dispatch } from '../src/main/dispatch'
-import { createPhoneController, phoneStaticDir, PHONE_RESUME_CHECK_MS, type PhoneController, type PhoneControllerOptions } from '../src/main/phone/phoneController'
+import { createPhoneController, phoneControllerFor, phoneStaticDir, PHONE_RESUME_CHECK_MS, PHONE_UNSUPPORTED, type PhoneController, type PhoneControllerOptions } from '../src/main/phone/phoneController'
 import { startPhoneServer, type PhoneClient, type PhoneServer, type PhoneServerOptions } from '../src/main/phone/phoneServer'
 import { EVENT_NAMES } from '../src/shared/ipcContract'
 import { PHONE_DENIED } from '../src/shared/phoneAccess'
@@ -1464,4 +1464,14 @@ test('routeRecheckEvery10min — 켜짐 + 길 열림인 동안만 10분 타이�
   expect(timers.filter((t) => !t.stopped)).toHaveLength(1)
   await c.dispose()
   expect(timers.every((t) => t.stopped)).toBe(true)
+})
+
+test('phoneControllerFor — mac 판은 휴대폰 연결을 만들지 않는다(서버·Tailscale·로그인 항목을 하나도 부르지 않는다) · win32 는 지금처럼 만든다', () => {
+  const fake = {} as PhoneController
+  const make = vi.fn(() => fake)
+  expect(phoneControllerFor('darwin', make)).toBeNull()
+  expect(make).not.toHaveBeenCalled()
+  expect(phoneControllerFor('win32', make)).toBe(fake)
+  expect(make).toHaveBeenCalledTimes(1)
+  expect(PHONE_UNSUPPORTED).toBe('이 Mac 판에선 아직 휴대폰 연결을 못 써요')
 })

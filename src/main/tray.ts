@@ -1,6 +1,8 @@
 // 트레이 — 늘 있다(2026-11-06 사용자 결정 — 전엔 휴대폰 연결을 켜 둔 동안만). 창을 닫으면(×) 두레는 끄지 않고 창을 숨긴다 —
 // 에이전트는 뒤에서 계속 일하고, 끄기는 트레이의 '두레 끄기'. 휴대폰 연결이 켜져 있으면 메뉴에 '휴대폰 연결 끄기'가 더 생긴다(설계 §4.4).
 // electron 없이 시험할 수 있게 Tray·창·알림은 주입한다(index.ts 가 진짜를 끼운다)
+import path from 'node:path'
+import type { Platform } from '../engine/platform'
 
 /** 트레이 메뉴 — 이 차례로(phoneOff 는 휴대폰 연결이 켜져 있을 때만) */
 export const TRAY_MENU = { open: '두레 열기', phoneOff: '휴대폰 연결 끄기', quit: '두레 끄기' } as const
@@ -9,6 +11,21 @@ export const TRAY_TOOLTIP = '두레'
 export const TRAY_TOOLTIP_PHONE = '두레 · 휴대폰 연결 켜짐'
 /** 처음 숨을 때 한 번 — Windows 알림 본문(제목은 '두레') */
 export const TRAY_TIP = '두레는 트레이에서 계속 돌아요'
+/** mac — 창을 닫으면 숨고 Dock 아이콘이 다시 연다(트레이 대신 메뉴 막대·Dock) */
+const TRAY_TIP_DARWIN = '창을 닫아도 두레는 계속 돌아요 — Dock 의 두레 아이콘을 누르면 다시 열려요'
+
+/** 처음 숨을 때 알림 본문 — win32 는 TRAY_TIP 그대로 */
+export function trayTip(p: Platform): string {
+  return p === 'darwin' ? TRAY_TIP_DARWIN : TRAY_TIP
+}
+
+/** mac 메뉴 막대 아이콘 — 검정 + 알파 PNG(scripts/icon/build.mjs). 이름이 Template 로 끝나야 macOS 가 다크·라이트에 맞춰 칠하고, 옆의 @2x 를 레티나에 쓴다 */
+export const TRAY_TEMPLATE = 'trayTemplate.png'
+
+/** 트레이 아이콘 파일 — win32 는 창과 같은 앱 아이콘(.ico) 그대로. mac 은 ICO 를 못 읽어(빈 그림 → 안 보이는 메뉴 막대 항목) 템플릿 PNG */
+export function trayIconPath(p: Platform, o: { appIcon: string; resourcesDir: string }): string {
+  return p === 'darwin' ? path.join(o.resourcesDir, TRAY_TEMPLATE) : o.appIcon
+}
 
 export type CloseAction = 'hide' | 'close'
 
@@ -68,9 +85,10 @@ export interface TrayControl {
   active(): boolean
   /**
    * 창 'close' — closeDecision 이 hide 면 막고(preventDefault) 숨긴 뒤 처음 한 번 안내.
-   * 숨긴 창엔 늘 트레이가 있다: 아직 트레이가 없으면 여기서 만들고, 못 만들면 숨기지 않고 닫는다(창도 트레이도 없는 두레가 되지 않게)
+   * 숨긴 창엔 늘 트레이가 있다: 아직 트레이가 없으면 여기서 만들고, 못 만들면 숨기지 않고 닫는다(창도 트레이도 없는 두레가 되지 않게).
+   * dock(mac) — Dock 아이콘이 늘 창을 되찾아 주니(activate) 트레이를 못 만들어도 숨긴다
    */
-  close(e: { preventDefault(): void }, o: { quitting: boolean; hide(): void }): CloseAction
+  close(e: { preventDefault(): void }, o: { quitting: boolean; hide(): void; dock?: boolean }): CloseAction
   /** 두레를 끌 때 — 트레이를 거두고, 그 뒤엔 다시 만들지 않는다. 여러 번 불러도 한 번 */
   dispose(): void
 }
@@ -123,7 +141,9 @@ export function createTrayControl(o: TrayControlOptions): TrayControl {
     active: () => tray !== null,
 
     close(e, c) {
-      if (closeDecision(c) === 'close' || !ensure()) return 'close'
+      if (closeDecision(c) === 'close') return 'close'
+      // 트레이를 늘 만들어 본다(mac 도 메뉴 막대 아이콘) — 못 만들었을 때 숨겨도 되는 건 Dock 이 있을 때뿐
+      if (!ensure() && !c.dock) return 'close'
       e.preventDefault()
       c.hide()
       safely('첫 안내', o.notifyOnce)

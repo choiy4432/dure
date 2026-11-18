@@ -1134,3 +1134,28 @@ describe('안드로이드 앱 칸', () => {
     expect(screen.queryByRole('dialog', { name: '안드로이드 앱 받기' })).toBeNull()
   })
 })
+
+describe('mac 판 — 휴대폰 연결은 아직', () => {
+  it('darwin 이면 휴대폰 탭에 이 Mac 판에선 아직 못 써요 · 켜기 스위치·짝 맺기·로그인 켜기 없음 · Tailscale 확인을 부르지 않는다', async () => {
+    api.appInfo = async () => ({ version: '0.1.0', packaged: true, platform: 'darwin' })
+    // main 은 mac 에서 휴대폰 연결을 만들지 않는다 — phoneState 가 거절한다
+    api.phoneState = vi.fn(async () => { throw new Error('이 Mac 판에선 아직 휴대폰 연결을 못 써요') })
+    await renderApp()
+    const { dlg } = await openPhone()
+    expect(dlg.textContent).toContain('이 Mac 판에선 아직 못 써요')
+    expect(within(dlg).queryAllByRole('switch')).toEqual([])
+    expect(within(dlg).queryByRole('button', { name: '휴대폰 짝 맺기' })).toBeNull()
+    expect(dlg.textContent).not.toContain('Windows')
+    expect(api.phoneCheck).not.toHaveBeenCalled()
+    expect(api.setPhone).not.toHaveBeenCalled()
+  })
+
+  it('darwin 이어도 상태를 받았으면(있을 수 없지만) 켜기를 보이지 않는다', async () => {
+    api.appInfo = async () => ({ version: '0.1.0', packaged: true, platform: 'darwin' })
+    await renderApp()
+    const { dlg } = await openPhone()
+    expect(dlg.textContent).toContain('이 Mac 판에선 아직 못 써요')
+    expect(within(dlg).queryAllByRole('switch')).toEqual([])
+    expect(api.phoneCheck).not.toHaveBeenCalled()
+  })
+})

@@ -1,4 +1,5 @@
 // 두레 아이콘 굽기 — resources/icon/*.svg → resources/icon.png(256) · resources/icon.ico(16~256, PNG 칸)
+//   · mac: resources/trayTemplate.png(16) · trayTemplate@2x.png(32) · icon-1024.png
 // 작은 크기는 따로 그린 판을 쓴다: 16 = dure-16.svg · 20·24 = dure-24.svg · 32~48 = dure-48.svg · 64 이상 = dure.svg
 // 쓰는 법: node scripts/icon/build.mjs   (Playwright 크로미움으로 그린다 — 다른 크로미움이면 CHROMIUM_PATH)
 import fs from 'node:fs'
@@ -36,6 +37,20 @@ for (const m of MOBILE) {
   await page.setContent(`<!doctype html><html><body style="margin:0;background:${m.opaque ?? 'transparent'}"><div style="width:${m.size}px;height:${m.size}px">${svg.replace('<svg ', `<svg width="${m.size}" height="${m.size}" `)}</div></body></html>`)
   fs.writeFileSync(path.join(SRC, 'mobile', m.file), await page.screenshot({ omitBackground: !m.opaque, clip: { x: 0, y: 0, width: m.size, height: m.size } }))
 }
+// mac — resources/: 메뉴 막대(트레이) 템플릿 16 · @2x 32(dure-badge.svg 를 검정으로 — template 는 brightness(0): 색은 0, 알파는 그대로.
+// macOS 는 알파만 보고 다크·라이트에 맞춰 칠한다 — 파일 이름이 …Template 로 끝나야 한다) · 번들 아이콘 1024(dure.svg — electron-builder 가 icns 로)
+const MAC = [
+  { file: 'trayTemplate.png', size: 16, svg: 'dure-badge.svg', template: true },
+  { file: 'trayTemplate@2x.png', size: 32, svg: 'dure-badge.svg', template: true },
+  { file: 'icon-1024.png', size: 1024, svg: 'dure.svg', template: false },
+]
+for (const m of MAC) {
+  const svg = fs.readFileSync(path.join(SRC, m.svg), 'utf8')
+  await page.setViewportSize({ width: m.size, height: m.size })
+  const filter = m.template ? 'filter:brightness(0);' : ''
+  await page.setContent(`<!doctype html><html><body style="margin:0;background:transparent"><div style="width:${m.size}px;height:${m.size}px;${filter}">${svg.replace('<svg ', `<svg width="${m.size}" height="${m.size}" `)}</div></body></html>`)
+  fs.writeFileSync(path.join(ROOT, 'resources', m.file), await page.screenshot({ omitBackground: true, clip: { x: 0, y: 0, width: m.size, height: m.size } }))
+}
 await browser.close()
 
 // ICO — 머리 6바이트 + 칸마다 16바이트 + PNG 그대로(Vista 이후 모든 크기에 PNG 칸을 읽는다)
@@ -59,4 +74,4 @@ const dir = pngs.map(({ size, data }) => {
 })
 fs.writeFileSync(path.join(ROOT, 'resources/icon.ico'), Buffer.concat([head, ...dir, ...pngs.map((p) => p.data)]))
 fs.writeFileSync(path.join(ROOT, 'resources/icon.png'), pngs.find((p) => p.size === 256).data)
-console.log('icon.ico', pngs.map((p) => p.size).join(' · '), '/ icon.png 256')
+console.log('icon.ico', pngs.map((p) => p.size).join(' · '), '/ icon.png 256 / mac:', MAC.map((m) => m.file).join(' · '))

@@ -42,8 +42,18 @@ describe('resolveSshCommand', () => {
     expect(() => resolveSshCommand({ DURE_SSH_COMMAND: 'n', DURE_SSH_ARGS: '{oops' })).toThrow(msg)
     expect(() => resolveSshCommand({ DURE_SSH_COMMAND: 'n', DURE_SSH_ARGS: '[1]' })).toThrow(msg)
   })
+  // platform 을 밝혀 넘긴다 — 기본값(process.platform)은 mac 러너에선 darwin 길이라 Windows 기대값을 보지 못한다
   it('defaults to Windows OpenSSH under SystemRoot (C:\\Windows when unset)', () => {
-    expect(resolveSshCommand({ SystemRoot: 'D:\\Win' })).toEqual({ command: join('D:\\Win', 'System32', 'OpenSSH', 'ssh.exe'), argsPrefix: [] })
-    expect(resolveSshCommand({})).toEqual({ command: join('C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe'), argsPrefix: [] })
+    expect(resolveSshCommand({ SystemRoot: 'D:\\Win' }, 'win32')).toEqual({ command: join('D:\\Win', 'System32', 'OpenSSH', 'ssh.exe'), argsPrefix: [] })
+    expect(resolveSshCommand({}, 'win32')).toEqual({ command: join('C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe'), argsPrefix: [] })
+  })
+  it('darwin_/usr/bin/ssh — 절대 경로(Finder 로 켠 앱의 빈약한 PATH 와 상관없이) · SystemRoot 는 보지 않는다', () => {
+    expect(resolveSshCommand({}, 'darwin')).toEqual({ command: '/usr/bin/ssh', argsPrefix: [] })
+    expect(resolveSshCommand({ SystemRoot: 'D:\\Win' }, 'darwin')).toEqual({ command: '/usr/bin/ssh', argsPrefix: [] })
+  })
+  it('DURE_SSH_COMMAND 손잡이는 운영체제와 상관없이 그대로', () => {
+    for (const p of ['win32', 'darwin'] as const) {
+      expect(resolveSshCommand({ DURE_SSH_COMMAND: 'node', DURE_SSH_ARGS: '["fakeSsh.mjs"]' }, p)).toEqual({ command: 'node', argsPrefix: ['fakeSsh.mjs'] })
+    }
   })
 })

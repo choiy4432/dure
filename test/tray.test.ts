@@ -7,6 +7,8 @@ import {
   closeDecision,
   createTrayControl,
   startHidden,
+  trayIconPath,
+  trayTip,
   trayTipOnce,
   TRAY_MENU,
   TRAY_TIP,
@@ -96,6 +98,33 @@ describe('closeDecision · 창 닫기', () => {
     expect(hide).not.toHaveBeenCalled()
     expect(deps.notifyOnce).not.toHaveBeenCalled()
     expect(deps.log).toHaveBeenCalled()
+  })
+})
+
+describe('운영체제별 — 트레이 아이콘 · 첫 안내 글 · Dock', () => {
+  it('trayIconPath — win32 는 앱 아이콘(.ico) 그대로, darwin 은 메뉴 막대용 템플릿 PNG(이름이 Template 로 끝나야 다크/라이트를 따른다)', () => {
+    const ico = path.join('r', 'icon.ico')
+    expect(trayIconPath('win32', { appIcon: ico, resourcesDir: 'r' })).toBe(ico)
+    expect(trayIconPath('darwin', { appIcon: ico, resourcesDir: 'r' })).toBe(path.join('r', 'trayTemplate.png'))
+  })
+
+  it('trayTip — win32 는 지금 글 그대로, darwin 은 트레이 대신 Dock', () => {
+    expect(trayTip('win32')).toBe(TRAY_TIP)
+    expect(TRAY_TIP).toBe('두레는 트레이에서 계속 돌아요')
+    expect(trayTip('darwin')).toBe('창을 닫아도 두레는 계속 돌아요 — Dock 의 두레 아이콘을 누르면 다시 열려요')
+    expect(trayTip('darwin')).not.toMatch(/트레이|Windows/)
+  })
+
+  it('dock 이 없으면(win32) 트레이를 못 만들 때 지금처럼 닫는다 — dock 칸을 안 넘겨도 같다', () => {
+    const { tray } = setup({
+      makeTray: () => {
+        throw new Error('no tray')
+      },
+    })
+    const hide = vi.fn()
+    expect(tray.close(closeEvent(), { quitting: false, hide, dock: false })).toBe('close')
+    expect(tray.close(closeEvent(), { quitting: false, hide })).toBe('close')
+    expect(hide).not.toHaveBeenCalled()
   })
 })
 

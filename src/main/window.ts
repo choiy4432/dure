@@ -1,6 +1,7 @@
 // 창 둘레의 작은 규칙 — electron 없이 시험할 수 있게 따로 둔다(index.ts 가 쓴다)
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { Platform } from '../engine/platform'
 
 /** 주소가 두레 화면(renderer) 자신인가 */
 export type AppPageMatcher = (url: string | undefined) => boolean
@@ -82,4 +83,39 @@ export function focusExisting(win: WindowLike | null): void {
   if (!win.isVisible()) win.show()
   if (win.isMinimized()) win.restore()
   win.focus()
+}
+
+/**
+ * 다시 열기 — 두레를 또 켰다(second-instance) · mac Dock 아이콘을 눌렀다(activate. Finder 로 또 켜도 mac 은 두 번째 실행 대신 이것).
+ * 창이 있으면 앞으로(숨었으면 보인다), 아직 없으면(숨겨 시작이 엔진을 기다리는 중) 잃지 않게 적어 둔다 — 창을 만들 때 숨기지 않는다
+ */
+export function reopenWindow(o: { win: WindowLike | null; requestShow(): void }): void {
+  if (o.win) focusExisting(o.win)
+  else o.requestShow()
+}
+
+/**
+ * 창이 다 닫혔을 때 두레를 끄나 — win32 는 지금처럼 끈다. mac 은 창 없이 Dock 에 남는 것이 관례라 끄지 않는다
+ * (끄기는 Cmd+Q · Dock 메뉴 · 메뉴 막대의 '두레 끄기' — 모두 before-quit 의 끄는 길)
+ */
+export function quitOnAllClosed(p: Platform): boolean {
+  return p !== 'darwin'
+}
+
+/** 배지를 다는 곳 — 진짜는 창의 setOverlayIcon(그림은 data URL 그대로 넘긴다)과 app.dock.setBadge */
+export interface BadgeTargets {
+  overlay(png: string | null, description: string): void
+  dock(text: string): void
+}
+
+/**
+ * 할 일 수 배지 — Windows 는 작업 표시줄 단추에 겹침 아이콘(렌더러가 그린 PNG)과 설명(지금 그대로),
+ * mac 은 Dock 아이콘에 숫자(setOverlayIcon 은 Windows 전용 API). 0 이면 지운다
+ */
+export function showTodoBadge(p: Platform, count: number, png: string | null, to: BadgeTargets): void {
+  if (p === 'darwin') {
+    to.dock(count > 0 ? String(count) : '')
+    return
+  }
+  to.overlay(png && count > 0 ? png : null, count > 0 ? `할 일 ${count}개` : '')
 }

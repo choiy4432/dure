@@ -12,6 +12,7 @@ import { MOTION } from '../lib/motion'
 import { ConfirmDialog } from './ConfirmDialog'
 import { FormDialog } from './FormDialog'
 import { RemoteCheckLine, ServerTag, useRemoteCheck } from './RemoteCheck'
+import { noSshText } from '../../shared/remoteTexts'
 
 /**
  * 방을 만들고 그 방으로 — 위 띠 목록의 '새 방'과 빈 화면의 '방 만들기'가 같이 쓴다(둘 다 새 방 대화상자).
@@ -521,6 +522,8 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
   const [where, setWhere] = useState<Where>('local')
   /** 이 PC 에 ssh 가 있나 — null 은 묻는 중(그동안 서버 칸은 꺼 둔다) */
   const [ssh, setSsh] = useState<boolean | null>(null)
+  /** ssh 가 없을 때의 글 — Windows 는 '윈도우 OpenSSH 를 찾지 못했어요'(지금 그대로), mac 은 ssh(엔진과 같은 글 — remoteTexts) */
+  const noSsh = useDure(s => noSshText(s.app.info?.platform))
   const hosts = useSshHosts(true)
   /** 목록에서 고른 서버 */
   const [listHost, setListHost] = useState<string | null>(null)
@@ -694,7 +697,7 @@ export function NewRoomDialog({ onClose }: { onClose: () => void }) {
         {ssh === false && (
           <p className="rchk bad" id={`${id}-ns`}>
             <TriangleAlert className="i" aria-hidden="true" />
-            <span>{REMOTE.noSsh}</span>
+            <span>{noSsh}</span>
           </p>
         )}
       </div>

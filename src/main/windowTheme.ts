@@ -1,3 +1,5 @@
+import type { Platform } from '../engine/platform'
+
 /**
  * 창 바탕·창 단추(최소화·최대화·닫기) 색 — tokens.css 의 --bg·--text-3 거울(test/themeTokens 가 같은지 본다).
  * 렌더러가 뜨기 전 첫 칠과 제목 표시줄 겹침(titleBarOverlay)에 쓴다 — 화면 안은 토큰이 칠한다.
@@ -29,4 +31,23 @@ export function veiledColor(dark: boolean): string {
 
 export function windowColors(dark: boolean): { bg: string; symbol: string } {
   return dark ? WINDOW_COLORS.dark : WINDOW_COLORS.light
+}
+
+/** 칠할 창 — BrowserWindow 에서 쓰는 것만. mac 창엔 setTitleBarOverlay 가 없을 수 있다 */
+export interface PaintTarget {
+  setBackgroundColor(color: string): void
+  setTitleBarOverlay?(o: { color: string; symbolColor: string; height: number }): void
+}
+
+/**
+ * 창 바탕·창 단추를 지금 테마로 — 테마를 바꾸거나 OS 가 바꾸면 다시 칠한다(nativeTheme 'updated' · 투어 막).
+ * 창 단추 겹침은 그 창에 겹침이 있을 때만(darwin 이 아닐 때 — windowOptions). mac 의 신호등은 색을 못 바꾸고, setTitleBarOverlay 는
+ * Windows·Linux 전용이라 mac 에서 부르면 'updated' 처리기 안에서 던져 오류 상자가 뜰 수 있다
+ */
+export function paintWindow(win: PaintTarget, o: { dark: boolean; veiled: boolean; platform: Platform }): void {
+  const c = windowColors(o.dark)
+  win.setBackgroundColor(c.bg)
+  if (o.platform === 'darwin') return
+  // 투어 막이 떠 있으면 창 단추 띠도 막 색으로(Windows 가 웹 화면 위에 그려 막이 못 덮는다)
+  win.setTitleBarOverlay?.({ color: o.veiled ? veiledColor(o.dark) : c.bg, symbolColor: c.symbol, height: TITLE_BAR_HEIGHT })
 }

@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import type { Platform } from '../engine/platform'
 
 export interface ClaudeCommand {
   command: string
@@ -34,12 +35,16 @@ export function resolveClaudeCommand(
   return found ? { command: found, argsPrefix: [] } : null
 }
 
+/** mac 기본 OpenSSH — 절대 경로라 Finder 로 켠 앱의 빈약한 PATH 와 상관없다 */
+const MAC_SSH = '/usr/bin/ssh'
+
 /**
  * 서버(SSH) 방의 ssh — DURE_SSH_COMMAND (+ DURE_SSH_ARGS, JSON 배열)로 E2E·개발은 가짜 ssh.
- * 아니면 윈도우 내장 OpenSSH(%SystemRoot%\System32\OpenSSH\ssh.exe) — 있는지는 엔진의 sshAvailable 이 본다
+ * 아니면 윈도우 내장 OpenSSH(%SystemRoot%\System32\OpenSSH\ssh.exe), mac 은 /usr/bin/ssh — 있는지는 엔진의 sshAvailable 이 본다
  */
-export function resolveSshCommand(env: Record<string, string | undefined>): ClaudeCommand {
+export function resolveSshCommand(env: Record<string, string | undefined>, platform: Platform = process.platform as Platform): ClaudeCommand {
   const override = env.DURE_SSH_COMMAND
   if (override) return { command: override, argsPrefix: jsonArgs(env.DURE_SSH_ARGS, 'DURE_SSH_ARGS') }
+  if (platform === 'darwin') return { command: MAC_SSH, argsPrefix: [] }
   return { command: join(env.SystemRoot ?? 'C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe'), argsPrefix: [] }
 }

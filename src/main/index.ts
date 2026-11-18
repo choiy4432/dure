@@ -17,18 +17,20 @@ import { resolveClaudeCommand, resolveSshCommand, type ClaudeCommand } from './c
 import * as setupCommands from './setupCommands'
 import { updateClaude, type ClaudeUpdateRun } from './claudeUpdate'
 import { createQuitControl } from './quit'
-import { createUpdater, RELEASE_URL, type UpdaterLike } from './updater'
+import { createUpdater, releasePageUrl, type UpdaterLike } from './updater'
 import { createSetupFlow, type SetupFlow } from './setupFlow'
 import { applyShellPath, importShellPath, shellRunner } from './shellPath'
 import { runStartup } from './startup'
 import { logEngineErrors, registerIpc, type AppHost, type IpcDeps } from './ipc'
 import { createDispatcher } from './dispatch'
-import { createPhoneController, phoneStaticDir, type PhoneController } from './phone/phoneController'
+import { createPhoneController, phoneControllerFor, phoneStaticDir, PHONE_UNSUPPORTED, type PhoneController } from './phone/phoneController'
 import { createTailscale, resolveTailscaleCommand } from './phone/tailscale'
-import { createTrayControl, startHidden, trayTipOnce, TRAY_TIP, type TrayControl } from './tray'
+import { createTrayControl, startHidden, trayIconPath, trayTip, trayTipOnce, type TrayControl } from './tray'
 import { UNINSTALL_CLEANUP_ARG, uninstallCleanup, uninstallHardCap } from './uninstallCleanup'
-import { appPageMatcher, focusExisting, guardNavigation, HIDDEN_ARG, withoutHiddenArg } from './window'
-import { TITLE_BAR_HEIGHT, veiledColor, windowColors } from './windowTheme'
+import { appPageMatcher, focusExisting, guardNavigation, HIDDEN_ARG, quitOnAllClosed, reopenWindow, showTodoBadge, withoutHiddenArg } from './window'
+import { paintWindow as paintTheme, TITLE_BAR_HEIGHT, windowColors } from './windowTheme'
+import { windowOptions } from './windowOptions'
+import { appMenuTemplate } from './appMenu'
 
 /** 운영체제 — main 은 여기서 한 번 읽어 넘긴다(갈래는 darwin 에서만 — Windows 길은 그대로) */
 const platform = process.platform as Platform
@@ -45,7 +47,8 @@ let setup: SetupFlow | null = null
 /** 휴대폰 연결 — 끌 때 길(tailscale serve)·서버·절전 막기를 거둔다 */
 let phone: PhoneController | null = null
 const phoneNow = (): PhoneController => {
-  if (!phone) throw new Error('휴대폰 연결을 아직 준비하는 중이에요')
+  // mac 판은 휴대폰 연결을 만들지 않는다(phoneControllerFor) — 화면은 부르지 않지만 불리면 그 까닭으로
+  if (!phone) throw new Error(platform === 'darwin' ? PHONE_UNSUPPORTED : '휴대폰 연결을 아직 준비하는 중이에요')
   return phone
 }
 /** 휴대폰 연결이 켜져 있나(설정 값 — 길이 아직 안 열렸어도 켜짐) — 못 읽으면 꺼짐으로(창 닫기가 지금처럼 두레를 끈다) */
@@ -150,24 +153,28 @@ function setLoginItem(open: boolean): void {
 const indexFile = join(__dirname, '../renderer/index.html')
 /** 앱 아이콘(D 넘김) — 창·작업표시줄. 굽는 법은 scripts/icon/build.mjs */
 const appIcon = join(__dirname, '../../resources/icon.ico')
+/** 트레이 아이콘 — Windows 는 앱 아이콘 그대로, mac 메뉴 막대는 템플릿 PNG(resources/trayTemplate.png · @2x) */
+const trayIcon = trayIconPath(platform, { appIcon, resourcesDir: join(__dirname, '../../resources') })
 /** 두레 화면 자신의 주소인가 — IPC 요청·창 안 이동을 이걸로 가린다 */
 const isAppPage = appPageMatcher({ devUrl: env.ELECTRON_RENDERER_URL, indexFile })
 
-/** 창 바탕·창 단추를 지금 테마로 — 테마를 바꾸거나 Windows 가 바꾸면(Windows 따라감) 다시 칠한다 */
+/**
+ * 창 바탕·창 단추를 지금 테마로 — 테마를 바꾸거나 Windows 가 바꾸면(Windows 따라감) 다시 칠한다.
+ * 창 단추 겹침(setTitleBarOverlay)은 mac 에선 부르지 않는다(windowTheme.paintWindow) — 신호등은 색을 못 바꾼다
+ */
 let tourVeil = false
 function paintWindow(win: BrowserWindow): void {
   if (win.isDestroyed()) return
-  const dark = nativeTheme.shouldUseDarkColors
-  const c = windowColors(dark)
-  win.setBackgroundColor(c.bg)
-  // 투어 막이 떠 있으면 창 단추 띠도 막 색으로(Windows 가 웹 화면 위에 그려 막이 못 덮는다)
-  win.setTitleBarOverlay({ color: tourVeil ? veiledColor(dark) : c.bg, symbolColor: c.symbol, height: TITLE_BAR_HEIGHT })
+  paintTheme(win, { dark: nativeTheme.shouldUseDarkColors, veiled: tourVeil, platform })
 }
 
-/** hidden: 숨겨 시작 — ready-to-show 에서 보이지 않는다(트레이만). 두레를 또 켜거나 트레이를 누르면 focusExisting 이 보인다 */
+/**
+ * hidden: 숨겨 시작 — ready-to-show 에서 보이지 않는다(트레이만). 두레를 또 켜거나 트레이를 누르면 focusExisting 이 보인다.
+ * 창 옵션의 운영체제 갈래는 windowOptions — Windows 는 아래 그대로, mac 은 신호등을 위 띠 안으로(hiddenInset)
+ */
 function createWindow(o: { hidden: boolean }): BrowserWindow {
   const c = windowColors(nativeTheme.shouldUseDarkColors)
-  const win = new BrowserWindow({
+  const win = new BrowserWindow(windowOptions(platform, {
     width: 1440,
     height: 900,
     minWidth: 1100,
@@ -186,7 +193,7 @@ function createWindow(o: { hidden: boolean }): BrowserWindow {
       nodeIntegration: false,
       sandbox: true,
     },
-  })
+  }))
   // 작업표시줄 단추의 아이콘·이름 — 고정(pin)할 때도 이 아이콘으로(개발 실행은 electron.exe 라 이게 없으면 Electron 아이콘)
   if (process.platform === 'win32') {
     win.setAppDetails({
@@ -247,10 +254,16 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
   const shellPath = platform === 'darwin' ? importShellPath({ platform, env: process.env, run: shellRunner() }) : null
 
   // 창이 아직 없으면(숨겨 시작이 엔진을 기다리는 중) 잃지 않게 적어 둔다 — 창을 만들 때 숨기지 않는다
-  app.on('second-instance', () => {
-    if (mainWindow) focusExisting(mainWindow)
-    else showRequested = true
-  })
+  const reopen = () =>
+    reopenWindow({
+      win: mainWindow,
+      requestShow: () => {
+        showRequested = true
+      },
+    })
+  app.on('second-instance', reopen)
+  // mac — Dock 아이콘 누름·Finder 로 또 켬은 second-instance 대신 activate 로 온다. 닫아(숨겨) 둔 창을 다시 보인다
+  if (platform === 'darwin') app.on('activate', reopen)
 
   // 끄는 길 — before-quit 과 업데이트 설치(beforeInstall)가 같은 정리 하나를 쓴다(두 번 끄지 않는다). 판단은 quit.ts
   const quitControl = createQuitControl({
@@ -268,7 +281,10 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
   // 설치 정리 중이면 정리 뒤 설치 흐름이 스스로 나가게 두고, 잠시 뒤에도 안 나가면 끈다
   app.on('before-quit', (event) => quitControl.beforeQuit(event))
 
-  app.on('window-all-closed', () => app.quit())
+  // mac 은 창이 다 닫혀도 Dock 에 남는다(quitOnAllClosed) — 끄기는 Cmd+Q·Dock 메뉴·메뉴 막대(모두 before-quit)
+  app.on('window-all-closed', () => {
+    if (quitOnAllClosed(platform)) app.quit()
+  })
 
   // Test-only hooks: DURE_SMOKE_EXIT_MS (self-quit after N ms), DURE_NO_DIALOG=1 (skip the error box, still exit 1),
   // DURE_USER_DATA and DURE_E2E_FOLDERS (above) — the E2E (e2e/app.spec.ts) sets them with DURE_CLAUDE_COMMAND/ARGS.
@@ -276,6 +292,9 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
   void app
     .whenReady()
     .then(async () => {
+      // 앱 메뉴 — mac 만(편집·창·끝내기 — 없으면 Cmd+C/V/A/Q 가 안 된다). Windows 는 지금처럼 건드리지 않는다(appMenuTemplate → null)
+      const menu = appMenuTemplate(platform)
+      if (menu) Menu.setApplicationMenu(Menu.buildFromTemplate(menu))
       // mac 만 — claude 찾기·엔진·설치가 모두 process.env.PATH 를 그때그때 읽는다
       if (shellPath) applyShellPath(process.env, await shellPath)
       const nextE2eFolder = e2eFolders(env.DURE_E2E_FOLDERS)
@@ -288,8 +307,8 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
         engine = await createEngine({
           dataDir: userData,
           claude,
-          // 서버(SSH) 방 — 기본은 윈도우 OpenSSH, 시험·개발은 DURE_SSH_COMMAND/ARGS
-          ssh: resolveSshCommand(env),
+          // 서버(SSH) 방 — 기본은 윈도우 OpenSSH · mac 은 /usr/bin/ssh, 시험·개발은 DURE_SSH_COMMAND/ARGS
+          ssh: resolveSshCommand(env, platform),
           autoStart: false,
           // 켤 때 claude 최신으로 — 서버 방도. 설정을 나중에 바꿔도 따라가게 그때그때 현재 prefs 를 본다
           claudeAutoUpdate: () => prefs.claudeAutoUpdate,
@@ -322,9 +341,11 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
       // 엔진 시작(갱신 뒤)이 끝나면 풀린다 — 그 전엔 claude 를 띄우는 엔진 메서드가 기다린다
       let markEngineReady!: () => void
       const engineReady = new Promise<void>((r) => (markEngineReady = r))
-      // 두레 업데이트 — 설치본만 electron-updater(ESM 이라 기본 내보내기에서 꺼낸다). 개발 실행은 늘 'dev'
+      // 두레 업데이트 — 설치본만 electron-updater(ESM 이라 기본 내보내기에서 꺼낸다). 개발 실행은 늘 'dev'.
+      // autoUpdater 는 읽는 순간 운영체제별 updater 를 만든다 — 함수로 넘겨 mac 판('manual' — 확인·받기 없음)에선 만들지도 않는다
       const updater = createUpdater({
-        updater: app.isPackaged ? (electronUpdater.autoUpdater as unknown as UpdaterLike) : null,
+        updater: app.isPackaged ? () => electronUpdater.autoUpdater as unknown as UpdaterLike : null,
+        platform,
         current: app.getVersion(),
         // quitAndInstall 은 before-quit 을 거치지 않을 수 있다 — 엔진을 먼저 끄고, 끄는 길이 겹쳐 또 끄지 않게 한다.
         // 정리가 실패하면 던진다 → 설치하지 않고 error 상태(다시 켜기를 또 누르면 정리 없이 설치 — updater.ts prepared)
@@ -379,8 +400,9 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
           if (mainWindow) paintWindow(mainWindow)
         },
         async openReleasePage() {
-          const s = updater.state()
-          if ('version' in s && s.version) await shell.openExternal(RELEASE_URL(s.version))
+          // 새 버전이 있으면 그 버전 페이지, mac 판(manual)은 릴리스 목록
+          const url = releasePageUrl(updater.state())
+          if (url) await shell.openExternal(url)
         },
         // 휴대폰 연결 — 아래에서 만든다(만들기 전에 불릴 일은 없지만 그러면 한국어로 거절)
         async phoneState() {
@@ -458,13 +480,15 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
         },
         async setTaskbar(count, png) {
           if (!mainWindow || mainWindow.isDestroyed()) return
-          mainWindow.setOverlayIcon(
-            png && count > 0 ? nativeImage.createFromDataURL(png) : null,
-            count > 0 ? `할 일 ${count}개` : '',
-          )
+          const win = mainWindow
+          // Windows 는 작업 표시줄 겹침 아이콘(지금 그대로), mac 은 Dock 숫자 배지(showTodoBadge)
+          showTodoBadge(platform, count, png, {
+            overlay: (img, description) => win.setOverlayIcon(img ? nativeImage.createFromDataURL(img) : null, description),
+            dock: (text) => app.dock?.setBadge(text),
+          })
         },
         async flashWindow() {
-          // 이미 보고 있는 창은 깜박일 이유가 없다
+          // 이미 보고 있는 창은 깜박일 이유가 없다. mac 의 flashFrame 은 Dock 아이콘 튀기기(알림 한 번) — 창을 보면 'focus' 의 flashFrame(false)가 그친다
           if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFocused()) return
           mainWindow.flashFrame(true)
         },
@@ -482,10 +506,10 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
           appEventSinks.push(fn)
         },
       }
-      // 트레이 — 늘 있다. 메뉴·툴팁은 휴대폰 연결 켜짐을 따른다('phone' 사건·아래 sync). 아이콘은 창과 같은 앱 아이콘. [두레 끄기]는 app.quit() → before-quit 의 끄는 길 그대로
+      // 트레이 — 늘 있다. 메뉴·툴팁은 휴대폰 연결 켜짐을 따른다('phone' 사건·아래 sync). 아이콘은 창과 같은 앱 아이콘(mac 은 메뉴 막대 템플릿). [두레 끄기]는 app.quit() → before-quit 의 끄는 길 그대로
       tray = createTrayControl({
         makeTray(spec) {
-          const t = new Tray(appIcon)
+          const t = new Tray(trayIcon)
           const apply = (s: Pick<typeof spec, 'tooltip' | 'menu'>) => {
             t.setToolTip(s.tooltip)
             t.setContextMenu(Menu.buildFromTemplate(s.menu.map((m) => ({ label: m.label, click: () => m.click() }))))
@@ -511,7 +535,7 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
           },
           notify: () => {
             if (!Notification.isSupported()) throw new Error('알림을 쓸 수 없어요')
-            const n = new Notification({ title: '두레', body: TRAY_TIP, icon: appIcon })
+            const n = new Notification({ title: '두레', body: trayTip(platform), icon: appIcon })
             n.on('click', () => focusExisting(mainWindow))
             n.on('close', () => {
               if (trayTipNote === n) trayTipNote = null
@@ -522,8 +546,9 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
         }),
       })
       // 휴대폰 연결 — 엔진 다음. 휴대폰은 창과 같은 디스패처를 허용 목록(phoneDispatcher)으로 감싸 탄다. 꺼져 있으면 tailscale 을 부르지 않는다.
-      // 🔴 개발 실행·시험은 로그인 항목을 건드리지 않는다(설치본만). DURE_TAILSCALE_*·DURE_PHONE_ALLOW_LOCAL 은 설치본에선 걸러진다(appEnv)
-      phone = createPhoneController({
+      // 🔴 개발 실행·시험은 로그인 항목을 건드리지 않는다(설치본만). DURE_TAILSCALE_*·DURE_PHONE_ALLOW_LOCAL 은 설치본에선 걸러진다(appEnv).
+      // mac 판은 만들지 않는다(phoneControllerFor) — 서버·tailscale 찾기·로그인 항목을 하나도 부르지 않고, 화면은 '이 Mac 판에선 아직 못 써요'
+      phone = phoneControllerFor(platform, () => createPhoneController({
         dataDir: userData,
         engine,
         dispatch: createDispatcher(engine, ipcDeps),
@@ -553,7 +578,7 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
           tray?.sync(s.settings.enabled)
         },
         allowLocal: env.DURE_PHONE_ALLOW_LOCAL === '1',
-      })
+      }))
       // 트레이를 지금 만든다(휴대폰 연결이 켜진 채 시작하면 길이 열리기 전에도 메뉴가 맞게)
       tray.sync(phoneOn())
       registerIpc(
@@ -580,9 +605,10 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
       win.on('minimize', () => powerMode.setVisible(false))
       win.on('show', () => powerMode.setVisible(!win.isMinimized()))
       win.on('restore', () => powerMode.setVisible(win.isVisible()))
-      // 창 닫기(×) — 막고 숨긴다(트레이로). 끄는 중(before-quit 이 정리를 시작함 · 업데이트 설치 · Windows 로그아웃)이면 닫힌다
+      // 창 닫기(× · mac Cmd+W) — 막고 숨긴다(트레이로). 끄는 중(before-quit 이 정리를 시작함 · 업데이트 설치 · Windows 로그아웃 · mac Cmd+Q)이면 닫힌다.
+      // mac 은 Dock 아이콘(activate)이 늘 다시 여니 메뉴 막대 아이콘이 없어도 숨긴다
       win.on('close', (e) => {
-        tray?.close(e, { quitting: quitControl.started() || sessionEnding, hide: () => win.hide() })
+        tray?.close(e, { quitting: quitControl.started() || sessionEnding, hide: () => win.hide(), dock: platform === 'darwin' })
       })
 
       const smokeMs = Number(env.DURE_SMOKE_EXIT_MS)

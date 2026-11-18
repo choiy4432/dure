@@ -266,6 +266,11 @@ code {
   -webkit-app-region: drag;
 }
 
+/* mac — 신호등(닫기·최소화·확대)이 위 띠 왼쪽에 있다(main windowOptions 의 trafficLightPosition 16·16) — 그만큼 비운다. html 의 data-platform 은 App 이 단다 */
+[data-platform='darwin'] .top {
+  padding-left: 80px;
+}
+
 /* 누르는 것과 위 띠에서 펼친 목록은 끌기 자리에서 뺀다 */
 .top button,
 .top input,

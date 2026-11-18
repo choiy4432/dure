@@ -399,6 +399,15 @@ describe('새 방 — 서버(SSH)', () => {
     fireEvent.click(server)
     expect(within(dlg).getByRole('radio', { name: '이 PC' }).getAttribute('aria-checked')).toBe('true')
   })
+
+  it('mac 판 — ssh 가 없을 때의 안내는 윈도우 OpenSSH 가 아니라 ssh', async () => {
+    api.sshAvailable.mockResolvedValue(false)
+    ;(window as any).dure.appInfo = async () => ({ version: '0.1.0', packaged: true, platform: 'darwin' })
+    await renderApp()
+    const dlg = await openNewRoom()
+    expect(within(dlg).getByText('ssh 를 찾지 못했어요')).toBeTruthy()
+    expect(within(dlg).queryByText(/윈도우|OpenSSH/)).toBeNull()
+  })
 })
 
 describe('RoomSwitcher — 서버 방 표시', () => {

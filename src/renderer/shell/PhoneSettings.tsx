@@ -75,6 +75,8 @@ export const PHONE = {
   openAtLogin: 'Windows 를 켜면 두레도 켜기',
   openAtLoginOffered: 'PC 를 다시 켜도 휴대폰 연결이 이어지게 함께 켰어요',
   noState: '휴대폰 연결 상태를 아직 받지 못했어요',
+  /** mac 판 — Tailscale CLI 자리·휴대폰 폴더 검사·로그인 항목이 아직 Windows 꼴(main 은 휴대폰 연결을 만들지 않는다) */
+  unsupported: '이 Mac 판에선 아직 못 써요',
   // 상태 한 줄(설정의 휴대폰 탭 설명 · 위 띠 알약)
   status: (p: PhoneState) => (!p.settings.enabled ? '꺼짐' : routeOpen(p) ? `켜짐 · ${connectedN(p.connected)}` : '켜짐 · 아직 안 열렸어요'),
   /** 위 띠 알약의 보이는 글 = 이름 */
@@ -147,11 +149,30 @@ type SwitchKey = 'enabled' | 'keepAwake' | 'openAtLogin' | 'asks' | 'finished'
 type ErrorKey = SwitchKey | 'check'
 
 /**
- * 설정 창의 휴대폰 탭 — 머리(제목 + 켜기 스위치) · 상태 상자 · 묶음 넷(짝 맺은 휴대폰 · 안드로이드 앱 · 휴대폰 알림 · PC 전원).
+ * 설정 창의 휴대폰 탭 — mac 판은 '이 Mac 판에선 아직 못 써요' 한 줄뿐(켜기·확인·짝 맺기·로그인 켜기 없음 — Tailscale 확인도 부르지 않는다).
+ * 그 밖(win32 · 아직 모름)은 지금 판 그대로(PhoneControls)
+ */
+export function PhonePane({ onCoveredChange }: { onCoveredChange: (covered: boolean) => void }) {
+  const darwin = useDure(s => s.app.info?.platform === 'darwin')
+  if (darwin) {
+    return (
+      <div className="phn-pane">
+        <div className="phn-head">
+          <h3 className="phn-title">{PHONE.switchName}</h3>
+        </div>
+        <p className="phn-none">{PHONE.unsupported}</p>
+      </div>
+    )
+  }
+  return <PhoneControls onCoveredChange={onCoveredChange} />
+}
+
+/**
+ * 휴대폰 탭(Windows) — 머리(제목 + 켜기 스위치) · 상태 상자 · 묶음 넷(짝 맺은 휴대폰 · 안드로이드 앱 · 휴대폰 알림 · PC 전원).
  * 설정 창은 고른 판만 그리니, 이 판이 보일 때 처음 한 번 확인하고 창으로 돌아오면 다시 본다.
  * 짝 맺기 QR · 앱 받기 QR · 끊기 확인 창은 설정 창 위에 겹쳐 뜬다 — 떠 있는 동안 onCoveredChange(true)(투어 카드가 가리지 않게).
  */
-export function PhonePane({ onCoveredChange }: { onCoveredChange: (covered: boolean) => void }) {
+function PhoneControls({ onCoveredChange }: { onCoveredChange: (covered: boolean) => void }) {
   const p = useDure(s => s.app.phone)
   const root = useRef<HTMLDivElement>(null)
   const id = useId()

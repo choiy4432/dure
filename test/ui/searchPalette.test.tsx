@@ -757,6 +757,47 @@ describe('대화 줄 표시(data-t)', () => {
   })
 })
 
+describe('mac — ⌘K', () => {
+  const mac = () => {
+    ;(window as any).dure.appInfo = async () => ({ version: '0.1.0', packaged: true, platform: 'darwin' })
+  }
+
+  it('darwin 에서 Cmd+K 로 찾기가 열리고 표시가 ⌘K · aria-keyshortcuts 는 Meta+K · Ctrl+K 도 그대로 연다', async () => {
+    mac()
+    await renderApp()
+    const field = screen.getByRole('button', { name: '찾기 · 옮기기' })
+    expect(field.querySelector('kbd')).toHaveTextContent('⌘K')
+    expect(field.querySelector('kbd')).not.toHaveTextContent('Ctrl')
+    expect(field).toHaveAttribute('aria-keyshortcuts', 'Meta+K')
+    await ctrlK(document.body, { meta: true })
+    expect(palette()).not.toBeNull()
+    // 열린 채 Cmd+K 면 닫는다
+    await ctrlK(input(), { meta: true })
+    expect(palette()).toBeNull()
+    await ctrlK(document.body)
+    expect(palette()).not.toBeNull()
+  })
+
+  it('darwin — 두레 탭의 단축키 줄도 ⌘K', async () => {
+    mac()
+    await renderApp()
+    fireEvent.click(screen.getByRole('button', { name: '설정' }))
+    const dlg = screen.getByRole('dialog', { name: '설정' })
+    fireEvent.click(within(dlg).getByRole('tab', { name: '두레' }))
+    const row = within(dlg).getByText('단축키').closest('[data-row]') as HTMLElement
+    expect(row).toHaveTextContent('⌘K 찾기 · 옮기기')
+    expect(row).not.toHaveTextContent('Ctrl')
+  })
+
+  it('win32 는 Ctrl K · Control+K 그대로 — appInfo 를 못 받았어도 같다', async () => {
+    delete (window as any).dure.appInfo
+    await renderApp()
+    const field = screen.getByRole('button', { name: '찾기 · 옮기기' })
+    expect(field.querySelector('kbd')).toHaveTextContent('Ctrl K')
+    expect(field).toHaveAttribute('aria-keyshortcuts', 'Control+K')
+  })
+})
+
 describe('설정 — 두레 탭', () => {
   it('단축키 한 줄 — Ctrl+K 찾기 · 옮기기', async () => {
     await renderApp()

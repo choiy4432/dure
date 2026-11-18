@@ -34,9 +34,10 @@ export type SetupState =
   | { phase: 'relaunching' }
   | { phase: 'needs'; install: InstallStep; login: LoginStep }
 
-/** 두레 자기 업데이트 — dev 는 개발 실행(확인하지 않음) */
+/** 두레 자기 업데이트 — dev 는 개발 실행(확인하지 않음) · manual 은 자동 업데이트가 없는 판(mac — url 은 릴리스 목록) */
 export type UpdateState =
   | { kind: 'dev' }
+  | { kind: 'manual'; url: string }
   | { kind: 'idle' }
   | { kind: 'checking' }
   | { kind: 'none' }

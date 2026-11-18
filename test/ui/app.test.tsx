@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, fireEvent, cleanup, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { AgentView, Snapshot } from '../../src/shared/ipcContract'
 
 const room = (id: string, name = id) => ({ id, name, createdAt: 1 })
@@ -293,5 +295,36 @@ describe('App 셸', () => {
     await renderApp()
     fireEvent.click(screen.getByRole('button', { name: '추가' }))
     expect(screen.getByRole('dialog', { name: '에이전트 추가' })).toBeTruthy()
+  })
+})
+
+describe('운영체제 — html 의 data-platform · 위 띠 왼쪽 여백', () => {
+  afterEach(() => document.documentElement.removeAttribute('data-platform'))
+
+  it('위 띠 왼쪽 여백 80px 가 darwin 에서만(html 에 data-platform) — appInfo 의 platform 을 한 번 단다', async () => {
+    ;(window as any).dure.appInfo = async () => ({ version: '0.1.0', packaged: true, platform: 'darwin' })
+    await renderApp()
+    expect(document.documentElement.dataset.platform).toBe('darwin')
+    cleanup()
+    document.documentElement.removeAttribute('data-platform')
+    vi.resetModules()
+    ;(window as any).dure.appInfo = async () => ({ version: '0.1.0', packaged: true, platform: 'win32' })
+    await renderApp()
+    expect(document.documentElement.dataset.platform).toBe('win32')
+  })
+
+  it('appInfo 를 못 받으면 달지 않는다 — Windows 규칙(.top 그대로)', async () => {
+    await renderApp()
+    expect(document.documentElement.hasAttribute('data-platform')).toBe(false)
+  })
+
+  it('base.css — 신호등 자리 80px 는 [data-platform=darwin] 에만 · .top 의 Windows 창 단추 자리(env titlebar-area) 규칙은 그대로', () => {
+    const css = readFileSync(join(process.cwd(), 'src/renderer/styles/base.css'), 'utf8')
+    const top = css.match(/\n\.top \{([^}]*)\}/)?.[1] ?? ''
+    expect(top).toContain('padding: 0 12px 0 20px;')
+    expect(top).toContain('padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px);')
+    expect(css).toMatch(/\[data-platform='darwin'\] \.top \{\s*padding-left: 80px;\s*\}/)
+    // 80px 는 그 한 곳뿐 — win32 엔 걸리지 않는다
+    expect(css.match(/padding-left: 80px/g)).toHaveLength(1)
   })
 })

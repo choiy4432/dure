@@ -12,7 +12,7 @@ import {
 } from './remote';
 import { killTree } from './killTree';
 import { spawnOpts, type Platform } from './platform';
-import { REMOTE_CLEANUP_FAILED, remoteIssueText, remotePortBlockedText } from '../shared/remoteTexts';
+import { noSshText, REMOTE_CLEANUP_FAILED, remoteIssueText, remotePortBlockedText } from '../shared/remoteTexts';
 import { readSshHosts, type SshHostEntry } from './sshConfig';
 import { openMessageLog, type MessageLog } from './messageLog';
 import { capPatch, lastBefore, lastN, openHistory, patchFromInput, trimToolInput, type History } from './history';
@@ -44,7 +44,7 @@ import type {
 export interface EngineOptions {
   dataDir: string;
   claude: { command: string; argsPrefix?: string[] };
-  /** 서버(SSH) 방의 ssh — 기본은 윈도우 OpenSSH(main 이 정한다). 없으면 서버 방을 못 만든다. 시험은 가짜 ssh */
+  /** 서버(SSH) 방의 ssh — 기본은 윈도우 OpenSSH · mac 은 /usr/bin/ssh(main 이 정한다). 없으면 서버 방을 못 만든다. 시험은 가짜 ssh */
   ssh?: { command: string; argsPrefix?: string[] };
   /** ~/.ssh/config 를 찾는 홈 — 없으면 os.homedir(). 시험용(진짜 ~/.ssh 를 읽지 않게) */
   sshHome?: string;
@@ -410,7 +410,6 @@ const SLEEP_MINUTE_MS = 60_000;
 const SLEEP_INVALID = '고를 수 없는 시간이에요';
 const EFFORT_UNKNOWN = '알 수 없는 effort 예요.';
 const CLOSED = '두레 엔진이 종료되었습니다.';
-const NO_SSH = '윈도우 OpenSSH 를 찾지 못했어요';
 const NOT_REMOTE = '서버 방이 아니에요';
 /** 폴더 열기 대상 */
 export type FolderTarget = { kind: 'local'; path: string } | { kind: 'remote'; host: string; path: string };
@@ -512,7 +511,7 @@ const ATTACH_COPY_STOPPED = '복사하는 중에 그만뒀어요';
 const ATTACH_COPY_SLOW = '파일을 복사하는 데 너무 오래 걸려요';
 /** 서버 방 — 올렸다는데 서버가 $HOME 을 알리지 않았다(DURE_HOME 줄 없음) */
 const ATTACH_UPLOAD_NO_HOME = '서버에 올린 파일의 경로를 알 수 없어요';
-/** 서버 방 — ssh 를 띄우지 못했다(없음 ENOENT 은 NO_SSH). 오류 원문엔 내 PC 의 ssh 경로가 실린다 — 코드만 */
+/** 서버 방 — ssh 를 띄우지 못했다(없음 ENOENT 은 noSsh). 오류 원문엔 내 PC 의 ssh 경로가 실린다 — 코드만 */
 const attachSshSpawnText = (code: string | null) => `ssh 를 실행하지 못했어요${code ? `(${code})` : ''}`;
 /** 서버 방 — 올리던 이 PC 사본을 읽지 못했다(백신이 잡음 등). 원문엔 내 PC 경로가 실린다 — 코드만 */
 const attachCopyReadText = (code: string | null) => `이 PC 사본을 읽지 못했어요${code ? `(${code})` : ''}`;
@@ -748,10 +747,13 @@ class EngineImpl extends EventEmitter implements Engine {
   // 갈래의 첨부 사본을 복사하는 중(forkAttachments — 갈래 에이전트마다) — 지우기가 그 끝을 기다렸다 폴더를 지운다(복사가 연 임시 파일에 막혀 잘못 알리지 않게)
   private forkCopies = new Map<AgentId, Promise<void>>();
   private readonly platform: Platform; // 띄우기 옵션·끄기 — 세션(ClaudeSession)에도 넘긴다
+  /** ssh 가 없을 때의 글 — Windows 는 윈도우 OpenSSH, mac 은 ssh(remoteTexts) */
+  private readonly noSsh: string;
 
   constructor(private o: EngineOptions, private store: Store, private log: MessageLog, private hist: History) {
     super();
     this.platform = o.platform ?? (process.platform as Platform);
+    this.noSsh = noSshText(this.platform);
     this.images = openImageStore(o.dataDir);
     this.attachments = openAttachmentStore(o.dataDir);
     this.limit = this.loadLimit(o.autoChainLimit ?? AUTO_CHAIN_LIMIT);
@@ -964,7 +966,7 @@ class EngineImpl extends EventEmitter implements Engine {
   rooms() { return this.store.rooms(); }
   agents(roomId?: RoomId) { return this.store.agents(roomId); }
   addRoom(name: string, remote?: { host: string } | null) {
-    if (remote && !this.sshAvailable()) throw new Error(NO_SSH);
+    if (remote && !this.sshAvailable()) throw new Error(this.noSsh);
     return this.store.addRoom(name, remote);
   }
   renameRoom(id: RoomId, name: string) { return this.store.renameRoom(id, name); }
@@ -1049,11 +1051,11 @@ class EngineImpl extends EventEmitter implements Engine {
 
   /**
    * 확인·정리·기록 확인 ssh — 셸 없이(execFile), 상한 REMOTE_CHECK_MS(quick 이면 REMOTE_QUICK_MS), 전달 없음(runArgs). login false = bash -c(정리).
-   * ssh 가 없으면 NO_SSH 로 던진다
+   * ssh 가 없으면 noSsh 로 던진다
    */
   private sshRun(host: string, script: string, o: { quick?: boolean; login?: boolean; timeoutMs?: number } = {}): Promise<SshRun> {
     const ssh = this.o.ssh;
-    if (!ssh || !this.sshAvailable()) return Promise.reject(new Error(NO_SSH));
+    if (!ssh || !this.sshAvailable()) return Promise.reject(new Error(this.noSsh));
     const quick = o.quick === true;
     const args = [
       ...(ssh.argsPrefix ?? []),
@@ -1067,7 +1069,7 @@ class EngineImpl extends EventEmitter implements Engine {
         (err, stdout, stderr) => {
           if (!err) return resolve({ code: 0, stdout, stderr });
           const code: unknown = err.code;
-          if (code === 'ENOENT') return reject(new Error(NO_SSH));
+          if (code === 'ENOENT') return reject(new Error(this.noSsh));
           // 못 띄움(글 코드)·시간 초과(null)는 code null — 글이 없으면 그 오류 글을 stderr 자리에
           resolve({ code: typeof code === 'number' ? code : null, stdout, stderr: stderr || (typeof code === 'string' ? err.message : '') });
         },
@@ -1805,7 +1807,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const agent = this.need(id);
     const remote = this.remoteOf(agent);
     // 서버 방인데 ssh 가 없다 — 사본을 만들기 전에
-    if (remote && !this.sshAvailable()) throw new Error(`${ATTACH_FAILED} — ${NO_SSH}`);
+    if (remote && !this.sshAvailable()) throw new Error(`${ATTACH_FAILED} — ${this.noSsh}`);
     const out: ReadyPart[] = [];
     let room = MEDIA_INLINE_MAX_B64 - parts.reduce((n, p) => n + (p.type === 'image' ? p.base64.length : 0), 0);
     try {
@@ -1958,12 +1960,12 @@ class EngineImpl extends EventEmitter implements Engine {
    * 올리기 ssh 한 번 — 확인·정리와 같은 옵션(runArgs: 전달 없음·BatchMode·RemoteCommand=none, bash -c — 셸 시작 파일을 읽지 않는다),
    * 파일은 스트림으로 stdin 에(명령 인자에 싣지 않는다 — 크기와 상관없이 메모리에 다 올리지 않는다). 시간을 넘기거나 끊으면(signal) ssh 를
    * 나무째 끄고(ProxyJump·ProxyCommand 의 자식 ssh 가 같은 파이프를 쥐면 'close' 가 늦다) code null(timedOut 이면 시간 넘김).
-   * ssh 가 없으면 NO_SSH 로 던진다 · 그 밖의 이유로 못 띄우면 spawnFailed · 사본을 못 읽어 껐으면 readFailed(둘 다 오류 코드만).
+   * ssh 가 없으면 noSsh 로 던진다 · 그 밖의 이유로 못 띄우면 spawnFailed · 사본을 못 읽어 껐으면 readFailed(둘 다 오류 코드만).
    * 끝나기 전에 사본 읽기를 닫는다(되돌릴 때 지울 수 있게)
    */
   private sshUpload(host: string, script: string, srcPath: string, timeoutMs = UPLOAD_MS, signal?: AbortSignal): Promise<UploadRun> {
     const ssh = this.o.ssh;
-    if (!ssh || !this.sshAvailable()) return Promise.reject(new Error(NO_SSH));
+    if (!ssh || !this.sshAvailable()) return Promise.reject(new Error(this.noSsh));
     const args = [...(ssh.argsPrefix ?? []), ...runArgs({ host, script, login: false })];
     return new Promise((resolve, reject) => {
       let child: ChildProcess;
@@ -1971,7 +1973,7 @@ class EngineImpl extends EventEmitter implements Engine {
         child = spawn(ssh.command, args, { ...spawnOpts(this.platform), env: claudeEnv({ ...process.env, ...this.o.env }), stdio: ['pipe', 'pipe', 'pipe'] });
       } catch (e) {
         // 실행 파일이 아니다(EFTYPE) 등 — 원문엔 내 PC 의 ssh 경로가 실린다
-        if ((e as NodeJS.ErrnoException | null)?.code === 'ENOENT') reject(new Error(NO_SSH));
+        if ((e as NodeJS.ErrnoException | null)?.code === 'ENOENT') reject(new Error(this.noSsh));
         else resolve({ code: null, stdout: '', stderr: '', spawnFailed: { code: errCode(e) } });
         return;
       }
@@ -2030,7 +2032,7 @@ class EngineImpl extends EventEmitter implements Engine {
       // 띄우지도 못했다(pid 없음) — 'close' 가 오지 않을 수 있다
       child.on('error', (e: NodeJS.ErrnoException) => {
         if (child.pid !== undefined) return;
-        settle(() => (e.code === 'ENOENT' ? reject(new Error(NO_SSH)) : resolve({ code: null, stdout, stderr, spawnFailed: { code: errCode(e) } })));
+        settle(() => (e.code === 'ENOENT' ? reject(new Error(this.noSsh)) : resolve({ code: null, stdout, stderr, spawnFailed: { code: errCode(e) } })));
       });
       child.on('close', (code) =>
         settle(() =>
@@ -3196,9 +3198,9 @@ class EngineImpl extends EventEmitter implements Engine {
     const remote = this.remoteOf(agent);
     if (remote && !this.sshAvailable()) {
       // 서버 방인데 ssh 가 없다 — 폴더 없음처럼 띄우지 않는다
-      this.errors.set(id, NO_SSH);
+      this.errors.set(id, this.noSsh);
       this.emitStatus(id);
-      throw new Error(NO_SSH);
+      throw new Error(this.noSsh);
     }
 
     const runDir = path.join(this.o.dataDir, 'run', id);

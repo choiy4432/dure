@@ -170,7 +170,7 @@ export const REMOTE = {
   typedExample: '사용자@주소',
   /** 직접 입력칸의 읽는 이름 */
   typedLabel: '서버 주소',
-  noSsh: '윈도우 OpenSSH 를 찾지 못했어요',
+  // ssh 가 없을 때의 글은 엔진과 같은 shared/remoteTexts 의 noSshText(운영체제별)
   checking: '확인하는 중…',
   connected: (version: string) => `접속됨 · claude ${version}`,
   folderOk: (version: string) => `폴더가 있어요 · claude ${version}`,
@@ -366,6 +366,16 @@ export const SEARCH = {
   countRecent: (n: number) => `최근 에이전트 ${n}개`,
   countConvs: (n: number, more: boolean) => `대화 ${n}곳${more ? ' 넘게' : ''}`,
 } as const
+
+/** 찾기 단축키 표시 — 보이는 글(위 띠 칸 · 두레 탭) · 두 단추 글 · aria-keyshortcuts */
+export type SearchKeys = { readonly key: string; readonly shortcut: string; readonly aria: string }
+const SEARCH_KEYS: SearchKeys = { key: SEARCH.key, shortcut: SEARCH.shortcut, aria: 'Control+K' }
+const SEARCH_KEYS_DARWIN: SearchKeys = { key: '⌘K', shortcut: '⌘K', aria: 'Meta+K' }
+
+/** 찾기 단축키 표시 — darwin 은 ⌘K(Cmd+K), 그 밖(win32 · 아직 모름)은 지금 글 그대로. 받는 키는 둘 다 Ctrl+K · Cmd+K(isSearchKey) */
+export function searchKeys(platform: Platform | null | undefined): SearchKeys {
+  return platform === 'darwin' ? SEARCH_KEYS_DARWIN : SEARCH_KEYS
+}
 
 /** 대화 패널 다듬기(시안 ② A) — 머리의 폴더 줄 · 대화 맨 위 앞 기록 불러오기 · 위로 읽는 중 새 글 알약 */
 export const CHAT_PANEL = {
@@ -606,6 +616,9 @@ export const SETTINGS_UPDATE = {
   retry: UPDATE_TOAST.retry,
   installFailed: UPDATE_TOAST.installFailed,
   dev: '개발 실행이라 확인하지 않아요',
+  /** mac 판(서명 없음) — 확인·받기 대신 릴리스 페이지 */
+  manual: '이 Mac 판은 자동 업데이트가 없어요',
+  releasePage: '릴리스 페이지',
   tour: '안내 다시 보기',
   claudeAuto: '켤 때 claude 최신으로',
 } as const
