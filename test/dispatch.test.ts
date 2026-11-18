@@ -61,7 +61,7 @@ const PREFS = { tourDone: true, approvalTipSeen: false, claudeAutoUpdate: true, 
 function fakeDeps(over: Partial<DispatchDeps> = {}): DispatchDeps {
   return {
     app: {
-      appInfo: vi.fn(async () => ({ version: '1.2.3', packaged: false })),
+      appInfo: vi.fn(async () => ({ version: '1.2.3', packaged: false, platform: 'win32' as const })),
       prefs: vi.fn(async () => PREFS),
       setPrefs: vi.fn(async (p: object) => ({ ...PREFS, ...p })),
       setupState: vi.fn(async () => ({ phase: 'ready' as const })),
@@ -182,7 +182,7 @@ describe('createDispatcher', () => {
     const snap = await dispatch('snapshot', [])
     expect(snap).toMatchObject({ ok: true, value: { claudeMissing: false, autoChainLimit: 8, theme: 'dark', sleepAfterMin: 45 } })
     expect((snap as { value: { agents: { pastCount: number; bypassPending: boolean }[] } }).value.agents[0]).toMatchObject({ pastCount: 3, bypassPending: true, background: true })
-    expect(await dispatch('appInfo', [])).toEqual({ ok: true, value: { version: '1.2.3', packaged: false } })
+    expect(await dispatch('appInfo', [])).toEqual({ ok: true, value: { version: '1.2.3', packaged: false, platform: 'win32' } })
     expect(await dispatch('nope', [])).toEqual({ ok: false, error: '허용되지 않은 요청이에요' })
     const none = createDispatcher(null, fakeDeps())
     expect(await none('snapshot', [])).toMatchObject({ ok: true, value: { claudeMissing: true } })

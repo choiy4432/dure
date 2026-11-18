@@ -25,7 +25,7 @@ function fake(opts: { snapshot?: () => Promise<Snapshot>; history?: (id: string)
   const api = {
     snapshot: vi.fn(opts.snapshot ?? (async () => snap())),
     history: vi.fn(opts.history ?? (async () => [])),
-    appInfo: vi.fn(opts.appInfo ?? (async () => ({ version: '1.0.0', packaged: true }))),
+    appInfo: vi.fn(opts.appInfo ?? (async () => ({ version: '1.0.0', packaged: true, platform: 'win32' }) as AppInfo)),
     prefs: vi.fn(opts.prefs ?? (async () => ({ ...DEFAULT_APP_PREFS }))),
     setPrefs: vi.fn(opts.setPrefs ?? (async (p: Partial<AppPrefs>) => ({ ...DEFAULT_APP_PREFS, ...p }))),
     setupState: vi.fn(opts.setupState ?? (async () => ({ phase: 'ready' }) as SetupState)),
@@ -1335,7 +1335,7 @@ describe('store 앱 상태', () => {
     expect(s.getState().app).toEqual({ info: null, prefs: null, setup: { phase: 'checking' }, setupLoadFailed: false, update: { kind: 'idle' }, claudeUpdate: 'idle', toastHidden: false, phone: null })
     await s.init()
     expect(s.getState().app.setup.phase).toBe('needs')
-    expect(s.getState().app.info).toEqual({ version: '1.0.0', packaged: true })
+    expect(s.getState().app.info).toEqual({ version: '1.0.0', packaged: true, platform: 'win32' })
     expect(s.getState().app.prefs).toEqual(DEFAULT_APP_PREFS)
   })
 

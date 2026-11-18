@@ -4,17 +4,24 @@ import { render, screen, act, fireEvent, cleanup, within } from '@testing-librar
 import type { SetupState } from '../../src/shared/appTypes'
 
 let setup: SetupState
+/** appInfo 의 운영체제 — undefined 면 appInfo 가 없는 옛 api(받지 못함 → Windows 글) */
+let platform: 'win32' | 'darwin' | undefined
 let emit: (name: string, payload: unknown) => void
 const api = { installClaude: vi.fn(async () => {}), loginClaude: vi.fn(async () => {}), openSetupGuide: vi.fn(async () => {}) }
 
 beforeEach(() => {
   vi.resetModules()
   vi.clearAllMocks()
+  platform = undefined
   const handlers: Record<string, (p: unknown) => void> = {}
   emit = (n, p) => handlers[n]?.(p)
   ;(window as any).dure = {
     snapshot: async () => ({ claudeMissing: true, rooms: [], agents: [], messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null }),
     history: async () => [], setupState: async () => setup,
+    appInfo: async () => {
+      if (!platform) throw new Error('없음')
+      return { version: '0.1.0', packaged: true, platform }
+    },
     on: (n: string, h: (p: unknown) => void) => { handlers[n] = h; return () => {} },
     ...api,
   }
@@ -103,6 +110,43 @@ describe('SetupScreen — 준비 화면', () => {
   it('다시 켜는 중', async () => {
     await show({ phase: 'relaunching' })
     expect(screen.getByText('두레를 다시 켜요…')).toBeInTheDocument()
+  })
+
+  describe('운영체제 — 설치·로그인 안내', () => {
+    const WIN_INSTALL = '두레는 이 PC 의 Claude Code 로 에이전트를 움직여요. 단추를 누르면 Anthropic 공식 설치 스크립트(install.ps1)를 대신 실행해요. 관리자 권한 없이 1~2분.'
+    const WIN_COMMAND = 'irm https://claude.ai/install.ps1 | iex'
+    const WIN_LOGIN = '단추를 누르면 브라우저가 열려요. 쓰고 있는 Claude 구독 계정으로 로그인하고 돌아오면 이어져요.'
+    /** 설치 안내 + 펼친 명령 + 로그인 안내가 한 화면에 보이는 글(설치·로그인 둘 다 할 일) */
+    async function allText(p: typeof platform): Promise<string> {
+      platform = p
+      await show(needs({ state: 'todo' }, { state: 'todo' }))
+      fireEvent.click(screen.getByRole('button', { name: /실행하는 명령 보기/ }))
+      await screen.findByText(p === 'darwin' ? /install\.sh \| bash/ : WIN_COMMAND)
+      return document.body.textContent ?? ''
+    }
+
+    it('win32 면 지금 글 그대로', async () => {
+      const text = await allText('win32')
+      expect(text).toContain(WIN_INSTALL)
+      expect(text).toContain(WIN_COMMAND)
+      expect(text).toContain(WIN_LOGIN)
+    })
+
+    it('appInfo 를 못 받았어도(옛 api) 지금 글 그대로', async () => {
+      const text = await allText(undefined)
+      expect(text).toContain(WIN_INSTALL)
+      expect(text).toContain(WIN_COMMAND)
+      expect(text).toContain(WIN_LOGIN)
+    })
+
+    it('darwin 이면 Windows·PowerShell 낱말이 안 보이고 설치 안내가 mac 글(install.sh · curl … | bash) · 로그인은 터미널 창', async () => {
+      const text = await allText('darwin')
+      expect(text).not.toMatch(/Windows|윈도|PowerShell|install\.ps1|irm |iex|이 PC/)
+      expect(text).toContain('두레는 이 Mac 의 Claude Code 로 에이전트를 움직여요. 단추를 누르면 Anthropic 공식 설치 스크립트(install.sh)를 대신 실행해요. 관리자 권한 없이 1~2분.')
+      expect(text).toContain('curl -fsSL https://claude.ai/install.sh | bash')
+      expect(text).toContain('터미널 창')
+      expect(text).not.toContain(WIN_LOGIN)
+    })
   })
 
   describe('초점', () => {

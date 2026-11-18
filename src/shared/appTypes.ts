@@ -1,4 +1,5 @@
 /** 엔진 없이 도는 앱 쪽 일(앱 설정·준비·업데이트)의 모양 — main·preload·renderer 가 함께 쓴다 */
+import type { Platform } from '../engine/platform'
 import type { PhoneState } from './phoneTypes'
 
 /**
@@ -10,7 +11,8 @@ export type AppPrefs = { tourDone: boolean; approvalTipSeen: boolean; claudeAuto
 /** 칸이 없거나 불리언이 아니면 이 값 */
 export const DEFAULT_APP_PREFS: AppPrefs = { tourDone: false, approvalTipSeen: false, claudeAutoUpdate: true, trayTipSeen: false, powerTerminal: false }
 
-export type AppInfo = { version: string; packaged: boolean }
+/** platform — 두레가 도는 운영체제(main 의 process.platform). 화면이 글(준비 화면 등)을 고른다 */
+export type AppInfo = { version: string; packaged: boolean; platform: Platform }
 
 /** 준비 화면 1 — claude 설치. running·failed 의 lines 는 설치 출력의 마지막 줄들 */
 export type InstallStep =

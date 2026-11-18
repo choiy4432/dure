@@ -4,7 +4,7 @@ import { useDure } from '../state/store'
 import { effectiveSetup } from '../state/selectors'
 import { Presence } from '../lib/presence'
 import { ExpandBox } from '../lib/ExpandBox'
-import { SETUP } from '../lib/words'
+import { SETUP, setupWords, type SetupWords } from '../lib/words'
 import type { InstallStep, LoginStep } from '../../shared/appTypes'
 
 /**
@@ -12,8 +12,10 @@ import type { InstallStep, LoginStep } from '../../shared/appTypes'
  * 단추는 api 만 부른다. 진행은 main 이 보내는 'setup' 사건이 바꾼다 — 눌린 단추는 다음 상태가 올 때까지만 막는다.
  */
 export function SetupScreen() {
-  const raw = useDure(s => ({ setup: s.app.setup, missing: s.claudeMissing, failed: s.app.setupLoadFailed }))
+  const raw = useDure(s => ({ setup: s.app.setup, missing: s.claudeMissing, failed: s.app.setupLoadFailed, platform: s.app.info?.platform ?? null }))
   const setup = effectiveSetup(raw.setup, raw.missing, raw.failed)
+  // 운영체제마다 다른 글(설치 스크립트·직접 할 명령·로그인 창) — 아직 모르면 Windows 글
+  const w = setupWords(raw.platform)
   const [busy, setBusy] = useState<string | null>(null)
   useEffect(() => setBusy(null), [setup])
 
@@ -67,8 +69,8 @@ export function SetupScreen() {
         <p className="setup-k">{SETUP.kicker}</p>
         <h2 className="setup-h" id="setup-h">{title}</h2>
         <ol className="setup-steps">
-          <InstallRow install={install} busy={busy} call={call} />
-          <LoginRow login={login} busy={busy} call={call} />
+          <InstallRow install={install} busy={busy} call={call} w={w} />
+          <LoginRow login={login} busy={busy} call={call} w={w} />
           <Step n={3} state="locked" title={SETUP.tour} tail={<span className="setup-mut">{SETUP.tourEta}</span>} />
         </ol>
       </section>
@@ -91,7 +93,7 @@ function Step({ n, state, title, tail, children }: { n: number; state: 'cur' | '
   )
 }
 
-function InstallRow({ install, busy, call }: { install: InstallStep; busy: string | null; call: Call }) {
+function InstallRow({ install, busy, call, w }: { install: InstallStep; busy: string | null; call: Call; w: SetupWords }) {
   if (install.state === 'done') {
     return <Step n={1} state="done" title={SETUP.installTitle} tail={install.version && <span className="setup-ver">{install.version}</span>} />
   }
@@ -110,7 +112,7 @@ function InstallRow({ install, busy, call }: { install: InstallStep; busy: strin
                 <p className="setup-why">{install.message}</p>
               </>
             ) : (
-              <p className="setup-p">{SETUP.installBody}</p>
+              <p className="setup-p">{w.installBody}</p>
             )}
           </>
         )}
@@ -131,7 +133,7 @@ function InstallRow({ install, busy, call }: { install: InstallStep; busy: strin
                 {SETUP.manual}
               </button>
             </div>
-            <Command />
+            <Command w={w} />
           </>
         )}
       </div>
@@ -139,7 +141,7 @@ function InstallRow({ install, busy, call }: { install: InstallStep; busy: strin
   )
 }
 
-function Command() {
+function Command({ w }: { w: SetupWords }) {
   const [open, setOpen] = useState(false)
   const id = useId()
   return (
@@ -150,19 +152,19 @@ function Command() {
       </button>
       <Presence show={open}>
         <ExpandBox as="p" className="setup-cmd" id={id}>
-          {SETUP.command}
+          {w.command}
         </ExpandBox>
       </Presence>
     </>
   )
 }
 
-function LoginRow({ login, busy, call }: { login: LoginStep; busy: string | null; call: Call }) {
+function LoginRow({ login, busy, call, w }: { login: LoginStep; busy: string | null; call: Call; w: SetupWords }) {
   if (login.state === 'locked') return <Step n={2} state="locked" title={SETUP.loginTitle} />
   return (
     <Step n={2} state="cur" title={SETUP.loginTitle}>
       <div className="setup-bd">
-        <p className="setup-p">{SETUP.loginBody}</p>
+        <p className="setup-p">{w.loginBody}</p>
         {login.state === 'failed' && <p className="setup-err">{SETUP.loginFailed}</p>}
         <div className="setup-acts">
           {login.state === 'waiting' ? (

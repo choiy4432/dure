@@ -1,5 +1,7 @@
+import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createSetupFlow, type SetupDeps } from '../src/main/setupFlow'
+import { spawnLogin } from '../src/main/setupCommands'
 import type { SetupState } from '../src/shared/appTypes'
 
 const CLAUDE = { command: 'claude.exe', argsPrefix: [] as string[] }
@@ -305,5 +307,53 @@ describe('setupFlow', () => {
     s.install.finish({ code: 0 }) // 설치 0 이지만 못 찾음
     await p
     expect(s.deps.relaunch).not.toHaveBeenCalled()
+  })
+})
+
+// mac 로그인 — setupCommands.spawnLogin(darwin) 을 그대로 꽂는다. 임시 .command 파일은 흐름이 끝나면(로그인됨·상한·다시 열기·끄기) 지운다
+describe('setupFlow + mac 로그인(.command)', () => {
+  function macLogin() {
+    const files = new Set<string>()
+    let n = 0
+    const child = Object.assign(new EventEmitter(), { pid: 77, unref: vi.fn() })
+    const deps = {
+      platform: 'darwin' as const, tmpDir: '/tmp', env: {},
+      spawn: vi.fn(() => child) as any, killTree: vi.fn(async () => {}),
+      write: vi.fn((p: string) => void files.add(p)), remove: vi.fn((p: string) => void files.delete(p)),
+      rand: () => `r${++n}`,
+    }
+    return { files, deps, spawnLogin: (c: typeof CLAUDE) => spawnLogin(c, deps) }
+  }
+
+  it('로그인되면 지운다 — Terminal 창은 끄지 않는다(killTree 없음)', async () => {
+    const m = macLogin()
+    const s = setup({ spawnLogin: m.spawnLogin })
+    s.setFound(CLAUDE)
+    await s.flow.check()
+    await s.flow.login()
+    expect([...m.files]).toEqual(['/tmp/dure-login-r1.command'])
+    expect(m.deps.spawn).toHaveBeenCalledWith('/usr/bin/open', ['-a', 'Terminal', '/tmp/dure-login-r1.command'], expect.anything())
+    s.setLoggedIn(true)
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(s.flow.state()).toEqual({ phase: 'ready' })
+    expect(m.files.size).toBe(0)
+    expect(m.deps.killTree).not.toHaveBeenCalled()
+  })
+
+  it('상한·다시 열기·끄기(dispose)에도 지운다 — 남는 파일이 없다', async () => {
+    const m = macLogin()
+    const s = setup({ spawnLogin: m.spawnLogin, loginTimeoutMs: 10_000 })
+    s.setFound(CLAUDE)
+    await s.flow.check()
+    await s.flow.login()
+    await s.flow.login() // 다시 열기 — 앞 파일을 지우고 새 파일
+    expect([...m.files]).toEqual(['/tmp/dure-login-r2.command'])
+    await vi.advanceTimersByTimeAsync(10_000) // 상한
+    expect(s.flow.state()).toMatchObject({ login: { state: 'failed' } })
+    expect(m.files.size).toBe(0)
+    await s.flow.login()
+    expect(m.files.size).toBe(1)
+    await s.flow.dispose() // 앱을 끈다
+    expect(m.files.size).toBe(0)
   })
 })

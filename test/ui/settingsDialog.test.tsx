@@ -50,7 +50,7 @@ beforeEach(() => {
   checkUpdate = vi.fn(async () => ({ kind: 'none' }))
   downloadUpdate = vi.fn(async () => {})
   installUpdate = vi.fn(async () => {})
-  ;(window as any).dure = { appInfo: async () => ({ version: '0.1.0', packaged: true }), prefs: async () => prefsNow, setPrefs: setPrefsApi, updateState: async () => updateNow, claudeUpdateState: async () => 'idle', checkUpdate, downloadUpdate, installUpdate, setSleepAfter, setAutoChainLimit, setAllowBypass, setNotify, setTheme, snapshot: async () => snapshot, setupState: async () => ({ phase: 'ready' }), history: async () => [], on: (n: string, h: (p: any) => void) => { handlers[n] = h; return () => {} } }
+  ;(window as any).dure = { appInfo: async () => ({ version: '0.1.0', packaged: true, platform: 'win32' }), prefs: async () => prefsNow, setPrefs: setPrefsApi, updateState: async () => updateNow, claudeUpdateState: async () => 'idle', checkUpdate, downloadUpdate, installUpdate, setSleepAfter, setAutoChainLimit, setAllowBypass, setNotify, setTheme, snapshot: async () => snapshot, setupState: async () => ({ phase: 'ready' }), history: async () => [], on: (n: string, h: (p: any) => void) => { handlers[n] = h; return () => {} } }
 })
 afterEach(() => cleanup())
 

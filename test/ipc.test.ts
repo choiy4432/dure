@@ -131,7 +131,7 @@ function fakeApp() {
     phonePairCancel: vi.fn(async () => {}),
     phoneUnpair: vi.fn(async (_id: string) => {}),
     phoneNoticeSeen: vi.fn(async () => {}),
-    appInfo: vi.fn(async () => ({ version: '1.2.3', packaged: false })),
+    appInfo: vi.fn(async () => ({ version: '1.2.3', packaged: false, platform: 'win32' as const })),
     prefs: vi.fn(async () => PREFS),
     setPrefs: vi.fn(async (p: object) => ({ ...PREFS, ...p })),
     setupState: vi.fn(async () => ({ phase: 'ready' as const })),
@@ -307,7 +307,7 @@ describe('registerIpc', () => {
     const { call, deps } = setup(false)
     expect(await call('prefs')).toEqual({ ok: true, value: PREFS })
     expect(deps.app.prefs).toHaveBeenCalledTimes(1)
-    expect(await call('appInfo')).toEqual({ ok: true, value: { version: '1.2.3', packaged: false } })
+    expect(await call('appInfo')).toEqual({ ok: true, value: { version: '1.2.3', packaged: false, platform: 'win32' } })
     expect(await call('setupState')).toEqual({ ok: true, value: { phase: 'ready' } })
     expect(await call('claudeUpdateState')).toEqual({ ok: true, value: 'running' })
     expect(await call('updateState')).toEqual({ ok: true, value: { kind: 'dev' } })

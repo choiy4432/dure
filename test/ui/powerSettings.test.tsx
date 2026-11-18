@@ -19,7 +19,7 @@ beforeEach(() => {
   setPowerMode = vi.fn(async () => {})
   setPrefsApi = vi.fn(async (p: any) => (prefsNow = { ...prefsNow, ...p }))
   ;(window as any).dure = {
-    appInfo: async () => ({ version: '0.1.0', packaged: true }), prefs: async () => prefsNow, setPrefs: setPrefsApi, setPowerMode,
+    appInfo: async () => ({ version: '0.1.0', packaged: true, platform: 'win32' }), prefs: async () => prefsNow, setPrefs: setPrefsApi, setPowerMode,
     updateState: async () => ({ kind: 'idle' }), claudeUpdateState: async () => 'idle', snapshot: async () => snapshot,
     setupState: async () => ({ phase: 'ready' }), history: async () => [], on: () => () => {},
   }

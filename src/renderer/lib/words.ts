@@ -1,6 +1,7 @@
 // 화면 문구 도우미 — 조사(이/가 …)와 '방금 · N분 전' 같은 시각 말
 
 import type { MessageState, SleepBlock, SshHostEntry, UsageWindow } from '../../engine/types'
+import type { Platform } from '../../engine/platform'
 import { hasBatchim } from '../../shared/josa'
 import { onPhone } from './phone'
 import type { DisplayStatus, Phase } from '../state/selectors'
@@ -201,6 +202,20 @@ export const SETUP = {
   tourEta: '· 1분',
   relaunching: '두레를 다시 켜요…',
 } as const
+
+/** mac 준비 화면 — 설치 스크립트(install.sh)·직접 할 명령·로그인 창(Terminal)만 다르다 */
+const SETUP_DARWIN = {
+  installBody: '두레는 이 Mac 의 Claude Code 로 에이전트를 움직여요. 단추를 누르면 Anthropic 공식 설치 스크립트(install.sh)를 대신 실행해요. 관리자 권한 없이 1~2분.',
+  command: 'curl -fsSL https://claude.ai/install.sh | bash',
+  loginBody: '단추를 누르면 터미널 창이 열리고 브라우저로 이어져요. 쓰고 있는 Claude 구독 계정으로 로그인하고 돌아오면 이어져요. 브라우저가 코드를 보여 주면 그 터미널 창에 붙여 넣어요.',
+} as const
+
+export type SetupWords = { readonly [K in keyof typeof SETUP]: string }
+
+/** 준비 화면 글 — darwin 이면 mac 글, 그 밖(win32 · 아직 모름)은 SETUP 그대로 */
+export function setupWords(platform: Platform | null | undefined): SetupWords {
+  return platform === 'darwin' ? { ...SETUP, ...SETUP_DARWIN } : SETUP
+}
 
 /** 안내 투어 문구(설계 4.3 · 문구 표) — 단계 모양(짚는 곳·넘어가는 법)은 tour/tourSteps.ts */
 export const TOUR = {

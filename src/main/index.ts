@@ -1,13 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerMonitor, powerSaveBlocker, shell, Tray } from 'electron'
-import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import electronUpdater from 'electron-updater'
-import { killTree } from '../engine/killTree'
-import { spawnOpts, type Platform } from '../engine/platform'
-import { authStatus, claudeEnv, claudeVersion, createEngine, locateClaude } from '../engine'
-import { homedir } from 'node:os'
+import type { Platform } from '../engine/platform'
+import { authStatus, claudeVersion, createEngine, locateClaude } from '../engine'
+import { homedir, tmpdir } from 'node:os'
 import { formatLogArgs, makeFatalReporter, openLog } from './log'
 import { startFailureMessage } from './startFailure'
 import type { Engine } from '../engine'
@@ -16,7 +14,7 @@ import { appEnv, appIconFor, appUserModelId, loginItemNamer, loginItemSettings }
 import { initAppPrefsSafe, writeAppPrefs } from './appPrefs'
 import { createPowerMode } from './powerMode'
 import { resolveClaudeCommand, resolveSshCommand, type ClaudeCommand } from './claudeCommand'
-import { cmdArgs, startWaitLine } from './cmdLine'
+import * as setupCommands from './setupCommands'
 import { updateClaude, type ClaudeUpdateRun } from './claudeUpdate'
 import { createQuitControl } from './quit'
 import { createUpdater, RELEASE_URL, type UpdaterLike } from './updater'
@@ -80,79 +78,18 @@ const bounded = (p: Promise<void> | undefined): Promise<void> =>
 
 /** 공식 설치 안내 */
 const SETUP_GUIDE_URL = 'https://code.claude.com/docs/en/setup'
-/** 공식 설치 스크립트 — 이 길만 쓴다 */
-const INSTALL_COMMAND = {
-  command: 'powershell.exe',
-  args: [
-    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
-    '[Console]::OutputEncoding=[Text.Encoding]::UTF8; irm https://claude.ai/install.ps1 | iex',
-  ],
-}
 
-/** Test-only: DURE_SETUP_INSTALL (JSON argv 배열) — 설치 명령을 가짜로 바꾼다. env 는 설치본에선 걸러진 사본 */
-function installCommand(raw: string | undefined): { command: string; args: string[] } {
-  if (!raw) return INSTALL_COMMAND
-  const bad = new Error('DURE_SETUP_INSTALL 은 JSON 배열이어야 해요')
-  let list: unknown
-  try {
-    list = JSON.parse(raw)
-  } catch {
-    throw bad
-  }
-  if (!Array.isArray(list) || list.length === 0 || !list.every((x) => typeof x === 'string')) throw bad
-  return { command: list[0] as string, args: (list as string[]).slice(1) }
-}
-
-/** 설치 스크립트를 돌리고 출력(stdout·stderr)을 줄로 쪼개 넘긴다 */
-function spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: number | null }>; kill(): Promise<void> } {
-  const cmd = installCommand(env.DURE_SETUP_INSTALL)
-  const child = spawn(cmd.command, cmd.args, { ...spawnOpts(platform), stdio: ['ignore', 'pipe', 'pipe'], env: claudeEnv(process.env) })
-  const feed = (stream: NodeJS.ReadableStream | null): void => {
-    let rest = ''
-    stream?.setEncoding('utf8')
-    stream?.on('data', (chunk: string) => {
-      rest += chunk
-      const parts = rest.split(/\r\n|\n|\r/)
-      rest = parts.pop() ?? ''
-      for (const l of parts) onLine(l)
-    })
-    stream?.on('end', () => {
-      if (rest) onLine(rest)
-    })
-  }
-  feed(child.stdout)
-  feed(child.stderr)
-  const done = new Promise<{ code: number | null }>((resolve, reject) => {
-    child.on('error', reject)
-    child.on('close', (code) => resolve({ code }))
-  })
-  // PowerShell 이 받아 돌리는 claude.exe install 은 자식이라 child.kill() 로는 안 꺼진다 — 나무째 끈다(POSIX 는 새 그룹째)
-  return { done, kill: () => (child.pid ? killTree(child.pid, { platform }) : Promise.resolve()) }
+/** 설치 — 이 운영체제의 공식 설치 스크립트(setupCommands). DURE_SETUP_INSTALL 은 시험용(env 는 설치본에선 걸러진 사본) — 틀리면 던져 준비 흐름이 실패로 보인다 */
+function spawnInstall(onLine: (l: string) => void): ReturnType<typeof setupCommands.spawnInstall> {
+  return setupCommands.spawnInstall(setupCommands.setupInstallCommand(platform, env.DURE_SETUP_INSTALL), onLine, { platform })
 }
 
 /**
- * 로그인 — 새 콘솔 창에서 `claude auth login --claudeai` (브라우저가 열린다). 창 없이 되는지(D1)는 아직 실측 전이라 이 선택을 여기 한 곳에 둔다.
- * `start /wait` 라 cmd 가 claude 를 기다리며 살아 있고 claude 는 cmd 의 자식 — kill() 은 cmd 를 나무째 꺼 콘솔 창까지 닫고, 끝날 때까지 기다린다.
- * 줄은 cmdLine 이 직접 만든다(경로에 & ^ % 가 있어도 cmd 가 나누거나 펼치지 않게).
+ * 로그인 — 새 창에서 `claude auth login --claudeai`(Windows 콘솔 창 · mac Terminal 창 — setupCommands.loginPlan). 창 없이 되는지(D1)는 아직 실측 전이라
+ * 이 선택을 setupCommands 한 곳에 둔다. mac 의 임시 .command 는 OS 임시 폴더에 — 흐름이 끝나거나 두레를 끌 때(setup.dispose) kill 이 지운다
  */
 function spawnLogin(c: ClaudeCommand): { kill(): Promise<void> } {
-  const line = startWaitLine(c.command, [...c.argsPrefix, 'auth', 'login', '--claudeai'])
-  const child = spawn('cmd.exe', cmdArgs(line), {
-    windowsHide: true,
-    windowsVerbatimArguments: true,
-    detached: true,
-    stdio: 'ignore',
-    env: claudeEnv(process.env),
-  })
-  let alive = true
-  const gone = (): void => {
-    alive = false
-  }
-  child.on('exit', gone)
-  child.on('error', gone)
-  child.unref()
-  // 이미 끝난 cmd 는 끄지 않는다 — 그 pid 를 다른 프로세스가 물려받았을 수 있다
-  return { kill: () => (alive && child.pid ? killTree(child.pid, { platform }) : Promise.resolve()) }
+  return setupCommands.spawnLogin(c, { platform, tmpDir: tmpdir() })
 }
 
 /** 앱 사건을 받는 곳 — registerIpc 가 onAppEvent 로 창 쪽을 단다 */
@@ -397,7 +334,8 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
       // 엔진 없이 도는 앱 쪽 일 — appInfo·prefs·setPrefs·준비 흐름·claude 최신으로·두레 업데이트
       const appHost: AppHost = {
         async appInfo() {
-          return { version: app.getVersion(), packaged: app.isPackaged }
+          // platform — 화면이 운영체제에 맞는 글(준비 화면 설치·로그인 안내)을 고른다
+          return { version: app.getVersion(), packaged: app.isPackaged, platform }
         },
         async prefs() {
           return prefs

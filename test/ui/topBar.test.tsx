@@ -39,7 +39,7 @@ beforeEach(() => {
     messages: [], requests: [], autoChainLimit: 3, allowBypass: false, notify: { asks: true, finished: false }, sleepAfterMin: 30, usage: null,
   }
   ;(window as any).dure = {
-    appInfo: async () => ({ version: '0.1.0', packaged: true }),
+    appInfo: async () => ({ version: '0.1.0', packaged: true, platform: 'win32' }),
     prefs: async () => ({ tourDone: true, approvalTipSeen: true, claudeAutoUpdate: true }),
     updateState: async () => ({ kind: 'idle' }),
     claudeUpdateState: async () => 'idle',

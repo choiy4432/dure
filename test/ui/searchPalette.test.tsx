@@ -55,7 +55,7 @@ beforeEach(() => {
   conversation = vi.fn(async () => [])
   const prefs = { tourDone: true, approvalTipSeen: true, claudeAutoUpdate: true }
   ;(window as any).dure = {
-    appInfo: async () => ({ version: '0.1.0', packaged: true }),
+    appInfo: async () => ({ version: '0.1.0', packaged: true, platform: 'win32' }),
     prefs: async () => prefs,
     setPrefs: async () => prefs,
     updateState: async () => ({ kind: 'idle' }),

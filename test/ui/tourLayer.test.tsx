@@ -32,7 +32,7 @@ beforeEach(() => {
   setPrefs = vi.fn(async (p: Partial<AppPrefs>) => (prefs = { ...prefs, ...p }))
   ;(window as any).dure = {
     snapshot: async () => snapshot, history: async () => [], on: () => () => {}, setSelected: async () => {},
-    appInfo: async () => ({ version: '0.1.0', packaged: false }), prefs: async () => prefs, setPrefs,
+    appInfo: async () => ({ version: '0.1.0', packaged: false, platform: 'win32' }), prefs: async () => prefs, setPrefs,
     setupState: async () => setupState, updateState: async () => ({ kind: 'idle' }), claudeUpdateState: async () => 'idle',
   }
 })
