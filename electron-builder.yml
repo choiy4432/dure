@@ -33,6 +33,29 @@ nsis:
   deleteAppDataOnUninstall: false
   # 제거 때 휴대폰 연결 정리(두레가 연 serve 길·로그인 항목) — customUnInstall 이 `두레 --uninstall-cleanup` 을 기다린다. 앱 데이터는 지우지 않는다
   include: build/installer.nsh
+# mac 시험 빌드 — GitHub Actions 의 mac-build(손으로 돌림)가 굽는다(이 Windows PC 에선 굽지 않는다). Actions 산출물로만 — 릴리스에 올리지 않는다
+# (올리면 latest-mac.yml 이 생겨 서명 없는 판에 업데이트 길이 열린다). 서명은 ad-hoc(identity '-') — Apple Silicon 은 서명 없는 실행 파일을
+# 아예 띄우지 않고, 인증서가 없으면 electron-builder 는 ad-hoc 으로 물러서지 않는다. ad-hoc 엔 hardened runtime 을 끈다(Electron 프레임워크의
+# 다른 Team ID 를 라이브러리 검사가 거절한다). 공증 없음 — 받은 사람은 격리 표시를 지운다(MAC-TEST.md)
+mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  category: public.app-category.developer-tools
+  # 1024 PNG — electron-builder 가 icns 로 바꾼다(scripts/icon/build.mjs 가 굽는다)
+  icon: resources/icon-1024.png
+  identity: '-'
+  hardenedRuntime: false
+  notarize: false
+  artifactName: Dure-${version}-${arch}.${ext}
+  # 메뉴 막대(트레이) 템플릿 — mac 빌드에만(위 files 에 더해진다. Windows 설치 파일엔 실리지 않는다)
+  files:
+    - resources/trayTemplate.png
+    - resources/trayTemplate@2x.png
+dmg:
+  artifactName: Dure-${version}-${arch}.${ext}
 publish:
   provider: github
   owner: choiy4432

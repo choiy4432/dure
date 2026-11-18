@@ -4878,7 +4878,8 @@ test('create_agent: 미리 보기 — 이름·역할의 줄바꿈·제어 문자
   expect(mine).toMatchObject({ name: '사'.repeat(41), role: '역할\n둘째 줄' });
 });
 
-test('create_agent: 폴더 — Git Bash 꼴(/c/...·/c)은 Windows 경로(C:\\...)로 바꿔 쓴다 · 드라이브 글자 하나일 때만', async () => {
+// Windows 만 — 시험 폴더가 드라이브 경로(C:\…)이고 Claude 의 셸이 Git Bash 인 곳. mac 은 아래 쌍둥이(바꾸지 않는다)
+test.runIf(process.platform === 'win32')('create_agent: 폴더 — Git Bash 꼴(/c/...·/c)은 Windows 경로(C:\\...)로 바꿔 쓴다 · 드라이브 글자 하나일 때만', async () => {
   const e = await start();
   const { a } = setup(e);
   const sub = folder('a/sub');
@@ -4912,6 +4913,27 @@ test('create_agent: 폴더 — Git Bash 꼴(/c/...·/c)은 Windows 경로(C:\\..
   await e.sendUser(a.id, text('MAKE 배시3|검사|/cc/nope|'));
   expect(await resultText(done)).toBe(`폴더를 찾을 수 없습니다: ${path.resolve(a.folder, '/cc/nope')}`);
   expect(requests).toHaveLength(seen);
+});
+
+// mac(POSIX) 러너 — /c/… 는 한 글자 맨 위 폴더일 뿐 드라이브로 바꾸지 않는다(그대로 찾고, 없으면 그 경로로 알린다)
+test.runIf(process.platform !== 'win32')('create_agent: 폴더 — POSIX 에선 /c/… 를 바꾸지 않는다', async () => {
+  const e = await start();
+  const { a } = setup(e);
+  const requests: PendingRequest[] = [];
+  e.on('request', (r: PendingRequest) => requests.push(r));
+  const done = resultOf(e, a.id);
+  await e.sendUser(a.id, text('MAKE 배시|검사|/c/dure-no-such-folder|'));
+  expect(await resultText(done)).toBe('폴더를 찾을 수 없습니다: /c/dure-no-such-folder');
+  expect(requests).toHaveLength(0);
+  // 진짜 POSIX 절대 경로는 그대로 쓴다
+  const sub = folder('a/sub');
+  const req = requestOf(e, a.id);
+  const made = resultOf(e, a.id);
+  await e.sendUser(a.id, text(`MAKE 맥|검사|${sub}|`));
+  const r = await req;
+  expect(r.input).toMatchObject({ folder: sub });
+  e.answerRequest(r.id, { type: 'deny' });
+  await made;
 });
 
 test('create_agent: 거절 — 결과는 새 에이전트 만들기를 거절했어요(오류), 에이전트 없음 · 항상 허용은 던지고 카드는 그대로', async () => {
@@ -6389,7 +6411,24 @@ test('newAgentFolder — 서버 방은 부모 서버 폴더 기준 POSIX(../api 
   expect(newAgentFolder(true, '/home/a/web', '~')).toBe('~');
   const base = folder('a');
   expect(newAgentFolder(false, base, 'sub')).toBe(path.join(base, 'sub'));
-  expect(newAgentFolder(false, base, '/c/Users')).toBe(path.resolve('C:/Users'));
+  // Git Bash 꼴 바꾸기는 Windows 만 — 기본 platform 은 process.platform 이라 mac 러너에선 그대로 둔다(아래 쌍둥이)
+  if (process.platform === 'win32') expect(newAgentFolder(false, base, '/c/Users')).toBe(path.resolve('C:/Users'));
+  else expect(newAgentFolder(false, base, '/c/Users')).toBe('/c/Users');
+});
+
+test('newAgentFolder — Git Bash 꼴(/c/…)을 드라이브 경로로 바꾸는 건 win32 만 · mac 의 /a/… 는 한 글자 맨 위 폴더 그대로(A:/… 가 되지 않는다)', () => {
+  const base = folder('a');
+  // win32 를 밝혀 넘기면 지금 그대로(이 PC 의 path 로 잇는다)
+  if (process.platform === 'win32') {
+    expect(newAgentFolder(false, base, '/c/Users', 'win32')).toBe(path.resolve('C:/Users'));
+    expect(newAgentFolder(false, base, '/d', 'win32')).toBe(path.resolve('D:/'));
+  }
+  // darwin — 바꾸지 않고 base 기준으로 잇기만(path.resolve 는 이 PC 의 것이라 Windows 에선 Windows 꼴로 잇는다)
+  expect(newAgentFolder(false, base, '/c/Users', 'darwin')).toBe(path.resolve(base, '/c/Users'));
+  expect(newAgentFolder(false, base, '/a/b', 'darwin')).toBe(path.resolve(base, '/a/b'));
+  expect(newAgentFolder(false, base, '/c/Users', 'darwin')).not.toBe(path.resolve('C:/Users'));
+  // 서버 방은 운영체제와 상관없이 POSIX
+  expect(newAgentFolder(true, '/home/a/web', '/c/Users', 'win32')).toBe('/c/Users');
 });
 
 // ── 서버(SSH) 방 — 띄우기·정리·끊김·로그인 만료 ──

@@ -558,10 +558,12 @@ async function runUpload(spec, host) {
   const hold = process.env.FAKE_SSH_UPLOAD_HOLD;
   if (hold && spec.file.includes(hold)) {
     // ProxyJump·ProxyCommand 흉내 — 같은 stdout·stderr 를 물려받은 자식(그것이 살아 있는 동안 부모의 파이프가 닫히지 않는다).
-    // detached: node 가 띄운 보통 자식은 부모와 함께 죽는 작업 개체(job)에 들어 파이프가 바로 닫힌다(이 PC 실측) — ssh.exe 가 띄운
-    // ProxyCommand 자식은 그렇게 묶이지 않는다고 보고, 묶이지 않은 자식으로 흉내 낸다
+    // Windows 는 detached: node 가 띄운 보통 자식은 부모와 함께 죽는 작업 개체(job)에 들어 파이프가 바로 닫힌다(이 PC 실측) — ssh.exe 가 띄운
+    // ProxyCommand 자식은 그렇게 묶이지 않는다고 보고, 묶이지 않은 자식으로 흉내 낸다.
+    // POSIX 는 detached 가 아니다: 진짜 ssh 의 ProxyCommand 자식은 ssh 와 같은 프로세스 그룹이다(두레는 ssh 를 새 그룹으로 띄우고 그룹째 끈다) —
+    // detached(setsid)면 다른 그룹이 되어 진짜와 다르게 그룹 끄기에 안 닿는다
     if (process.env.FAKE_SSH_UPLOAD_PROXY) {
-      const proxy = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, detached: true });
+      const proxy = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true, detached: process.platform === 'win32' });
       proxy.unref();
       log({ event: 'upload-proxy', pid: proxy.pid });
     }

@@ -6,23 +6,40 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { locateClaude, authStatus, claudeVersion } from '../src/engine/claudeSetup';
 
 describe('locateClaude', () => {
-  it('PATH 앞쪽 폴더가 우선', () => {
+  // 아래 넷은 platform 을 안 넘긴다 — 기본값(process.platform)이 win32 인 Windows 에서만 Windows 꼴(';'·claude.exe·USERPROFILE)을 본다.
+  // 같은 기대값을 platform 'win32' 으로 모든 러너에서 보는 쌍둥이가 'win32_는_지금과_같은_결과', mac 기본값은 '기본값은_process.platform'
+  const onWindows = process.platform === 'win32';
+  it.runIf(onWindows)('PATH 앞쪽 폴더가 우선', () => {
     const a = path.join('C_a', 'claude.exe');
     const b = path.join('C_b', 'claude.exe');
     const r = locateClaude({ PATH: 'C_a;;C_b', USERPROFILE: 'C_u' }, (p) => p === a || p === b);
     expect(r).toBe(a);
   });
-  it('Path(대소문자 다름) 도 읽는다', () => {
+  it.runIf(onWindows)('Path(대소문자 다름) 도 읽는다', () => {
     const a = path.join('C_a', 'claude.exe');
     expect(locateClaude({ Path: 'C_a' }, (p) => p === a)).toBe(a);
   });
-  it('PATH 에 없고 USERPROFILE 에 있음', () => {
+  it.runIf(onWindows)('PATH 에 없고 USERPROFILE 에 있음', () => {
     const u = path.join('C_u', '.local', 'bin', 'claude.exe');
     expect(locateClaude({ PATH: 'C_a', USERPROFILE: 'C_u' }, (p) => p === u)).toBe(u);
   });
-  it('둘 다 없으면 null', () => {
+  it.runIf(onWindows)('둘 다 없으면 null', () => {
     expect(locateClaude({ PATH: 'C_a', USERPROFILE: 'C_u' }, () => false)).toBeNull();
     expect(locateClaude({}, () => true)).toBeNull();
+  });
+  it('기본값은_process.platform — platform 을 안 넘기면 이 운영체제의 길과 같다', () => {
+    const p = process.platform as 'win32' | 'darwin' | 'linux';
+    const envs = [
+      { PATH: 'C_a;;C_b', USERPROFILE: 'C_u' },
+      { PATH: '/usr/local/bin:/opt/x', HOME: '/Users/a' },
+      {},
+    ];
+    for (const env of envs) {
+      const seenDefault: string[] = [];
+      const seenExplicit: string[] = [];
+      expect(locateClaude(env, (x) => (seenDefault.push(x), false))).toBe(locateClaude(env, (x) => (seenExplicit.push(x), false), p));
+      expect(seenDefault).toEqual(seenExplicit);
+    }
   });
 
   it("win32_는_지금과_같은_결과 — platform 'win32' 을 줘도 위와 같다(';'·claude.exe·USERPROFILE)", () => {

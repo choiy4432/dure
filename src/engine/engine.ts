@@ -389,10 +389,11 @@ function fromGitBashPath(p: string): string {
 
 /**
  * create_agent 의 폴더 — 만든 쪽 폴더 기준. 서버 방은 POSIX 로 잇는다(Git Bash 꼴로 바꾸지 않음).
- * 서버 방의 `~`·`~/…` 는 이을 수 없어 그대로 둔다 — create_agent 가 서버 확인(checkRemoteFolder)으로 펼친다
+ * 서버 방의 `~`·`~/…` 는 이을 수 없어 그대로 둔다 — create_agent 가 서버 확인(checkRemoteFolder)으로 펼친다.
+ * Git Bash 꼴 바꾸기는 Windows 만(Claude 의 셸이 Git Bash 인 곳) — mac 의 `/a/…` 는 한 글자 맨 위 폴더일 뿐이다
  */
-export function newAgentFolder(remote: boolean, base: string, rel: string): string {
-  if (!remote) return path.resolve(base, fromGitBashPath(rel));
+export function newAgentFolder(remote: boolean, base: string, rel: string, platform: Platform = process.platform as Platform): string {
+  if (!remote) return path.resolve(base, platform === 'win32' ? fromGitBashPath(rel) : rel);
   return rel === '~' || rel.startsWith('~/') ? rel : posixJoin(base, rel);
 }
 /** 부른 tool_use id 를 스트림에서 못 봤을 때 기다리는 한도 — 그 줄은 보통 부르기보다 먼저 온다(probe13·14) */
@@ -2669,7 +2670,7 @@ class EngineImpl extends EventEmitter implements Engine {
     const plan: CreateAgentInput = {
       name: args.name.trim(),
       role: args.role.trim(),
-      folder: newAgentFolder(!!remote, me.folder, args.folder ?? '.'),
+      folder: newAgentFolder(!!remote, me.folder, args.folder ?? '.', this.platform),
       task: args.task?.trim() ? args.task : null,
     };
     if (remote) {

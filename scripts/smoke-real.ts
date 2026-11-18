@@ -7,6 +7,8 @@ import { createEngine, locateClaude, authStatus } from '../src/engine';
 import type { Engine, AgentId, StreamEvent } from '../src/engine';
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/** 글에 쓰는 claude 이름 — Windows 는 지금 글 그대로 */
+const CLAUDE_NAME = process.platform === 'win32' ? 'claude.exe' : 'claude';
 let failures = 0;
 async function step(name: string, fn: () => Promise<void>): Promise<void> {
   try {
@@ -50,7 +52,34 @@ const attach = (e: Engine) => {
 const results = (id: AgentId) => seen.filter((s) => s.agentId === id && s.event.kind === 'result');
 const resultText = (id: AgentId) => results(id).map((s) => (s.event as any).text as string).join('\n');
 
+/** 이 프로세스의 자식 — Windows 는 PowerShell(CIM), mac 은 pgrep -P + ps */
 function listChildren(): Promise<{ pid: number; name: string }[]> {
+  return process.platform === 'win32' ? listChildrenWindows() : listChildrenPosix();
+}
+
+/** claude 프로세스인가 — Windows 는 이름(claude.exe). mac 은 실행 파일 경로(공식 설치는 ~/.local/bin/claude → ~/.local/share/claude/versions/<판> 링크) */
+const isClaude = (name: string): boolean => /^claude(\.exe)?$/i.test(name) || /(^|\/)claude$/.test(name) || /\/claude\/versions\//.test(name);
+
+/** mac(POSIX) — pgrep -P 로 자식 pid, ps 로 실행 파일 경로. 자식이 없으면 pgrep 이 1 로 끝난다(빈 목록) */
+function listChildrenPosix(): Promise<{ pid: number; name: string }[]> {
+  return new Promise((resolve, reject) => {
+    execFile('/usr/bin/pgrep', ['-P', String(process.pid)], { timeout: 30000 }, (err, stdout) => {
+      const pids = String(stdout).split(/\s+/).filter((s) => /^\d+$/.test(s));
+      if (pids.length === 0) return err && (err as { code?: unknown }).code !== 1 ? reject(err) : resolve([]);
+      execFile('/bin/ps', ['-o', 'pid=,comm=', '-p', pids.join(',')], { timeout: 30000 }, (err2, out) => {
+        if (err2) return reject(err2);
+        const rows = String(out)
+          .split('\n')
+          .map((l) => /^\s*(\d+)\s+(.+?)\s*$/.exec(l))
+          .filter((m): m is RegExpExecArray => m !== null)
+          .map((m) => ({ pid: Number(m[1]), name: m[2] }));
+        resolve(rows);
+      });
+    });
+  });
+}
+
+function listChildrenWindows(): Promise<{ pid: number; name: string }[]> {
   return new Promise((resolve, reject) => {
     execFile(
       'powershell',
@@ -73,7 +102,7 @@ async function main() {
   let A!: AgentId, B!: AgentId;
 
   await step('locate', async () => {
-    if (!claudePath) throw new Error('claude.exe 를 찾지 못함');
+    if (!claudePath) throw new Error(`${CLAUDE_NAME} 를 찾지 못함`);
     const a = await authStatus({ command: claudePath, argsPrefix: [] });
     if (!a.loggedIn) throw new Error('로그인되어 있지 않음');
   });
@@ -160,10 +189,10 @@ async function main() {
   const pids: number[] = [];
   await step('cleanup', async () => {
     const kids = await listChildren();
-    const others = kids.filter((k) => !/^claude(\.exe)?$/i.test(k.name)).map((k) => k.name);
+    const others = kids.filter((k) => !isClaude(k.name)).map((k) => k.name);
     if (others.length) console.log(`INFO other children: ${[...new Set(others)].join(',')}`);
-    for (const k of kids) if (/^claude(\.exe)?$/i.test(k.name)) pids.push(k.pid);
-    if (pids.length === 0) throw new Error('claude.exe 자식 프로세스를 찾지 못함(목록이 안 됨)');
+    for (const k of kids) if (isClaude(k.name)) pids.push(k.pid);
+    if (pids.length === 0) throw new Error(`${CLAUDE_NAME} 자식 프로세스를 찾지 못함(목록이 안 됨)`);
     await engine.shutdown();
     await sleep(2000);
     const alive = pids.filter((pid) => {

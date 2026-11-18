@@ -28,6 +28,11 @@ const hasBash = (() => {
     return tmp !== null && spawnSync('bash', ['-c', 'test -d "$1"', 'bash', tmp]).status === 0;
   } catch { return false; }
 })();
+/**
+ * 표식(DURE_RUN) 찾기는 /proc/<pid>/environ 을 읽는다 — 서버는 리눅스 전제. 이 PC 의 bash 가 /proc 를 볼 때만 돈다(Windows 는 Git Bash 의 흉내 /proc,
+ * mac 엔 /proc 가 없다). node 의 existsSync('/proc/…') 는 Windows 에서 C:\proc 를 보므로 bash 에게 묻는다
+ */
+const hasProc = hasBash && spawnSync('bash', ['-c', 'test -r /proc/self/environ']).status === 0;
 /** 윈도 경로 → bash 가 아는 경로 — hasBash 일 때만 쓴다. 못 바꾸면 던진다(윈도 경로를 그대로 넘겨 쓰레기 폴더를 만들지 않게) */
 const posix = (p: string) => {
   const r = toPosix(p);
@@ -353,7 +358,7 @@ describe('cleanupScript', () => {
     expect(spawnSync('bash', ['-n', '-c', s]).status).toBe(0);
     expect(spawnSync('bash', ['-n', '-c', remoteLaunchScript({ agentId: 'a', launchId: 'b', folder: '/x', claudeArgs: [] })]).status).toBe(0);
   });
-  it.skipIf(!hasBash)('표식을 가진 프로세스는 다른 세션·고아여도 끄고, 표식 없는 것은 남긴다', () => {
+  it.skipIf(!hasProc)('표식을 가진 프로세스는 다른 세션·고아여도 끄고, 표식 없는 것은 남긴다', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'dure-mark-'));
     const pids: string[] = [];
     try {
@@ -399,7 +404,8 @@ describe('cleanupScript', () => {
 });
 
 describe('cleanupScript — 표식이 안 맞는 pid 는 건드리지 않는다', () => {
-  it.skipIf(!hasBash)('남의 살아 있는 프로세스는 그대로', () => {
+  // /proc 가 없으면 cleanupScript 는 저장된 pid 를 표식 확인 없이 끈다(서버는 리눅스 전제 — 그 성질은 그대로) — 표식 확인을 볼 수 있을 때만
+  it.skipIf(!hasProc)('남의 살아 있는 프로세스는 그대로', () => {
     const holder = spawnSync('bash', ['-c', 'sleep 60 >/dev/null 2>&1 & echo $!; disown'], { encoding: 'utf8' });
     const pid = Number(holder.stdout.trim());
     expect(pid).toBeGreaterThan(0);

@@ -631,9 +631,13 @@ describe('registerIpc', () => {
       ['sendUser', ['a1', [text, good, image, empty], undefined]],
       ['sendUser', ['a1', [good], { plan: true }]],
     ])
-    // 네트워크 공유·빗금 꼴·긴 경로 꼴도 절대 경로다 — 검증을 조이다가 막히지 않게
+    // 네트워크 공유·빗금 꼴·긴 경로 꼴도 절대 경로다 — 검증을 조이다가 막히지 않게.
+    // 검사는 이 PC 의 path.isAbsolute — mac(POSIX)에선 Windows 꼴이 절대 경로가 아니라 / 로 시작하는 꼴(공유 볼륨·홈·.. 섞임)으로 본다
     calls.length = 0
-    for (const p of ['\\\\server\\share\\a.pdf', 'C:/x/a.pdf', '\\\\?\\C:\\x\\a.pdf']) {
+    const absForms = process.platform === 'win32'
+      ? ['\\\\server\\share\\a.pdf', 'C:/x/a.pdf', '\\\\?\\C:\\x\\a.pdf']
+      : ['/Volumes/공유/a.pdf', '/Users/x/a.pdf', '/private/var/../x/a.pdf']
+    for (const p of absForms) {
       expect(await call('sendUser', 'a1', [{ ...good, path: p }]), p).toEqual({ ok: true, value: null })
     }
     expect(calls).toHaveLength(3)

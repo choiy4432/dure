@@ -13,9 +13,10 @@ const C = { command: 'claude', argsPrefix: ['--x'] }
 describe('updateClaude', () => {
   it('상한은 90초', () => expect(CLAUDE_UPDATE_TIMEOUT_MS).toBe(90_000))
 
+  // '창 없이'(windowsHide)는 Windows 옵션 — platform 을 밝혀 넘긴다(기본값 process.platform 은 mac 러너에선 darwin 옵션이다)
   it('코드 0 → ok (명령은 [...argsPrefix, update], 창 없이)', async () => {
     const { spawn, child } = fakeSpawn()
-    const run = updateClaude(C, { spawn })
+    const run = updateClaude(C, { spawn, platform: 'win32' })
     child.emit('close', 0)
     expect(await run.done).toBe('ok')
     expect(spawn).toHaveBeenCalledWith('claude', ['--x', 'update'], expect.objectContaining({ windowsHide: true }))

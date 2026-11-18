@@ -1,0 +1,45 @@
+# mac 시험 빌드 — 손으로만 돌린다(Actions 탭 → mac-build → Run workflow). 푸시·PR 때는 돌지 않는다.
+# 시험(vitest)을 mac 러너에서 돌린 뒤 서명·공증 없는 ad-hoc 빌드(arm64 · x64 의 dmg · zip)를 Actions 산출물로만 올린다(14일).
+# 🔴 릴리스에 올리지 않는다(--publish never — latest-mac.yml 이 생기면 서명 없는 판에 업데이트 길이 열린다). 비밀 값·토큰을 쓰지 않는다.
+# 받는 법·시험할 것은 레포 맨 위의 MAC-TEST.md
+name: mac-build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Apple Silicon 러너 — 네이티브 모듈이 없어 이 한 대에서 arm64 · x64 를 다 꾸린다
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      # 러너 키체인의 인증서를 찾지 않는다 — 서명은 electron-builder.yml 의 mac.identity '-'(ad-hoc)
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          # package.json engines(node >=20) 안 — 시험·빌드 도구는 이 Node 로 돈다(앱은 Electron 의 Node)
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      # 안드로이드 앱(resources/android)은 git 에 없다 — electron-builder 는 없는 extraResources 에 경고만 내지만, 빈 폴더를 확실히 둔다
+      - run: mkdir -p resources/android
+      - run: npx electron-builder --mac --arm64 --x64 --publish never
+      # 고른 파일만 — dist 의 다른 산출물(builder-debug.yml 등)은 올리지 않는다
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dure-mac-${{ github.sha }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
