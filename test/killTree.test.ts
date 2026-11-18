@@ -68,15 +68,16 @@ describe('killTree', () => {
     expect(w.total).toBeLessThan(KILL_GRACE_MS);
   });
 
-  it('그룹이_없으면(ESRCH)_pid_하나로_물러선다', async () => {
-    const k = fakeKill((target) => target < 0); // 그룹으로 띄우지 않은 pid — -pid 는 늘 ESRCH
+  it('그룹이_없으면(ESRCH)_다_끝난_것 — pid 하나로 물러서지 않는다(같은 번호를 물려받은 남을 끄지 않게) · 기다리지도 KILL 하지도 않는다', async () => {
+    // 두레는 POSIX 에서 늘 그룹으로 띄운다(spawnOpts) — -pid 가 ESRCH 면 그룹째 없다. 그 pid 는 이미 남의 것일 수 있다
+    const k = fakeKill((target) => target < 0);
     const w = fakeWait();
-    await killTree(4242, { platform: 'darwin', kill: k.kill, wait: w.wait });
-    expect(k.signals()).toEqual([[-4242, 'SIGTERM'], [4242, 'SIGTERM'], [4242, 'SIGKILL']]);
-    expect(w.total).toBe(1500);
+    await expect(killTree(4242, { platform: 'darwin', kill: k.kill, wait: w.wait })).resolves.toBeUndefined();
+    expect(k.calls).toEqual([[-4242, 'SIGTERM']]);
+    expect(w.wait).not.toHaveBeenCalled();
   });
 
-  it('EPERM 도 pid 하나로 물러선다', async () => {
+  it('EPERM 이면 pid 하나로 물러선다(그룹 안에 못 건드리는 것이 있다 — 그룹이 살아 있으니 그 pid 는 아직 우리 것)', async () => {
     const k = fakeKill();
     k.kill.mockImplementation((target, sig) => {
       k.calls.push([target, sig]);
@@ -86,11 +87,28 @@ describe('killTree', () => {
     expect(k.signals()).toEqual([[-4242, 'SIGTERM'], [4242, 'SIGTERM'], [4242, 'SIGKILL']]);
   });
 
-  it('둘_다_던져도_resolve — 이미 끝났으니 기다리지도 KILL 하지도 않는다', async () => {
-    const k = fakeKill(() => true);
+  it('EPERM 뒤 pid 하나도 던지면 resolve — 기다리지도 KILL 하지도 않는다', async () => {
+    const k = fakeKill();
+    k.kill.mockImplementation((target, sig) => {
+      k.calls.push([target, sig]);
+      if (target < 0) throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+      throw esrch();
+    });
     const w = fakeWait();
     await expect(killTree(4242, { platform: 'darwin', kill: k.kill, wait: w.wait })).resolves.toBeUndefined();
     expect(k.signals()).toEqual([[-4242, 'SIGTERM'], [4242, 'SIGTERM']]);
+    expect(w.wait).not.toHaveBeenCalled();
+  });
+
+  it('그 밖의 오류(코드 없음 등)도 다 끝난 것으로 — pid 하나로 물러서지 않는다', async () => {
+    const k = fakeKill();
+    k.kill.mockImplementation((target, sig) => {
+      k.calls.push([target, sig]);
+      if (target < 0) throw new Error('알 수 없음');
+    });
+    const w = fakeWait();
+    await killTree(4242, { platform: 'darwin', kill: k.kill, wait: w.wait });
+    expect(k.calls).toEqual([[-4242, 'SIGTERM']]);
     expect(w.wait).not.toHaveBeenCalled();
   });
 

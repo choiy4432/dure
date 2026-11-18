@@ -497,6 +497,8 @@ describe('운영체제', () => {
   function fakeChild() {
     return Object.assign(new EventEmitter(), {
       pid: 4242, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(), unref: vi.fn(),
+      // 진짜 ChildProcess 처럼 — 살아 있는 동안 null, 끝나면('exit') 둘 중 하나가 찬다
+      exitCode: null as number | null, signalCode: null as NodeJS.Signals | null,
     });
   }
   function fake(platform: 'win32' | 'darwin') {
@@ -526,6 +528,29 @@ describe('운영체제', () => {
     expect(child.unref).not.toHaveBeenCalled();
     await s.stop({ now: true });
     expect(killTree).toHaveBeenCalledWith(4242, { platform: 'darwin' });
+    expect(s.status).toBe('stopped');
+  });
+
+  test('darwin — 이미 끝난 claude(exitCode·signalCode 가 참)는 stop 이 끄지 않는다 — 같은 번호를 물려받은 남을 건드리지 않게, close 만 기다린다', async () => {
+    for (const ended of [{ exitCode: 0 }, { exitCode: 1 }, { signalCode: 'SIGTERM' as const }]) {
+      const { s, child, killTree } = fake('darwin');
+      s.start();
+      Object.assign(child, ended); // 'exit' 는 왔고 'close'(파이프 닫힘)는 아직
+      const stopped = s.stop({ now: true });
+      await new Promise((r) => setImmediate(r));
+      expect(killTree, JSON.stringify(ended)).not.toHaveBeenCalled();
+      child.emit('close', ended.exitCode ?? null);
+      await stopped;
+      expect(s.status).toBe('stopped');
+    }
+  });
+
+  test('win32 — 이미 끝난 claude 라도 stop 은 지금처럼 taskkill 나무째(바뀌지 않는다)', async () => {
+    const { s, child, killTree } = fake('win32');
+    s.start();
+    child.exitCode = 0;
+    await s.stop({ now: true });
+    expect(killTree).toHaveBeenCalledWith(4242, { platform: 'win32' });
     expect(s.status).toBe('stopped');
   });
 

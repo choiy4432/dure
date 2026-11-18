@@ -120,7 +120,7 @@ describe('shellRunner — 기본 run', () => {
     return Object.assign(new EventEmitter(), { pid: 4242, stdout: new PassThrough(), kill: vi.fn() })
   }
 
-  it('새 프로세스 그룹으로(detached) · 입력 없음 · stderr 는 버린다 — 닫히면 stdout', async () => {
+  it('새 프로세스 그룹으로(detached) · 입력 없음 · stderr 는 버린다 — 표식 없이 닫히면 그때까지의 stdout', async () => {
     const child = fakeChild()
     const spawn = vi.fn(() => child)
     const kill = vi.fn(async () => {})
@@ -128,12 +128,48 @@ describe('shellRunner — 기본 run', () => {
     const p = shellRunner({ spawn: spawn as any, kill, env })('/bin/zsh', ['-ilc', 'x'], 3000)
     expect(spawn).toHaveBeenCalledWith('/bin/zsh', ['-ilc', 'x'], { detached: true, stdio: ['ignore', 'pipe', 'ignore'], env })
     child.stdout.write('noise ')
-    child.stdout.write(wrap('/a'))
+    child.stdout.write(`${S}/a`) // 끝 표식이 오지 않음(printf 가 없는 셸 등)
     child.stdout.end()
     await new Promise((r) => setImmediate(r))
     child.emit('close', 1) // 끝 코드는 보지 않는다 — 표식이 말한다
-    expect(await p).toBe(`noise ${wrap('/a')}`)
+    expect(await p).toBe(`noise ${S}/a`)
     expect(kill).not.toHaveBeenCalled()
+  })
+
+  it('끝 표식이 오면 닫히길 기다리지 않는다 — 프로필의 뒷일이 stdout 을 쥐고 안 닫혀도 곧 돌려주고, 셸은 그룹째 끄고 더 듣지 않는다', async () => {
+    const child = fakeChild()
+    const kill = vi.fn(async () => {})
+    // 상한을 크게 — 기다렸다면 이 시험의 상한(2초)에 걸린다
+    const p = shellRunner({ spawn: (() => child) as any, kill, env: {} })('/bin/zsh', ['-ilc', 'x'], 60_000)
+    child.stdout.write(`Last login\n${S}/opt/homebrew/bin:/u`)
+    await new Promise((r) => setImmediate(r))
+    expect(kill).not.toHaveBeenCalled() // 표식이 반만 — 아직
+    child.stdout.write(`sr/bin${E}\n`) // 끝 표식이 조각 사이에 갈려 와도
+    // close 도 end 도 내지 않는다
+    expect(await p).toBe(`Last login\n${wrap('/opt/homebrew/bin:/usr/bin')}\n`)
+    expect(parseShellPath(await p)).toBe('/opt/homebrew/bin:/usr/bin')
+    expect(kill).toHaveBeenCalledTimes(1)
+    expect(kill).toHaveBeenCalledWith(4242)
+    expect(child.stdout.listenerCount('data')).toBe(0)
+    // 뒤늦은 close 는 아무 일도 아니다(한 번만 끈다)
+    child.emit('close', 0)
+    await new Promise((r) => setImmediate(r))
+    expect(kill).toHaveBeenCalledTimes(1)
+  }, 2000)
+
+  it('끝 표식만(시작 표식 없이) 와서는 돌려주지 않는다 — 닫힐 때까지 기다린다', async () => {
+    const child = fakeChild()
+    const kill = vi.fn(async () => {})
+    const p = shellRunner({ spawn: (() => child) as any, kill, env: {} })('/bin/zsh', ['-ilc', 'x'], 60_000)
+    let done = false
+    void p.then(() => (done = true))
+    child.stdout.write(`echo ${E} in profile\n`)
+    await new Promise((r) => setImmediate(r))
+    await new Promise((r) => setImmediate(r))
+    expect(done).toBe(false)
+    expect(kill).not.toHaveBeenCalled()
+    child.emit('close', 0)
+    expect(await p).toBe(`echo ${E} in profile\n`)
   })
 
   it('띄우지 못하면(ENOENT — $SHELL 이 없는 파일) 거절', async () => {

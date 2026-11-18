@@ -2,8 +2,8 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { locateClaude, authStatus, claudeVersion } from '../src/engine/claudeSetup';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { locateClaude, authStatus, claudeVersion, isExecutableFile } from '../src/engine/claudeSetup';
 
 describe('locateClaude', () => {
   // 아래 넷은 platform 을 안 넘긴다 — 기본값(process.platform)이 win32 인 Windows 에서만 Windows 꼴(';'·claude.exe·USERPROFILE)을 본다.
@@ -56,40 +56,101 @@ describe('locateClaude', () => {
     locateClaude({ PATH: 'C_a', HOME: '/Users/a' }, (p) => (seen.push(p), false), 'win32');
     expect(seen).toEqual([a]);
   });
+
+  it('win32_은_실행_파일_확인을_부르지_않는다 — 있기만 하면(exists) 지금처럼 그것', () => {
+    const a = path.join('C_a', 'claude.exe');
+    const u = path.join('C_u', '.local', 'bin', 'claude.exe');
+    const exe = vi.fn(() => false); // 불렸다면 다 건너뛰었을 것
+    expect(locateClaude({ PATH: 'C_a', USERPROFILE: 'C_u' }, (p) => p === a, 'win32', exe)).toBe(a);
+    expect(locateClaude({ PATH: 'C_a', USERPROFILE: 'C_u' }, (p) => p === u, 'win32', exe)).toBe(u);
+    expect(locateClaude({ PATH: 'C_a', USERPROFILE: 'C_u' }, () => false, 'win32', exe)).toBeNull();
+    expect(exe).not.toHaveBeenCalled();
+  });
 });
 
 describe('locateClaude — darwin', () => {
   const FIXED = (home: string) => [`${home}/.local/bin/claude`, '/opt/homebrew/bin/claude', '/usr/local/bin/claude', `${home}/.claude/local/claude`];
+  /** 실행 파일 확인 — 이 묶음의 위쪽 시험은 '있으면 실행 파일'로 친다(진짜 파일 시스템을 보지 않는다) */
+  const EXE = () => true;
 
   it('darwin_PATH_는_콜론으로_나누고_claude_를_찾는다 — 앞쪽 폴더가 우선, 빈 칸·상대 경로는 건너뛴다', () => {
     const seen: string[] = [];
     const exists = (p: string) => (seen.push(p), p === '/b/bin/claude' || p === '/c/claude');
-    expect(locateClaude({ PATH: '::bin:./x:/a:/b/bin:/c', HOME: '/Users/a' }, exists, 'darwin')).toBe('/b/bin/claude');
+    expect(locateClaude({ PATH: '::bin:./x:/a:/b/bin:/c', HOME: '/Users/a' }, exists, 'darwin', EXE)).toBe('/b/bin/claude');
     expect(seen).toEqual(['/a/claude', '/b/bin/claude']); // claude.exe 도, 역슬래시도 아니다
   });
 
   it('darwin_PATH_에_없으면_고정_후보_순서대로(HOME 기준 네 곳)', () => {
     const seen: string[] = [];
-    expect(locateClaude({ PATH: '/usr/bin:/bin', HOME: '/Users/a' }, (p) => (seen.push(p), false), 'darwin')).toBeNull();
+    expect(locateClaude({ PATH: '/usr/bin:/bin', HOME: '/Users/a' }, (p) => (seen.push(p), false), 'darwin', EXE)).toBeNull();
     expect(seen).toEqual(['/usr/bin/claude', '/bin/claude', ...FIXED('/Users/a')]);
     // 하나씩 — 앞의 것이 있으면 그것
     for (const want of FIXED('/Users/a')) {
-      expect(locateClaude({ PATH: '/usr/bin', HOME: '/Users/a' }, (p) => p === want, 'darwin')).toBe(want);
+      expect(locateClaude({ PATH: '/usr/bin', HOME: '/Users/a' }, (p) => p === want, 'darwin', EXE)).toBe(want);
     }
     const two = FIXED('/Users/a').slice(1, 3);
-    expect(locateClaude({ PATH: '/usr/bin', HOME: '/Users/a' }, (p) => two.includes(p), 'darwin')).toBe('/opt/homebrew/bin/claude');
+    expect(locateClaude({ PATH: '/usr/bin', HOME: '/Users/a' }, (p) => two.includes(p), 'darwin', EXE)).toBe('/opt/homebrew/bin/claude');
   });
 
   it('홈 경로 끝의 / 도 한 번만', () => {
-    expect(locateClaude({ HOME: '/Users/a/' }, (p) => p === '/Users/a/.local/bin/claude', 'darwin')).toBe('/Users/a/.local/bin/claude');
+    expect(locateClaude({ HOME: '/Users/a/' }, (p) => p === '/Users/a/.local/bin/claude', 'darwin', EXE)).toBe('/Users/a/.local/bin/claude');
   });
 
   it('HOME_이_없어도_던지지_않는다 — 홈 기준 후보만 건너뛴다(USERPROFILE 도 보지 않는다)', () => {
     const seen: string[] = [];
-    expect(locateClaude({ USERPROFILE: 'C_u' }, (p) => (seen.push(p), false), 'darwin')).toBeNull();
+    expect(locateClaude({ USERPROFILE: 'C_u' }, (p) => (seen.push(p), false), 'darwin', EXE)).toBeNull();
     expect(seen).toEqual(['/opt/homebrew/bin/claude', '/usr/local/bin/claude']);
-    expect(locateClaude({}, (p) => p === '/usr/local/bin/claude', 'darwin')).toBe('/usr/local/bin/claude');
-    expect(locateClaude({ HOME: 'relative' }, (p) => p.startsWith('relative'), 'darwin')).toBeNull();
+    expect(locateClaude({}, (p) => p === '/usr/local/bin/claude', 'darwin', EXE)).toBe('/usr/local/bin/claude');
+    expect(locateClaude({ HOME: 'relative' }, (p) => p.startsWith('relative'), 'darwin', EXE)).toBeNull();
+  });
+
+  // 가짜 파일 시스템 — 진짜 디스크·실행 권한을 보지 않는다(Windows 의 X_OK 는 있기만 보면 참이라 진짜로는 가를 수 없다)
+  type Entry = 'dir' | 'file' | 'exe';
+  function fakeFs(tree: Record<string, Entry>) {
+    const access = vi.fn((p: string, mode: number) => {
+      expect(mode).toBe(fs.constants.X_OK);
+      if (tree[p] !== 'exe') throw Object.assign(new Error(`EACCES: permission denied, access '${p}'`), { code: 'EACCES' });
+    });
+    const io = {
+      statSync: (p: string) => {
+        const e = tree[p];
+        if (!e) throw Object.assign(new Error(`ENOENT: no such file or directory, stat '${p}'`), { code: 'ENOENT' });
+        return { isFile: () => e !== 'dir' };
+      },
+      accessSync: access,
+    };
+    return { io, access, exists: (p: string) => p in tree };
+  }
+
+  it('darwin_PATH_앞의_claude_가_폴더면_건너뛴다 — 뒤의 실행 파일을 고른다(폴더를 띄우면 EACCES)', () => {
+    const f = fakeFs({ '/a/claude': 'dir', '/b/claude': 'exe' });
+    expect(locateClaude({ PATH: '/a:/b' }, f.exists, 'darwin', (p) => isExecutableFile(p, f.io))).toBe('/b/claude');
+  });
+
+  it('darwin_실행_권한이_없는_파일도_건너뛴다 — 고정 후보까지 그렇다', () => {
+    const f = fakeFs({ '/a/claude': 'file', '/b/claude': 'exe' });
+    expect(locateClaude({ PATH: '/a:/b' }, f.exists, 'darwin', (p) => isExecutableFile(p, f.io))).toBe('/b/claude');
+    const g = fakeFs({ '/Users/a/.local/bin/claude': 'file', '/opt/homebrew/bin/claude': 'dir', '/usr/local/bin/claude': 'exe' });
+    expect(locateClaude({ PATH: '/usr/bin', HOME: '/Users/a' }, g.exists, 'darwin', (p) => isExecutableFile(p, g.io))).toBe('/usr/local/bin/claude');
+    // 쓸 수 있는 것이 하나도 없으면 null
+    const h = fakeFs({ '/a/claude': 'dir', '/Users/a/.local/bin/claude': 'file' });
+    expect(locateClaude({ PATH: '/a', HOME: '/Users/a' }, h.exists, 'darwin', (p) => isExecutableFile(p, h.io))).toBeNull();
+  });
+});
+
+describe('isExecutableFile — POSIX 의 claude 후보 확인', () => {
+  const fail = (code: string) => () => {
+    throw Object.assign(new Error(code), { code });
+  };
+  it('보통 파일이고 X_OK 면 참 — 폴더·실행 권한 없음·없음은 거짓(던지지 않는다)', () => {
+    const access = vi.fn();
+    expect(isExecutableFile('/x/claude', { statSync: () => ({ isFile: () => true }), accessSync: access })).toBe(true);
+    expect(access).toHaveBeenCalledWith('/x/claude', fs.constants.X_OK);
+    const dirAccess = vi.fn();
+    expect(isExecutableFile('/x/claude', { statSync: () => ({ isFile: () => false }), accessSync: dirAccess })).toBe(false);
+    expect(dirAccess).not.toHaveBeenCalled(); // 폴더는 X_OK(들어가기)라도 실행 파일이 아니다
+    expect(isExecutableFile('/x/claude', { statSync: () => ({ isFile: () => true }), accessSync: fail('EACCES') })).toBe(false);
+    expect(isExecutableFile('/x/claude', { statSync: fail('ENOENT'), accessSync: vi.fn() })).toBe(false);
   });
 });
 

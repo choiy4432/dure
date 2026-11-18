@@ -28,6 +28,12 @@ function shellArgs(shell: string): string[] {
   return ['-ilc', posix.basename(shell) === 'fish' ? `${printf} (string join : $PATH)` : `${printf} "$PATH"`]
 }
 
+/** 시작 표식 뒤에 끝 표식까지 왔나 — parseShellPath 가 읽는 자리(처음 시작 표식 · 그 뒤 처음 끝 표식)와 같다 */
+function hasMarkers(out: string): boolean {
+  const s = out.indexOf(START)
+  return s >= 0 && out.indexOf(END, s + START.length) >= 0
+}
+
 /** 표식 사이의 PATH 만 — 표식이 없거나 비었거나 줄바꿈·NUL 이 들었으면 null. 절대 경로가 아닌 칸(빈 칸·'.'·펼치지 못한 '$PATH')은 버린다 */
 export function parseShellPath(stdout: string): string | null {
   const s = stdout.indexOf(START)
@@ -76,7 +82,9 @@ export function applyShellPath(env: NodeJS.ProcessEnv, fromShell: string | null)
 
 /**
  * 기본 run — 셸 없이 그 셸을 띄운다(mac 만 쓴다 — 새 프로세스 그룹·제어 터미널 없음이라 프로필이 터미널을 붙잡지 못한다). 입력은 없음(/dev/null),
- * stderr 는 버린다. 닫히면 stdout(끝 코드는 보지 않는다 — 표식이 말한다), 못 띄우면(ENOENT 등) 거절, 상한이면 셸을 그룹째 끄고 거절. spawn·kill 은 시험용
+ * stderr 는 버린다. 끝 표식까지 오면 곧 그때까지의 stdout — 닫히길 기다리지 않는다(프로필이 띄운 뒷일이 stdout 을 쥐고 있으면 close 가 상한까지
+ * 안 와 켤 때마다 3초를 기다리고 아무것도 못 들인다). 그때 셸을 그룹째 끄고(그 뒷일까지) 더 듣지 않는다. 표식 없이 닫히면 그때까지의 stdout
+ * (끝 코드는 보지 않는다 — 표식이 말한다), 못 띄우면(ENOENT 등) 거절, 상한이면 셸을 그룹째 끄고 거절. spawn·kill 은 시험용
  */
 export function shellRunner(d: { spawn?: typeof nodeSpawn; kill?: (pid: number) => Promise<void>; env?: NodeJS.ProcessEnv } = {}): ShellRun {
   const spawn = d.spawn ?? nodeSpawn
@@ -92,14 +100,24 @@ export function shellRunner(d: { spawn?: typeof nodeSpawn; kill?: (pid: number) 
         clearTimeout(timer)
         fn()
       }
+      /** 셸을 그룹째 — 셸이 이미 끝났어도 뒷일이 남았으면 그 그룹은 살아 있다(그룹이 없으면 killTree 가 곧 돌아온다) */
+      const killShell = (): void => {
+        if (child.pid) void kill(child.pid).catch(() => {})
+      }
       const timer = setTimeout(() => {
         finish(() => reject(new Error('시간 초과')))
-        if (child.pid) void kill(child.pid).catch(() => {})
+        killShell()
       }, timeoutMs)
-      child.stdout?.setEncoding('utf8')
-      child.stdout?.on('data', (s: string) => {
+      const onData = (s: string): void => {
         out = (out + s).slice(-OUTPUT_KEEP)
-      })
+        if (settled || !hasMarkers(out)) return
+        child.stdout?.off('data', onData)
+        child.stdout?.destroy()
+        finish(() => resolve(out))
+        killShell()
+      }
+      child.stdout?.setEncoding('utf8')
+      child.stdout?.on('data', onData)
       child.on('error', (e) => finish(() => reject(e)))
       child.on('close', () => finish(() => resolve(out)))
     })

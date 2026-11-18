@@ -8,12 +8,14 @@ import type { Platform } from './platform';
  * 이 PC 의 claude — PATH 를 앞에서부터, 없으면 공식 설치기 자리. 못 찾으면 null.
  * win32: PATH 를 ';' 로 · claude.exe · %USERPROFILE%\.local\bin\claude.exe (지금 그대로).
  * POSIX(mac): PATH 를 ':' 로(절대 경로 칸만) · claude → 고정 후보 차례로 — ~/.local/bin(공식 install.sh) · /opt/homebrew/bin(Apple Silicon Homebrew) ·
- *   /usr/local/bin(Intel Homebrew) · ~/.claude/local(옛 로컬 설치). Finder 로 켠 앱의 PATH 는 main 이 로그인 셸에서 먼저 메운다(shellPath.ts) — 이 목록은 그게 안 될 때의 받침
+ *   /usr/local/bin(Intel Homebrew) · ~/.claude/local(옛 로컬 설치). Finder 로 켠 앱의 PATH 는 main 이 로그인 셸에서 먼저 메운다(shellPath.ts) — 이 목록은 그게 안 될 때의 받침.
+ *   있기만 해서는 안 된다 — 실행할 수 있는 보통 파일이어야(isExecutable). PATH 앞쪽의 `claude` 폴더·실행 권한 없는 파일을 고르면 띄울 때마다 EACCES 다
  */
 export function locateClaude(
   env: NodeJS.ProcessEnv = process.env,
   exists: (p: string) => boolean = fs.existsSync,
   platform: Platform = process.platform as Platform,
+  isExecutable: (p: string) => boolean = isExecutableFile,
 ): string | null {
   const pathVar = env.PATH ?? env.Path ?? '';
   if (platform !== 'win32') {
@@ -21,7 +23,7 @@ export function locateClaude(
       ...pathVar.split(':').filter((dir) => dir.startsWith('/')).map((dir) => path.posix.join(dir, 'claude')),
       ...posixFixed(env.HOME),
     ]) {
-      if (exists(candidate)) return candidate;
+      if (exists(candidate) && isExecutable(candidate)) return candidate;
     }
     return null;
   }
@@ -35,6 +37,23 @@ export function locateClaude(
     if (exists(candidate)) return candidate;
   }
   return null;
+}
+
+/** isExecutableFile 이 쓰는 fs 두 가지 — 시험은 가짜로(Windows 의 X_OK 는 있기만 보면 참이라 진짜 디스크로는 가를 수 없다) */
+export type ExecCheckFs = {
+  statSync: (p: string) => { isFile(): boolean };
+  accessSync: (p: string, mode: number) => void;
+};
+
+/** POSIX — 보통 파일(링크면 가리키는 것)이고 이 사용자가 실행할 수 있나. 없음·폴더·권한 없음이면 false(던지지 않는다) */
+export function isExecutableFile(p: string, io: ExecCheckFs = fs): boolean {
+  try {
+    if (!io.statSync(p).isFile()) return false;
+    io.accessSync(p, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** POSIX 고정 후보 — 홈이 없거나 절대 경로가 아니면 홈 기준 둘은 건너뛴다 */

@@ -312,11 +312,17 @@ export class ClaudeSession extends EventEmitter {
       }
     }
     if (this.child.pid !== undefined) {
-      // POSIX 는 그룹에 TERM → 남으면 KILL_GRACE_MS 뒤 KILL(다 끝나면 곧 돌아온다)
-      await this.killTree(this.child.pid, { platform: this.platform });
+      // POSIX 는 그룹에 TERM → 남으면 KILL_GRACE_MS 뒤 KILL(다 끝나면 곧 돌아온다). 이미 끝난 claude('exit' 는 왔고 파이프만 아직)는 끄지 않는다 —
+      // 그 pid 는 다른 프로세스가 다시 받을 수 있다(sshUpload 와 같은 약속). win32 은 지금 그대로 taskkill
+      if (!(isPosix(this.platform) && this.childEnded())) await this.killTree(this.child.pid, { platform: this.platform });
       await this.exited;
     }
     this.setStatus('stopped');
+  }
+
+  /** 띄운 claude 가 이미 끝났나 — exitCode·signalCode 중 하나가 차 있다(살아 있는 동안 둘 다 null) */
+  private childEnded(): boolean {
+    return this.child !== null && (this.child.exitCode != null || this.child.signalCode != null);
   }
 
   /**
