@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { killTree } from '../../engine/killTree'
+import { spawnOpts, type Platform } from '../../engine/platform'
 import type { TailscaleState } from '../../shared/phoneTypes'
 import { jsonArgs } from '../claudeCommand'
 
@@ -53,17 +54,21 @@ export type RunOptions = {
 
 export type Runner = (command: string, args: string[], o: RunOptions) => Promise<RunResult>
 
-/** 기본 Runner — 셸 없이 띄우고, 상한·until 이면 프로세스 나무를 끈다(Windows 는 자식이 부모보다 오래 산다). 던지지 않는다 */
+/**
+ * 기본 Runner — 셸 없이 띄우고, 상한·until 이면 프로세스 나무를 끈다(Windows 는 자식이 부모보다 오래 산다 · POSIX 는 새 그룹째). 던지지 않는다.
+ * platform 기본 process.platform · spawn 은 시험용
+ */
 export function runCommand(
   command: string,
   args: string[],
-  o: RunOptions & { env?: NodeJS.ProcessEnv; kill?: (pid: number) => Promise<void> },
+  o: RunOptions & { env?: NodeJS.ProcessEnv; kill?: (pid: number) => Promise<void>; platform?: Platform; spawn?: typeof spawn },
 ): Promise<RunResult> {
-  const kill = o.kill ?? killTree
+  const platform = o.platform ?? (process.platform as Platform)
+  const kill = o.kill ?? ((pid: number) => killTree(pid, { platform }))
   return new Promise<RunResult>((resolve) => {
     let child: ReturnType<typeof spawn>
     try {
-      child = spawn(command, args, { windowsHide: true, shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: o.env })
+      child = (o.spawn ?? spawn)(command, args, { ...spawnOpts(platform), shell: false, stdio: ['ignore', 'pipe', 'pipe'], env: o.env })
     } catch {
       resolve({ kind: 'missing' })
       return

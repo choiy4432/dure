@@ -11,6 +11,7 @@ import {
   transcriptCheckScript, updateScript, uploadScript, uploadWriteText, type RemoteIssueKind,
 } from './remote';
 import { killTree } from './killTree';
+import { spawnOpts, type Platform } from './platform';
 import { REMOTE_CLEANUP_FAILED, remoteIssueText, remotePortBlockedText } from '../shared/remoteTexts';
 import { readSshHosts, type SshHostEntry } from './sshConfig';
 import { openMessageLog, type MessageLog } from './messageLog';
@@ -93,6 +94,8 @@ export interface EngineOptions {
   uploadTimeoutMs?: number;
   /** 첨부 하나의 이 PC 쪽 준비(진짜 경로·재기·복사)의 상한(ms) — 없으면 LOCAL_COPY_MS(10분). 시험용 */
   copyTimeoutMs?: number;
+  /** 운영체제 — POSIX 는 claude·ssh 를 새 프로세스 그룹으로 띄우고 그룹째 끈다(spawnOpts·killTree). 없으면 process.platform */
+  platform?: Platform;
 }
 
 // 이벤트:
@@ -744,9 +747,11 @@ class EngineImpl extends EventEmitter implements Engine {
   private retracting = new Map<AgentId, Promise<void>>();
   // 갈래의 첨부 사본을 복사하는 중(forkAttachments — 갈래 에이전트마다) — 지우기가 그 끝을 기다렸다 폴더를 지운다(복사가 연 임시 파일에 막혀 잘못 알리지 않게)
   private forkCopies = new Map<AgentId, Promise<void>>();
+  private readonly platform: Platform; // 띄우기 옵션·끄기 — 세션(ClaudeSession)에도 넘긴다
 
   constructor(private o: EngineOptions, private store: Store, private log: MessageLog, private hist: History) {
     super();
+    this.platform = o.platform ?? (process.platform as Platform);
     this.images = openImageStore(o.dataDir);
     this.attachments = openAttachmentStore(o.dataDir);
     this.limit = this.loadLimit(o.autoChainLimit ?? AUTO_CHAIN_LIMIT);
@@ -1112,6 +1117,7 @@ class EngineImpl extends EventEmitter implements Engine {
       stdinPreamble: launchPreamble(mcpJson, prompt),
       onStderr: (chunk) => this.guard(id, () => this.noteRemotePid(id, run, chunk)),
       ...(gate ? { startAfter: gate } : {}),
+      platform: this.platform,
     });
     this.remoteRuns.set(s, run);
     return s;
@@ -1962,7 +1968,7 @@ class EngineImpl extends EventEmitter implements Engine {
     return new Promise((resolve, reject) => {
       let child: ChildProcess;
       try {
-        child = spawn(ssh.command, args, { windowsHide: true, env: claudeEnv({ ...process.env, ...this.o.env }), stdio: ['pipe', 'pipe', 'pipe'] });
+        child = spawn(ssh.command, args, { ...spawnOpts(this.platform), env: claudeEnv({ ...process.env, ...this.o.env }), stdio: ['pipe', 'pipe', 'pipe'] });
       } catch (e) {
         // 실행 파일이 아니다(EFTYPE) 등 — 원문엔 내 PC 의 ssh 경로가 실린다
         if ((e as NodeJS.ErrnoException | null)?.code === 'ENOENT') reject(new Error(NO_SSH));
@@ -1975,12 +1981,12 @@ class EngineImpl extends EventEmitter implements Engine {
       let readFailed: { code: string | null } | null = null;
       let settled = false;
       let killing = false;
-      /** 나무째(taskkill /T /F) — 다 끈 뒤 그 ssh 를 한 번 더(이미 끝났으면 아무 일 없음) */
+      /** 나무째(taskkill /T /F · POSIX 는 그룹째) — 다 끈 뒤 그 ssh 를 한 번 더(이미 끝났으면 아무 일 없음) */
       const kill = () => {
         // 이미 끝난 ssh 의 pid 는 다른 프로세스가 다시 받을 수 있다 — 끝났으면 건드리지 않는다
         if (killing || child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
         killing = true;
-        void killTree(child.pid).then(() => {
+        void killTree(child.pid, { platform: this.platform }).then(() => {
           try {
             child.kill();
           } catch {
@@ -3158,6 +3164,7 @@ class EngineImpl extends EventEmitter implements Engine {
       args: [...(this.o.claude.argsPrefix ?? []), ...buildUsageArgs()],
       cwd,
       env: this.spawnEnv(),
+      platform: this.platform,
     });
   }
 
@@ -3220,6 +3227,7 @@ class EngineImpl extends EventEmitter implements Engine {
         args: [...(this.o.claude.argsPrefix ?? []), ...argsWith(mcpConfigPath, promptPath, [attachDir])],
         cwd: agent.folder,
         env: this.spawnEnv(),
+        platform: this.platform,
       });
     }
     const run = this.remoteRuns.get(s); // 서버 방 세션이면 그 띄우기

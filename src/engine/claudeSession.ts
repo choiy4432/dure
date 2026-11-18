@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import { parseLine, encodeUser, encodeControl } from './streamProtocol.js';
 import { killTree } from './killTree.js';
+import { isPosix, spawnOpts, type Platform } from './platform.js';
 import type { ControlRequest, ReadyPart, SessionStatus } from './types.js';
 
 export interface SessionOptions {
@@ -20,9 +21,16 @@ export interface SessionOptions {
    * 띄운 뒤 머리말 다음에 그대로. 그새 stop 하면 띄우지 않는다. 실패해도 띄운다
    */
   startAfter?: Promise<unknown>;
+  /** 운영체제 — POSIX 는 새 프로세스 그룹으로 띄우고(spawnOpts) 그룹째 끈다(killTree). 기본 process.platform */
+  platform?: Platform;
+  /** 시험용 — 띄우기·나무 끄기를 갈아끼운다 */
+  spawn?: typeof spawn;
+  killTree?: typeof killTree;
 }
 
 const STDERR_KEEP = 2048;
+/** forceKill — 기다리지 않는다(POSIX 는 TERM 뒤 곧 KILL) */
+const NO_WAIT = (): Promise<void> => Promise.resolve();
 const STOP_TIMEOUT_MS = 3000;
 /**
  * stdout 한 줄의 상한(UTF-16 글자 수) — 넘는 줄은 줄바꿈까지 모으지 않고 버린다(그다음 줄부터 다시 읽는다). 상한이 없으면 V8 글 상한
@@ -54,9 +62,13 @@ export class ClaudeSession extends EventEmitter {
   private queued: string[] | null = null; // 띄우기 전(startAfter)에 쓴 줄 — 띄운 뒤 머리말 다음에
   private armQueued: (() => void)[] = []; // 띄우기 전에 쓴 제어 요청의 시간 재기 — 그 줄을 쓸 때 건다
   private dropGate: (() => void) | null = null; // 띄우기 전에 접는다(stop) — 띄우지 않고 끝낸다
+  private readonly platform: Platform;
+  private readonly killTree: typeof killTree;
 
   constructor(private opts: SessionOptions) {
     super();
+    this.platform = opts.platform ?? (process.platform as Platform);
+    this.killTree = opts.killTree ?? killTree;
   }
 
   get status(): SessionStatus {
@@ -122,10 +134,10 @@ export class ClaudeSession extends EventEmitter {
   }
 
   private spawnChild(): void {
-    const child = spawn(this.opts.command, this.opts.args, {
+    const child = (this.opts.spawn ?? spawn)(this.opts.command, this.opts.args, {
       cwd: this.opts.cwd,
       env: this.opts.env,
-      windowsHide: true,
+      ...spawnOpts(this.platform),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.child = child;
@@ -300,7 +312,8 @@ export class ClaudeSession extends EventEmitter {
       }
     }
     if (this.child.pid !== undefined) {
-      await killTree(this.child.pid);
+      // POSIX 는 그룹에 TERM → 남으면 KILL_GRACE_MS 뒤 KILL(다 끝나면 곧 돌아온다)
+      await this.killTree(this.child.pid, { platform: this.platform });
       await this.exited;
     }
     this.setStatus('stopped');
@@ -308,12 +321,14 @@ export class ClaudeSession extends EventEmitter {
 
   /**
    * 앱을 닫는데 stop() 이 상한 안에 못 끝났다(바쁜 PC 에서 taskkill 이 늦음) — 직접 끝내고 waitMs 까지만 기다린다.
-   * 손자 프로세스는 stop() 이 시작한 taskkill /T 가 계속 정리한다.
+   * win32: 그 프로세스만 끈다 — 손자 프로세스는 stop() 이 시작한 taskkill /T 가 계속 정리한다.
+   * POSIX: 정리를 이어 줄 쪽이 없다 — 그룹째 기다리지 않고 끈다(TERM 뒤 곧 KILL).
    */
   async forceKill(waitMs: number): Promise<void> {
     if (!this.child || !this.running) return;
     try {
-      this.child.kill();
+      if (isPosix(this.platform) && this.child.pid !== undefined) void this.killTree(this.child.pid, { platform: this.platform, wait: NO_WAIT });
+      else this.child.kill();
     } catch {
       /* 이미 끝남 */
     }

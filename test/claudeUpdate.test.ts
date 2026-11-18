@@ -85,6 +85,27 @@ describe('updateClaude', () => {
     expect(kill).not.toHaveBeenCalled()
   })
 
+  it('win32 — 띄우기 옵션은 지금 그대로({ windowsHide, stdio ignore, env })', async () => {
+    const { spawn, child } = fakeSpawn()
+    const run = updateClaude(C, { spawn, platform: 'win32' })
+    child.emit('close', 0)
+    await run.done
+    expect(spawn.mock.calls[0][2]).toEqual({ windowsHide: true, stdio: 'ignore', env: expect.any(Object) })
+  })
+
+  it('darwin — 새 프로세스 그룹으로 띄운다(detached · windowsHide 없음 · unref 안 함)', async () => {
+    const { spawn, child } = fakeSpawn()
+    const unref = vi.fn()
+    Object.assign(child, { unref })
+    const kill = vi.fn(async () => { child.emit('close', null) })
+    const run = updateClaude(C, { spawn, kill, platform: 'darwin' })
+    expect(spawn.mock.calls[0][2]).toEqual({ detached: true, stdio: 'ignore', env: expect.any(Object) })
+    expect(unref).not.toHaveBeenCalled()
+    await run.kill()
+    expect(kill).toHaveBeenCalledWith(4242)
+    expect(await run.done).toBe('failed')
+  })
+
   it('끄기가 던져도 kill() 은 거절하지 않는다', async () => {
     const { spawn, child } = fakeSpawn()
     const kill = vi.fn(async () => { throw new Error('taskkill 실패') })

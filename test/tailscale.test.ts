@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createTailscale, enableUrlIn, offRecordedRoute, resolveTailscaleCommand, runCommand, stateFromStatus, type Runner,
@@ -517,5 +519,40 @@ describe('resolveTailscaleCommand', () => {
       expect(resolveTailscaleCommand({ ProgramFiles }, () => false)).toEqual({ command: defaultPF, args: [] })
       expect(resolveTailscaleCommand({ ProgramFiles }, (p) => p === defaultPF)).toEqual({ command: defaultPF, args: [] })
     }
+  })
+})
+
+describe('runCommand — 운영체제', () => {
+  /** 가짜 자식 — 사건을 직접 낸다 */
+  function fakeChild() {
+    return Object.assign(new EventEmitter(), {
+      pid: 4242, exitCode: null as number | null, signalCode: null, stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(),
+    })
+  }
+  const STDIO = ['ignore', 'pipe', 'pipe']
+
+  it('win32 — 띄우기 옵션은 지금 그대로({ windowsHide, shell false, stdio, env })', async () => {
+    const child = fakeChild()
+    const spawn = vi.fn(() => child)
+    const env = { A: '1' }
+    const p = runCommand('dure-no-such-tailscale', ['status', '--json'], { timeoutMs: 10_000, env, platform: 'win32', spawn: spawn as any })
+    child.emit('close', 0)
+    expect(await p).toEqual({ kind: 'exit', code: 0, stdout: '', stderr: '' })
+    expect(spawn).toHaveBeenCalledWith('dure-no-such-tailscale', ['status', '--json'], { windowsHide: true, shell: false, stdio: STDIO, env })
+  })
+
+  it('darwin — 새 프로세스 그룹으로 띄우고(detached) 시간 상한이면 그 pid 를 나무째 끈다', async () => {
+    const child = fakeChild()
+    const spawn = vi.fn(() => child)
+    const kill = vi.fn(async () => {
+      child.exitCode = 143
+      child.emit('close', null)
+    })
+    const env = { A: '1' }
+    const r = await runCommand('dure-no-such-tailscale', ['serve', '--bg'], { timeoutMs: 10, env, platform: 'darwin', spawn: spawn as any, kill })
+    expect(spawn).toHaveBeenCalledWith('dure-no-such-tailscale', ['serve', '--bg'], { detached: true, shell: false, stdio: STDIO, env })
+    expect(r.kind).toBe('timeout')
+    expect(kill).toHaveBeenCalledWith(4242)
+    expect(child.kill).not.toHaveBeenCalled() // 나무째 끄기로 끝났다
   })
 })

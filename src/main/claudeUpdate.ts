@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import { killTree } from '../engine/killTree'
 import { claudeEnv } from '../engine/claudeEnv'
+import { spawnOpts, type Platform } from '../engine/platform'
 import type { ClaudeCommand } from './claudeCommand'
 
 /** `claude update` 를 기다리는 상한 — 넘으면 끄고 그냥 켠다 (실측: 갱신 ~8초, 이미 최신 ~2.6초) */
@@ -13,6 +14,8 @@ export interface UpdateClaudeOptions {
   spawn?: typeof nodeSpawn
   /** 프로세스 나무를 끄는 길(시간 초과·kill()) — 시험용으로 갈아끼운다 */
   kill?: (pid: number) => Promise<void>
+  /** 운영체제 — POSIX 는 새 프로세스 그룹으로 띄우고 그룹째 끈다. 기본 process.platform */
+  platform?: Platform
 }
 
 export interface ClaudeUpdateRun {
@@ -25,15 +28,16 @@ export interface ClaudeUpdateRun {
 /**
  * 켤 때 `claude update` 를 한 번 돌린다 — Windows 는 도는 claude.exe 를 바꿔 쓰지 못해서 어떤 claude 도 뜨기 전에.
  * 던지지 않는다: 실패·시간 초과도 값으로 돌려주고, 두레는 있는 claude 로 그냥 켠다.
- * Windows 에선 자식이 부모보다 오래 산다 — 두레를 끌 때 kill() 로 나무째 끈다(설치 흐름과 같은 꼴).
+ * Windows 에선 자식이 부모보다 오래 산다 — 두레를 끌 때 kill() 로 나무째 끈다(설치 흐름과 같은 꼴). POSIX 도 새 그룹(detached)이라 같다.
  */
 export function updateClaude(c: ClaudeCommand, o: UpdateClaudeOptions = {}): ClaudeUpdateRun {
   const spawn = o.spawn ?? nodeSpawn
-  const killPid = o.kill ?? killTree
+  const platform = o.platform ?? (process.platform as Platform)
+  const killPid = o.kill ?? ((pid: number) => killTree(pid, { platform }))
   const timeoutMs = o.timeoutMs ?? CLAUDE_UPDATE_TIMEOUT_MS
   let child: ReturnType<typeof nodeSpawn>
   try {
-    child = spawn(c.command, [...c.argsPrefix, 'update'], { windowsHide: true, stdio: 'ignore', env: claudeEnv(process.env) })
+    child = spawn(c.command, [...c.argsPrefix, 'update'], { ...spawnOpts(platform), stdio: 'ignore', env: claudeEnv(process.env) })
   } catch {
     return { done: Promise.resolve('failed'), kill: () => Promise.resolve() }
   }

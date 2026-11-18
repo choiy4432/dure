@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -488,3 +490,63 @@ test('startAfter: 제어 요청의 시간은 그 줄을 실제로 쓸 때부터 
   open();
   await expect(req).resolves.toBeTruthy();
 }, 15000);
+
+// ── 운영체제 — 띄우기 옵션·끄기(진짜로 띄우지 않는다: spawn·killTree 를 갈아끼운다) ──
+describe('운영체제', () => {
+  /** 가짜 자식 — close 를 직접 낸다 */
+  function fakeChild() {
+    return Object.assign(new EventEmitter(), {
+      pid: 4242, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), kill: vi.fn(), unref: vi.fn(),
+    });
+  }
+  function fake(platform: 'win32' | 'darwin') {
+    const child = fakeChild();
+    const spawn = vi.fn(() => child);
+    const killTree = vi.fn(async () => {
+      child.emit('close', null);
+    });
+    const env = { A: '1' };
+    const s = new ClaudeSession({ command: 'dure-no-such-claude', args: ['-p'], cwd: dir, env, platform, spawn: spawn as any, killTree });
+    return { s, child, spawn, killTree, env };
+  }
+
+  test('win32 — 띄우기 옵션은 지금 그대로({ cwd, env, windowsHide, stdio pipe }) · stop 은 그 platform 으로 나무째', async () => {
+    const { s, spawn, killTree, env } = fake('win32');
+    s.start();
+    expect(spawn).toHaveBeenCalledWith('dure-no-such-claude', ['-p'], { cwd: dir, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    await s.stop({ now: true });
+    expect(killTree).toHaveBeenCalledWith(4242, { platform: 'win32' });
+    expect(s.status).toBe('stopped');
+  });
+
+  test('darwin — 새 프로세스 그룹으로 띄운다(detached · windowsHide 없음 · unref 안 함) · stop 은 그룹째', async () => {
+    const { s, spawn, child, killTree, env } = fake('darwin');
+    s.start();
+    expect(spawn).toHaveBeenCalledWith('dure-no-such-claude', ['-p'], { cwd: dir, env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    expect(child.unref).not.toHaveBeenCalled();
+    await s.stop({ now: true });
+    expect(killTree).toHaveBeenCalledWith(4242, { platform: 'darwin' });
+    expect(s.status).toBe('stopped');
+  });
+
+  test('forceKill — win32 는 지금처럼 child.kill() · darwin 은 기다리지 않고 그룹째(TERM 뒤 곧 KILL)', async () => {
+    const w = fake('win32');
+    w.s.start();
+    w.child.kill.mockImplementation(() => w.child.emit('close', null));
+    await w.s.forceKill(100);
+    expect(w.child.kill).toHaveBeenCalledTimes(1);
+    expect(w.killTree).not.toHaveBeenCalled();
+
+    const d = fake('darwin');
+    d.s.start();
+    await d.s.forceKill(100);
+    expect(d.killTree).toHaveBeenCalledTimes(1);
+    const [pid, o] = d.killTree.mock.calls[0] as unknown as [number, { platform: string; wait: (ms: number) => Promise<void> }];
+    expect(pid).toBe(4242);
+    expect(o.platform).toBe('darwin');
+    const t0 = Date.now();
+    await o.wait(1500); // 기다리지 않는다
+    expect(Date.now() - t0).toBeLessThan(50);
+    expect(d.child.kill).not.toHaveBeenCalled();
+  });
+});

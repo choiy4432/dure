@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import electronUpdater from 'electron-updater'
 import { killTree } from '../engine/killTree'
+import { spawnOpts, type Platform } from '../engine/platform'
 import { authStatus, claudeEnv, claudeVersion, createEngine, locateClaude } from '../engine'
 import { homedir } from 'node:os'
 import { formatLogArgs, makeFatalReporter, openLog } from './log'
@@ -29,6 +30,9 @@ import { createTrayControl, startHidden, trayTipOnce, TRAY_TIP, type TrayControl
 import { UNINSTALL_CLEANUP_ARG, uninstallCleanup, uninstallHardCap } from './uninstallCleanup'
 import { appPageMatcher, focusExisting, guardNavigation, HIDDEN_ARG, withoutHiddenArg } from './window'
 import { TITLE_BAR_HEIGHT, veiledColor, windowColors } from './windowTheme'
+
+/** 운영체제 — main 은 여기서 한 번 읽어 넘긴다(갈래는 darwin 에서만 — Windows 길은 그대로) */
+const platform = process.platform as Platform
 
 let mainWindow: BrowserWindow | null = null
 /** 파워 모드 — 전체 화면 + 화면 꺼짐 막기(휴대폰 연결의 'prevent-app-suspension' 과 별개) */
@@ -101,7 +105,7 @@ function installCommand(raw: string | undefined): { command: string; args: strin
 /** 설치 스크립트를 돌리고 출력(stdout·stderr)을 줄로 쪼개 넘긴다 */
 function spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: number | null }>; kill(): Promise<void> } {
   const cmd = installCommand(env.DURE_SETUP_INSTALL)
-  const child = spawn(cmd.command, cmd.args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: claudeEnv(process.env) })
+  const child = spawn(cmd.command, cmd.args, { ...spawnOpts(platform), stdio: ['ignore', 'pipe', 'pipe'], env: claudeEnv(process.env) })
   const feed = (stream: NodeJS.ReadableStream | null): void => {
     let rest = ''
     stream?.setEncoding('utf8')
@@ -121,8 +125,8 @@ function spawnInstall(onLine: (l: string) => void): { done: Promise<{ code: numb
     child.on('error', reject)
     child.on('close', (code) => resolve({ code }))
   })
-  // PowerShell 이 받아 돌리는 claude.exe install 은 자식이라 child.kill() 로는 안 꺼진다 — 나무째 끈다
-  return { done, kill: () => (child.pid ? killTree(child.pid) : Promise.resolve()) }
+  // PowerShell 이 받아 돌리는 claude.exe install 은 자식이라 child.kill() 로는 안 꺼진다 — 나무째 끈다(POSIX 는 새 그룹째)
+  return { done, kill: () => (child.pid ? killTree(child.pid, { platform }) : Promise.resolve()) }
 }
 
 /**
@@ -147,7 +151,7 @@ function spawnLogin(c: ClaudeCommand): { kill(): Promise<void> } {
   child.on('error', gone)
   child.unref()
   // 이미 끝난 cmd 는 끄지 않는다 — 그 pid 를 다른 프로세스가 물려받았을 수 있다
-  return { kill: () => (alive && child.pid ? killTree(child.pid) : Promise.resolve()) }
+  return { kill: () => (alive && child.pid ? killTree(child.pid, { platform }) : Promise.resolve()) }
 }
 
 /** 앱 사건을 받는 곳 — registerIpc 가 onAppEvent 로 창 쪽을 단다 */
@@ -346,6 +350,7 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
           // 켤 때 claude 최신으로 — 서버 방도. 설정을 나중에 바꿔도 따라가게 그때그때 현재 prefs 를 본다
           claudeAutoUpdate: () => prefs.claudeAutoUpdate,
           ...sleepKnob,
+          platform,
         })
         logEngineErrors(engine, logError)
       }
@@ -649,7 +654,7 @@ if (process.argv.includes(UNINSTALL_CLEANUP_ARG)) {
         update: async () => {
           // 확인하는 사이 끄기 시작했으면 띄우지 않는다 — 띄운 뒤라면 before-quit 이 나무째 끈다
           if (!updateWith || quitControl.started()) return
-          claudeUpdateRun = updateClaude(updateWith)
+          claudeUpdateRun = updateClaude(updateWith, { platform })
           return claudeUpdateRun.done
         },
         start: () => engine?.start(),
