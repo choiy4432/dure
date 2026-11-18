@@ -6477,7 +6477,9 @@ describe('서버 방 띄우기', () => {
     const kinds = calls().map((c) => c.kind);
     expect(kinds).toContain('update');
     expect(kinds.filter((k) => k === 'update')).toHaveLength(1);
-    expect(kinds.indexOf('update')).toBeLessThan(kinds.indexOf('launch'));
+    // update 와 띄우기는 따로 도는 ssh 두 개라 호출 기록에 찍히는 차례는 운영체제가 정한다(Windows 는 update 가 먼저, mac 은 띄우기가 먼저 찍혔다)
+    // — 차례는 보지 않는다. 기다리지 않았다는 것은 위의 걸린 시간(update 3초보다 짧다)이 본다
+    expect(kinds).toContain('launch');
   }, 30_000);
 
   test('서버 방 — ssh 로 띄워 대화 · -R·BatchMode·bash -lc · 토큰은 서버 파일에만 · 띄운 pid 저장', async () => {
